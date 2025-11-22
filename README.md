@@ -1,6 +1,10 @@
-# STL Slicer POC — Project Documentation
+# Dragonfruit
 
-## Tech Stack
+**Dragonfruit is a 3D Printing slicer prototype**
+
+## STL Slicer POC — Project Documentation
+
+### Tech Stack
 
 - Frontend framework: Next.js (App Router), TypeScript
 - UI/styling: TailwindCSS + custom CSS in `globals.css`
@@ -55,7 +59,7 @@ This project is organized by responsibility, using a domain-first folder structu
 
 - Components and shared UI
   - Shared scene/UI components live under `src/components/` (e.g., `components/scene`, `components/controls`, `components/ui`).
-  - Domain-specific visuals (e.g., preview overlays, gizmos) live inside their domain’s module (`src/<domain>/<FeatureName>/rendering/`).
+  - Domain-specific visuals (e.g., preview overlays, gizmos) live inside their domain's module (`src/<domain>/<FeatureName>/rendering/`).
 
 - Modularity and safety
   - Build features as small focused files; gate WIP behind feature flags.
