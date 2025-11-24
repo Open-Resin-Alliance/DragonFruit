@@ -1,7 +1,7 @@
 [ ] Shaped supports
 [ ] Hot Keys
 [ ] Smoothing brush
-[ ] Grid Supports
+[X] Grid Supports
 [ ] Blender style controls G = grab + z = axis
 [X] Support Joint creation
 [X] crenellated raft

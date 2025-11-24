@@ -1,0 +1,181 @@
+{
+  "main": {
+    "id": "4fc4a903c2af8fd4",
+    "type": "split",
+    "children": [
+      {
+        "id": "90b7f36152e738c8",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "dd28c5bcb2c9b27d",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "AnatomyOfSupports/Anatomy-of-Supports.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Anatomy-of-Supports"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "3cec694209995919",
+    "type": "split",
+    "children": [
+      {
+        "id": "7913e4f6d29f564e",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d3edbff67637afd6",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "94003756ddc7ae21",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "d5e36fd361c6c558",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "c6c2c2c49c515a1b",
+    "type": "split",
+    "children": [
+      {
+        "id": "154ef35ef8a45b3f",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "048280c28bdfa267",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "AnatomyOfSupports/Anatomy-of-Supports.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for Anatomy-of-Supports"
+            }
+          },
+          {
+            "id": "2c20704841be429c",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "AnatomyOfSupports/Anatomy-of-Supports.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from Anatomy-of-Supports"
+            }
+          },
+          {
+            "id": "f20e53398ce074d3",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "fc4f7ebc83c4981f",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "AnatomyOfSupports/Anatomy-of-Supports.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of Anatomy-of-Supports"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false
+    }
+  },
+  "active": "dd28c5bcb2c9b27d",
+  "lastOpenFiles": [
+    "IslandScan-ScanlineMethod.md",
+    "ScanlineMethod.md",
+    "Hotkeys.md",
+    "AnatomyOfSupports/Brace.md",
+    "AnatomyOfSupports/Anatomy-of-Supports.md",
+    "GPU-Picking.md",
+    "1 LogicBibleWritingDirecvtions.md"
+  ]
+}
