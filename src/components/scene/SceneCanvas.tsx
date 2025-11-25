@@ -11,9 +11,10 @@ import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { AxisLabels } from '@/components/scene/AxisLabels';
-import { TransformGizmo } from '@/components/scene/TransformGizmo';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { CameraFocusController } from '@/components/scene/CameraFocusController';
+import { PickingProvider, PickingDebugOverlay } from '@/components/picking';
+import { SelectionProvider, SelectionManager, SelectionOutlineRenderer } from '@/components/selection';
 import type { IslandMarker } from '@/modules/island/islandOverlayLogic';
 import type { ScanResults } from '@/modules/island/ScanOrchestrator';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
@@ -57,6 +58,17 @@ function Lights({ ambientIntensity, directionalIntensity }: { ambientIntensity: 
   );
 }
 
+/**
+ * Wrapper that conditionally applies PickingProvider.
+ * When disabled, just renders children directly.
+ */
+function PickingProviderWrapper({ enabled, children }: { enabled?: boolean; children: React.ReactNode }) {
+  if (enabled) {
+    return <PickingProvider debug>{children}</PickingProvider>;
+  }
+  return <>{children}</>;
+}
+
 function Helpers() {
   return (
     <>
@@ -69,12 +81,15 @@ function Helpers() {
   );
 }
 
-function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, materialRoughness, transform, mode, onSupportClick, onSupportHover, onSupportSelect, disableRaycast, blockSupportPlacement, suppressNextClickRef }: {
+function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMeshRef, materialRoughness, transform, mode, onSupportClick, onSupportHover, onSupportSelect, disableRaycast, blockSupportPlacement, suppressNextClickRef, modelId }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
   clipUpper?: number | null;
   meshColor?: string;
+  /** Ref to the group (for gizmo positioning) */
   meshRef?: React.RefObject<THREE.Mesh | null>;
+  /** Ref to the actual mesh (for outline effect) */
+  actualMeshRef?: React.MutableRefObject<THREE.Mesh | null>;
   materialRoughness?: number;
   transform?: ModelTransform | null;
   mode?: SupportMode;
@@ -84,6 +99,8 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, materialR
   disableRaycast?: boolean;
   blockSupportPlacement?: boolean;
   suppressNextClickRef?: React.RefObject<boolean>;
+  /** Model ID for picking registration */
+  modelId?: string;
 }) {
   // Build clipping planes for a band [clipLower, clipUpper] on Z axis
   // Clipping planes work in WORLD space
@@ -148,13 +165,28 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, materialR
       scale={transform?.scale || new THREE.Vector3(1, 1, 1)}
     >
       <mesh
-        ref={internalMeshRef}
-        geometry={geometry}
-        position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}
-        castShadow
-        receiveShadow
-        onClick={(e) => {
+          ref={(node) => {
+            // Assign to refs
+            internalMeshRef.current = node;
+            if (actualMeshRef) actualMeshRef.current = node;
+          }}
+          geometry={geometry}
+          position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}
+          castShadow
+          receiveShadow
+          onClick={(e) => {
           console.log('[SceneCanvas] Mesh clicked, mode:', mode);
+          
+          // Model selection in prepare mode - dispatch custom event
+          if (mode === 'prepare') {
+            e.stopPropagation();
+            window.__modelClickedThisFrame = true;
+            window.dispatchEvent(new CustomEvent('model-clicked', { 
+              detail: { modelId: modelId || 'default-model' } 
+            }));
+            return; // Don't process further in prepare mode
+          }
+          
           if (mode === 'support') {
             // Suppress single click after external drag end
             if (suppressNextClickRef?.current) {
@@ -266,7 +298,8 @@ export function SceneCanvas({
   branchBasePosition,
   leafPreviewState,
   leafStateRef,
-  leafSocketPosition
+  leafSocketPosition,
+  gpuPickingTest = false,
 }: {
   geom: GeometryWithBounds | null;
   clipLower?: number | null;
@@ -296,7 +329,7 @@ export function SceneCanvas({
   transformMode?: TransformMode;
   transform?: ModelTransform;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
-  onTransformEnd?: (mode: TransformMode) => void;
+  onTransformEnd?: (operation: 'move' | 'rotate' | 'scale') => void;
   crossSectionMode?: 'smooth' | 'rasterized';
   pxMm?: number;
   showIslandIdLabels?: boolean;
@@ -322,8 +355,12 @@ export function SceneCanvas({
   leafPreviewState?: import('@/supports/LeafSupports/types').LeafPlacementState;
   leafStateRef?: React.RefObject<import('@/supports/LeafSupports/types').LeafPlacementState>;
   leafSocketPosition?: import('@/supports/types').Vec3 | null;
+  /** Enable GPU picking test mode - shows test gizmo and debug overlay */
+  gpuPickingTest?: boolean;
 }) {
   const meshRef = React.useRef<THREE.Mesh>(null);
+  const actualMeshRef = React.useRef<THREE.Mesh | null>(null);
+  const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
   const [mouseScreenY, setMouseScreenY] = React.useState<number>(0.5); // 0 = top, 1 = bottom
@@ -377,6 +414,20 @@ export function SceneCanvas({
     onJointPreviewChangeRef.current = onJointPreviewChange;
     supportsRef.current = supports;
   }, [onJointPreviewChange, supports]);
+
+  // Listen for selection events to show/hide gizmo
+  React.useEffect(() => {
+    const handleModelClicked = () => setIsModelSelected(true);
+    const handleModelDeselected = () => setIsModelSelected(false);
+    
+    window.addEventListener('model-clicked', handleModelClicked);
+    window.addEventListener('model-deselected', handleModelDeselected);
+    
+    return () => {
+      window.removeEventListener('model-clicked', handleModelClicked);
+      window.removeEventListener('model-deselected', handleModelDeselected);
+    };
+  }, []);
 
   // Update joint preview position based on mouse screen Y and joint creation mode
   React.useEffect(() => {
@@ -680,8 +731,15 @@ export function SceneCanvas({
   }, []);
 
   // Handle canvas background clicks (deselect support OR create joint OR finalize branch)
+  // Note: Model selection/deselection is handled by SelectionManager
   const handleCanvasClick = React.useCallback((e: React.MouseEvent) => {
     console.log('[Canvas] handleCanvasClick fired, mode:', mode, 'branchStage:', branchPreviewState?.stage);
+    
+    // In prepare mode, selection is handled by SelectionManager
+    if (mode === 'prepare') {
+      return;
+    }
+    
     if (mode !== 'support') return;
 
     // If a gizmo drag just ended, ignore this click (prevents unintended deselect)
@@ -754,9 +812,10 @@ export function SceneCanvas({
       supportClickedRef.current = false;
     } else {
       // Background was clicked, deselect
-      console.log('[Canvas] Background clicked, deselecting support');
-      // Also clear any selected joint
+      console.log('[Canvas] Background clicked, deselecting');
+      // Clear any selected joint
       if (onJointSelect) onJointSelect(null);
+      // Clear any selected support
       if (onSupportSelect) onSupportSelect(null);
       // Reset the flag
       supportClickedRef.current = false;
@@ -778,31 +837,40 @@ export function SceneCanvas({
         <Helpers />
         <EnableLocalClipping />
         <CameraProvider cameraRef={cameraRef} />
-        <React.Suspense fallback={null}>
-          {geom && (
-            <>
-              {/* Raft renders when enabled; no separate preview mode */}
-              <RaftRenderer />
-              {/* Footprint border shows combined model + raft outline with margin */}
-              <FootprintBorderRenderer modelGeometry={geom} modelTransform={transform} />
-              {meshVisible !== false && (
-                <StlMesh
-                  geometry={geom.geometry}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
-                  meshColor={meshColor}
-                  meshRef={meshRef}
-                  materialRoughness={materialRoughness}
-                  transform={transform}
-                  mode={mode}
-                  onSupportClick={onSupportClick}
-                  onSupportHover={onSupportHover}
-                  onSupportSelect={onSupportSelect}
-                  disableRaycast={disableRaycast}
-                  blockSupportPlacement={isGizmoDragging || !!selectedJointId}
-                  suppressNextClickRef={suppressNextCanvasClickRef}
-                />
-              )}
+        {/* GPU Picking Provider - wraps all pickable content when enabled */}
+        <PickingProviderWrapper enabled={gpuPickingTest}>
+          {/* Selection Provider - manages model selection state */}
+          <SelectionProvider initialSelection="default-model">
+            {/* Selection Manager - handles click-to-select/deselect logic */}
+            <SelectionManager enabled={mode === 'prepare'} mode={mode} />
+            
+            <React.Suspense fallback={null}>
+              {geom && (
+              <>
+                {/* Raft renders when enabled; no separate preview mode */}
+                <RaftRenderer />
+                {/* Footprint border shows combined model + raft outline with margin */}
+                <FootprintBorderRenderer modelGeometry={geom} modelTransform={transform} />
+                {meshVisible !== false && (
+                  <StlMesh
+                    geometry={geom.geometry}
+                    clipLower={clipLower}
+                    clipUpper={clipUpper}
+                    meshColor={meshColor}
+                    meshRef={meshRef}
+                    actualMeshRef={actualMeshRef}
+                    materialRoughness={materialRoughness}
+                    transform={transform}
+                    mode={mode}
+                    onSupportClick={onSupportClick}
+                    onSupportHover={onSupportHover}
+                    onSupportSelect={onSupportSelect}
+                    disableRaycast={disableRaycast}
+                    blockSupportPlacement={isGizmoDragging || !!selectedJointId}
+                    suppressNextClickRef={suppressNextCanvasClickRef}
+                    modelId="default-model"
+                  />
+                )}
               {/* Cross-section cap (fill) at the cut plane */}
               {clipLower != null && !hideCrossSectionCap && (
                 <CrossSectionCap
@@ -883,15 +951,7 @@ export function SceneCanvas({
                   );
                 })()
               )}
-              {transformMode && transformMode !== 'select' && transformMode !== 'transform' && (
-                <TransformGizmo
-                  mode={transformMode}
-                  meshRef={meshRef}
-                  onTransformChange={onTransformChange}
-                  onTransformEnd={onTransformEnd}
-                />
-              )}
-              {transformMode === 'transform' && meshRef.current && (
+              {transformMode === 'transform' && meshRef.current && isModelSelected && (
                 <UnifiedGizmo
                   meshRef={meshRef}
                   position={[
@@ -906,13 +966,12 @@ export function SceneCanvas({
                   enableLighting
                   onDragStateChange={setIsGizmoDragging}
                   onMove={(delta) => {
-                    // Update mesh directly - NO React state updates during drag
                     if (meshRef.current) {
                       meshRef.current.position.add(delta);
                     }
                   }}
                   onMoveEnd={() => {
-                    // Update React state only when drag ends
+                    window.__gizmoDragEndedThisFrame = true;
                     if (meshRef.current && onTransformChange) {
                       onTransformChange(
                         meshRef.current.position.clone(),
@@ -922,7 +981,6 @@ export function SceneCanvas({
                     }
                   }}
                   onRotate={(axis, angle) => {
-                    // Update mesh directly using world-space rotation
                     if (meshRef.current) {
                       const worldAxis = new THREE.Vector3(
                         axis === 'x' ? 1 : 0,
@@ -934,7 +992,7 @@ export function SceneCanvas({
                     }
                   }}
                   onRotateEnd={() => {
-                    // Update React state only when drag ends
+                    window.__gizmoDragEndedThisFrame = true;
                     if (meshRef.current && onTransformChange) {
                       onTransformChange(
                         meshRef.current.position.clone(),
@@ -942,22 +1000,18 @@ export function SceneCanvas({
                         meshRef.current.scale.clone()
                       );
                     }
+                    onTransformEnd?.('rotate');
                   }}
                   onScaleStart={() => {
-                    // Store initial scale when scaling starts
                     if (meshRef.current) {
                       initialScaleRef.current.copy(meshRef.current.scale);
                     }
                   }}
                   onScale={(axis, factor) => {
-                    // Update mesh directly using absolute scaling
-                    // factor is now an absolute ratio (0.5 = half size, 2.0 = double size)
                     if (meshRef.current) {
                       if (axis === 'uniform') {
-                        // Apply absolute uniform scaling
                         meshRef.current.scale.copy(initialScaleRef.current).multiplyScalar(factor);
                       } else {
-                        // Apply absolute per-axis scaling
                         meshRef.current.scale.copy(initialScaleRef.current);
                         if (axis === 'x') meshRef.current.scale.x *= factor;
                         if (axis === 'y') meshRef.current.scale.y *= factor;
@@ -966,7 +1020,7 @@ export function SceneCanvas({
                     }
                   }}
                   onScaleEnd={() => {
-                    // Update React state only when drag ends
+                    window.__gizmoDragEndedThisFrame = true;
                     if (meshRef.current && onTransformChange) {
                       onTransformChange(
                         meshRef.current.position.clone(),
@@ -1121,24 +1175,37 @@ export function SceneCanvas({
               }}
             />
           )}
-        </React.Suspense>
-        <OrbitControls
-          makeDefault
-          enableDamping={false}
-          enabled={!isGizmoDragging}
-          onChange={onCameraChange}
-          onEnd={onCameraEnd}
-          mouseButtons={
-            mode === 'support'
-              ? { MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
-              : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
-          }
+            </React.Suspense>
+            
+          </SelectionProvider>
+        </PickingProviderWrapper>
+        {/* Selection outline - renders when model is selected */}
+        <SelectionOutlineRenderer
+          meshRef={actualMeshRef}
+          enabled={mode === 'prepare'}
+          color="#00ff00"
+          thickness={0.3}
         />
+          <OrbitControls
+            makeDefault
+            enableDamping={false}
+            enabled={!isGizmoDragging}
+            onChange={onCameraChange}
+            onEnd={onCameraEnd}
+            mouseButtons={
+              mode === 'support'
+                ? { MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+                : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+            }
+          />
         <CameraFocusController
           selectedIslandId={overlaySelectedIslandId ?? null}
           islandMarkers={islandMarkers ?? []}
         />
+        {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
       </Canvas>
+      {/* GPU Picking Debug Overlay - shows what's under cursor */}
+      {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
     </div>
   );
 }

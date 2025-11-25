@@ -12,9 +12,7 @@ import { IslandOverlayControls } from '@/components/controls/IslandOverlayContro
 import { IslandVoxelControls } from '@/components/controls/IslandVoxelControls';
 import { IslandListCard } from '@/components/controls/IslandListCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
-import { MoveControls } from '@/components/controls/MoveControls';
-import { RotateControls } from '@/components/controls/RotateControls';
-import { ScaleControls } from '@/components/controls/ScaleControls';
+import { TransformControls } from '@/components/controls/TransformControls';
 import type { SupportMode, SupportInstance } from '@/supports/types';
 import { SupportSidebar } from '@/supports/SupportSidebar';
 
@@ -831,7 +829,7 @@ export default function Home() {
             }
 
             // Check if Z position changed (manual Z movement with translate widget)
-            if (transformMode === 'move' && Math.abs(pos.z - transform.position.z) > 0.001) {
+            if (transformMode === 'transform' && Math.abs(pos.z - transform.position.z) > 0.001) {
               // User manually moved Z, disable auto-snap
               transformHook.setAutoSnapEnabled(false);
             }
@@ -916,6 +914,7 @@ export default function Home() {
           onJointSelect={setSelectedJointId}
           hoveredJointId={hoveredJointId}
           onJointHoverChange={setHoveredJointId}
+          gpuPickingTest={false}  // GPU picking disabled - using custom events for selection
         />
 
         {/* Transform Toolbar */}
@@ -923,13 +922,37 @@ export default function Home() {
           <>
             <TransformToolbar mode={transformMode} onModeChange={setTransformMode} />
 
-            {/* Transform Mode Settings Cards */}
-            {transformMode === 'move' && (
-              <MoveControls
+            {/* Transform Controls Panel */}
+            {transformMode === 'transform' && (
+              <TransformControls
                 position={transform.position}
                 onPositionChange={transformHook.setPosition}
                 onCenter={transformHook.centerXY}
                 onPlatform={transformHook.setPlatformZ}
+                rotation={transform.rotation}
+                onRotationChange={transformHook.setRotation}
+                onResetRotation={transformHook.resetRotation}
+                onRotationComplete={() => {
+                  setScanData(null);
+                  setOverlayEnabled(false);
+                  setVoxelEnabled(false);
+                  setSelectedIslandId(null);
+                  setTimeout(() => {
+                    if (transformHook.autoSnapEnabled) {
+                      const lowestWorldZ = getLowestWorldZ();
+                      if (lowestWorldZ !== null) {
+                        if (autoLift) {
+                          transformHook.snapToLift(lowestWorldZ, liftDistance);
+                        } else {
+                          transformHook.snapToPlatform(lowestWorldZ);
+                        }
+                      }
+                    }
+                  }, 0);
+                }}
+                scale={transform.scale}
+                onScaleChange={transformHook.setScale}
+                onResetScale={transformHook.resetScale}
                 modelBBox={geom.bbox}
                 autoLift={autoLift}
                 onAutoLiftChange={setAutoLift}
@@ -943,21 +966,6 @@ export default function Home() {
                   const lowestWorldZ = getLowestWorldZ();
                   if (lowestWorldZ !== null) transformHook.snapToPlatform(lowestWorldZ);
                 }}
-              />
-            )}
-            {transformMode === 'rotate' && (
-              <RotateControls
-                rotation={transform.rotation}
-                onRotationChange={transformHook.setRotation}
-                onReset={transformHook.resetRotation}
-              />
-            )}
-            {transformMode === 'scale' && (
-              <ScaleControls
-                scale={transform.scale}
-                onScaleChange={transformHook.setScale}
-                onReset={transformHook.resetScale}
-                modelBBox={geom.bbox}
               />
             )}
           </>

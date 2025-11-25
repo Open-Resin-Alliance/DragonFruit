@@ -85,6 +85,16 @@ body {
   border: 2px solid #ffffff;
 }
 
+/* Hide number input spinners */
+input[type="number"].no-spinners::-webkit-outer-spin-button,
+input[type="number"].no-spinners::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"].no-spinners {
+  -moz-appearance: textfield;
+}
+
 /* Toast fade-in animation */
 @keyframes fadeIn {
   from {

@@ -10,9 +10,6 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
   const buttons: Array<{ mode: TransformMode; label: string; icon: string }> = [
     { mode: 'select', label: 'Select', icon: '👆' },
     { mode: 'transform', label: 'Transform', icon: '⬙' },
-    { mode: 'move', label: 'Move', icon: '✥' },
-    { mode: 'rotate', label: 'Rotate', icon: '↻' },
-    { mode: 'scale', label: 'Scale', icon: '⇲' },
   ];
 
   return (

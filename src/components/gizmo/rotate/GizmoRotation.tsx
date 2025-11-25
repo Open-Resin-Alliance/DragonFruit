@@ -6,6 +6,8 @@ import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis } from '../types';
+import { usePicking } from '@/components/picking';
+import type { GizmoHandleType } from '@/components/picking/types';
 
 interface GizmoRotationProps {
   axis: GizmoAxis;
@@ -46,6 +48,38 @@ export function GizmoRotation({
   const lastMouseAngle = useRef<number>(0);
   const rafId = useRef<number | null>(null);
   const { camera, gl } = useThree();
+  
+  // GPU Picking registration
+  const pickMeshRef = useRef<THREE.Mesh>(null);
+  const pickIdRef = useRef<number | null>(null);
+  const { register, unregister, hit } = usePicking();
+  
+  // Map axis to gizmo handle type
+  const handleType: GizmoHandleType = `rotate-${axis}` as GizmoHandleType;
+  
+  // Register with picking system
+  useEffect(() => {
+    if (!pickMeshRef.current) return;
+    
+    pickIdRef.current = register({
+      category: 'gizmo',
+      objectId: null,
+      gizmoHandle: handleType,
+      object: pickMeshRef.current,
+    });
+    
+    return () => {
+      if (pickIdRef.current !== null) {
+        unregister(pickIdRef.current);
+        pickIdRef.current = null;
+      }
+    };
+  }, [register, unregister, handleType]);
+  
+  // Check if this handle is hovered via GPU picking
+  const isPickingHovered = hit.category === 'gizmo' && 
+    'gizmoHandle' in hit && 
+    hit.gizmoHandle === handleType;
 
   // Get colors for this axis
   const ringColors = axis === 'x' ? GIZMO_COLORS.xRing : axis === 'y' ? GIZMO_COLORS.yRing : GIZMO_COLORS.zRing;
@@ -204,22 +238,25 @@ export function GizmoRotation({
     };
   }, [isDragging, onDrag, onDragEnd, getMouseAngle]);
 
+  // Use GPU picking hover state OR prop-based hover (fallback)
+  const effectiveHovered = isPickingHovered || isHovered;
+
   const opacity = isHidden ? 0 : isDimmed ? 0.15 : 0.6;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
   const diamondColor = isDimmed ? dimmedColor : ringColors.diamond;
   const ringColor = isDimmed ? dimmedColor : ringColors.ring;
 
-  // Emissive intensity based on state
+  // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
   const emissiveIntensity = isActive
     ? GIZMO_LIGHTING.emissiveIntensity.active
-    : isHovered
+    : effectiveHovered
     ? GIZMO_LIGHTING.emissiveIntensity.hovered
     : GIZMO_LIGHTING.emissiveIntensity.idle;
 
-  // Point light intensity based on state
+  // Point light intensity based on state (uses effectiveHovered for GPU picking support)
   const lightIntensity = isActive
     ? GIZMO_LIGHTING.pointLightIntensity.active
-    : isHovered
+    : effectiveHovered
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
@@ -312,14 +349,13 @@ export function GizmoRotation({
     <group
       rotation={rotation}
       onPointerDown={handlePointerDown}
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={onPointerLeave}
     >
-      {/* Invisible larger hitbox for better raycasting */}
-      <mesh position={handlePosition}>
+      {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
+      <mesh ref={pickMeshRef} position={handlePosition}>
         <sphereGeometry args={[GIZMO_SIZES.ringDiamondRadius * 2, 16, 16]} />
-        <meshBasicMaterial visible={false} depthTest={false} />
+        <meshBasicMaterial visible={false} />
       </mesh>
+      
       {/* Rotating group to keep colored arc facing camera - uses same angle as handle */}
       <group rotation={[0, 0, handleAngle]}>
         {/* Front arc with gradient - pure color at center, lighter at ends */}

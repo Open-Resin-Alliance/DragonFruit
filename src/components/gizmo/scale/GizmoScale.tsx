@@ -6,6 +6,8 @@ import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis } from '../types';
+import { usePicking } from '@/components/picking';
+import type { GizmoHandleType } from '@/components/picking/types';
 
 interface GizmoScaleProps {
   axis: GizmoAxis;
@@ -176,6 +178,38 @@ export function GizmoScale({
   const rafId = useRef<number | null>(null);
   const { camera, gl } = useThree();
 
+  // GPU Picking registration
+  const pickMeshRef = useRef<THREE.Mesh>(null);
+  const pickIdRef = useRef<number | null>(null);
+  const { register, unregister, hit } = usePicking();
+  
+  // Map axis to gizmo handle type
+  const handleType: GizmoHandleType = `scale-${axis}` as GizmoHandleType;
+  
+  // Register with picking system
+  useEffect(() => {
+    if (!pickMeshRef.current) return;
+    
+    pickIdRef.current = register({
+      category: 'gizmo',
+      objectId: null,
+      gizmoHandle: handleType,
+      object: pickMeshRef.current,
+    });
+    
+    return () => {
+      if (pickIdRef.current !== null) {
+        unregister(pickIdRef.current);
+        pickIdRef.current = null;
+      }
+    };
+  }, [register, unregister, handleType]);
+  
+  // Check if this handle is hovered via GPU picking
+  const isPickingHovered = hit.category === 'gizmo' && 
+    'gizmoHandle' in hit && 
+    hit.gizmoHandle === handleType;
+
   // Get colors for this axis
   const axisColors = axis === 'x' ? GIZMO_COLORS.xAxis : axis === 'y' ? GIZMO_COLORS.yAxis : GIZMO_COLORS.zAxis;
 
@@ -344,32 +378,34 @@ export function GizmoScale({
     };
   }, [isDragging, isUniformScale, onDrag, onDragEnd, getScaleFactor, gizmoPosition, camera, gl]);
 
+  // Use GPU picking hover state OR prop-based hover (fallback)
+  const effectiveHovered = isPickingHovered || isHovered;
+
   const opacity = isHidden ? 0 : isDimmed ? 0.15 : 1.0;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
 
-  // Emissive intensity based on state
+  // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
   const emissiveIntensity = isActive
     ? GIZMO_LIGHTING.emissiveIntensity.active
-    : isHovered
+    : effectiveHovered
     ? GIZMO_LIGHTING.emissiveIntensity.hovered
     : GIZMO_LIGHTING.emissiveIntensity.idle;
 
-  // Point light intensity based on state
+  // Point light intensity based on state (uses effectiveHovered for GPU picking support)
   const lightIntensity = isActive
     ? GIZMO_LIGHTING.pointLightIntensity.active
-    : isHovered
+    : effectiveHovered
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
   return (
     <group>
-      {/* Invisible larger hitbox for better raycasting */}
+      {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
       <mesh 
+        ref={pickMeshRef}
         position={position}
         renderOrder={1000}
         onPointerDown={handlePointerDown}
-        onPointerEnter={handlePointerEnter}
-        onPointerLeave={handlePointerLeave}
         onContextMenu={handleContextMenu}
       >
         <boxGeometry args={[

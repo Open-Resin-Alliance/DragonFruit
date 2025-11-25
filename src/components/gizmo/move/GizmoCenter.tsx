@@ -4,6 +4,8 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { ThreeEvent, useThree } from '@react-three/fiber';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
+import { usePicking } from '@/components/picking';
+import type { GizmoHandleType } from '@/components/picking/types';
 
 interface GizmoCenterProps {
   isHovered?: boolean;
@@ -40,6 +42,38 @@ export function GizmoCenter({
   const rafId = useRef<number | null>(null);
   const dragPlane = useRef<THREE.Plane | null>(null);
   const { camera, gl } = useThree();
+
+  // GPU Picking registration
+  const pickMeshRef = useRef<THREE.Mesh>(null);
+  const pickIdRef = useRef<number | null>(null);
+  const { register, unregister, hit } = usePicking();
+  
+  // Handle type for center
+  const handleType: GizmoHandleType = 'move-center';
+  
+  // Register with picking system
+  useEffect(() => {
+    if (!pickMeshRef.current) return;
+    
+    pickIdRef.current = register({
+      category: 'gizmo',
+      objectId: null,
+      gizmoHandle: handleType,
+      object: pickMeshRef.current,
+    });
+    
+    return () => {
+      if (pickIdRef.current !== null) {
+        unregister(pickIdRef.current);
+        pickIdRef.current = null;
+      }
+    };
+  }, [register, unregister, handleType]);
+  
+  // Check if this handle is hovered via GPU picking
+  const isPickingHovered = hit.category === 'gizmo' && 
+    'gizmoHandle' in hit && 
+    hit.gizmoHandle === handleType;
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -138,29 +172,30 @@ export function GizmoCenter({
     };
   }, [isDragging, onDrag, onDragEnd, getWorldPointFromMouse]);
 
+  // Use GPU picking hover state OR prop-based hover (fallback)
+  const effectiveHovered = isPickingHovered || isHovered;
+
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
   const centerColor = isDimmed ? dimmedColor : GIZMO_COLORS.center;
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isActive || isHovered ? 1.0 : 0.5;
+  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isActive || effectiveHovered ? 1.0 : 0.5;
 
   // Emissive intensity - disabled for center disc (no glow)
   const emissiveIntensity = 0;
 
-  // Point light intensity based on state
+  // Point light intensity based on state (uses effectiveHovered for GPU picking support)
   const lightIntensity = isActive
     ? GIZMO_LIGHTING.pointLightIntensity.active
-    : isHovered
+    : effectiveHovered
     ? GIZMO_LIGHTING.pointLightIntensity.hovered
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
   return (
     <group
       onPointerDown={handlePointerDown}
-      onPointerEnter={onPointerEnter}
-      onPointerLeave={onPointerLeave}
     >
-      {/* Invisible larger hitbox for better raycasting */}
-      <mesh>
+      {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
+      <mesh ref={pickMeshRef}>
         <circleGeometry args={[GIZMO_SIZES.centerRadius * 1.8, 32]} />
         <meshBasicMaterial
           visible={false}

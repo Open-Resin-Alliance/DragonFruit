@@ -35,35 +35,81 @@ This ensures consistent vertical orientation across all visualization, slicing, 
 ## Programming Ideology
 
 - Build features as small, focused modules.
-- Keep UI, scene logic, hooks, and utilities in their own files.
+- Co-locate all code with its parent component or system (no scattered `hooks/` or `utils/` folders).
 - Prefer composition over large monolithic components.
-- Co-locate code by responsibility (e.g., components/scene, components/controls, hooks/).
 - Keep files short, readable, and single-purpose to enable testing and refactoring.
+- Split large files into multiple smaller files with clear responsibilities.
 
 ## Code Organization (Important)
 
-This project is organized by responsibility, using a domain-first folder structure. This applies to supports and to any new feature domains we add in the future (e.g., Slicing, Meshing, Bracing, Measurement, Export).
+This project is organized by **component/feature**, not by shared technical categories. Avoid generic folders like `hooks/`, `utils/`, or `helpers/` at the root level. Instead, co-locate all code with the component or system it belongs to.
 
-- Domain namespaces
-  - Each domain lives under `src/<domain>/` and contains its logic, state, types, rendering, and utilities.
-  - Example (supports): `src/supports/` holds support-specific code.
-  - Example (future): `src/bracing/`, `src/export/`, etc., with the same internal structure.
+### Core Principle: Component-First Organization
 
-- Hooks
-  - Domain hooks live under `src/<domain>/hooks/`. Do not place domain-specific hooks in the global `src/hooks/`.
-  - Use `src/hooks/` only for truly generic hooks that are not tied to any domain.
+Each system or feature gets its own folder containing ALL of its logic:
+- Types and interfaces
+- State management
+- Hooks (specific to that system)
+- Utilities (specific to that system)
+- Rendering components
+- Tests
 
-- Feature modules within a domain
-  - Place feature modules under `src/<domain>/<FeatureName>/` with subfolders for placement, snapping, joints, validation, rendering, etc.
-  - Example: `src/supports/BranchSupports/{placement,snapping,joints,validation,rendering}/`.
+**Example structure for a new system (GPUPicking):**
+```
+src/components/picking/
+├── PickingContext.tsx      # React context providing pointerHit
+├── PickingRenderer.tsx     # Offscreen render pass
+├── PickingProvider.tsx     # Provider component wrapping the scene
+├── pickingUtils.ts         # ID encoding, majority vote logic
+├── types.ts                # Pickable types, hit result interface
+├── constants.ts            # Update rates, buffer sizes
+└── hooks/
+    └── usePickingSubscription.ts  # Hook for components to subscribe
+```
 
-- Components and shared UI
-  - Shared scene/UI components live under `src/components/` (e.g., `components/scene`, `components/controls`, `components/ui`).
-  - Domain-specific visuals (e.g., preview overlays, gizmos) live inside their domain's module (`src/<domain>/<FeatureName>/rendering/`).
+### File Size Guidelines
 
-- Modularity and safety
-  - Build features as small focused files; gate WIP behind feature flags.
-  - Keep ownership clear—avoid placing domain code in generic directories.
+- **Avoid large monolithic files.** Split code into logical sections across multiple files.
+- Each file should have a single, clear responsibility.
+- If a file exceeds ~200-500 lines, consider splitting it.
+
+### Domain Structure
+
+Major feature domains live under `src/` with their own namespace:
+- `src/supports/` — Support generation (trunks, branches, leaves, joints, rafts)
+- `src/components/` — Shared UI and scene components, each in its own subfolder
+- `src/modules/` — Standalone systems (e.g., island detection)
+
+Within each domain, organize by feature:
+```
+src/supports/
+├── BranchSupports/
+│   ├── placement/
+│   ├── snapping/
+│   ├── constraints/
+│   └── rendering/
+├── Joints/
+│   ├── types.ts
+│   ├── raycasting.ts
+│   └── ...
+└── Rafts/
+    └── Crenelated/
+        ├── rendering/
+        └── ...
+```
+
+### What Goes Where
+
+- **Domain-specific code** → Inside the domain folder (e.g., `src/supports/hooks/`)
+- **Shared scene components** → `src/components/<ComponentName>/` (each component gets a folder)
+- **Truly generic utilities** → Only if used by 3+ unrelated systems; otherwise keep co-located
+- **Global hooks** → `src/hooks/` only for app-wide hooks not tied to any domain (rare)
+
+### Modularity and Safety
+
+- Build features as small focused files.
+- Gate work-in-progress behind feature flags.
+- Keep ownership clear—avoid placing domain code in generic directories.
 
 Following this structure ensures clean boundaries, safer refactors, and easier collaboration as the codebase grows.
 
