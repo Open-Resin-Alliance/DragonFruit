@@ -32,6 +32,7 @@ import { useBranchPlacement } from '@/supports/BranchSupports/placement/useBranc
 import { useLeafPlacement } from '@/supports/LeafSupports/placement/useLeafPlacement';
 import { RaftSettingsCard } from '@/supports/Rafts/Crenelated/components/RaftSettingsCard';
 import { getRaftSettings, setRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeLowestZ, computeBoundsZ } from '@/utils/geometry';
 
 const EMPTY_SUPPORT_SNAPSHOT: SupportInstance[] = [];
 
@@ -42,6 +43,15 @@ if (typeof window !== 'undefined') {
 }
 
 export default function Home() {
+  const renderId = useRef(0);
+  renderId.current++;
+  console.log(`[${new Date().toISOString()}] [Home] Render #${renderId.current} start`);
+  const renderStart = performance.now();
+
+  useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [Home] Render #${renderId.current} finished. Took ${(performance.now() - renderStart).toFixed(2)}ms`);
+  });
+
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [layerHeightMicron, setLayerHeightMicron] = useState<number>(50);
@@ -172,45 +182,45 @@ export default function Home() {
   const getLowestWorldZ = useCallback((): number | null => {
     if (!geom) return null;
 
+    // Use pending transform if available (during/after drag), otherwise use state
+    const currentT = pendingTransformRef.current
+      ? {
+        position: pendingTransformRef.current.pos,
+        rotation: pendingTransformRef.current.rot,
+        scale: pendingTransformRef.current.scl
+      }
+      : transform;
+
     // Get center offset
     const bbox = geom.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geom.geometry.getAttribute('position') as THREE.BufferAttribute);
     const center = bbox.getCenter(new THREE.Vector3());
 
-    const geometry = geom.geometry.clone();
+    // Construct the full transform matrix:
+    // V_world = Pos * RotScale * Offset * V_local
 
-    // Apply ALL transforms: position, rotation, scale, AND the mesh offset
-    const matrix = new THREE.Matrix4();
+    // 1. Offset matrix (centering)
+    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
 
-    // First apply the mesh centering offset
-    matrix.makeTranslation(-center.x, -center.y, -center.z);
-
-    // Then apply rotation and scale
+    // 2. Rotation and Scale matrix
     const rotScaleMatrix = new THREE.Matrix4();
     rotScaleMatrix.compose(
       new THREE.Vector3(0, 0, 0),
-      new THREE.Quaternion().setFromEuler(transform.rotation),
-      transform.scale
+      new THREE.Quaternion().setFromEuler(currentT.rotation),
+      currentT.scale
     );
-    matrix.premultiply(rotScaleMatrix);
 
-    // Finally apply position
+    // 3. Position matrix
     const posMatrix = new THREE.Matrix4();
-    posMatrix.makeTranslation(transform.position.x, transform.position.y, transform.position.z);
-    matrix.premultiply(posMatrix);
+    posMatrix.makeTranslation(currentT.position.x, currentT.position.y, currentT.position.z);
 
-    geometry.applyMatrix4(matrix);
+    // Combine: final = pos * rotScale * offset
+    const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
 
-    // Find the lowest Z vertex in world space
-    const positions = geometry.getAttribute('position');
-    let minZ = Infinity;
-    for (let i = 0; i < positions.count; i++) {
-      const z = positions.getZ(i);
-      if (z < minZ) minZ = z;
-    }
-
-    geometry.dispose();
-    return minZ;
-  }, [geom, transform.position, transform.rotation, transform.scale]);
+    // Use optimized utility to find lowest Z without cloning geometry
+    const z = computeLowestZ(geom.geometry, finalMatrix);
+    console.log('[getLowestWorldZ] Computed lowest Z:', z);
+    return z;
+  }, [geom, transform]);
 
   // Auto-snap when lift distance changes (if auto-snap is enabled)
   // Note: Don't include transformHook in dependencies to avoid infinite loop
@@ -268,31 +278,45 @@ export default function Home() {
     }
 
     // Clone geometry and apply same transforms as rendered mesh
-    const tempGeom = geom.geometry.clone();
-    const bbox = geom.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
-      geom.geometry.getAttribute('position') as THREE.BufferAttribute
-    );
-    const centerOffset = bbox.getCenter(new THREE.Vector3());
+    // OPTIMIZED: Use computeBoundsZ to avoid cloning geometry
 
-    // Apply center offset (negate to move geometry)
-    tempGeom.translate(-centerOffset.x, -centerOffset.y, -centerOffset.z);
+    // Get center offset
+    const bbox = geom.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geom.geometry.getAttribute('position') as THREE.BufferAttribute);
+    const center = bbox.getCenter(new THREE.Vector3());
 
-    // Apply transform matrix
-    const quaternion = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(transform.rotation.x, transform.rotation.y, transform.rotation.z)
-    );
-    const matrix = new THREE.Matrix4().compose(
-      new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z),
-      quaternion,
+    // Construct the full transform matrix:
+    // V_world = Pos * RotScale * Offset * V_local
+
+    // 1. Offset matrix (centering)
+    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+
+    // 2. Rotation and Scale matrix
+    const rotScaleMatrix = new THREE.Matrix4();
+    rotScaleMatrix.compose(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(transform.rotation.x, transform.rotation.y, transform.rotation.z)
+      ),
       new THREE.Vector3(transform.scale.x, transform.scale.y, transform.scale.z)
     );
-    tempGeom.applyMatrix4(matrix);
-    tempGeom.computeBoundingBox();
-    const transformedBBox = tempGeom.boundingBox!;
-    tempGeom.dispose();
+
+    // 3. Position matrix
+    const posMatrix = new THREE.Matrix4();
+    posMatrix.makeTranslation(transform.position.x, transform.position.y, transform.position.z);
+
+    // Combine: final = pos * rotScale * offset
+    const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
+
+    console.time('zRange_computeBoundsZ');
+    const { min, max } = computeBoundsZ(geom.geometry, finalMatrix);
+    console.timeEnd('zRange_computeBoundsZ');
 
     // Return range from grid base (0) to highest point in world space
-    return { min: 0, max: transformedBBox.max.z };
+    // The original logic seemed to imply min is always 0 for the slider range?
+    // "min: always 0 (grid base)"
+    // "max: highest vertex in world space"
+    // So we return { min: 0, max: max }
+    return { min: 0, max: max };
   }, [
     geom,
     isTransforming,
@@ -850,7 +874,11 @@ export default function Home() {
                     }
                   }
                 }
+                // Clear pending transform after we've used it for the snap calculation
+                pendingTransformRef.current = null;
               }, 0);
+            } else {
+              pendingTransformRef.current = null;
             }
           }}
           crossSectionMode={crossSectionMode}

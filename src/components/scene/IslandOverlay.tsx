@@ -23,6 +23,7 @@ type IslandOverlayProps = {
  * Applies the same transform as the main mesh to keep overlays aligned.
  */
 export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity, transform, centerOffset, selectedIslandId, clipLower, clipUpper }: IslandOverlayProps) {
+  console.log(`[${new Date().toISOString()}] [IslandOverlay] Render start`);
   const threeColor = useMemo(() => new THREE.Color(color), [color]);
   const visibleColor = useMemo(() => new THREE.Color('#ffff00'), []); // Bright yellow when visible
   const occludedColor = useMemo(() => new THREE.Color('#fF6600'), []); // Vibrant red-orange when behind mesh
@@ -30,14 +31,14 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
   // Create clipping planes for layer slider support
   const clippingPlanes = useMemo(() => {
     const planes: THREE.Plane[] = [];
-    
+
     if (clipLower != null) {
       planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
     }
     if (clipUpper != null) {
       planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
-    
+
     return planes;
   }, [clipLower, clipUpper]);
 
@@ -61,9 +62,9 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
     <group position={getScanVisualPosition(transform)}>
       {markers.map((marker) => {
         if (!marker.geometry) return null;
-        
+
         const isSelected = marker.id === selectedIslandId;
-        
+
         if (isSelected) {
           // Render selected island twice:
           // 1. Orange version without depth test (always visible, shows when occluded)
@@ -71,7 +72,7 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
           return (
             <group key={marker.id}>
               {/* Occluded state - orange, no depth test, renders behind */}
-              <mesh 
+              <mesh
                 geometry={marker.geometry}
                 renderOrder={999}
               >
@@ -87,9 +88,9 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
                   clipIntersection
                 />
               </mesh>
-              
+
               {/* Visible state - yellow, with depth test, renders on top */}
-              <mesh 
+              <mesh
                 geometry={marker.geometry}
                 renderOrder={1000}
               >
@@ -110,8 +111,8 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
         } else {
           // Non-selected islands render normally
           return (
-            <mesh 
-              key={marker.id} 
+            <mesh
+              key={marker.id}
               geometry={marker.geometry}
             >
               <meshStandardMaterial

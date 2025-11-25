@@ -104,6 +104,10 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, materialR
     return ps;
   }, [clipLower, clipUpper]);
 
+  useEffect(() => {
+    console.log(`[${new Date().toISOString()}] [SceneCanvas] StlMesh received new geometry`);
+  }, [geometry]);
+
   // Calculate center offset for positioning
   const centerOffset = React.useMemo(() => {
     const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
@@ -799,14 +803,16 @@ export function SceneCanvas({
                   suppressNextClickRef={suppressNextCanvasClickRef}
                 />
               )}
-              {!hideCrossSectionCap && (clipUpper != null || clipLower != null) && (
+              {/* Cross-section cap (fill) at the cut plane */}
+              {clipLower != null && !hideCrossSectionCap && (
                 <CrossSectionCap
                   geometry={geom.geometry}
-                  y={(clipUpper ?? clipLower)!}
-                  color="#ffffff"
+                  y={clipLower}
+                  color={meshColor}
                   transformMatrix={transformMatrix}
                   mode={crossSectionMode}
                   pxMm={pxMm}
+                  visible={!hideCrossSectionCap && clipLower != null}
                 />
               )}
               {islandMarkers && islandMarkers.length > 0 && meshRef.current && (

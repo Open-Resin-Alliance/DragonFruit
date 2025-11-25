@@ -6,6 +6,9 @@
 - **Stick** [[Stick]]
   - A two-ended contact element connecting model → model via a central hub: two branches meet at a central spherical joint. Does not attach to supports.
 
+- **Brace** [[Brace]]
+  - A support-to-support stabilizer: a `shaft` with a `[[Knot]]` at both ends that snaps to any support `[[Shaft]]` (including a Brace). Never touches the model.
+
 - **Roots** [[Roots]]
   - The bottom element of a trunk that forms the footprint on the plate or raft and provides a strong, continuous connection to the trunk.
 

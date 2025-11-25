@@ -21,12 +21,12 @@ interface FootprintBorderRendererProps {
  */
 function convexHull(points: THREE.Vector2[]): THREE.Vector2[] {
   if (points.length <= 1) return points.slice();
-  
+
   const pts = points
     .map((p) => new THREE.Vector2(p.x, p.y))
     .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
 
-  const cross = (o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) => 
+  const cross = (o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2) =>
     (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 
   const lower: THREE.Vector2[] = [];
@@ -70,7 +70,6 @@ function offsetPolygonOutward(polygon: THREE.Vector2[], distance: number): THREE
     const edge2 = new THREE.Vector2().subVectors(next, curr).normalize();
 
     // Perpendicular normals (outward for CCW polygon)
-    // For CCW: right normal (edge.y, -edge.x) points outward
     const normal1 = new THREE.Vector2(edge1.y, -edge1.x);
     const normal2 = new THREE.Vector2(edge2.y, -edge2.x);
 
@@ -97,12 +96,11 @@ function offsetPolygonOutward(polygon: THREE.Vector2[], distance: number): THREE
 /**
  * FootprintBorderRenderer
  * - Renders a blue line border showing combined model + raft footprint with margin
- * - Positioned below the build plate for build plate organization visualization
- * - Updates when model transforms, raft changes, or supports change
+ * - Uses BVH-accelerated raycasting for accurate model footprint ("100 little lights" approach)
  */
-export default function FootprintBorderRenderer({ 
-  modelGeometry, 
-  modelTransform 
+export default function FootprintBorderRenderer({
+  modelGeometry,
+  modelTransform
 }: FootprintBorderRendererProps) {
   const supports = useSyncExternalStore(subscribeToSupportStore, getSupportList, () => []);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
@@ -122,10 +120,8 @@ export default function FootprintBorderRenderer({
       }));
 
     if (circles.length > 0) {
-      // Get base raft footprint
       const baseProfile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
       if (baseProfile && baseProfile.length >= 3) {
-        // Compute outer boundary including chamfer and walls
         const raftOuterBoundary = computeRaftOuterBoundary(baseProfile, raft);
         if (raftOuterBoundary && raftOuterBoundary.length >= 3) {
           allPoints.push(...raftOuterBoundary);
@@ -133,10 +129,13 @@ export default function FootprintBorderRenderer({
       }
     }
 
-    // 2. Add model footprint points (transformed to world space)
+    // 2. Add model footprint using raycasting
     if (modelGeometry && modelTransform) {
-      // Build transform matrix accounting for mesh center offset
-      const bbox = modelGeometry.geometry.boundingBox ?? 
+      console.log(`[${new Date().toISOString()}] [FootprintBorderRenderer] Computing footprint...`);
+      const start = performance.now();
+
+      // Build transform matrix
+      const bbox = modelGeometry.geometry.boundingBox ??
         new THREE.Box3().setFromBufferAttribute(
           modelGeometry.geometry.getAttribute('position') as THREE.BufferAttribute
         );
@@ -151,42 +150,98 @@ export default function FootprintBorderRenderer({
       const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
       transformMatrix.multiply(offsetMatrix);
 
-      // Sample model vertices and transform to world space
-      const positions = modelGeometry.geometry.attributes.position;
-      if (positions) {
-        const vertex = new THREE.Vector3();
-        const worldVertex = new THREE.Vector3();
-        
-        for (let i = 0; i < positions.count; i++) {
-          vertex.fromBufferAttribute(positions, i);
-          worldVertex.copy(vertex).applyMatrix4(transformMatrix);
-          allPoints.push(new THREE.Vector2(worldVertex.x, worldVertex.y));
+      // Compute world-space bounds
+      const corners = [
+        new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.min.z),
+        new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.max.z),
+        new THREE.Vector3(bbox.min.x, bbox.max.y, bbox.min.z),
+        new THREE.Vector3(bbox.min.x, bbox.max.y, bbox.max.z),
+        new THREE.Vector3(bbox.max.x, bbox.min.y, bbox.min.z),
+        new THREE.Vector3(bbox.max.x, bbox.min.y, bbox.max.z),
+        new THREE.Vector3(bbox.max.x, bbox.max.y, bbox.min.z),
+        new THREE.Vector3(bbox.max.x, bbox.max.y, bbox.max.z),
+      ];
+
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
+      let maxZ = -Infinity;
+
+      for (const corner of corners) {
+        corner.applyMatrix4(transformMatrix);
+        minX = Math.min(minX, corner.x);
+        maxX = Math.max(maxX, corner.x);
+        minY = Math.min(minY, corner.y);
+        maxY = Math.max(maxY, corner.y);
+        maxZ = Math.max(maxZ, corner.z);
+      }
+
+      // @ts-ignore - BVH is added by three-mesh-bvh
+      const bvh = modelGeometry.geometry.boundsTree;
+
+      if (bvh) {
+        // RAYCAST APPROACH: Cast rays from above in a grid
+        const GRID_SIZE = 50; // 50x50 = 2,500 rays (increased for better accuracy)
+        const stepX = (maxX - minX) / GRID_SIZE;
+        const stepY = (maxY - minY) / GRID_SIZE;
+
+        const raycaster = new THREE.Raycaster();
+        const rayOrigin = new THREE.Vector3();
+        const rayDir = new THREE.Vector3(0, 0, -1);
+        const inverseMatrix = transformMatrix.clone().invert();
+
+        for (let i = 0; i <= GRID_SIZE; i++) {
+          for (let j = 0; j <= GRID_SIZE; j++) {
+            const worldX = minX + i * stepX;
+            const worldY = minY + j * stepY;
+
+            // Set up ray in world space
+            rayOrigin.set(worldX, worldY, maxZ + 10);
+            raycaster.ray.origin.copy(rayOrigin);
+            raycaster.ray.direction.copy(rayDir);
+
+            // Transform to local space for BVH query
+            raycaster.ray.applyMatrix4(inverseMatrix);
+
+            // Cast ray
+            // @ts-ignore
+            const hit = bvh.raycastFirst(raycaster.ray, THREE.DoubleSide);
+
+            if (hit) {
+              // Transform hit back to world space
+              const worldHit = hit.point.clone().applyMatrix4(transformMatrix);
+              allPoints.push(new THREE.Vector2(worldHit.x, worldHit.y));
+            }
+          }
+        }
+      } else {
+        // FALLBACK: Use bbox corners if no BVH
+        for (const corner of corners) {
+          allPoints.push(new THREE.Vector2(corner.x, corner.y));
         }
       }
+
+      console.log(`[${new Date().toISOString()}] [FootprintBorderRenderer] Footprint computed in ${(performance.now() - start).toFixed(2)}ms. Points: ${allPoints.length}`);
     }
 
     if (allPoints.length < 3) return null;
 
-    // 3. Compute convex hull of all points (model + raft)
+    // 3. Compute convex hull
     const combinedHull = convexHull(allPoints);
     if (!combinedHull || combinedHull.length < 3) return null;
 
-    // 4. Add margin beyond the combined hull (adjustable setting)
+    // 4. Add margin
     const margin = raft.footprintBorderMargin || 2.0;
     const borderProfile = offsetPolygonOutward(combinedHull, margin);
     if (!borderProfile || borderProfile.length < 3) return null;
 
-    // Create line geometry from profile
+    // 5. Create line geometry
     const points: THREE.Vector3[] = [];
     for (const p of borderProfile) {
-      points.push(new THREE.Vector3(p.x, p.y, -1.0)); // Z = -1mm below build plate
+      points.push(new THREE.Vector3(p.x, p.y, -1.0));
     }
-    // Close the loop
     points.push(new THREE.Vector3(borderProfile[0].x, borderProfile[0].y, -1.0));
 
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    
-    return geometry;
+    return new THREE.BufferGeometry().setFromPoints(points);
   }, [modelGeometry, modelTransform, supports, raft]);
 
   if (!raft.enabled || !raft.showFootprintBorder || !borderLine) {
@@ -194,7 +249,7 @@ export default function FootprintBorderRenderer({
   }
 
   return (
-    <primitive object={new THREE.Line(borderLine, new THREE.LineBasicMaterial({ 
+    <primitive object={new THREE.Line(borderLine, new THREE.LineBasicMaterial({
       color: '#3b82f6',
       linewidth: 5,
       opacity: 0.5,

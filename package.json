@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --loader tsx --test src/supports/__tests__/*.test.ts",
-    "test:watch": "node --loader tsx --test --watch src/supports/__tests__/*.test.ts"
+    "test": "node --import tsx --test src/supports/__tests__/*.test.ts",
+    "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.6",
