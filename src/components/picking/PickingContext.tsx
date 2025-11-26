@@ -28,14 +28,14 @@ export const EMPTY_PICK_RESULT: PickingResult = {
 const defaultContextValue: PickingContextValue = {
   hit: EMPTY_PICK_RESULT,
   register: () => {
-    console.warn('[Picking] No PickingProvider found. Registration ignored.');
+    // Silent no-op when no provider - GPU picking is optional
     return 0;
   },
   unregister: () => {
-    console.warn('[Picking] No PickingProvider found. Unregistration ignored.');
+    // Silent no-op when no provider - GPU picking is optional
   },
   setConfig: () => {
-    console.warn('[Picking] No PickingProvider found. Config change ignored.');
+    // Silent no-op when no provider - GPU picking is optional
   },
   config: DEFAULT_PICKING_CONFIG,
   onDragStart: () => {},

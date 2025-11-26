@@ -16,10 +16,17 @@ interface SelectionOutlineRendererProps {
   meshRef: React.RefObject<THREE.Mesh | null>;
   /** Whether outline is enabled */
   enabled?: boolean;
-  /** Outline color */
+  /** Glow color */
   color?: string;
-  /** Outline thickness in world units */
-  thickness?: number;
+  /** Fresnel glow intensity (0-1) */
+  intensity?: number;
+  /** Fresnel power - higher = tighter edge glow */
+  power?: number;
+  /** Rim smoothing range */
+  rimMin?: number;
+  rimMax?: number;
+  /** Alpha discard threshold */
+  alphaCut?: number;
 }
 
 /**
@@ -30,7 +37,11 @@ export function SelectionOutlineRenderer({
   meshRef,
   enabled = true,
   color = '#00ff00',
-  thickness = 0.3,
+  intensity = 1.0,
+  power = 2.0,
+  rimMin,
+  rimMax,
+  alphaCut,
 }: SelectionOutlineRendererProps) {
   const [isSelected, setIsSelected] = useState(true); // Start selected
   
@@ -62,7 +73,11 @@ export function SelectionOutlineRenderer({
       selectedMeshes={[meshRef]}
       enabled={true}
       color={color}
-      thickness={thickness}
+      intensity={intensity}
+      power={power}
+      rimMin={rimMin}
+      rimMax={rimMax}
+      alphaCut={alphaCut}
     />
   );
 }

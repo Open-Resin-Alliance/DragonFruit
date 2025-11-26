@@ -11,6 +11,7 @@ export { SelectionProvider, useSelection, useSelectionState } from './SelectionC
 export { SelectionOutline } from './SelectionOutline';
 export { SelectionManager } from './SelectionManager';
 export { SelectionOutlineRenderer } from './SelectionOutlineRenderer';
+export { SelectionSpotlight } from './SelectionSpotlight';
 
 // Types
-export type { SelectableType, SelectionState, SelectionContextValue } from './types';
+export type { SelectableType, SelectionState, SelectionContextValue, SelectionHighlightMode } from './types';

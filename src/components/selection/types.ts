@@ -10,6 +10,11 @@ import * as THREE from 'three';
 export type SelectableType = 'model' | 'support' | 'joint';
 
 /**
+ * Selection highlight mode - how to visually indicate selection
+ */
+export type SelectionHighlightMode = 'spotlight' | 'fresnel' | 'tint' | 'none';
+
+/**
  * Selection state
  */
 export interface SelectionState {

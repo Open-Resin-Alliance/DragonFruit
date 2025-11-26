@@ -14,7 +14,8 @@ import { AxisLabels } from '@/components/scene/AxisLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { CameraFocusController } from '@/components/scene/CameraFocusController';
 import { PickingProvider, PickingDebugOverlay } from '@/components/picking';
-import { SelectionProvider, SelectionManager, SelectionOutlineRenderer } from '@/components/selection';
+import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
+import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/modules/island/islandOverlayLogic';
 import type { ScanResults } from '@/modules/island/ScanOrchestrator';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
@@ -81,7 +82,7 @@ function Helpers() {
   );
 }
 
-function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMeshRef, materialRoughness, transform, mode, onSupportClick, onSupportHover, onSupportSelect, disableRaycast, blockSupportPlacement, suppressNextClickRef, modelId }: {
+function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMeshRef, materialRoughness, transform, mode, onSupportClick, onSupportHover, onSupportSelect, disableRaycast, blockSupportPlacement, suppressNextClickRef, modelId, isSelected }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
   clipUpper?: number | null;
@@ -101,6 +102,8 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMes
   suppressNextClickRef?: React.RefObject<boolean>;
   /** Model ID for picking registration */
   modelId?: string;
+  /** Whether model is selected (tints material) */
+  isSelected?: boolean;
 }) {
   // Build clipping planes for a band [clipLower, clipUpper] on Z axis
   // Clipping planes work in WORLD space
@@ -232,6 +235,8 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMes
         <meshStandardMaterial
           vertexColors
           color="#ffffff"
+          emissive={isSelected ? "#1a75ff" : "#000000"}
+          emissiveIntensity={isSelected ? 0.3 : 0}
           metalness={0.0}
           roughness={materialRoughness ?? 1.0}
           clippingPlanes={planes}
@@ -300,6 +305,7 @@ export function SceneCanvas({
   leafStateRef,
   leafSocketPosition,
   gpuPickingTest = false,
+  selectionHighlightMode = 'spotlight' as SelectionHighlightMode,
 }: {
   geom: GeometryWithBounds | null;
   clipLower?: number | null;
@@ -357,6 +363,8 @@ export function SceneCanvas({
   leafSocketPosition?: import('@/supports/types').Vec3 | null;
   /** Enable GPU picking test mode - shows test gizmo and debug overlay */
   gpuPickingTest?: boolean;
+  /** Selection highlight mode */
+  selectionHighlightMode?: SelectionHighlightMode;
 }) {
   const meshRef = React.useRef<THREE.Mesh>(null);
   const actualMeshRef = React.useRef<THREE.Mesh | null>(null);
@@ -832,6 +840,7 @@ export function SceneCanvas({
         style={{ width: '100%', height: '100%', backgroundColor: '#202020' }}
         camera={{ position: [150, 150, 150], fov: 50, up: [0, 0, 1] }}
         shadows
+        gl={{ stencil: true }}
       >
         <Lights ambientIntensity={ambientIntensity ?? 1.2} directionalIntensity={directionalIntensity ?? 0.3} />
         <Helpers />
@@ -869,6 +878,7 @@ export function SceneCanvas({
                     blockSupportPlacement={isGizmoDragging || !!selectedJointId}
                     suppressNextClickRef={suppressNextCanvasClickRef}
                     modelId="default-model"
+                    isSelected={isModelSelected && mode === 'prepare' && selectionHighlightMode === 'tint'}
                   />
                 )}
               {/* Cross-section cap (fill) at the cut plane */}
@@ -1182,9 +1192,25 @@ export function SceneCanvas({
         {/* Selection outline - renders when model is selected */}
         <SelectionOutlineRenderer
           meshRef={actualMeshRef}
-          enabled={mode === 'prepare'}
-          color="#00ff00"
-          thickness={0.3}
+          enabled={mode === 'prepare' && selectionHighlightMode === 'fresnel'}
+          color="#82ccff"
+          intensity={0.38}
+          power={3.5}
+          rimMin={0.22}
+          rimMax={0.5}
+          alphaCut={0.03}
+        />
+        {/* Selection spotlight - illuminates only the selected model via layers */}
+        <SelectionSpotlight
+          meshRef={actualMeshRef}
+          enabled={mode === 'prepare' && isModelSelected && selectionHighlightMode === 'spotlight'}
+          color="#ffeacc"
+          intensity={1.5}
+          angle={Math.PI / 3}
+          penumbra={0}
+          elevation={60}
+          radius={60}
+          affectAll
         />
           <OrbitControls
             makeDefault

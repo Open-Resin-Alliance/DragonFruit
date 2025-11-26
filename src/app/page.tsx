@@ -14,6 +14,7 @@ import { IslandListCard } from '@/components/controls/IslandListCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
 import type { SupportMode, SupportInstance } from '@/supports/types';
+import type { SelectionHighlightMode } from '@/components/selection';
 import { SupportSidebar } from '@/supports/SupportSidebar';
 
 import { getSupportList, subscribeToSupportStore, addSupport, getCurrentSupportSettings } from '@/supports/state';
@@ -59,6 +60,8 @@ export default function Home() {
   const geom = useStlGeometry(fileUrl);
   // Global application mode: prepare (default) or support.
   const [mode, setMode] = useState<SupportMode>('prepare');
+  // Selection highlight mode
+  const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
   // Support instances from normalized store
   const supports = useSyncExternalStore(subscribeToSupportStore, getSupportList, () => EMPTY_SUPPORT_SNAPSHOT);
 
@@ -599,6 +602,8 @@ export default function Home() {
         onMeshVisibleChange={setMeshVisible}
         mode={mode}
         onModeChange={setMode}
+        selectionHighlightMode={selectionHighlightMode}
+        onSelectionHighlightModeChange={setSelectionHighlightMode}
       />
       <Sidebar>
 
@@ -808,7 +813,7 @@ export default function Home() {
           clipUpper={clipUpper}
           meshColor={meshColor}
           meshVisible={meshVisible}
-          disableRaycast={transformMode !== 'select' && transformMode !== undefined}
+          disableRaycast={isTransforming}
           hideCrossSectionCap={isTransforming}
           onCameraChange={undefined}
           onCameraEnd={undefined}
@@ -915,6 +920,7 @@ export default function Home() {
           hoveredJointId={hoveredJointId}
           onJointHoverChange={setHoveredJointId}
           gpuPickingTest={false}  // GPU picking disabled - using custom events for selection
+          selectionHighlightMode={selectionHighlightMode}
         />
 
         {/* Transform Toolbar */}

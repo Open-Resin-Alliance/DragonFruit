@@ -13,6 +13,7 @@
   "dependencies": {
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.4.0",
+    "@react-three/postprocessing": "^3.0.4",
     "next": "16.0.1",
     "react": "19.2.0",
     "react-dom": "19.2.0",

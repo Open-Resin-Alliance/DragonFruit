@@ -3,6 +3,7 @@
 import React from 'react';
 import { MeshAppearancePopover } from '@/components/controls/MeshAppearancePopover';
 import type { SupportMode } from '@/supports/types';
+import type { SelectionHighlightMode } from '@/components/selection';
 
 interface TopBarProps {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -23,6 +24,9 @@ interface TopBarProps {
   // New: global application mode (prepare vs support)
   mode: SupportMode;
   onModeChange: (mode: SupportMode) => void;
+  // Selection highlight mode
+  selectionHighlightMode: SelectionHighlightMode;
+  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
 }
 
 export function TopBar({ 
@@ -43,6 +47,8 @@ export function TopBar({
   onMeshVisibleChange,
   mode,
   onModeChange,
+  selectionHighlightMode,
+  onSelectionHighlightModeChange,
 }: TopBarProps) {
   return (
     <div className="fixed top-0 left-0 right-0 h-14 bg-neutral-900 border-b border-neutral-700 z-50 flex items-center px-4 gap-4">
@@ -126,6 +132,26 @@ export function TopBar({
         </button>
       </div>
       
+      {/* Divider */}
+      <div className="h-8 w-px bg-neutral-700" />
+      
+      {/* Selection Highlight Mode */}
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-neutral-300 whitespace-nowrap">
+          Selection:
+        </label>
+        <select
+          value={selectionHighlightMode}
+          onChange={(e) => onSelectionHighlightModeChange(e.target.value as SelectionHighlightMode)}
+          className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
+        >
+          <option value="spotlight">Spotlight</option>
+          <option value="fresnel">Fresnel</option>
+          <option value="tint">Mesh Tint</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+
       {/* Divider */}
       <div className="h-8 w-px bg-neutral-700" />
       

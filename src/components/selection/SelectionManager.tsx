@@ -67,17 +67,12 @@ export function SelectionManager({
           return;
         }
         
-        // Toggle selection on canvas click
+        // Canvas click only deselects - clicking model is required to select
         if (hasSelection) {
           console.log('[SelectionManager] Deselecting (canvas click)');
           deselect();
           setHasSelection(false);
           window.dispatchEvent(new CustomEvent('model-deselected'));
-        } else {
-          console.log('[SelectionManager] Selecting model (canvas click)');
-          select('default-model');
-          setHasSelection(true);
-          window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: 'default-model' } }));
         }
       }
     };

@@ -1,8 +1,8 @@
 /**
- * Selection Outline Effect
+ * Selection Fresnel Rim Effect
  * 
- * Renders an outline using the same geometry with GPU-based vertex displacement.
- * No geometry cloning - displacement happens in the vertex shader.
+ * Renders a glowing rim effect on mesh edges using Fresnel shading.
+ * The glow is strongest at glancing angles (silhouette edges from camera view).
  */
 
 "use client";
@@ -10,22 +10,41 @@
 import React from 'react';
 import * as THREE from 'three';
 
-// Vertex shader that pushes vertices outward along normals (GPU-side, no cloning)
-const outlineVertexShader = `
-  uniform float thickness;
+// Vertex shader - passes view direction and normal to fragment shader
+const fresnelVertexShader = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
   
   void main() {
-    vec3 newPosition = position + normal * thickness;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(newPosition, 1.0);
+    vNormal = normalize(normalMatrix * normal);
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
-// Fragment shader for solid outline color
-const outlineFragmentShader = `
-  uniform vec3 outlineColor;
+// Fragment shader - Fresnel rim glow effect with smoothing and thresholding
+const fresnelFragmentShader = `
+  uniform vec3 glowColor;
+  uniform float intensity;
+  uniform float power;
+  uniform float rimMin;   // smoothstep lower bound
+  uniform float rimMax;   // smoothstep upper bound
+  uniform float alphaCut; // discard threshold
+  
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
   
   void main() {
-    gl_FragColor = vec4(outlineColor, 1.0);
+    // Fresnel factor: 1 at edges (perpendicular to view), 0 facing camera
+    float f = 1.0 - abs(dot(normalize(vNormal), normalize(vViewDir)));
+    f = pow(f, power);
+    // Smooth the ramp to reduce speckling
+    float rim = smoothstep(rimMin, rimMax, f);
+    float alpha = rim * intensity;
+    // Remove tiny values that cause stippling
+    if (alpha < alphaCut) discard;
+    gl_FragColor = vec4(glowColor, alpha);
   }
 `;
 
@@ -34,20 +53,31 @@ interface SelectionOutlineProps {
   selectedMeshes: React.RefObject<THREE.Mesh | null>[];
   /** Whether outline is enabled */
   enabled?: boolean;
-  /** Outline color */
+  /** Glow color */
   color?: string;
-  /** Outline thickness in world units */
-  thickness?: number;
+  /** Glow intensity (0-1) */
+  intensity?: number;
+  /** Fresnel power - higher = tighter edge glow */
+  power?: number;
+  /** Rim smoothing range: lower/upper bounds for smoothstep (0-1) */
+  rimMin?: number;
+  rimMax?: number;
+  /** Alpha discard threshold to remove speckles */
+  alphaCut?: number;
 }
 
 /**
- * SelectionOutline - Renders outline by extruding along normals.
+ * SelectionOutline - Renders Fresnel rim glow on selected meshes.
  */
 export function SelectionOutline({
   selectedMeshes,
   enabled = true,
-  color = '#aaaaaa',
-  thickness = 0.5,
+  color = '#00ff00',
+  intensity = 1.0,
+  power = 2.0,
+  rimMin = 0.15,
+  rimMax = 0.6,
+  alphaCut = 0.02,
 }: SelectionOutlineProps) {
   const validMeshes = selectedMeshes
     .map(ref => ref.current)
@@ -60,11 +90,15 @@ export function SelectionOutline({
   return (
     <>
       {validMeshes.map((mesh, index) => (
-        <OutlineMesh 
+        <FresnelGlowMesh 
           key={index} 
           sourceMesh={mesh} 
           color={color} 
-          thickness={thickness} 
+          intensity={intensity}
+          power={power}
+          rimMin={rimMin}
+          rimMax={rimMax}
+          alphaCut={alphaCut}
         />
       ))}
     </>
@@ -72,60 +106,76 @@ export function SelectionOutline({
 }
 
 /**
- * OutlineMesh - Renders outline for a single mesh using normal extrusion
+ * FresnelGlowMesh - Renders Fresnel rim glow for a single mesh
  */
-function OutlineMesh({ 
+function FresnelGlowMesh({ 
   sourceMesh, 
   color, 
-  thickness 
+  intensity,
+  power,
+  rimMin,
+  rimMax,
+  alphaCut,
 }: { 
   sourceMesh: THREE.Mesh; 
   color: string; 
-  thickness: number;
+  intensity: number;
+  power: number;
+  rimMin: number;
+  rimMax: number;
+  alphaCut: number;
 }) {
-  const outlineRef = React.useRef<THREE.Mesh>(null);
+  const glowRef = React.useRef<THREE.Mesh>(null);
   
-  // Create shader material - displacement happens on GPU, no geometry cloning
-  // depthTest: true ensures outline is hidden behind the model (silhouette only)
-  const outlineMaterial = React.useMemo(() => {
+  // Create Fresnel shader material
+  const glowMaterial = React.useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
-        thickness: { value: thickness },
-        outlineColor: { value: new THREE.Color(color) },
+        glowColor: { value: new THREE.Color(color) },
+        intensity: { value: intensity },
+        power: { value: power },
+        rimMin: { value: rimMin },
+        rimMax: { value: rimMax },
+        alphaCut: { value: alphaCut },
       },
-      vertexShader: outlineVertexShader,
-      fragmentShader: outlineFragmentShader,
-      side: THREE.BackSide,
-      toneMapped: false,
+      vertexShader: fresnelVertexShader,
+      fragmentShader: fresnelFragmentShader,
+      side: THREE.FrontSide,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
       depthTest: true,
-      depthWrite: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      toneMapped: false,
     });
-  }, [color, thickness]);
+  }, [color, intensity, power, rimMin, rimMax, alphaCut]);
 
   // Sync transform with source mesh
   React.useEffect(() => {
-    if (!outlineRef.current || !sourceMesh) return;
+    if (!glowRef.current || !sourceMesh) return;
     
-    // Set initial position immediately to avoid flicker
+    // Set initial position immediately
     sourceMesh.updateWorldMatrix(true, false);
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3();
     sourceMesh.matrixWorld.decompose(position, quaternion, scale);
-    outlineRef.current.position.copy(position);
-    outlineRef.current.quaternion.copy(quaternion);
-    outlineRef.current.scale.copy(scale);
+    glowRef.current.position.copy(position);
+    glowRef.current.quaternion.copy(quaternion);
+    glowRef.current.scale.copy(scale);
     
     let animationId: number;
     
     const updateTransform = () => {
-      if (outlineRef.current && sourceMesh) {
+      if (glowRef.current && sourceMesh) {
         sourceMesh.updateWorldMatrix(true, false);
         sourceMesh.matrixWorld.decompose(position, quaternion, scale);
         
-        outlineRef.current.position.copy(position);
-        outlineRef.current.quaternion.copy(quaternion);
-        outlineRef.current.scale.copy(scale);
+        glowRef.current.position.copy(position);
+        glowRef.current.quaternion.copy(quaternion);
+        glowRef.current.scale.copy(scale);
       }
       animationId = requestAnimationFrame(updateTransform);
     };
@@ -136,12 +186,11 @@ function OutlineMesh({
 
   if (!sourceMesh.geometry) return null;
 
-  // Use the SAME geometry reference - no cloning, displacement is in shader
   return (
     <mesh
-      ref={outlineRef}
+      ref={glowRef}
       geometry={sourceMesh.geometry}
-      material={outlineMaterial}
+      material={glowMaterial}
     />
   );
 }
