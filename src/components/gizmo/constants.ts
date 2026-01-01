@@ -46,17 +46,17 @@ export const GIZMO_COLORS: GizmoColors = {
 export const GIZMO_SIZES: GizmoSizes = {
   centerRadius: 0.6,      // 4x bigger
   arrowShaftRadius: 0.08,  // 4x bigger
-  arrowShaftLength: 4.0,   // 4x bigger
-  arrowHeadRadius: 0.16,   // 50% smaller (was 0.32)
-  arrowHeadLength: 0.4,    // 50% smaller (was 0.8)
-  planeSize: 1.2,          // 4x bigger
+  arrowShaftLength: 6.0,   // Increased 50% (was 4.0)
+  arrowHeadRadius: 0.24,   // Increased 50% (was 0.16)
+  arrowHeadLength: 0.6,    // Increased 50% (was 0.4)
+  planeSize: 1.8,          // Increased 50% (was 1.2)
   planeOffset: 1.2,        // 4x bigger
-  ringMajorRadius: 3.2,    // 4x bigger
+  ringMajorRadius: 4.8,    // Increased 50% (was 3.2)
   ringMinorRadius: 0.12,   // 4x bigger
-  ringDiamondRadius: 0.32, // 4x bigger
+  ringDiamondRadius: 0.48, // Increased 50% (was 0.32)
   scaleLineLength: 1.6,    // Moved closer to center (was 2.4)
-  scaleHexagonRadius: 0.33, // Cube size - 25% larger (was 0.3)
-  scaleHexagonDepth: 0.2,  // 4x bigger
+  scaleHexagonRadius: 0.5, // Increased 50% (was 0.33)
+  scaleHexagonDepth: 0.3,  // Increased 50% (was 0.2)
 };
 
 export const GIZMO_LIGHTING = {

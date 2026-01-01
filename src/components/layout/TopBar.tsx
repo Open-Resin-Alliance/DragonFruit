@@ -29,13 +29,13 @@ interface TopBarProps {
   onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
 }
 
-export function TopBar({ 
-  onFileChange, 
-  fileName, 
-  layerHeightMicron, 
-  onLayerHeightChange, 
-  layerHeightMm, 
-  meshColor, 
+export function TopBar({
+  onFileChange,
+  fileName,
+  layerHeightMicron,
+  onLayerHeightChange,
+  layerHeightMm,
+  meshColor,
   onMeshColorChange,
   ambientIntensity,
   onAmbientIntensityChange,
@@ -53,14 +53,17 @@ export function TopBar({
   return (
     <div className="fixed top-0 left-0 right-0 h-14 bg-neutral-900 border-b border-neutral-700 z-50 flex items-center px-4 gap-4">
       {/* Logo/Title */}
-      <div className="text-lg font-semibold text-neutral-200">
-        STL Slicer
-      </div>
-      
+      {/* Logo */}
+      <img
+        src="/textonlyupdate.png"
+        alt="Dragonfruit Slicer"
+        className="h-12 w-auto object-contain -ml-2"
+      />
+
       {/* Load STL Button */}
       <div className="flex items-center gap-2">
-        <label 
-          htmlFor="stl-file-input" 
+        <label
+          htmlFor="stl-file-input"
           className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded cursor-pointer transition-colors"
         >
           Load STL
@@ -69,6 +72,7 @@ export function TopBar({
           id="stl-file-input"
           type="file"
           accept=".stl"
+          multiple
           onChange={onFileChange}
           className="hidden"
         />
@@ -100,7 +104,7 @@ export function TopBar({
           ({layerHeightMm.toFixed(3)} mm)
         </span>
       </div>
-      
+
       {/* Divider */}
       <div className="h-8 w-px bg-neutral-700" />
 
@@ -109,32 +113,53 @@ export function TopBar({
         <button
           type="button"
           onClick={() => onModeChange('prepare')}
-          className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
-            mode === 'prepare'
-              ? 'bg-blue-600 border-blue-500 text-white'
-              : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
-          }`}
+          className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${mode === 'prepare'
+            ? 'bg-blue-600 border-blue-500 text-white'
+            : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
+            }`}
           title="Prepare mode: move/rotate/scale the model"
         >
           Prepare
         </button>
         <button
           type="button"
+          onClick={() => onModeChange('analysis')}
+          className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${mode === 'analysis'
+            ? 'bg-blue-600 border-blue-500 text-white'
+            : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
+            }`}
+          title="Analysis mode: Island scanning and voxel analysis"
+        >
+          Analysis
+        </button>
+        <button
+          type="button"
           onClick={() => onModeChange('support')}
-          className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
-            mode === 'support'
-              ? 'bg-blue-600 border-blue-500 text-white'
-              : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
-          }`}
+          className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${mode === 'support'
+            ? 'bg-blue-600 border-blue-500 text-white'
+            : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
+            }`}
           title="Support mode: place and edit supports"
         >
           Support
         </button>
+
+        <button
+          type="button"
+          onClick={() => onModeChange('export')}
+          className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${mode === 'export'
+            ? 'bg-blue-600 border-blue-500 text-white'
+            : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700'
+            }`}
+          title="Export mode: Generate and download STL"
+        >
+          Export
+        </button>
       </div>
-      
+
       {/* Divider */}
       <div className="h-8 w-px bg-neutral-700" />
-      
+
       {/* Selection Highlight Mode */}
       <div className="flex items-center gap-2">
         <label className="text-sm text-neutral-300 whitespace-nowrap">
@@ -154,7 +179,7 @@ export function TopBar({
 
       {/* Divider */}
       <div className="h-8 w-px bg-neutral-700" />
-      
+
       {/* Mesh Appearance Popover */}
       <MeshAppearancePopover
         meshColor={meshColor}
@@ -166,15 +191,14 @@ export function TopBar({
         materialRoughness={materialRoughness}
         onMaterialRoughnessChange={onMaterialRoughnessChange}
       />
-      
+
       {/* Hide Mesh Toggle */}
       <button
         onClick={() => onMeshVisibleChange(!meshVisible)}
-        className={`px-3 py-1.5 rounded text-sm transition-colors ${
-          meshVisible 
-            ? 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200' 
-            : 'bg-blue-600 hover:bg-blue-700 text-white'
-        }`}
+        className={`px-3 py-1.5 rounded text-sm transition-colors ${meshVisible
+          ? 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'
+          : 'bg-blue-600 hover:bg-blue-700 text-white'
+          }`}
         title={meshVisible ? 'Hide mesh' : 'Show mesh'}
       >
         {meshVisible ? (
@@ -188,7 +212,7 @@ export function TopBar({
           </svg>
         )}
       </button>
-      
+
       {/* Future tools will go here */}
       <div className="flex-1" />
     </div>

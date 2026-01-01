@@ -1,13 +1,18 @@
 import * as THREE from 'three';
 
+export type RaftBottomMode = 'off' | 'solid' | 'line';
+
 export interface RaftSettings {
-  enabled: boolean;
+  bottomMode: RaftBottomMode;
+  wallEnabled: boolean;
   thickness: number;           // mm
   chamferAngle: number;        // degrees (45-90)
   wallHeight: number;          // mm
   wallThickness: number;       // mm
   crenulationGapWidth: number; // mm
   crenulationSpacing: number;  // mm
+  lineWidthMm: number;         // mm
+  lineHeightMm: number;        // mm
   showFootprintBorder: boolean; // Show combined model+raft footprint border
   footprintBorderMargin: number; // mm - margin beyond raft/model edge
 }

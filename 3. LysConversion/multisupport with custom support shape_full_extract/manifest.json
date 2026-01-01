@@ -1,0 +1,41 @@
+{
+  "version": "3.1.0",
+  "mangoFiles": {
+    "9daa4c19f9d0dbdb3c141164fd3ce770.bin": {
+      "size": 155828,
+      "offset": "0",
+      "integrity": {
+        "algorithm": "SHA256",
+        "hash": "3d6cb1f0dd5bea24985fdf4c7fe81f61e4dd18969be824d766fec55f53dd4a04",
+        "blockSize": 4194304,
+        "blocks": [
+          "3d6cb1f0dd5bea24985fdf4c7fe81f61e4dd18969be824d766fec55f53dd4a04"
+        ]
+      }
+    },
+    "preview.png": {
+      "size": 54008,
+      "offset": "155828",
+      "integrity": {
+        "algorithm": "SHA256",
+        "hash": "49884eb2ac8f289b81350f6502900ca64f100aa8fa0a93476d460e9b9b2a5837",
+        "blockSize": 4194304,
+        "blocks": [
+          "49884eb2ac8f289b81350f6502900ca64f100aa8fa0a93476d460e9b9b2a5837"
+        ]
+      }
+    },
+    "scene.bin": {
+      "size": 58409,
+      "offset": "209836",
+      "integrity": {
+        "algorithm": "SHA256",
+        "hash": "4968f82f49d7c59cc6a233d6de564b20636aebf3e43ef62c35f89ede13028bd0",
+        "blockSize": 4194304,
+        "blocks": [
+          "4968f82f49d7c59cc6a233d6de564b20636aebf3e43ef62c35f89ede13028bd0"
+        ]
+      }
+    }
+  }
+}

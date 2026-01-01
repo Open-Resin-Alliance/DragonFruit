@@ -232,5 +232,6 @@ export function CrossSectionCap({
     return group;
   }, [geometry, y, color, transformMatrix, mode, pxMm]);
 
+  if (!mesh) return null;
   return <primitive object={mesh} />;
 }

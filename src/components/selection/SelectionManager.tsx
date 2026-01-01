@@ -9,12 +9,13 @@
 
 import React, { useEffect } from 'react';
 import { useSelection } from './SelectionContext';
+import type { SupportMode } from '@/supports/types';
 
 interface SelectionManagerProps {
   /** Whether selection is enabled */
   enabled?: boolean;
   /** App mode - selection only works in prepare mode */
-  mode?: 'prepare' | 'support';
+  mode?: SupportMode;
 }
 
 /**
@@ -28,10 +29,7 @@ export function SelectionManager({
   enabled = true,
   mode = 'prepare',
 }: SelectionManagerProps) {
-  const { select, deselect } = useSelection();
-  
-  // Track selection locally for immediate updates
-  const [hasSelection, setHasSelection] = React.useState(true);
+  const { select, deselect, state } = useSelection();
 
   // Listen for model click events
   useEffect(() => {
@@ -41,7 +39,6 @@ export function SelectionManager({
       const modelId = e.detail.modelId;
       console.log('[SelectionManager] Selecting model:', modelId);
       select(modelId);
-      setHasSelection(true);
     };
 
     window.addEventListener('model-clicked', handleModelClick as EventListener);
@@ -60,18 +57,18 @@ export function SelectionManager({
           window.__modelClickedThisFrame = false;
           return;
         }
-        
+
         // If gizmo drag just ended, don't toggle selection
         if (window.__gizmoDragEndedThisFrame) {
           window.__gizmoDragEndedThisFrame = false;
           return;
         }
-        
+
         // Canvas click only deselects - clicking model is required to select
-        if (hasSelection) {
+        // Check global state directly to avoid stale closure issues
+        if (state.hasSelection) {
           console.log('[SelectionManager] Deselecting (canvas click)');
           deselect();
-          setHasSelection(false);
           window.dispatchEvent(new CustomEvent('model-deselected'));
         }
       }
@@ -79,7 +76,7 @@ export function SelectionManager({
 
     document.addEventListener('click', handleCanvasClick);
     return () => document.removeEventListener('click', handleCanvasClick);
-  }, [enabled, mode, deselect, select, hasSelection]);
+  }, [enabled, mode, deselect, select, state.hasSelection]);
 
   return null;
 }

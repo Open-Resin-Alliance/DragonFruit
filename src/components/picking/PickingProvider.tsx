@@ -105,9 +105,10 @@ export function PickingProvider({
     
     registrationsRef.current.set(pickId, fullRegistration);
     
-    if (config.debug) {
-      console.log('[Picking] Registered:', fullRegistration);
-    }
+    // Debug logging disabled - uncomment if needed
+    // if (config.debug) {
+    //   console.log('[Picking] Registered:', fullRegistration);
+    // }
     
     return pickId;
   }, [config.debug]);
@@ -119,9 +120,10 @@ export function PickingProvider({
     const registration = registrationsRef.current.get(pickId);
     registrationsRef.current.delete(pickId);
     
-    if (config.debug && registration) {
-      console.log('[Picking] Unregistered:', registration);
-    }
+    // Debug logging disabled - uncomment if needed
+    // if (config.debug && registration) {
+    //   console.log('[Picking] Unregistered:', registration);
+    // }
   }, [config.debug]);
   
   /**
@@ -135,6 +137,11 @@ export function PickingProvider({
    * Handle pick result from the renderer.
    */
   const handlePick = useCallback((pickId: number, ndcX: number, ndcY: number) => {
+    // Debug: Log picking results occasionally (e.g. if not none)
+    if (config.debug && pickId !== PICK_ID.NONE) {
+       console.log('[Picking] Picked ID:', pickId);
+    }
+
     const timestamp = performance.now();
     const screenPosition = { x: ndcX, y: ndcY };
     
@@ -239,7 +246,8 @@ export function PickingProvider({
     pause,
     resume,
     isPaused,
-  }), [hit, register, unregister, setConfig, config, onDragStart, onDragEnd, pause, resume, isPaused]);
+    isDragging, // Exposed
+  }), [hit, register, unregister, setConfig, config, onDragStart, onDragEnd, pause, resume, isPaused, isDragging]);
   
   return (
     <PickingContext.Provider value={contextValue}>
@@ -274,7 +282,16 @@ function PointerTracker({
 }) {
   React.useEffect(() => {
     const canvas = gl.domElement;
-    console.log('[PointerTracker] Mounted, canvas:', canvas);
+
+    if (typeof (canvas as any).tabIndex !== 'number') {
+      (canvas as any).tabIndex = 0;
+    }
+
+    const focusCanvas = () => {
+      if (typeof (canvas as any).focus === 'function') {
+        (canvas as any).focus();
+      }
+    };
     
     const handlePointerMove = (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -288,10 +305,14 @@ function PointerTracker({
     };
     
     canvas.addEventListener('pointermove', handlePointerMove);
+    canvas.addEventListener('pointerenter', focusCanvas);
+    canvas.addEventListener('pointerdown', focusCanvas);
     canvas.addEventListener('pointerleave', handlePointerLeave);
     
     return () => {
       canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerenter', focusCanvas);
+      canvas.removeEventListener('pointerdown', focusCanvas);
       canvas.removeEventListener('pointerleave', handlePointerLeave);
     };
   }, [gl, mouseNDCRef]);

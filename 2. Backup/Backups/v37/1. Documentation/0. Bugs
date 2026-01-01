@@ -1,5 +1,0 @@
-Switching presets breaks the grid support snapping. 
-
-branch joint snapping logic is still buggy. Sometimes it doesnt snap properly, sometimes it does. 
-
-Grid supports - Biggest support wins needs joints fixed. 

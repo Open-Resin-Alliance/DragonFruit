@@ -17,6 +17,7 @@ interface GizmoMoveProps {
   isHidden?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
+  handleScale?: number; // New prop for scaling handles
   onDragStart: () => void;
   onDrag: (delta: THREE.Vector3) => void;
   onDragEnd: () => void;
@@ -35,6 +36,7 @@ export function GizmoMove({
   isHidden,
   enableLighting = true,
   gizmoPosition,
+  handleScale = 1.0, // Default to 1.0
   onDragStart,
   onDrag,
   onDragEnd,
@@ -114,6 +116,11 @@ export function GizmoMove({
     : [0, 0, 0];
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Ignore right-click to allow camera orbit controls
+    if (e.button === 2) {
+      return;
+    }
+    
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
     
@@ -276,6 +283,7 @@ export function GizmoMove({
         ref={pickMeshRef}
         position={arrowTipPosition}
         onPointerDown={handlePointerDown}
+        scale={handleScale}
       >
         <coneGeometry args={[GIZMO_SIZES.arrowHeadRadius * 3, GIZMO_SIZES.arrowHeadLength * 3, 8]} />
         <meshBasicMaterial 
@@ -284,7 +292,7 @@ export function GizmoMove({
         />
       </mesh>
       
-      {/* Gradient cylinder shaft */}
+      {/* Gradient cylinder shaft - NOT SCALED */}
       <mesh position={[0, GIZMO_SIZES.arrowShaftLength / 2, 0]} geometry={gradientGeometry} renderOrder={-10}>
         <meshBasicMaterial 
           vertexColors={!isDimmed}
@@ -296,8 +304,8 @@ export function GizmoMove({
         />
       </mesh>
       
-      {/* Arrow head (cone) with outline */}
-      <group position={arrowTipPosition}>
+      {/* Arrow head (cone) with outline - SCALED */}
+      <group position={arrowTipPosition} scale={handleScale}>
         {/* Outline - slightly larger with darker color */}
         <mesh scale={1.15}>
           <coneGeometry args={[GIZMO_SIZES.arrowHeadRadius, GIZMO_SIZES.arrowHeadLength, 8]} />

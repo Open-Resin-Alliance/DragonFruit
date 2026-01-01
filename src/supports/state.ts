@@ -1,538 +1,1726 @@
-import { SupportCollection, SupportInstance, SupportSettings, createDefaultSupportSettings } from './types';
-import { SupportHistoryAction } from './historyTypes';
+import { SupportState, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, Knot, Vec3, Leaf, Brace, Twig, Stick } from './types';
+import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } from './Curves/BezierUtils';
+import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
+import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
+import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
+import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
+import { JOINT_DIAMETER_OFFSET_MM } from './constants';
+import * as THREE from 'three';
 
-// In-memory normalized store. Later we can lift this into Zustand/Context, but the API here
-// should already reflect a normalized collection (byId/allIds) with helper selectors.
-let supports: SupportCollection = {
-  byId: {},
-  allIds: [],
+const listeners = new Set<() => void>();
+
+const initialState: SupportState = {
+    roots: {},
+    trunks: {},
+    branches: {},
+    leaves: {},
+    twigs: {},
+    sticks: {},
+    braces: {},
+    knots: {},
+    selectedId: null,
+    hoveredId: null,
+    selectedCategory: null,
+    hoveredCategory: 'none',
+    interactionWarning: null,
 };
 
-let cachedSupportList: SupportInstance[] = [];
+let state: SupportState = { ...initialState };
 
-function rebuildSupportListCache() {
-  cachedSupportList = supports.allIds.map((id) => supports.byId[id]).filter(Boolean) as SupportInstance[];
+function deepClone<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value));
 }
 
-// Use the single source of truth from types.ts
-let currentSettings: SupportSettings = createDefaultSupportSettings();
+export function removeTwig(twigId: string): { twig: Twig } | null {
+    const existing = state.twigs[twigId];
+    if (!existing) return null;
 
-let nextId = 1;
+    const snapshot = { twig: deepClone(existing) };
+    const { [twigId]: _, ...remainingTwigs } = state.twigs;
 
-type StoreListener = () => void;
-const listeners = new Set<StoreListener>();
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+    if (state.selectedId === twigId) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    }
 
-let undoStack: SupportHistoryAction[] = [];
-let redoStack: SupportHistoryAction[] = [];
-let historyMuted = false;
+    state = {
+        ...state,
+        twigs: remainingTwigs,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+    notify();
+    return snapshot;
+}
 
-type HistoryListener = () => void;
-const historyListeners = new Set<HistoryListener>();
+export function removeStick(stickId: string): { stick: Stick } | null {
+    const existing = state.sticks[stickId];
+    if (!existing) return null;
+
+    const snapshot = { stick: deepClone(existing) };
+    const { [stickId]: _, ...remainingSticks } = state.sticks;
+
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+    if (state.selectedId === stickId) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    }
+
+    state = {
+        ...state,
+        sticks: remainingSticks,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+    notify();
+    return snapshot;
+}
+
+function resolveLowerSegmentIndex(segments: Segment[], jointId: string) {
+    const byTop = segments.findIndex((seg) => seg.topJoint?.id === jointId);
+    if (byTop !== -1) return byTop;
+    const upper = segments.findIndex((seg) => seg.bottomJoint?.id === jointId);
+    if (upper <= 0) return -1;
+    return upper - 1;
+}
+
+function recomputeLeafContactConeAxisAndLength(
+    tipPos: Vec3,
+    surfaceNormal: Vec3,
+    knotPos: Vec3,
+    profile: SupportTipProfile
+): { axis: Vec3; lengthMm: number; diskThicknessMm: number } {
+    const tip = new THREE.Vector3(tipPos.x, tipPos.y, tipPos.z);
+    const sn = new THREE.Vector3(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
+    const knot = new THREE.Vector3(knotPos.x, knotPos.y, knotPos.z);
+
+    let axis = knot.clone().sub(tip);
+    if (axis.lengthSq() < 0.000001) {
+        axis.set(sn.x, sn.y, sn.z);
+    }
+    axis.normalize();
+
+    let finalThickness = 0;
+    let finalLength = Math.max(0.1, knot.distanceTo(tip));
+
+    for (let i = 0; i < 3; i++) {
+        const axisVec3 = { x: axis.x, y: axis.y, z: axis.z };
+        const thickness = profile.type === 'disk'
+            ? calculateDiskThickness(surfaceNormal, axisVec3, profile)
+            : 0;
+        finalThickness = thickness;
+
+        const start = tip.clone().add(sn.clone().multiplyScalar(thickness));
+        const coneVec = knot.clone().sub(start);
+        const len = coneVec.length();
+        if (len > 0.000001) {
+            axis = coneVec.normalize();
+            finalLength = Math.max(0.1, len);
+        }
+    }
+
+    return {
+        axis: { x: axis.x, y: axis.y, z: axis.z },
+        lengthMm: finalLength,
+        diskThicknessMm: finalThickness,
+    };
+}
+
+function recomputeKnotDependentGeometry(
+    leaves: Record<string, Leaf>,
+    updatedKnotPosById: Record<string, Vec3>
+): Record<string, Leaf> {
+    const knotIds = Object.keys(updatedKnotPosById);
+    if (knotIds.length === 0) return leaves;
+
+    let changed = false;
+    let nextLeaves = leaves;
+
+    for (const leaf of Object.values(leaves)) {
+        const knotPos = updatedKnotPosById[leaf.parentKnotId];
+        if (!knotPos) continue;
+        if (!leaf.contactCone?.surfaceNormal) continue;
+
+        const { axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
+            leaf.contactCone.pos,
+            leaf.contactCone.surfaceNormal,
+            knotPos,
+            leaf.contactCone.profile
+        );
+
+        const oldNormal = leaf.contactCone.normal;
+        const oldLen = leaf.contactCone.profile.lengthMm;
+
+        if (
+            oldLen === lengthMm &&
+            oldNormal.x === axis.x &&
+            oldNormal.y === axis.y &&
+            oldNormal.z === axis.z
+        ) {
+            continue;
+        }
+
+        if (!changed) {
+            nextLeaves = { ...leaves };
+            changed = true;
+        }
+
+        nextLeaves[leaf.id] = {
+            ...leaf,
+            contactCone: {
+                ...leaf.contactCone,
+                normal: axis,
+                profile: {
+                    ...leaf.contactCone.profile,
+                    lengthMm,
+                },
+            },
+        };
+    }
+
+    return nextLeaves;
+}
+
+function recomputeLeafConeKnotGeometry(
+    leaves: Record<string, Leaf>,
+    knots: Record<string, Knot>
+): { knots: Record<string, Knot>; changed: boolean } {
+    let changed = false;
+    let nextKnots = knots;
+
+    for (const knot of Object.values(knots)) {
+        if (!knot.parentShaftId.startsWith('leafCone:')) continue;
+        const leafId = knot.parentShaftId.slice('leafCone:'.length);
+        const leaf = leaves[leafId];
+        const cone = leaf?.contactCone;
+        if (!leaf || !cone) continue;
+
+        const socket = getFinalSocketPosition(cone);
+        const axis = new THREE.Vector3(cone.normal.x, cone.normal.y, cone.normal.z);
+        if (axis.lengthSq() < 0.000001) continue;
+        axis.normalize();
+
+        const lenMm = cone.profile?.lengthMm ?? 0;
+        if (lenMm <= 0.000001) continue;
+
+        const start = new THREE.Vector3(socket.x, socket.y, socket.z).add(axis.clone().multiplyScalar(-lenMm));
+        const tRaw = knot.t ?? 0;
+
+        const minMm = 0.25;
+        const minT = THREE.MathUtils.clamp(minMm / lenMm, 0, 0.99);
+        const t = THREE.MathUtils.clamp(Math.max(tRaw, minT), minT, 1);
+
+        const pos = start.clone().add(axis.multiplyScalar(t * lenMm));
+        const contactDia = cone.profile?.contactDiameterMm ?? 0.4;
+        const bodyDia = cone.profile?.bodyDiameterMm ?? 1.2;
+        const hostDia = THREE.MathUtils.lerp(contactDia, bodyDia, t);
+
+        const next: Knot = {
+            ...knot,
+            t,
+            pos: { x: pos.x, y: pos.y, z: pos.z },
+            diameter: hostDia + 0.1,
+        };
+
+        if (
+            next.t !== knot.t ||
+            next.pos.x !== knot.pos.x ||
+            next.pos.y !== knot.pos.y ||
+            next.pos.z !== knot.pos.z ||
+            next.diameter !== knot.diameter
+        ) {
+            if (!changed) {
+                nextKnots = { ...knots };
+                changed = true;
+            }
+            nextKnots[knot.id] = next;
+        }
+    }
+
+    return { knots: nextKnots, changed };
+}
+
+function getChangedKnotPositions(prev: Record<string, Knot>, next: Record<string, Knot>): Record<string, Vec3> {
+    const changed: Record<string, Vec3> = {};
+    for (const [id, nk] of Object.entries(next)) {
+        const pk = prev[id];
+        if (!pk) continue;
+        if (pk.pos.x !== nk.pos.x || pk.pos.y !== nk.pos.y || pk.pos.z !== nk.pos.z) {
+            changed[id] = nk.pos;
+        }
+    }
+    return changed;
+}
+
+function recomputeBraceSegmentKnotGeometry(
+    braces: Record<string, Brace>,
+    knots: Record<string, Knot>
+): { knots: Record<string, Knot>; changed: boolean } {
+    let changed = false;
+    let nextKnots = knots;
+
+    for (const knot of Object.values(knots)) {
+        if (!knot.parentShaftId.startsWith('braceSegment:')) continue;
+        const braceId = knot.parentShaftId.slice('braceSegment:'.length);
+        const brace = braces[braceId];
+        if (!brace) continue;
+
+        const startKnot = knots[brace.startKnotId];
+        const endKnot = knots[brace.endKnotId];
+        if (!startKnot || !endKnot) continue;
+
+        if (knot.t === undefined) continue;
+        const t = THREE.MathUtils.clamp(knot.t, 0, 1);
+
+        let pos: THREE.Vector3;
+        if (brace.curve?.type === 'bezier') {
+            const p = getBezierPointAtT(
+                startKnot.pos,
+                brace.curve.controlPoint1,
+                brace.curve.controlPoint2,
+                endKnot.pos,
+                t
+            );
+            pos = new THREE.Vector3(p.x, p.y, p.z);
+        } else {
+            const a = new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z);
+            const b = new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z);
+            pos = a.clone().lerp(b, t);
+        }
+
+        const startDia = Math.max(
+            0.001,
+            (startKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
+        );
+        const endDia = Math.max(
+            0.001,
+            (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
+        );
+        const hostDia = THREE.MathUtils.lerp(startDia, endDia, t);
+
+        const next: Knot = {
+            ...knot,
+            t,
+            pos: { x: pos.x, y: pos.y, z: pos.z },
+            diameter: hostDia + JOINT_DIAMETER_OFFSET_MM,
+        };
+
+        if (
+            next.t !== knot.t ||
+            next.pos.x !== knot.pos.x ||
+            next.pos.y !== knot.pos.y ||
+            next.pos.z !== knot.pos.z ||
+            next.diameter !== knot.diameter
+        ) {
+            if (!changed) {
+                nextKnots = { ...knots };
+                changed = true;
+            }
+            nextKnots[knot.id] = next;
+        }
+    }
+
+    return { knots: nextKnots, changed };
+}
+
+export function removeJoint(trunkId: string, jointId: string): { before: Trunk; after: Trunk } | null {
+    const trunk = state.trunks[trunkId];
+    if (!trunk) return null;
+
+    // Prevent deletion of the top joint that connects to the contact cone
+    if (trunk.contactCone?.socketJointId && trunk.contactCone.socketJointId === jointId) {
+        console.warn('Cannot delete the top joint that connects to the contact cone');
+        return null;
+    }
+
+    const lowerIndex = resolveLowerSegmentIndex(trunk.segments, jointId);
+    if (lowerIndex === -1) return null;
+
+    const before = deepClone(trunk);
+    const after = deepClone(trunk);
+
+    const segments = after.segments;
+    const lowerSegment = segments[lowerIndex];
+    if (!lowerSegment) return null;
+
+    const nextIndex = lowerIndex + 1;
+    const upperSegment = nextIndex < segments.length ? segments[nextIndex] : undefined;
+    const removedSegmentId = upperSegment?.id ?? null;
+
+    if (upperSegment) {
+        lowerSegment.topJoint = upperSegment.topJoint ? deepClone(upperSegment.topJoint) : undefined;
+        segments.splice(nextIndex, 1);
+    } else {
+        lowerSegment.topJoint = undefined;
+    }
+
+    // If we removed a segment, any knots attached to that removed segment must be rebound
+    // to the merged segment so they stay connected.
+    if (removedSegmentId) {
+        const root = state.roots[trunk.rootId];
+        const mergedSegmentId = after.segments[lowerIndex]?.id;
+        const mergedSegment = after.segments[lowerIndex];
+
+        if (root && mergedSegmentId && mergedSegment) {
+            const endpoints = getTrunkSegmentEndpoints(after, mergedSegment, lowerIndex, root);
+            if (endpoints) {
+                const startVec = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
+                const endVec = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
+
+                const updatedKnots: Record<string, Knot> = { ...state.knots };
+                let knotsChanged = false;
+
+                for (const knot of Object.values(state.knots)) {
+                    if (knot.parentShaftId !== removedSegmentId) continue;
+
+                    // Preserve approximate world position by re-projecting onto the merged segment
+                    // and then using that t going forward.
+                    const knotPosVec = new THREE.Vector3(knot.pos.x, knot.pos.y, knot.pos.z);
+                    const segLen = startVec.distanceTo(endVec);
+                    let t = 0;
+                    if (segLen > 0.000001) {
+                        const dir = endVec.clone().sub(startVec);
+                        const lenSq = dir.lengthSq();
+                        if (lenSq > 0.000001) {
+                            const v = knotPosVec.clone().sub(startVec);
+                            t = THREE.MathUtils.clamp(v.dot(dir) / lenSq, 0, 1);
+                        }
+                    }
+
+                    const newPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, mergedSegment, t);
+                    updatedKnots[knot.id] = {
+                        ...knot,
+                        parentShaftId: mergedSegmentId,
+                        t,
+                        pos: newPos,
+                    };
+                    knotsChanged = true;
+                }
+
+                if (knotsChanged) {
+                    state = { ...state, knots: updatedKnots };
+                }
+            }
+        }
+    }
+
+    // Route through updateTrunk so ALL knots attached to this trunk stay connected after joint removal.
+    updateTrunk(after);
+
+    return {
+        before,
+        after: deepClone(after),
+    };
+}
+
+export function removeBranchJoint(branchId: string, jointId: string): { before: Branch; after: Branch } | null {
+    const branch = state.branches[branchId];
+    if (!branch) return null;
+
+    // Prevent deletion of the top joint that connects to the contact cone
+    if (branch.contactCone?.socketJointId && branch.contactCone.socketJointId === jointId) {
+        console.warn('Cannot delete the top joint that connects to the contact cone');
+        return null;
+    }
+
+    const lowerIndex = resolveLowerSegmentIndex(branch.segments, jointId);
+    if (lowerIndex === -1) return null;
+
+    const before = deepClone(branch);
+    const after = deepClone(branch);
+
+    const segments = after.segments;
+    const lowerSegment = segments[lowerIndex];
+    if (!lowerSegment) return null;
+
+    const nextIndex = lowerIndex + 1;
+    const upperSegment = nextIndex < segments.length ? segments[nextIndex] : undefined;
+    const removedSegmentId = upperSegment?.id ?? null;
+
+    if (upperSegment) {
+        lowerSegment.topJoint = upperSegment.topJoint ? deepClone(upperSegment.topJoint) : undefined;
+        segments.splice(nextIndex, 1);
+    } else {
+        lowerSegment.topJoint = undefined;
+    }
+
+    if (removedSegmentId) {
+        const parentKnot = state.knots[branch.parentKnotId];
+        const mergedSegmentId = after.segments[lowerIndex]?.id;
+        const mergedSegment = after.segments[lowerIndex];
+
+        if (parentKnot && mergedSegmentId && mergedSegment) {
+            const endpoints = getBranchSegmentEndpoints(after, mergedSegment, lowerIndex, parentKnot);
+            if (endpoints) {
+                const startVec = new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z);
+                const endVec = new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z);
+
+                const updatedKnots: Record<string, Knot> = { ...state.knots };
+                let knotsChanged = false;
+
+                for (const knot of Object.values(state.knots)) {
+                    if (knot.parentShaftId !== removedSegmentId) continue;
+
+                    const knotPosVec = new THREE.Vector3(knot.pos.x, knot.pos.y, knot.pos.z);
+                    const segLen = startVec.distanceTo(endVec);
+                    let t = 0;
+                    if (segLen > 0.000001) {
+                        const dir = endVec.clone().sub(startVec);
+                        const lenSq = dir.lengthSq();
+                        if (lenSq > 0.000001) {
+                            const v = knotPosVec.clone().sub(startVec);
+                            t = THREE.MathUtils.clamp(v.dot(dir) / lenSq, 0, 1);
+                        }
+                    }
+
+                    const newPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, mergedSegment, t);
+                    updatedKnots[knot.id] = {
+                        ...knot,
+                        parentShaftId: mergedSegmentId,
+                        t,
+                        pos: newPos,
+                    };
+                    knotsChanged = true;
+                }
+
+                if (knotsChanged) {
+                    state = { ...state, knots: updatedKnots };
+                }
+            }
+        }
+    }
+
+    updateBranch(after);
+
+    return {
+        before,
+        after: deepClone(after),
+    };
+}
+
+export type RemoveJointByIdResult =
+    | { kind: 'trunk'; trunkId: string; before: Trunk; after: Trunk }
+    | { kind: 'branch'; branchId: string; before: Branch; after: Branch };
+
+export function removeJointById(jointId: string): RemoveJointByIdResult | null {
+    for (const [trunkId, trunk] of Object.entries(state.trunks)) {
+        const hasJoint = trunk.segments.some(
+            (seg) => seg.topJoint?.id === jointId || seg.bottomJoint?.id === jointId
+        );
+        if (!hasJoint) continue;
+        const result = removeJoint(trunkId, jointId);
+        if (result) {
+            return { kind: 'trunk', trunkId, ...result };
+        }
+    }
+
+    for (const [branchId, branch] of Object.entries(state.branches)) {
+        const hasJoint = branch.segments.some(
+            (seg) => seg.topJoint?.id === jointId || seg.bottomJoint?.id === jointId
+        );
+        if (!hasJoint) continue;
+        const result = removeBranchJoint(branchId, jointId);
+        if (result) {
+            return { kind: 'branch', branchId, ...result };
+        }
+    }
+
+    return null;
+}
 
 function notify() {
-  listeners.forEach((listener) => {
-    try {
-      listener();
-    } catch (err) {
-      console.error('[SupportStore] listener error', err);
-    }
-  });
+    listeners.forEach((l) => l());
 }
 
-function notifyHistory() {
-  historyListeners.forEach((listener) => {
-    try {
-      listener();
-    } catch (err) {
-      console.error('[SupportHistory] listener error', err);
-    }
-  });
+export function subscribe(listener: () => void) {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
 }
 
-function snapshotSupport(instance: SupportInstance): SupportInstance {
-  return JSON.parse(JSON.stringify(instance));
+export function getSnapshot() {
+    return state;
 }
 
-function pushUndo(action: SupportHistoryAction) {
-  if (historyMuted) return;
-  undoStack.push(action);
-  redoStack = [];
-  notifyHistory();
-}
-
-function withHistoryMuted<T>(fn: () => T): T {
-  historyMuted = true;
-  try {
-    return fn();
-  } finally {
-    historyMuted = false;
-  }
-}
-
-function storeAdd(instance: SupportInstance): SupportInstance {
-  const snapshot = snapshotSupport(instance);
-  supports.byId[snapshot.id] = snapshot;
-  if (!supports.allIds.includes(snapshot.id)) {
-    supports.allIds.push(snapshot.id);
-  }
-  rebuildSupportListCache();
-  notify();
-  return snapshot;
-}
-
-function storeRemove(id: string): SupportInstance | null {
-  const existing = supports.byId[id];
-  if (!existing) return null;
-  const snapshot = snapshotSupport(existing);
-  delete supports.byId[id];
-  supports.allIds = supports.allIds.filter((existingId) => existingId !== id);
-  rebuildSupportListCache();
-  notify();
-  return snapshot;
-}
-
-function storeUpdate(instance: SupportInstance): { previous: SupportInstance; updated: SupportInstance } | null {
-  const existing = supports.byId[instance.id];
-  if (!existing) return null;
-  const previous = snapshotSupport(existing);
-  const updated = snapshotSupport(instance);
-  supports.byId[instance.id] = updated;
-  rebuildSupportListCache();
-  notify();
-  return { previous, updated };
-}
-
-export function generateSupportId(): string {
-  const id = `s${nextId}`;
-  nextId += 1;
-  return id;
-}
-
-export function subscribeToSupportStore(listener: StoreListener): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-export function getSupportCollection(): SupportCollection {
-  return supports;
-}
-
-export function getSupportList(): SupportInstance[] {
-  return cachedSupportList;
-}
-
-export function setSupportCollection(newCollection: SupportCollection): void {
-  supports = {
-    byId: { ...newCollection.byId },
-    allIds: [...newCollection.allIds],
-  };
-  rebuildSupportListCache();
-  notify();
-}
-
-export function getSupportById(id: string): SupportInstance | undefined {
-  return supports.byId[id];
-}
-
-export function getCurrentSupportSettings(): SupportSettings {
-  return currentSettings;
-}
-
-export function setCurrentSupportSettings(settings: SupportSettings): void {
-  currentSettings = settings;
-  notify();
-}
-
-/**
- * Updates the baseFlare settings on all existing supports.
- * This allows toggling the base flare feature globally.
- */
-export function updateAllSupportsBaseFlare(baseFlare: { enabled: boolean; diameterMm: number; heightMm: number }): void {
-  const updatedSupports: SupportInstance[] = [];
-
-  supports.allIds.forEach((id) => {
-    const support = supports.byId[id];
-    if (support) {
-      const updated = {
-        ...support,
-        settings: {
-          ...support.settings,
-          baseFlare: { ...baseFlare },
-        },
-        updatedAt: Date.now(),
-      };
-      supports.byId[id] = updated;
-      updatedSupports.push(updated);
-    }
-  });
-
-  rebuildSupportListCache();
-  notify();
-  console.log('[SupportStore] Updated baseFlare on', updatedSupports.length, 'supports');
-}
-
-export function addSupport(instance: SupportInstance): void {
-  const snapshot = storeAdd(instance);
-  pushUndo({ type: 'add', instance: snapshot });
-}
-
-export function updateSupport(instance: SupportInstance): void {
-  const result = storeUpdate(instance);
-  if (!result) return;
-  pushUndo({ type: 'update', previous: result.previous, instance: result.updated });
-}
-
-export function removeSupport(id: string): void {
-  const removed = storeRemove(id);
-  if (!removed) return;
-  pushUndo({ type: 'remove', instance: removed });
-}
-
-/**
- * Adds a new joint to a support at the specified position.
- * Joints are automatically sorted by their Z position along the shaft.
- */
-export function addJointToSupport(
-  supportId: string,
-  position: { x: number; y: number; z: number }
-): void {
-  const support = supports.byId[supportId];
-  if (!support) {
-    console.warn('[SupportStore] Support not found:', supportId);
-    return;
-  }
-
-  // Create new joint
-  const shaftDiameter = support.settings.mid.diameterMm;
-  const jointDiameter = shaftDiameter + 0.1;
-  const existingJoints = support.joints || [];
-
-  const newJoint = {
-    id: `${supportId}-joint-${existingJoints.length}-${Date.now()}`,
-    position,
-    ballDiameterMm: jointDiameter,
-    order: existingJoints.length,
-    updatedAt: Date.now(),
-  };
-
-  // Add joint and keep designated tip joint first; sort others by distance from current tipEnd
-  const merged = [...existingJoints, newJoint];
-  const tipIdx0 = merged.findIndex((j: any) => j.isTipJoint === true);
-  const tipJoint0 = tipIdx0 >= 0 ? merged[tipIdx0] : null;
-  const tipLen0 = support.settings.tip.lengthMm;
-  const tipDir0 = { x: support.tipNormal.x, y: support.tipNormal.y, z: support.tipNormal.z };
-  const tipEnd0 = { x: support.tip.x + tipDir0.x * tipLen0, y: support.tip.y + tipDir0.y * tipLen0, z: support.tip.z + tipDir0.z * tipLen0 };
-  const dist0 = (p: { x: number; y: number; z: number }) => {
-    const dx = p.x - tipEnd0.x, dy = p.y - tipEnd0.y, dz = p.z - tipEnd0.z; return Math.hypot(dx, dy, dz);
-  };
-  const others0 = merged.filter((_, i) => i !== tipIdx0).sort((a, b) => dist0(a.position) - dist0(b.position));
-  const updatedJoints = tipJoint0 ? [tipJoint0, ...others0] : others0;
-  updatedJoints.forEach((j: any, i) => { j.order = i; });
-
-  // Update support
-  const updatedSupport = {
-    ...support,
-    joints: updatedJoints,
-  };
-
-  updateSupport(updatedSupport);
-  console.log(`[SupportStore] Added joint to support ${supportId}, total joints: ${updatedJoints.length}`);
-}
-
-/**
- * Update the position of an existing joint on a support.
- * Triggers an update with undo history.
- */
-export function updateJointPosition(
-  supportId: string,
-  jointId: string,
-  position: { x: number; y: number; z: number }
-): void {
-  const support = supports.byId[supportId];
-  if (!support || !support.joints) return;
-
-  const idx = support.joints.findIndex((j) => j.id === jointId);
-  if (idx === -1) return;
-
-  const tipIdx = support.joints.findIndex((j: any) => j.isTipJoint === true);
-  const movingTip = tipIdx !== -1 && idx === tipIdx;
-  
-  // Check if this is a leaf support (type 2 or has 'leaf' tag)
-  const isLeaf = support.type === 2 || support.tags?.includes('leaf');
-  const movedJoint = support.joints[idx] as any;
-  const isLeafJoint = movedJoint.type === 'leaf';
-
-  // Update the moved joint position first
-  let nextJoints = support.joints.map((j, i) => (i === idx ? { ...j, position: { ...position }, updatedAt: Date.now() } : j));
-
-  let nextSettings = support.settings;
-  let nextTipNormal = support.tipNormal;
-  let nextBase = support.base;
-
-  // LEAF SUPPORT: Update base position when leaf joint moves
-  if (isLeaf && isLeafJoint) {
-    // For leaf supports, the base is the socket point (where the joint is)
-    // When the joint moves, update the base to match
-    nextBase = { ...position };
-    console.log('[updateJointPosition] Leaf joint moved, updating base to:', nextBase);
-  } else if (movingTip) {
-    // Recompute tip orientation and length from tip to new joint pos
-    const dirX = position.x - support.tip.x;
-    const dirY = position.y - support.tip.y;
-    const dirZ = position.z - support.tip.z;
-    const newLen = Math.hypot(dirX, dirY, dirZ) || support.settings.tip.lengthMm;
-    const newNormal = { x: dirX / (newLen || 1), y: dirY / (newLen || 1), z: dirZ / (newLen || 1) };
-    nextSettings = { ...support.settings, tip: { ...support.settings.tip, lengthMm: newLen } } as any;
-    nextTipNormal = newNormal;
-    const tipEnd = { x: support.tip.x + newNormal.x * newLen, y: support.tip.y + newNormal.y * newLen, z: support.tip.z + newNormal.z * newLen };
-    nextJoints = nextJoints.map((j, i) => (i === tipIdx ? { ...j, position: tipEnd } : j));
-  }
-
-  // Keep tip joint first; sort other joints by distance from current/new tipEnd
-  const tipLen = nextSettings.tip.lengthMm;
-  const tipDir = { x: nextTipNormal.x, y: nextTipNormal.y, z: nextTipNormal.z };
-  const tipEnd = { x: support.tip.x + tipDir.x * tipLen, y: support.tip.y + tipDir.y * tipLen, z: support.tip.z + tipDir.z * tipLen };
-  const dist = (p: { x: number; y: number; z: number }) => { const dx = p.x - tipEnd.x, dy = p.y - tipEnd.y, dz = p.z - tipEnd.z; return Math.hypot(dx, dy, dz); };
-  const tipIdx2 = nextJoints.findIndex((j: any) => j.isTipJoint === true);
-  const tipJoint2 = tipIdx2 >= 0 ? nextJoints[tipIdx2] : null;
-  const others2 = nextJoints.filter((_, i) => i !== tipIdx2).sort((a, b) => dist(a.position) - dist(b.position));
-  nextJoints = tipJoint2 ? [tipJoint2, ...others2] : others2;
-  (nextJoints as any[]).forEach((j: any, i: number) => { j.order = i; });
-
-  const updatedSupport: SupportInstance = { ...support, settings: nextSettings, tipNormal: nextTipNormal, base: nextBase, joints: nextJoints };
-  updateSupport(updatedSupport);
-}
-
-/**
- * Live joint move without pushing history. Use during gizmo drag.
- * Call updateJointPosition at the end to record a single undo entry.
- */
-export function updateJointPositionLive(
-  supportId: string,
-  jointId: string,
-  position: { x: number; y: number; z: number }
-): void {
-  const support = supports.byId[supportId];
-  if (!support || !support.joints) return;
-
-  const idx = support.joints.findIndex((j) => j.id === jointId);
-  if (idx === -1) return;
-
-  const tipIdx = support.joints.findIndex((j: any) => j.isTipJoint === true);
-  const movingTip = tipIdx !== -1 && idx === tipIdx;
-  
-  // Check if this is a leaf support
-  const isLeaf = support.type === 2 || support.tags?.includes('leaf');
-  const movedJoint = support.joints[idx] as any;
-  const isLeafJoint = movedJoint.type === 'leaf';
-
-  let nextJoints = support.joints.map((j, i) => (i === idx ? { ...j, position: { ...position } } : j));
-  let nextSettings = support.settings;
-  let nextTipNormal = support.tipNormal;
-  let nextBase = support.base;
-
-  // LEAF SUPPORT: Update base position when leaf joint moves (live)
-  if (isLeaf && isLeafJoint) {
-    nextBase = { ...position };
-  } else if (movingTip) {
-    const dirX = position.x - support.tip.x;
-    const dirY = position.y - support.tip.y;
-    const dirZ = position.z - support.tip.z;
-    const newLen = Math.hypot(dirX, dirY, dirZ) || support.settings.tip.lengthMm;
-    const newNormal = { x: dirX / (newLen || 1), y: dirY / (newLen || 1), z: dirZ / (newLen || 1) };
-    nextSettings = { ...support.settings, tip: { ...support.settings.tip, lengthMm: newLen } } as any;
-    nextTipNormal = newNormal;
-    const tipEnd = { x: support.tip.x + newNormal.x * newLen, y: support.tip.y + newNormal.y * newLen, z: support.tip.z + newNormal.z * newLen };
-    nextJoints = nextJoints.map((j, i) => (i === tipIdx ? { ...j, position: tipEnd } : j));
-  }
-
-  const tipLen = nextSettings.tip.lengthMm;
-  const tipDir = { x: nextTipNormal.x, y: nextTipNormal.y, z: nextTipNormal.z };
-  const tipEnd = { x: support.tip.x + tipDir.x * tipLen, y: support.tip.y + tipDir.y * tipLen, z: support.tip.z + tipDir.z * tipLen };
-  const dist = (p: { x: number; y: number; z: number }) => { const dx = p.x - tipEnd.x, dy = p.y - tipEnd.y, dz = p.z - tipEnd.z; return Math.hypot(dx, dy, dz); };
-  const tipIdx2 = nextJoints.findIndex((j: any) => j.isTipJoint === true);
-  const tipJoint2 = tipIdx2 >= 0 ? nextJoints[tipIdx2] : null;
-  const others2 = nextJoints.filter((_, i) => i !== tipIdx2).sort((a, b) => dist(a.position) - dist(b.position));
-  nextJoints = tipJoint2 ? [tipJoint2, ...others2] : others2;
-  (nextJoints as any[]).forEach((j: any, i: number) => { j.order = i; });
-
-  const updatedSupport: SupportInstance = { ...support, settings: nextSettings, tipNormal: nextTipNormal, base: nextBase, joints: nextJoints };
-  withHistoryMuted(() => updateSupport(updatedSupport));
-}
-
-export function clearSupports(): void {
-  supports = { byId: {}, allIds: [] };
-  nextId = 1;
-  rebuildSupportListCache();
-  notify();
-}
-
-export function undoSupportAction(): void {
-  const action = undoStack.pop();
-  if (!action) return;
-  withHistoryMuted(() => {
-    switch (action.type) {
-      case 'add':
-        if (supports.byId[action.instance.id]) {
-          storeRemove(action.instance.id);
-        }
-        break;
-      case 'remove':
-        storeAdd(action.instance);
-        break;
-      case 'update':
-        storeUpdate(action.previous);
-        break;
-    }
-  });
-  redoStack.push(action);
-  notifyHistory();
-}
-
-export function redoSupportAction(): void {
-  const action = redoStack.pop();
-  if (!action) return;
-  withHistoryMuted(() => {
-    switch (action.type) {
-      case 'add':
-        storeAdd(action.instance);
-        break;
-      case 'remove':
-        storeRemove(action.instance.id);
-        break;
-      case 'update':
-        storeUpdate(action.instance);
-        break;
-    }
-  });
-  undoStack.push(action);
-  notifyHistory();
-}
-
-export function subscribeSupportHistory(listener: HistoryListener): () => void {
-  historyListeners.add(listener);
-  return () => {
-    historyListeners.delete(listener);
-  };
-}
-
-// Serialization functions for save/load
-export interface SerializedSupports {
-  version: number;
-  supports: SupportCollection;
-  nextId: number;
-  currentSettings: SupportSettings;
-}
-
-export function serializeSupports(): SerializedSupports {
-  return {
-    version: 1,
-    supports: {
-      byId: { ...supports.byId },
-      allIds: [...supports.allIds],
-    },
-    nextId,
-    currentSettings: JSON.parse(JSON.stringify(currentSettings)),
-  };
-}
-
-export function deserializeSupports(data: SerializedSupports): void {
-  if (data.version !== 1) {
-    console.warn('[SupportStore] Unknown serialization version:', data.version);
-    return;
-  }
-
-  withHistoryMuted(() => {
-    supports = {
-      byId: { ...data.supports.byId },
-      allIds: [...data.supports.allIds],
-    };
-    nextId = data.nextId || 1;
-    currentSettings = data.currentSettings;
-    rebuildSupportListCache();
+export function setSnapshot(next: SupportState) {
+    state = next;
     notify();
-  });
-
-  // Clear undo/redo stacks on load
-  undoStack = [];
-  redoStack = [];
-  notifyHistory();
 }
 
-export function saveSupportsToLocalStorage(key: string = 'supports'): void {
-  try {
-    const serialized = serializeSupports();
-    localStorage.setItem(key, JSON.stringify(serialized));
-    console.log('[SupportStore] Saved to localStorage:', key);
-  } catch (err) {
-    console.error('[SupportStore] Failed to save to localStorage:', err);
-  }
+// --- Actions ---
+
+export function toggleSegmentCurve(segmentId: string) {
+    if (segmentId.startsWith('braceSegment:')) {
+        const braceId = segmentId.slice('braceSegment:'.length);
+        const brace = state.braces[braceId];
+        if (!brace) return;
+
+        const startKnot = state.knots[brace.startKnotId];
+        const endKnot = state.knots[brace.endKnotId];
+        if (!startKnot || !endKnot) return;
+
+        const newBrace = deepClone(brace);
+        if (newBrace.curve?.type === 'bezier') {
+            delete (newBrace as any).curve;
+        } else {
+            const startPos = toVector3(startKnot.pos);
+            const endPos = toVector3(endKnot.pos);
+            const dir = endPos.clone().sub(startPos).normalize();
+            if (dir.lengthSq() === 0) dir.set(0, 0, 1);
+
+            const startTangent = toVec3(dir);
+            const endTangent = toVec3(dir);
+            const tension = 0.5;
+            const bias = 0.5;
+            const [cp1, cp2] = calculateBezierControlPoints(startKnot.pos, endKnot.pos, startTangent, endTangent, tension, bias);
+
+            newBrace.curve = {
+                type: 'bezier',
+                controlPoint1: cp1,
+                controlPoint2: cp2,
+                startTangent,
+                endTangent,
+                tension,
+                bias,
+                resolution: 16,
+            };
+        }
+
+        updateBrace(newBrace);
+        return;
+    }
+
+    // Find the segment in trunks/branches/twigs/sticks
+    let targetTrunkId: string | null = null;
+    let targetBranchId: string | null = null;
+    let targetTwigId: string | null = null;
+    let targetStickId: string | null = null;
+    let targetSegmentIndex = -1;
+    let container: Trunk | Branch | Twig | Stick | null = null;
+
+    // Search Trunks
+    for (const t of Object.values(state.trunks)) {
+        const idx = t.segments.findIndex(s => s.id === segmentId);
+        if (idx !== -1) {
+            targetTrunkId = t.id;
+            targetSegmentIndex = idx;
+            container = t;
+            break;
+        }
+    }
+
+    // Search Branches if not found
+    if (!container) {
+        for (const b of Object.values(state.branches)) {
+            const idx = b.segments.findIndex(s => s.id === segmentId);
+            if (idx !== -1) {
+                targetBranchId = b.id;
+                targetSegmentIndex = idx;
+                container = b;
+                break;
+            }
+        }
+    }
+
+    // Search Twigs if not found
+    if (!container) {
+        for (const t of Object.values(state.twigs)) {
+            const idx = t.segments.findIndex(s => s.id === segmentId);
+            if (idx !== -1) {
+                targetTwigId = t.id;
+                targetSegmentIndex = idx;
+                container = t;
+                break;
+            }
+        }
+    }
+
+    // Search Sticks if not found
+    if (!container) {
+        for (const spt of Object.values(state.sticks)) {
+            const idx = spt.segments.findIndex(s => s.id === segmentId);
+            if (idx !== -1) {
+                targetStickId = spt.id;
+                targetSegmentIndex = idx;
+                container = spt;
+                break;
+            }
+        }
+    }
+
+    if (!container || targetSegmentIndex === -1) return;
+
+    // Create deep clone
+    const newContainer = deepClone(container);
+    const segment = newContainer.segments[targetSegmentIndex];
+
+    if (segment.type === 'bezier') {
+        // Convert to Straight
+        const straight: StraightSegment = {
+            id: segment.id,
+            diameter: segment.diameter,
+            topJoint: segment.topJoint,
+            bottomJoint: segment.bottomJoint,
+            type: 'straight'
+        };
+        newContainer.segments[targetSegmentIndex] = straight;
+    } else {
+        // Convert to Bezier
+
+        // Get Start Position (Approximation for initialization)
+        let startPos: THREE.Vector3;
+        if (targetSegmentIndex === 0) {
+            if (targetTrunkId) {
+                const root = state.roots[(newContainer as Trunk).rootId];
+                if (root) {
+                    const startZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
+                    startPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, startZ);
+                } else {
+                    startPos = new THREE.Vector3();
+                }
+            } else if (targetBranchId) {
+                const knot = state.knots[(newContainer as Branch).parentKnotId];
+                startPos = knot && knot.pos ? toVector3(knot.pos) : new THREE.Vector3();
+            } else {
+                startPos = segment.bottomJoint ? toVector3(segment.bottomJoint.pos) : new THREE.Vector3();
+            }
+        } else {
+            const prevSeg = newContainer.segments[targetSegmentIndex - 1];
+            // Start is prevSeg.topJoint.pos
+            if (prevSeg.topJoint) {
+                startPos = toVector3(prevSeg.topJoint.pos);
+            } else {
+                startPos = new THREE.Vector3(); // Fallback
+            }
+        }
+
+        // Get End Position (Approximation)
+        let endPos: THREE.Vector3;
+        if (segment.topJoint) {
+            endPos = toVector3(segment.topJoint.pos);
+        } else if ((newContainer as Trunk).contactCone) {
+            const cone = (newContainer as Trunk).contactCone!;
+            endPos = toVector3(cone.pos);
+        } else {
+            endPos = startPos.clone().add(new THREE.Vector3(0, 0, 10));
+        }
+
+        // Calculate Tangents (Straight line)
+        const dir = endPos.clone().sub(startPos).normalize();
+        // Handle zero length case
+        if (dir.lengthSq() === 0) dir.set(0, 0, 1);
+
+        // Calculate Control Points
+        const [cp1, cp2] = calculateBezierControlPoints(
+            toVec3(startPos),
+            toVec3(endPos),
+            toVec3(dir),
+            toVec3(dir),
+            0.5
+        );
+
+        const bezier: BezierSegment = {
+            id: segment.id,
+            diameter: segment.diameter,
+            topJoint: segment.topJoint,
+            bottomJoint: segment.bottomJoint,
+            type: 'bezier',
+            controlPoint1: cp1,
+            controlPoint2: cp2,
+            startTangent: toVec3(dir),
+            endTangent: toVec3(dir),
+            tension: 0.5,
+            bias: 0.5,
+            resolution: 16
+        };
+        newContainer.segments[targetSegmentIndex] = bezier;
+    }
+
+    if (targetTrunkId) {
+        updateTrunk(newContainer as Trunk);
+    } else if (targetBranchId) {
+        updateBranch(newContainer as Branch);
+    } else if (targetTwigId) {
+        updateTwig(newContainer as Twig);
+    } else if (targetStickId) {
+        updateStick(newContainer as Stick);
+    }
 }
 
-export function loadSupportsFromLocalStorage(key: string = 'supports'): boolean {
-  try {
-    const stored = localStorage.getItem(key);
-    if (!stored) return false;
-    const data = JSON.parse(stored) as SerializedSupports;
-    deserializeSupports(data);
-    console.log('[SupportStore] Loaded from localStorage:', key);
-    return true;
-  } catch (err) {
-    console.error('[SupportStore] Failed to load from localStorage:', err);
-    return false;
-  }
+export function resetStore() {
+    state = { ...initialState };
+    notify();
 }
 
-// Subscription
-export function subscribeToStore(listener: StoreListener): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-// Export to JSON file
-export function exportSupportsToFile(): void {
-  try {
-    const data = serializeSupports();
-    const json = JSON.stringify(data, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `supports-${Date.now()}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    console.log('[SupportStore] Exported to file');
-  } catch (err) {
-    console.error('[SupportStore] Failed to export:', err);
-  }
-}
-
-// Import from JSON file
-export function importSupportsFromFile(file: File): Promise<boolean> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const json = e.target?.result as string;
-        const data = JSON.parse(json) as SerializedSupports;
-        deserializeSupports(data);
-        console.log('[SupportStore] Imported from file');
-        resolve(true);
-      } catch (err) {
-        console.error('[SupportStore] Failed to import:', err);
-        resolve(false);
-      }
+/**
+ * Loads support data from the Dragonfruit Interchange Format (e.g. from Lychee conversion).
+ */
+export function loadFromLychee(data: DragonfruitImportFormat) {
+    // Reset first
+    const newState: SupportState = {
+        roots: {},
+        trunks: {},
+        branches: {},
+        leaves: {},
+        twigs: {},
+        sticks: {},
+        braces: {},
+        knots: {},
+        selectedId: null,
+        hoveredId: null,
+        selectedCategory: null,
+        hoveredCategory: 'none',
+        interactionWarning: null,
     };
-    reader.onerror = () => {
-      console.error('[SupportStore] Failed to read file');
-      resolve(false);
+
+    // Populate Roots
+    data.roots.forEach(r => {
+        newState.roots[r.id] = r;
+    });
+
+    // Populate Trunks
+    data.trunks.forEach(t => {
+        newState.trunks[t.id] = t;
+    });
+
+    // Populate Branches
+    data.branches.forEach(b => {
+        newState.branches[b.id] = b;
+    });
+
+    // Populate Leaves
+    data.leaves.forEach(l => {
+        newState.leaves[l.id] = l;
+    });
+
+    // Populate Twigs
+    if (data.twigs) {
+        data.twigs.forEach((t) => {
+            newState.twigs[t.id] = t;
+        });
+    }
+
+    // Populate Sticks
+    if (data.sticks) {
+        data.sticks.forEach((s) => {
+            newState.sticks[s.id] = s;
+        });
+    }
+
+    // Populate Braces
+    data.braces.forEach(br => {
+        newState.braces[br.id] = br;
+    });
+
+    // Populate Knots
+    if (data.knots) {
+        data.knots.forEach(k => {
+            newState.knots[k.id] = k;
+        });
+    }
+
+    state = newState;
+    console.log('[SupportStore] Loaded from Lychee:', {
+        roots: Object.keys(state.roots).length,
+        trunks: Object.keys(state.trunks).length,
+        branches: Object.keys(state.branches).length,
+        leaves: Object.keys(state.leaves).length,
+        twigs: Object.keys(state.twigs).length,
+        sticks: Object.keys(state.sticks).length,
+        braces: Object.keys(state.braces).length,
+        knots: Object.keys(state.knots).length,
+    });
+    notify();
+}
+
+export function setSelectedId(id: string | null) {
+    if (state.selectedId === id) return;
+
+    let category: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | null = null;
+
+    if (id) {
+        if (id.startsWith('braceSegment:')) category = 'segment';
+        if (state.roots[id]) category = 'root';
+        else if (state.trunks[id]) category = 'trunk';
+        else if (state.branches[id]) category = 'branch';
+        else if (state.leaves[id]) category = 'leaf';
+        else if (state.twigs[id]) category = 'twig';
+        else if (state.sticks[id]) category = 'stick';
+        else if (state.braces[id]) category = 'brace';
+        else if (state.knots[id]) category = 'knot';
+        else {
+            // Check for joints inside trunks
+            let foundJoint = false;
+            const trunks = Object.values(state.trunks);
+            for (const t of trunks) {
+                for (const s of t.segments) {
+                    if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
+                        foundJoint = true;
+                        break;
+                    }
+                }
+                if (foundJoint) break;
+            }
+
+            if (foundJoint) {
+                category = 'joint';
+            } else {
+                // Check for joints inside branches
+                const branches = Object.values(state.branches);
+                for (const b of branches) {
+                    for (const s of b.segments) {
+                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
+                            foundJoint = true;
+                            break;
+                        }
+                    }
+                    if (foundJoint) break;
+                }
+                if (foundJoint) category = 'joint';
+            }
+
+            if (!category) {
+                const twigs = Object.values(state.twigs);
+                for (const t of twigs) {
+                    for (const s of t.segments) {
+                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
+                            foundJoint = true;
+                            break;
+                        }
+                    }
+                    if (foundJoint) break;
+                }
+                if (foundJoint) category = 'joint';
+            }
+
+            if (!category) {
+                const sticks = Object.values(state.sticks);
+                for (const spt of sticks) {
+                    for (const s of spt.segments) {
+                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
+                            foundJoint = true;
+                            break;
+                        }
+                    }
+                    if (foundJoint) break;
+                }
+                if (foundJoint) category = 'joint';
+            }
+
+            // Check for segments
+            if (!category) {
+                const trunks = Object.values(state.trunks);
+                for (const t of trunks) {
+                    if (t.segments.some(s => s.id === id)) {
+                        category = 'segment';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                const branches = Object.values(state.branches);
+                for (const b of branches) {
+                    if (b.segments.some(s => s.id === id)) {
+                        category = 'segment';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                const twigs = Object.values(state.twigs);
+                for (const t of twigs) {
+                    if (t.segments.some(s => s.id === id)) {
+                        category = 'segment';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                const sticks = Object.values(state.sticks);
+                for (const spt of sticks) {
+                    if (spt.segments.some(s => s.id === id)) {
+                        category = 'segment';
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    state = { ...state, selectedId: id, selectedCategory: category };
+    notify();
+}
+
+export function setHoveredId(id: string | null) {
+    if (state.hoveredId === id) return;
+    state = { ...state, hoveredId: id };
+    notify();
+}
+
+export function setHoveredCategory(category: 'model' | 'support' | 'joint' | 'raft' | 'gizmo' | 'none') {
+    if (state.hoveredCategory === category) return;
+    state = { ...state, hoveredCategory: category };
+    notify();
+}
+
+export function setInteractionWarning(warning: import('./types').WarningCode | null) {
+    if (state.interactionWarning === warning) return;
+    state = { ...state, interactionWarning: warning };
+    notify();
+}
+
+export function addRoot(root: Roots) {
+    state = {
+        ...state,
+        roots: { ...state.roots, [root.id]: root }
     };
-    reader.readAsText(file);
-  });
+    notify();
+}
+
+export function addTrunk(trunk: Trunk) {
+    state = {
+        ...state,
+        trunks: { ...state.trunks, [trunk.id]: trunk }
+    };
+    notify();
+}
+
+export function updateTrunk(trunk: Trunk) {
+    // Update trunk
+    const nextTrunks = { ...state.trunks, [trunk.id]: trunk };
+
+    // Update any knots attached to this trunk's segments
+    const root = state.roots[trunk.rootId];
+    let nextKnots = state.knots;
+    let nextLeaves = state.leaves;
+    let knotsChanged = false;
+
+    if (root) {
+        const updatedKnots: Record<string, Knot> = { ...state.knots };
+        const updatedKnotPosById: Record<string, Vec3> = {};
+
+        for (const knot of Object.values(state.knots)) {
+            // Find if this knot is attached to one of this trunk's segments
+            const segIndex = trunk.segments.findIndex(s => s.id === knot.parentShaftId);
+            if (segIndex === -1) continue;
+
+            const seg = trunk.segments[segIndex];
+            const endpoints = getTrunkSegmentEndpoints(trunk, seg, segIndex, root);
+            const nextDiameter = seg.diameter + 0.1;
+
+            let nextPos = knot.pos;
+            let posChanged = false;
+            if (endpoints && knot.t !== undefined) {
+                const computed = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, knot.t);
+                if (computed.x !== knot.pos.x || computed.y !== knot.pos.y || computed.z !== knot.pos.z) {
+                    nextPos = computed;
+                    posChanged = true;
+                }
+            }
+
+            const diaChanged = knot.diameter !== nextDiameter;
+            if (!posChanged && !diaChanged) continue;
+
+            updatedKnots[knot.id] = { ...knot, pos: nextPos, diameter: nextDiameter };
+            knotsChanged = true;
+            if (posChanged) {
+                updatedKnotPosById[knot.id] = nextPos;
+            }
+        }
+
+        if (knotsChanged) {
+            nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+            const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+            const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+            nextKnots = braceSeg.knots;
+        }
+    }
+
+    state = {
+        ...state,
+        trunks: nextTrunks,
+        knots: nextKnots,
+        leaves: nextLeaves,
+    };
+
+    notify();
+}
+
+export function addBranch(branch: Branch) {
+    state = {
+        ...state,
+        branches: { ...state.branches, [branch.id]: branch }
+    };
+    notify();
+}
+
+export function addLeaf(leaf: Leaf) {
+    state = {
+        ...state,
+        leaves: { ...state.leaves, [leaf.id]: leaf }
+    };
+    notify();
+}
+
+export function addBrace(brace: Brace) {
+    state = {
+        ...state,
+        braces: { ...state.braces, [brace.id]: brace },
+    };
+    notify();
+}
+
+export function addTwig(twig: Twig) {
+    state = {
+        ...state,
+        twigs: { ...state.twigs, [twig.id]: twig },
+    };
+    notify();
+}
+
+export function addStick(stick: Stick) {
+    state = {
+        ...state,
+        sticks: { ...state.sticks, [stick.id]: stick },
+    };
+    notify();
+}
+
+export function updateTwig(twig: Twig) {
+    if (!state.twigs[twig.id]) return;
+
+    const nextTwigs = { ...state.twigs, [twig.id]: twig };
+
+    let nextKnots = state.knots;
+    let nextLeaves = state.leaves;
+
+    const updatedKnots: Record<string, Knot> = { ...state.knots };
+    const updatedKnotPosById: Record<string, Vec3> = {};
+    let knotsChanged = false;
+
+    for (const knot of Object.values(state.knots)) {
+        const segIndex = twig.segments.findIndex(s => s.id === knot.parentShaftId);
+        if (segIndex === -1) continue;
+
+        const seg = twig.segments[segIndex];
+        if (!seg.bottomJoint || !seg.topJoint || knot.t === undefined) continue;
+
+        const newPos = calculateKnotPositionOnSegmentFromT(seg.bottomJoint.pos, seg.topJoint.pos, seg, knot.t);
+        if (newPos.x === knot.pos.x && newPos.y === knot.pos.y && newPos.z === knot.pos.z) continue;
+
+        updatedKnots[knot.id] = { ...knot, pos: newPos };
+        updatedKnotPosById[knot.id] = newPos;
+        knotsChanged = true;
+    }
+
+    if (knotsChanged) {
+        nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+        const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+        nextKnots = braceSeg.knots;
+    }
+
+    state = {
+        ...state,
+        twigs: nextTwigs,
+        knots: nextKnots,
+        leaves: nextLeaves,
+    };
+    notify();
+}
+
+export function updateStick(stick: Stick) {
+    if (!state.sticks[stick.id]) return;
+
+    const nextSticks = { ...state.sticks, [stick.id]: stick };
+
+    let nextKnots = state.knots;
+    let nextLeaves = state.leaves;
+
+    const updatedKnots: Record<string, Knot> = { ...state.knots };
+    const updatedKnotPosById: Record<string, Vec3> = {};
+    let knotsChanged = false;
+
+    for (const knot of Object.values(state.knots)) {
+        const segIndex = stick.segments.findIndex(s => s.id === knot.parentShaftId);
+        if (segIndex === -1) continue;
+
+        const seg = stick.segments[segIndex];
+        if (!seg.bottomJoint || !seg.topJoint || knot.t === undefined) continue;
+
+        const newPos = calculateKnotPositionOnSegmentFromT(seg.bottomJoint.pos, seg.topJoint.pos, seg, knot.t);
+        if (newPos.x === knot.pos.x && newPos.y === knot.pos.y && newPos.z === knot.pos.z) continue;
+
+        updatedKnots[knot.id] = { ...knot, pos: newPos };
+        updatedKnotPosById[knot.id] = newPos;
+        knotsChanged = true;
+    }
+
+    if (knotsChanged) {
+        nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+        const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+        const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+        nextKnots = braceSeg.knots;
+    }
+
+    state = {
+        ...state,
+        sticks: nextSticks,
+        knots: nextKnots,
+        leaves: nextLeaves,
+    };
+    notify();
+}
+
+export function updateBrace(brace: Brace) {
+    if (!state.braces[brace.id]) return;
+    const nextBraces = { ...state.braces, [brace.id]: brace };
+
+    const braceSeg1 = recomputeBraceSegmentKnotGeometry(nextBraces, state.knots);
+    const changedByBrace1 = getChangedKnotPositions(state.knots, braceSeg1.knots);
+
+    let nextLeaves = state.leaves;
+    let nextKnots = braceSeg1.knots;
+
+    if (Object.keys(changedByBrace1).length > 0) {
+        nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedByBrace1);
+        const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, nextKnots);
+        const braceSeg2 = recomputeBraceSegmentKnotGeometry(nextBraces, leafCone.knots);
+        nextKnots = braceSeg2.knots;
+    }
+
+    state = {
+        ...state,
+        braces: nextBraces,
+        knots: nextKnots,
+        leaves: nextLeaves,
+    };
+    notify();
+}
+
+export function removeBrace(braceId: string): { brace: Brace; startKnot: Knot | null; endKnot: Knot | null } | null {
+    const existing = state.braces[braceId];
+    if (!existing) return null;
+
+    const snapshots: { brace: Brace; startKnot: Knot | null; endKnot: Knot | null } = {
+        brace: deepClone(existing),
+        startKnot: null,
+        endKnot: null,
+    };
+
+    const startKnotId = existing.startKnotId;
+    const endKnotId = existing.endKnotId;
+
+    const { [braceId]: _, ...remainingBraces } = state.braces;
+
+    let nextKnots = state.knots;
+    const knotsToRemove = [startKnotId, endKnotId].filter(Boolean);
+    if (knotsToRemove.length > 0) {
+        const updatedKnots: Record<string, Knot> = { ...state.knots };
+        if (startKnotId && updatedKnots[startKnotId]) {
+            snapshots.startKnot = deepClone(updatedKnots[startKnotId]);
+            delete updatedKnots[startKnotId];
+        }
+        if (endKnotId && updatedKnots[endKnotId]) {
+            snapshots.endKnot = deepClone(updatedKnots[endKnotId]);
+            delete updatedKnots[endKnotId];
+        }
+        nextKnots = updatedKnots;
+    }
+
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+    if (
+        state.selectedId === braceId ||
+        (startKnotId && state.selectedId === startKnotId) ||
+        (endKnotId && state.selectedId === endKnotId)
+    ) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    }
+
+    state = {
+        ...state,
+        braces: remainingBraces,
+        knots: nextKnots,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+    notify();
+    return snapshots;
+}
+
+export function removeBranch(branchId: string): { branches: Branch[]; braces: Brace[]; leaves: Leaf[]; knots: Knot[] } | null {
+    const rootBranch = state.branches[branchId];
+    if (!rootBranch) return null;
+
+    const branchIdsToRemove = new Set<string>([branchId]);
+    const knotIdsToRemove = new Set<string>();
+
+    // Collect branches recursively: if a branch is attached to a knot we remove, it must be removed too.
+    // Also remove all knots created on the segments of those branches.
+    let grew = true;
+    while (grew) {
+        grew = false;
+
+        for (const bId of Array.from(branchIdsToRemove)) {
+            const b = state.branches[bId];
+            if (!b) continue;
+
+            if (b.parentKnotId) {
+                knotIdsToRemove.add(b.parentKnotId);
+            }
+
+            for (const seg of b.segments) {
+                for (const knot of Object.values(state.knots)) {
+                    if (knot.parentShaftId === seg.id) {
+                        knotIdsToRemove.add(knot.id);
+                    }
+                }
+            }
+        }
+
+        for (const b of Object.values(state.branches)) {
+            if (branchIdsToRemove.has(b.id)) continue;
+            if (b.parentKnotId && knotIdsToRemove.has(b.parentKnotId)) {
+                branchIdsToRemove.add(b.id);
+                grew = true;
+            }
+        }
+    }
+
+    const leafIdsToRemove = new Set<string>();
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.parentKnotId && knotIdsToRemove.has(leaf.parentKnotId)) {
+            leafIdsToRemove.add(leaf.id);
+        }
+    }
+
+    const braceIdsToRemove = new Set<string>();
+    for (const brace of Object.values(state.braces)) {
+        if ((brace.startKnotId && knotIdsToRemove.has(brace.startKnotId)) || (brace.endKnotId && knotIdsToRemove.has(brace.endKnotId))) {
+            braceIdsToRemove.add(brace.id);
+        }
+    }
+
+    const snapshots = {
+        branches: Array.from(branchIdsToRemove).map((id) => deepClone(state.branches[id])).filter(Boolean),
+        braces: Array.from(braceIdsToRemove).map((id) => deepClone(state.braces[id])).filter(Boolean),
+        leaves: Array.from(leafIdsToRemove).map((id) => deepClone(state.leaves[id])).filter(Boolean),
+        knots: Array.from(knotIdsToRemove).map((id) => deepClone(state.knots[id])).filter(Boolean),
+    };
+
+    let nextBranches = { ...state.branches };
+    for (const id of branchIdsToRemove) {
+        delete nextBranches[id];
+    }
+
+    let nextBraces = { ...state.braces };
+    for (const id of braceIdsToRemove) {
+        delete nextBraces[id];
+    }
+
+    let nextLeaves = { ...state.leaves };
+    for (const id of leafIdsToRemove) {
+        delete nextLeaves[id];
+    }
+
+    let nextKnots = { ...state.knots };
+    for (const id of knotIdsToRemove) {
+        delete nextKnots[id];
+    }
+
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+    if (
+        (nextSelectedId && branchIdsToRemove.has(nextSelectedId)) ||
+        (nextSelectedId && braceIdsToRemove.has(nextSelectedId)) ||
+        (nextSelectedId && leafIdsToRemove.has(nextSelectedId)) ||
+        (nextSelectedId && knotIdsToRemove.has(nextSelectedId))
+    ) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    }
+
+    state = {
+        ...state,
+        branches: nextBranches,
+        braces: nextBraces,
+        leaves: nextLeaves,
+        knots: nextKnots,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+    notify();
+    return snapshots;
+}
+
+export function updateBranch(branch: Branch) {
+    if (!state.branches[branch.id]) return;
+
+    const nextBranches = { ...state.branches, [branch.id]: branch };
+
+    // Update any knots attached to this branch's segments
+    const parentKnot = state.knots[branch.parentKnotId];
+    let nextKnots = state.knots;
+    let nextLeaves = state.leaves;
+
+    if (parentKnot) {
+        const updatedKnots: Record<string, Knot> = { ...state.knots };
+        const updatedKnotPosById: Record<string, Vec3> = {};
+        let knotsChanged = false;
+
+        for (const knot of Object.values(state.knots)) {
+            const segIndex = branch.segments.findIndex(s => s.id === knot.parentShaftId);
+            if (segIndex === -1) continue;
+
+            const seg = branch.segments[segIndex];
+            const endpoints = getBranchSegmentEndpoints(branch, seg, segIndex, parentKnot);
+            if (!endpoints || knot.t === undefined) continue;
+
+            const newPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, seg, knot.t);
+            if (newPos.x === knot.pos.x && newPos.y === knot.pos.y && newPos.z === knot.pos.z) continue;
+
+            updatedKnots[knot.id] = { ...knot, pos: newPos };
+            updatedKnotPosById[knot.id] = newPos;
+            knotsChanged = true;
+        }
+
+        if (knotsChanged) {
+            nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+            const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+            const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+            nextKnots = braceSeg.knots;
+        }
+    }
+
+    state = {
+        ...state,
+        branches: nextBranches,
+        knots: nextKnots,
+        leaves: nextLeaves,
+    };
+    notify();
+}
+
+export function addKnot(knot: Knot) {
+    state = {
+        ...state,
+        knots: { ...state.knots, [knot.id]: knot }
+    };
+    notify();
+}
+
+export function updateKnot(knot: Knot) {
+    const existing = state.knots[knot.id];
+    if (!existing) return;
+
+    const baseKnots = { ...state.knots, [knot.id]: knot };
+
+    let nextLeaves = recomputeKnotDependentGeometry(state.leaves, { [knot.id]: knot.pos });
+    const leafCone1 = recomputeLeafConeKnotGeometry(nextLeaves, baseKnots);
+    const braceSeg1 = recomputeBraceSegmentKnotGeometry(state.braces, leafCone1.knots);
+
+    const changedByBrace1 = getChangedKnotPositions(leafCone1.knots, braceSeg1.knots);
+
+    let nextKnots = braceSeg1.knots;
+    if (Object.keys(changedByBrace1).length > 0) {
+        nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedByBrace1);
+        const leafCone2 = recomputeLeafConeKnotGeometry(nextLeaves, nextKnots);
+        const braceSeg2 = recomputeBraceSegmentKnotGeometry(state.braces, leafCone2.knots);
+        nextKnots = braceSeg2.knots;
+    }
+
+    state = { ...state, knots: nextKnots, leaves: nextLeaves };
+    notify();
+}
+
+export function removeLeaf(leafId: string): { leaf: Leaf; knot: Knot | null } | null {
+    const existingLeaf = state.leaves[leafId];
+    if (!existingLeaf) return null;
+
+    const snapshots: { leaf: Leaf; knot: Knot | null } = {
+        leaf: deepClone(existingLeaf),
+        knot: null,
+    };
+
+    const knotId = existingLeaf.parentKnotId;
+    const { [leafId]: _, ...remainingLeaves } = state.leaves;
+
+    let nextKnots = state.knots;
+    if (knotId && state.knots[knotId]) {
+        const { [knotId]: removedKnot, ...restKnots } = state.knots;
+        snapshots.knot = deepClone(removedKnot);
+        nextKnots = restKnots;
+    }
+
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+    if (state.selectedId === leafId || (knotId && state.selectedId === knotId)) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    }
+
+    state = {
+        ...state,
+        leaves: remainingLeaves,
+        knots: nextKnots,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+
+    notify();
+    return snapshots;
+}
+
+export function removeTrunk(
+    trunkId: string
+): { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; leaves: Leaf[]; knots: Knot[] } | null {
+    const existingTrunk = state.trunks[trunkId];
+    if (!existingTrunk) return null;
+
+    const trunkSegmentIds = new Set(existingTrunk.segments.map((s) => s.id));
+    const trunkHostedKnotIds = new Set<string>();
+    for (const knot of Object.values(state.knots)) {
+        if (trunkSegmentIds.has(knot.parentShaftId)) trunkHostedKnotIds.add(knot.id);
+    }
+
+    const branchIdsToRemove: string[] = [];
+    for (const branch of Object.values(state.branches)) {
+        if (branch.parentKnotId && trunkHostedKnotIds.has(branch.parentKnotId)) {
+            branchIdsToRemove.push(branch.id);
+        }
+    }
+
+    const leafIdsToRemove: string[] = [];
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.parentKnotId && trunkHostedKnotIds.has(leaf.parentKnotId)) {
+            leafIdsToRemove.push(leaf.id);
+        }
+    }
+
+    const braceIdsToRemove: string[] = [];
+    for (const brace of Object.values(state.braces)) {
+        if ((brace.startKnotId && trunkHostedKnotIds.has(brace.startKnotId)) || (brace.endKnotId && trunkHostedKnotIds.has(brace.endKnotId))) {
+            braceIdsToRemove.push(brace.id);
+        }
+    }
+
+    const snapshots: { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; leaves: Leaf[]; knots: Knot[] } = {
+        trunk: deepClone(existingTrunk),
+        root: null,
+        branches: [],
+        braces: [],
+        leaves: [],
+        knots: [],
+    };
+
+    const seenBranchIds = new Set<string>();
+    const seenBraceIds = new Set<string>();
+    const seenLeafIds = new Set<string>();
+    const seenKnotIds = new Set<string>();
+
+    for (const branchId of branchIdsToRemove) {
+        const removed = removeBranch(branchId);
+        if (!removed) continue;
+        for (const b of removed.branches ?? []) {
+            if (!b || seenBranchIds.has(b.id)) continue;
+            seenBranchIds.add(b.id);
+            snapshots.branches.push(b);
+        }
+        for (const br of removed.braces ?? []) {
+            if (!br || seenBraceIds.has(br.id)) continue;
+            seenBraceIds.add(br.id);
+            snapshots.braces.push(br);
+        }
+        for (const l of removed.leaves ?? []) {
+            if (!l || seenLeafIds.has(l.id)) continue;
+            seenLeafIds.add(l.id);
+            snapshots.leaves.push(l);
+        }
+        for (const k of removed.knots ?? []) {
+            if (!k || seenKnotIds.has(k.id)) continue;
+            seenKnotIds.add(k.id);
+            snapshots.knots.push(k);
+        }
+    }
+
+    for (const leafId of leafIdsToRemove) {
+        const removed = removeLeaf(leafId);
+        if (!removed) continue;
+        if (removed.leaf && !seenLeafIds.has(removed.leaf.id)) {
+            seenLeafIds.add(removed.leaf.id);
+            snapshots.leaves.push(removed.leaf);
+        }
+        if (removed.knot && !seenKnotIds.has(removed.knot.id)) {
+            seenKnotIds.add(removed.knot.id);
+            snapshots.knots.push(removed.knot);
+        }
+    }
+
+    for (const braceId of braceIdsToRemove) {
+        const removed = removeBrace(braceId);
+        if (!removed) continue;
+        if (removed.brace && !seenBraceIds.has(removed.brace.id)) {
+            seenBraceIds.add(removed.brace.id);
+            snapshots.braces.push(removed.brace);
+        }
+        if (removed.startKnot && !seenKnotIds.has(removed.startKnot.id)) {
+            seenKnotIds.add(removed.startKnot.id);
+            snapshots.knots.push(removed.startKnot);
+        }
+        if (removed.endKnot && !seenKnotIds.has(removed.endKnot.id)) {
+            seenKnotIds.add(removed.endKnot.id);
+            snapshots.knots.push(removed.endKnot);
+        }
+    }
+
+    const remainingKnotsToRemove: string[] = [];
+    for (const knotId of Array.from(trunkHostedKnotIds)) {
+        if (state.knots[knotId]) remainingKnotsToRemove.push(knotId);
+    }
+
+    let nextKnots = state.knots;
+    if (remainingKnotsToRemove.length > 0) {
+        const updatedKnots: Record<string, Knot> = { ...state.knots };
+        for (const knotId of remainingKnotsToRemove) {
+            const k = updatedKnots[knotId];
+            if (!k) continue;
+            if (!seenKnotIds.has(k.id)) {
+                seenKnotIds.add(k.id);
+                snapshots.knots.push(deepClone(k));
+            }
+            delete updatedKnots[knotId];
+        }
+        nextKnots = updatedKnots;
+    }
+
+    const { [trunkId]: _, ...remainingTrunks } = state.trunks;
+    let nextRoots = state.roots;
+    if (existingTrunk.rootId && state.roots[existingTrunk.rootId]) {
+        const { [existingTrunk.rootId]: removedRoot, ...restRoots } = state.roots;
+        snapshots.root = deepClone(removedRoot);
+        nextRoots = restRoots;
+    }
+
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+
+    if (state.selectedId === trunkId || state.selectedId === existingTrunk.rootId) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    } else if (state.selectedCategory === 'joint' && state.selectedId) {
+        const jointInTrunk =
+            existingTrunk.segments.some((s) => s.topJoint?.id === state.selectedId || s.bottomJoint?.id === state.selectedId) ||
+            (!!existingTrunk.contactCone?.socketJointId && existingTrunk.contactCone.socketJointId === state.selectedId);
+        if (jointInTrunk) {
+            nextSelectedId = null;
+            nextSelectedCategory = null;
+        }
+    } else if (state.selectedCategory === 'segment' && state.selectedId) {
+        if (trunkSegmentIds.has(state.selectedId)) {
+            nextSelectedId = null;
+            nextSelectedCategory = null;
+        }
+    } else if (state.selectedCategory === 'knot' && state.selectedId) {
+        if (trunkHostedKnotIds.has(state.selectedId)) {
+            nextSelectedId = null;
+            nextSelectedCategory = null;
+        }
+    }
+
+    state = {
+        ...state,
+        trunks: remainingTrunks,
+        roots: nextRoots,
+        knots: nextKnots,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+
+    notify();
+    return snapshots;
+}
+
+// --- Selectors / Hooks Helpers ---
+
+export function getRoots() {
+    return Object.values(state.roots);
+}
+
+export function getTrunks() {
+    return Object.values(state.trunks);
+}
+
+export function getBranches() {
+    return Object.values(state.branches);
+}
+
+export function getLeaves() {
+    return Object.values(state.leaves);
+}
+
+export function getTwigs() {
+    return Object.values(state.twigs);
+}
+
+export function getSticks() {
+    return Object.values(state.sticks);
+}
+
+export function getBraces() {
+    return Object.values(state.braces);
+}
+
+export function getKnotsMap() {
+    return state.knots;
+}
+
+export function getKnots() {
+    return Object.values(state.knots);
+}
+
+export function getKnotById(knotId: string) {
+    return state.knots[knotId] ?? null;
+}
+
+export function getSelectedId() {
+    return state.selectedId;
+}
+
+export function getSelectedCategory() {
+    return state.selectedCategory;
+}
+
+export function getHoveredId() {
+    return state.hoveredId;
+}
+
+export function getHoveredCategory() {
+    return state.hoveredCategory;
+}
+
+export function getTrunkById(trunkId: string) {
+    return state.trunks[trunkId] ?? null;
+}
+
+export function getRootById(rootId: string) {
+    return state.roots[rootId] ?? null;
+}
+
+export function getBranchById(branchId: string) {
+    return state.branches[branchId] ?? null;
+}
+
+export function getTwigById(twigId: string) {
+    return state.twigs[twigId] ?? null;
+}
+
+export function getStickById(stickId: string) {
+    return state.sticks[stickId] ?? null;
 }

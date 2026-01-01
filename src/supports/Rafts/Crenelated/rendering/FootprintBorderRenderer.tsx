@@ -3,7 +3,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
-import { getSupportList, subscribeToSupportStore } from '@/supports/state';
+import { subscribe, getSnapshot } from '@/supports/state';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import { SupportBaseCircle } from '../RaftTypes';
 import { computeFootprint } from '../geometry/computeFootprint';
@@ -102,22 +102,20 @@ export default function FootprintBorderRenderer({
   modelGeometry,
   modelTransform
 }: FootprintBorderRendererProps) {
-  const supports = useSyncExternalStore(subscribeToSupportStore, getSupportList, () => []);
+  const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
   const borderLine = React.useMemo(() => {
-    if (!raft.enabled || !raft.showFootprintBorder) return null;
+    if (raft.bottomMode === 'off' || !raft.showFootprintBorder) return null;
 
     const allPoints: THREE.Vector2[] = [];
 
     // 1. Add raft outer boundary points
-    const circles: SupportBaseCircle[] = supports
-      .filter(s => s?.settings?.base?.diameterMm && s.base)
-      .map(s => ({
-        x: s.base.x,
-        y: s.base.y,
-        r: (s.settings.base.diameterMm || 0) / 2,
-      }));
+    const circles: SupportBaseCircle[] = Object.values(supportState.roots).map(root => ({
+      x: root.transform.pos.x,
+      y: root.transform.pos.y,
+      r: root.diameter / 2,
+    }));
 
     if (circles.length > 0) {
       const baseProfile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
@@ -131,8 +129,6 @@ export default function FootprintBorderRenderer({
 
     // 2. Add model footprint using raycasting
     if (modelGeometry && modelTransform) {
-      console.log(`[${new Date().toISOString()}] [FootprintBorderRenderer] Computing footprint...`);
-      const start = performance.now();
 
       // Build transform matrix
       const bbox = modelGeometry.geometry.boundingBox ??
@@ -220,7 +216,6 @@ export default function FootprintBorderRenderer({
         }
       }
 
-      console.log(`[${new Date().toISOString()}] [FootprintBorderRenderer] Footprint computed in ${(performance.now() - start).toFixed(2)}ms. Points: ${allPoints.length}`);
     }
 
     if (allPoints.length < 3) return null;
@@ -242,9 +237,9 @@ export default function FootprintBorderRenderer({
     points.push(new THREE.Vector3(borderProfile[0].x, borderProfile[0].y, -1.0));
 
     return new THREE.BufferGeometry().setFromPoints(points);
-  }, [modelGeometry, modelTransform, supports, raft]);
+  }, [modelGeometry, modelTransform, supportState, raft]);
 
-  if (!raft.enabled || !raft.showFootprintBorder || !borderLine) {
+  if (raft.bottomMode === 'off' || !raft.showFootprintBorder || !borderLine) {
     return null;
   }
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import * as THREE from 'three';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { NumberInput } from '@/components/ui/NumberInput';
 
 interface TransformControlsProps {
   // Position
@@ -72,17 +73,15 @@ export function TransformControls({
     : new THREE.Vector3(1, 1, 1);
 
   // Position handlers
-  const handlePositionChange = (axis: 'x' | 'y' | 'z', value: string) => {
-    const num = parseFloat(value) || 0;
+  const handlePositionChange = (axis: 'x' | 'y' | 'z', value: number) => {
     const newPos = position.clone();
-    newPos[axis] = num;
+    newPos[axis] = value;
     onPositionChange(newPos.x, newPos.y, newPos.z);
   };
 
   // Rotation handlers
-  const handleRotationChange = (axis: 'x' | 'y' | 'z', value: string) => {
-    const degrees = parseFloat(value) || 0;
-    const radians = toRadians(degrees);
+  const handleRotationChange = (axis: 'x' | 'y' | 'z', value: number) => {
+    const radians = toRadians(value);
     const newRot = rotation.clone();
     newRot[axis] = radians;
     onRotationChange(newRot.x, newRot.y, newRot.z);
@@ -90,14 +89,13 @@ export function TransformControls({
   };
 
   // Scale handlers
-  const handleScaleChange = (axis: 'x' | 'y' | 'z', value: string) => {
-    const num = parseFloat(value) || 1;
+  const handleScaleChange = (axis: 'x' | 'y' | 'z', value: number) => {
     let newScale: number;
 
     if (scaleUnit === '%') {
-      newScale = num / 100;
+      newScale = value / 100;
     } else {
-      newScale = num / originalSize[axis];
+      newScale = value / originalSize[axis];
     }
 
     if (uniformScaling) {
@@ -109,11 +107,11 @@ export function TransformControls({
     }
   };
 
-  const getScaleDisplayValue = (axis: 'x' | 'y' | 'z'): string => {
+  const getScaleDisplayValue = (axis: 'x' | 'y' | 'z'): number => {
     if (scaleUnit === '%') {
-      return (scale[axis] * 100).toFixed(2);
+      return (scale[axis] * 100);
     } else {
-      return (scale[axis] * originalSize[axis]).toFixed(2);
+      return (scale[axis] * originalSize[axis]);
     }
   };
 
@@ -136,7 +134,7 @@ export function TransformControls({
   }) => (
     <button
       onClick={onToggle}
-      className="w-full flex items-center justify-between py-2 text-sm font-semibold text-neutral-200 hover:text-white transition-colors"
+      className="w-full flex items-center justify-between py-1 text-sm font-semibold text-neutral-200 hover:text-white transition-colors"
     >
       <span>{title}</span>
       {expanded ? (
@@ -148,83 +146,73 @@ export function TransformControls({
   );
 
   return (
-    <div className="absolute left-24 top-20 z-10 bg-neutral-800/95 backdrop-blur-sm rounded-lg p-4 shadow-xl w-80 max-h-[calc(100vh-120px)] overflow-y-auto">
-      <h3 className="text-sm font-semibold text-neutral-200 mb-2 pb-2 border-b border-neutral-700">Transform</h3>
-
+    <div className="absolute left-72 top-20 z-10 bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl w-64 max-h-[calc(100vh-120px)] overflow-y-auto">
+      
       {/* MOVE SECTION */}
       <div className="border-b border-neutral-700">
         <SectionHeader title="Move" expanded={moveExpanded} onToggle={() => setMoveExpanded(!moveExpanded)} />
         {moveExpanded && (
-          <div className="pb-3">
+          <div className="pb-1">
             {/* XYZ Position Inputs */}
-            <div className="flex gap-2 mb-3">
+            <div className="flex gap-1.5 mb-1">
               <div className="flex-1">
-                <label className="text-[10px] text-red-400 font-medium mb-1 block">X</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={position.x.toFixed(2)}
-                  onChange={(e) => handlePositionChange('x', e.target.value)}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
+                <label className="text-[9px] text-red-400 font-medium mb-0.5 block">X</label>
+                <NumberInput
+                  value={parseFloat(position.x.toFixed(2))}
+                  onChange={(val) => handlePositionChange('x', val)}
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] text-green-400 font-medium mb-1 block">Y</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={position.y.toFixed(2)}
-                  onChange={(e) => handlePositionChange('y', e.target.value)}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none no-spinners"
+                <label className="text-[9px] text-green-400 font-medium mb-0.5 block">Y</label>
+                <NumberInput
+                  value={parseFloat(position.y.toFixed(2))}
+                  onChange={(val) => handlePositionChange('y', val)}
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] text-blue-400 font-medium mb-1 block">Z</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={position.z.toFixed(2)}
-                  onChange={(e) => handlePositionChange('z', e.target.value)}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                <label className="text-[9px] text-blue-400 font-medium mb-0.5 block">Z</label>
+                <NumberInput
+                  value={parseFloat(position.z.toFixed(2))}
+                  onChange={(val) => handlePositionChange('z', val)}
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
                 />
-              </div>
-              <div className="flex items-end">
-                <span className="text-xs text-neutral-400 pb-1">mm</span>
               </div>
             </div>
 
             {/* Action Buttons */}
-            <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="grid grid-cols-3 gap-1.5 mb-1">
               <button
                 onClick={onCenter}
-                className="px-2 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
+                className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
               >
                 Center
               </button>
               <button
                 onClick={() => modelBBox && onPlatform(modelBBox)}
                 disabled={!modelBBox}
-                className="px-2 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Platform
               </button>
               <button
                 onClick={handleArrangeAll}
                 disabled={!modelBBox}
-                className="px-2 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Arrange
               </button>
             </div>
 
             {/* Lift Object Section */}
-            <div className="bg-neutral-750 rounded p-2">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-neutral-400">Auto lift</span>
+            <div className="bg-neutral-750 rounded p-1">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-neutral-400">Auto lift</span>
                 <div className="flex gap-1">
                   <button
                     onClick={() => onAutoLiftChange(true)}
-                    className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                    className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                       autoLift
                         ? 'bg-blue-500 text-white'
                         : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
@@ -234,7 +222,7 @@ export function TransformControls({
                   </button>
                   <button
                     onClick={() => onAutoLiftChange(false)}
-                    className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                    className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                       !autoLift
                         ? 'bg-neutral-600 text-white'
                         : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
@@ -245,30 +233,27 @@ export function TransformControls({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs text-neutral-400">Distance</span>
-                <input
-                  type="number"
-                  step="1"
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="text-[10px] text-neutral-400">Dist (mm)</span>
+                <NumberInput
                   value={liftDistance}
-                  onChange={(e) => onLiftDistanceChange(parseFloat(e.target.value) || 0)}
-                  className="flex-1 px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                  onChange={(val) => onLiftDistanceChange(val)}
+                  className="flex-1 px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
                 />
-                <span className="text-xs text-neutral-400">mm</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-1.5">
                 <button
                   onClick={onLift}
                   disabled={!modelBBox}
-                  className="px-2 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-1.5 py-1 text-[10px] bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Lift
                 </button>
                 <button
                   onClick={onDrop}
                   disabled={!modelBBox}
-                  className="px-2 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Drop
                 </button>
@@ -282,47 +267,38 @@ export function TransformControls({
       <div className="border-b border-neutral-700">
         <SectionHeader title="Rotate" expanded={rotateExpanded} onToggle={() => setRotateExpanded(!rotateExpanded)} />
         {rotateExpanded && (
-          <div className="pb-3">
+          <div className="pb-1">
             {/* XYZ Rotation Inputs */}
-            <div className="flex gap-2 mb-3">
+            <div className="flex gap-1.5 mb-1">
               <div className="flex-1">
-                <label className="text-[10px] text-red-400 font-medium mb-1 block">X</label>
-                <input
-                  type="number"
-                  step="1"
-                  value={toDegrees(rotation.x).toFixed(2)}
-                  onChange={(e) => handleRotationChange('x', e.target.value)}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
+                <label className="text-[9px] text-red-400 font-medium mb-0.5 block">X</label>
+                <NumberInput
+                  value={parseFloat(toDegrees(rotation.x).toFixed(2))}
+                  onChange={(val) => handleRotationChange('x', val)}
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] text-green-400 font-medium mb-1 block">Y</label>
-                <input
-                  type="number"
-                  step="1"
-                  value={toDegrees(rotation.y).toFixed(2)}
-                  onChange={(e) => handleRotationChange('y', e.target.value)}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none no-spinners"
+                <label className="text-[9px] text-green-400 font-medium mb-0.5 block">Y</label>
+                <NumberInput
+                  value={parseFloat(toDegrees(rotation.y).toFixed(2))}
+                  onChange={(val) => handleRotationChange('y', val)}
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] text-blue-400 font-medium mb-1 block">Z</label>
-                <input
-                  type="number"
-                  step="1"
-                  value={toDegrees(rotation.z).toFixed(2)}
-                  onChange={(e) => handleRotationChange('z', e.target.value)}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                <label className="text-[9px] text-blue-400 font-medium mb-0.5 block">Z</label>
+                <NumberInput
+                  value={parseFloat(toDegrees(rotation.z).toFixed(2))}
+                  onChange={(val) => handleRotationChange('z', val)}
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
                 />
-              </div>
-              <div className="flex items-end">
-                <span className="text-xs text-neutral-400 pb-1">°</span>
               </div>
             </div>
 
             <button
               onClick={onResetRotation}
-              className="w-full px-2 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
+              className="w-full px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
             >
               Reset Rotation
             </button>
@@ -336,43 +312,37 @@ export function TransformControls({
         {scaleExpanded && (
           <div className="pb-1">
             {/* Scale Factor Inputs */}
-            <div className="flex gap-2 mb-2">
+            <div className="flex gap-1.5 mb-1">
               <div className="flex-1">
-                <label className="text-[10px] text-red-400 font-medium mb-1 block">X</label>
-                <input
-                  type="number"
-                  step={scaleUnit === '%' ? '1' : '0.1'}
-                  value={getScaleDisplayValue('x')}
-                  onChange={(e) => handleScaleChange('x', e.target.value)}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
+                <label className="text-[9px] text-red-400 font-medium mb-0.5 block">X</label>
+                <NumberInput
+                  value={parseFloat(getScaleDisplayValue('x').toFixed(2))}
+                  onChange={(val) => handleScaleChange('x', val)}
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] text-green-400 font-medium mb-1 block">Y</label>
-                <input
-                  type="number"
-                  step={scaleUnit === '%' ? '1' : '0.1'}
-                  value={getScaleDisplayValue('y')}
-                  onChange={(e) => handleScaleChange('y', e.target.value)}
+                <label className="text-[9px] text-green-400 font-medium mb-0.5 block">Y</label>
+                <NumberInput
+                  value={parseFloat(getScaleDisplayValue('y').toFixed(2))}
+                  onChange={(val) => handleScaleChange('y', val)}
                   disabled={uniformScaling}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none disabled:opacity-50 no-spinners"
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none disabled:opacity-50 no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] text-blue-400 font-medium mb-1 block">Z</label>
-                <input
-                  type="number"
-                  step={scaleUnit === '%' ? '1' : '0.1'}
-                  value={getScaleDisplayValue('z')}
-                  onChange={(e) => handleScaleChange('z', e.target.value)}
+                <label className="text-[9px] text-blue-400 font-medium mb-0.5 block">Z</label>
+                <NumberInput
+                  value={parseFloat(getScaleDisplayValue('z').toFixed(2))}
+                  onChange={(val) => handleScaleChange('z', val)}
                   disabled={uniformScaling}
-                  className="w-full px-2 py-1 text-sm bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none disabled:opacity-50 no-spinners"
+                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none disabled:opacity-50 no-spinners"
                 />
               </div>
               <div className="flex items-end">
                 <button
                   onClick={() => setScaleUnit(scaleUnit === 'mm' ? '%' : 'mm')}
-                  className="px-2 py-1 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors mb-0.5"
+                  className="px-1.5 py-0.5 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors mb-0.5"
                 >
                   {scaleUnit}
                 </button>
@@ -380,12 +350,12 @@ export function TransformControls({
             </div>
 
             {/* Uniform Scaling Toggle */}
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs text-neutral-400">Uniform</span>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-neutral-400">Uniform</span>
               <div className="flex gap-1">
                 <button
                   onClick={() => setUniformScaling(true)}
-                  className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                  className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                     uniformScaling
                       ? 'bg-blue-500 text-white'
                       : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
@@ -395,7 +365,7 @@ export function TransformControls({
                 </button>
                 <button
                   onClick={() => setUniformScaling(false)}
-                  className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                  className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                     !uniformScaling
                       ? 'bg-neutral-600 text-white'
                       : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
@@ -408,7 +378,7 @@ export function TransformControls({
 
             <button
               onClick={onResetScale}
-              className="w-full px-2 py-1.5 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
+              className="w-full px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
             >
               Reset Scale
             </button>
@@ -418,3 +388,4 @@ export function TransformControls({
     </div>
   );
 }
+

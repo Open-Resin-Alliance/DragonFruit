@@ -6,7 +6,7 @@ import * as THREE from 'three';
  * Returns a new CCW polygon of same vertex count.
  */
 export function insetConvexPolygon(poly: THREE.Vector2[], d: number): THREE.Vector2[] {
-  if (poly.length < 3 || d <= 0) return poly.map(p => p.clone());
+  if (poly.length < 3 || Math.abs(d) < 1e-5) return poly.map(p => p.clone());
 
   const n = poly.length;
 

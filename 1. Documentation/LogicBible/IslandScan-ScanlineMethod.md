@@ -229,3 +229,209 @@ The 3D voxel visualizer needs to know if a voxel is "surface" (exposed to air) o
     3.  We perform O(1) neighbor checks using these buffers.
     4.  We discard `PrevLayer`, move `Curr` to `Prev`, `Next` to `Curr`, and decode a new `Next`.
 *   **Memory Impact:** We only ever hold ~25MB of raw data in memory (for 3 layers) instead of 17GB.
+
+---
+
+## Island Detection Pipeline (High-Level)
+
+The scanline + RLE pipeline above is the **foundation** for island detection. This section connects it to the island concept the slicer uses.
+
+### What is an Island?
+
+- An **island** is a 3D volume of model material that, at some point, starts in mid‑air (unsupported) and then grows upward.
+- Once an island starts, all connected solid above that unsupported base belongs to the **same island**, until it merges into other islands or reaches the top of the model.
+
+### Per-Layer Unsupported Detection
+
+For each layer, workers:
+
+1. Slice the mesh at the current Z to get 2D loops.
+2. Rasterize loops into a binary mask using the scanline method.
+3. Encode the mask as `RleMask`.
+4. Compare the current mask to the **dilated** previous mask:
+   - Dilate previous mask by `support_buffer_mm / px_mm` in pixel space (using RLE).
+   - `supported = current ∧ dilated(previous)`.
+   - `unsupportedCandidates = current − supported`.
+5. Run RLE component labeling on `unsupportedCandidates` to get **unsupported components** (potential island seeds).
+
+Each worker returns, per layer:
+
+- `solidMaskRle` – all solid pixels for that layer.
+- `islandLabelsRle` – labels of unsupported components for that layer.
+- `components` – metadata for those unsupported components.
+
+The main thread feeds these into **IslandTracker** to form full 3D islands.
+
+---
+
+## IslandTracker: 3D Islands and Hierarchy
+
+IslandTracker is responsible for turning per‑layer masks into stable 3D islands with IDs, volumes, and parent–child relationships.
+
+### Core Island Data (Conceptual Interface)
+
+```typescript
+interface Island {
+  id: number;                               // Stable ID
+  firstLayer: number;                       // First layer where island appears
+  lastLayer: number;                        // Last layer where island appears
+  status: 'active' | 'complete';            // Lifecycle during scan
+  perLayerAreaMm2: Map<number, number>;     // Area at each layer when processed
+  volumeMm3?: number;                       // Computed after scan
+  maxAreaMm2?: number;                      // Largest cross-section
+  maxAreaLayer?: number;                    // Layer of largest cross-section
+  parentId?: number;                        // Parent island ID (if merged)
+  childIds: number[];                       // Child island IDs
+  isMergedPlaceholder?: boolean;            // Temporary merged islands during evaluation
+}
+```
+
+### Per-Layer Logic
+
+For each layer, IslandTracker:
+
+1. Runs connected components on the **solid mask** (RLE) to find solid components.
+2. For each solid component, checks overlap with the **previous layer’s island labels** (also RLE):
+   - Builds `prevIds`: set of all island IDs overlapped one layer below.
+   - Builds `activePrevIds`: subset of `prevIds` whose islands are still `active`.
+
+Then decides how to label the component:
+
+- **Multiple active overlaps** (`activePrevIds.size > 1`):
+  - Merge event.
+  - Previous islands are marked `complete` at layer‑1.
+  - A new **merged placeholder** island is created and a `PendingMerge` record is added.
+
+- **Single active overlap** (`activePrevIds.size === 1`):
+  - Simple **continuation** of that island.
+  - The island’s `lastLayer`, `perLayerAreaMm2`, volume stats, and `maxAreaMm2` are updated.
+
+- **No active overlaps, but `prevIds` not empty**:
+  - The component only overlaps islands that are no longer active (completed parents or placeholders).
+  - Instead of starting a new island, the tracker resolves those IDs through their `parentId` chain to find the **ultimate ancestor** and treats this as a **continuation of that ancestor**.
+  - This prevents “top caps” that sit directly on existing bodies from becoming separate child islands.
+
+- **No overlaps at all** (`prevIds` empty):
+  - True new unsupported seed → start a **new island** at this layer.
+
+After assigning an island ID to each component, IslandTracker writes the ID into the per‑layer `RleLabels` grid (`islandLabelsPerLayer`) that downstream systems use.
+
+---
+
+## Volume and Parent–Child Hierarchy
+
+### Per-Layer Area and Volume
+
+- Each island maintains `perLayerAreaMm2`, a map from `layerIndex → areaMm2` recorded when that layer is processed.
+- After the scan:
+
+```text
+volumeMm3 = Σ (areaAtLayer × layerHeightMm) over all layers in perLayerAreaMm2
+```
+
+- Using pre‑merge areas ensures that each island’s volume reflects its own contribution, even after parent reassignments.
+
+### PendingMerge and the 30-Layer Window
+
+When a merge happens (multiple active islands feed into a single component):
+
+- IslandTracker creates a `PendingMerge` record roughly like:
+
+```typescript
+type PendingMerge = {
+  mergeLayer: number;                 // Layer where merge occurred
+  candidateIds: number[];             // Islands that merged
+  mergedIslandId: number;             // Temporary merged placeholder
+  overlapCounts: Map<number, number>; // Overlap per candidate in later layers
+  preMergeLabels: RleLabels;          // Island labels from layer before the merge
+};
+```
+
+- Over the next 30 layers, it tracks how much each candidate continues inside the merged placeholder using `preMergeLabels` to attribute pixels.
+- After 30 layers:
+  - The candidate with the **highest overlap** becomes the **parent**.
+  - Other candidates and the placeholder become **children**.
+
+### Placeholder Resolution and True Parents
+
+- Placeholders may participate in later merges, so they can form chains.
+- A conceptual `resolveTrueParent(id)` helper walks `parentId` links until it reaches a **non‑placeholder ancestor**.
+- All hierarchy references (including new merges and top‑cap continuation) use this resolved ancestor ID.
+- Once all merges are evaluated:
+  - Placeholder islands are removed from the public `islands` list.
+  - Their areas/volumes remain merged into their real parent.
+
+The result is a clean parent–child tree that describes how unsupported volumes grow and merge without exposing temporary bookkeeping nodes.
+
+---
+
+## Visualization: Voxels, Blobs, and Labels
+
+The same `ScanResults` data is visualized in three main ways.
+
+### 1. Voxel Visualization
+
+- Uses `islandLabelsPerLayer` to instantiate colored voxels.
+- Each island ID is mapped to a unique color.
+- Only **surface** voxels are rendered, using the sliding‑window decode described earlier.
+- Color changes along continuous geometry make it easy to see where the tracker starts/stops islands or where merges occur.
+
+### 2. Island Overlay Blobs
+
+- For each island, a base footprint is computed from its base layer (`compBase` / `firstLayer` and label data).
+- That footprint is converted to world‑space points, hulled, and extruded a few layers to create a 3D **blob** over the base region.
+- Blobs are only shown for:
+  - Islands that are **true unsupported seeds**.
+  - Islands that are **leaf nodes** (no `childIds`), to avoid huge parent slabs.
+- This yields a focused view of the islands that actually need support attention.
+
+### 3. Debug Island ID Labels
+
+- Each blob can optionally show a small `#ID` label just above the base.
+- These labels help correlate:
+  - Voxel colors ↔ island IDs ↔ overlay blobs ↔ internal island data.
+
+---
+
+## How This Feeds Future Auto-Support
+
+The island system is designed so an auto‑support module can reuse its results directly.
+
+### Key Inputs for Auto-Support
+
+From `ScanResults` and `Island` objects, an auto‑support system can access:
+
+- **Island bases and footprints**
+  - Base layer indices (`compBase` / `firstLayer`).
+  - Base footprints in grid space (via `islandLabelsPerLayer` and `baseLabels`).
+
+- **Size metrics**
+  - `volumeMm3` and `maxAreaMm2` for how big / wide each unsupported volume is.
+
+- **Hierarchy**
+  - `parentId` / `childIds` describing which islands feed into which merged bodies.
+  - This allows focusing supports on key parents that indirectly support multiple children.
+
+- **Spatial mapping**
+  - `grid` for mapping pixel indices back to world‑space positions on the mesh.
+
+### Example Auto-Support Workflow (Conceptual)
+
+1. **Candidate selection**
+   - Start with islands that:
+     - Begin unsupported (true seeds).
+     - Are leaf islands or important parents.
+     - Exceed thresholds for volume or `maxAreaMm2`.
+
+2. **Ranking**
+   - Score islands based on size and height to decide which are most critical.
+
+3. **Support target derivation**
+   - For a chosen island, project its base footprint (from `islandLabelsPerLayer` at `compBase[id]`) into world space to find anchor patches on the model.
+
+4. **Support placement and explanation**
+   - Generate support geometry that terminates within those anchor patches.
+   - Use voxel colors + blobs to visually explain why those supports were chosen.
+
+Because the scanline + RLE pipeline already reduces the model to a small set of well‑described unsupported volumes, automatic support generation can focus on **deciding where and how to support**, rather than rediscovering which parts of the model are islands.
+

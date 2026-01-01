@@ -2,7 +2,7 @@
 
 ## Plain Language Overview
 *   **What it is**: A two-ended contact element connecting model → model via a central hub.
-*   **Purpose**: To span larger gaps between surfaces where a mono-shaft [[Twig]] would be too short.
+*   **Purpose**: To span larger gaps between surfaces where a mono-shaft [[Twig]] would be too long.
 *   **Key Characteristics**:
     *   Two branches meeting at a central joint.
     *   Allows angled edits on each side.
@@ -16,7 +16,7 @@
 *   **Dimensions**: Per-segment diameters.
 
 ## Placement & Creation
-*   **Creation Method**: Hold `Ctrl+Alt` (unified placement).
+*   **Creation Method**: Hold `alt` (unified placement).
 *   **Input Flow**:
     1.  **First Click**: Set Tip A.
     2.  **Move Pointer**: Preview Tip B. Auto-chooses Stick vs [[Twig]] based on distance.

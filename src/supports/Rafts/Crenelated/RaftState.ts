@@ -21,7 +21,20 @@ export function getRaftSettings(): RaftSettings {
 }
 
 export function setRaftSettings(settings: RaftSettings): void {
-  currentRaftSettings = settings;
+  const next = { ...DEFAULT_RAFT_SETTINGS, ...settings };
+  currentRaftSettings = {
+    ...next,
+    wallEnabled: next.bottomMode === 'off' ? false : next.wallEnabled,
+  };
+  notify();
+}
+
+export function updateRaftSettings(partial: Partial<RaftSettings>): void {
+  const next = { ...DEFAULT_RAFT_SETTINGS, ...currentRaftSettings, ...partial };
+  currentRaftSettings = {
+    ...next,
+    wallEnabled: next.bottomMode === 'off' ? false : next.wallEnabled,
+  };
   notify();
 }
 

@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/supports_legacy
+
+# local
+tsc_output.txt
+todo_list

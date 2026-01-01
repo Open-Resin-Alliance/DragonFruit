@@ -50,6 +50,7 @@ export function TransformGizmo({
   constrainToSurface = DEFAULT_GIZMO_CONFIG.constrainToSurface,
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
+  handleScale = 1.0, // New prop
   onMoveStart,
   onMove,
   onMoveEnd,
@@ -148,7 +149,7 @@ export function TransformGizmo({
     }
   };
 
-  const handleScale = (axis: GizmoAxis, factor: number, isUniform: boolean) => {
+  const handleScaleDrag = (axis: GizmoAxis, factor: number, isUniform: boolean) => {
     if (onScale) {
       // If uniform scaling, apply to all axes. Otherwise, apply to specific axis.
       if (isUniform) {
@@ -199,6 +200,7 @@ export function TransformGizmo({
             isHidden={isHidden('axis-x')}
             enableLighting={enableLighting}
             gizmoPosition={posVec}
+            handleScale={handleScale}
             onDragStart={() => handleDragStart('axis-x')}
             onDrag={(delta: THREE.Vector3) => handleAxisMove('x', delta)}
             onDragEnd={handleDragEnd}
@@ -213,6 +215,7 @@ export function TransformGizmo({
             isHidden={isHidden('axis-y')}
             enableLighting={enableLighting}
             gizmoPosition={posVec}
+            handleScale={handleScale}
             onDragStart={() => handleDragStart('axis-y')}
             onDrag={(delta: THREE.Vector3) => handleAxisMove('y', delta)}
             onDragEnd={handleDragEnd}
@@ -227,6 +230,7 @@ export function TransformGizmo({
             isHidden={isHidden('axis-z')}
             enableLighting={enableLighting}
             gizmoPosition={posVec}
+            handleScale={handleScale}
             onDragStart={() => handleDragStart('axis-z')}
             onDrag={(delta: THREE.Vector3) => handleAxisMove('z', delta)}
             onDragEnd={handleDragEnd}
@@ -292,7 +296,7 @@ export function TransformGizmo({
             isHidden={isHidden('scale-x')}
             gizmoPosition={posVec}
             onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
-            onDrag={(factor: number, isUniform: boolean) => handleScale('x', factor, isUniform)}
+            onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
             onDragEnd={handleDragEnd}
             onPointerEnter={() => handlePointerEnter('scale-x')}
             onPointerLeave={handlePointerLeave}
@@ -305,7 +309,7 @@ export function TransformGizmo({
             isHidden={isHidden('scale-y')}
             gizmoPosition={posVec}
             onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
-            onDrag={(factor: number, isUniform: boolean) => handleScale('y', factor, isUniform)}
+            onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
             onDragEnd={handleDragEnd}
             onPointerEnter={() => handlePointerEnter('scale-y')}
             onPointerLeave={handlePointerLeave}
@@ -318,7 +322,7 @@ export function TransformGizmo({
             isHidden={isHidden('scale-z')}
             gizmoPosition={posVec}
             onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
-            onDrag={(factor: number, isUniform: boolean) => handleScale('z', factor, isUniform)}
+            onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}
             onDragEnd={handleDragEnd}
             onPointerEnter={() => handlePointerEnter('scale-z')}
             onPointerLeave={handlePointerLeave}

@@ -12,9 +12,10 @@ type LayerSliderProps = {
   showValue?: boolean;
   onToggleMode?: () => void;
   crossSectionMode?: 'smooth' | 'rasterized';
+  docked?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, className, showValue = false, onToggleMode, crossSectionMode = 'smooth' }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, className, showValue = false, onToggleMode, crossSectionMode = 'smooth', docked = false }: LayerSliderProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const [inputValue, setInputValue] = React.useState(String(Math.round(value)));
@@ -185,7 +186,13 @@ export function LayerSlider({ min, max, step, value, onChange, className, showVa
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
 
   return (
-    <div className={`absolute right-3 top-1/2 -translate-y-1/2 z-10 select-none ${className ?? ''}`}>
+    <div
+      className={
+        docked
+          ? `relative z-10 select-none ${className ?? ''}`
+          : `absolute right-3 top-1/2 -translate-y-1/2 z-10 select-none ${className ?? ''}`
+      }
+    >
       {/* Max layer label above slider */}
       {showValue && (
         <div className="absolute left-1/2 -translate-x-1/2 top-0 -mt-10 w-12 rounded border border-neutral-600 bg-neutral-800/90 px-1 py-0.5 text-center text-xs text-neutral-400 shadow tabular-nums">

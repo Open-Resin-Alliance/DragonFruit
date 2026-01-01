@@ -2,8 +2,8 @@
 
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import type { Island } from '@/modules/island';
-import type { ScanResults } from '@/modules/island/ScanOrchestrator';
+import type { Island } from '@/volumeAnalysis/IslandScan/types';
+import type { ScanResults } from '@/volumeAnalysis/islandVolume/steps/voxelization/ScanOrchestrator';
 
 type IslandIdLabelsProps = {
   islands: Island[];
@@ -68,7 +68,7 @@ export function IslandIdLabels({ islands, scanResults, layerHeightMm, enabled, b
 
       return {
         id: island.id,
-        position: [centerX, centerY, baseZ + 1] as [number, number, number], // [X, Y, Z] in world space, +1mm above base
+        position: [centerX, centerY, baseZ + 3] as [number, number, number], // [X, Y, Z] in world space, slightly above island base
       };
     }).filter(Boolean) as Array<{ id: number; position: [number, number, number] }>;
   }, [islands, scanResults, layerHeightMm, bboxMinZ]);
@@ -92,33 +92,29 @@ function IslandLabel({ id, position }: { id: number; position: [number, number, 
     const context = canvas.getContext('2d');
     if (!context) return null;
 
-    canvas.width = 128;
-    canvas.height = 64;
+    // Smaller canvas for more compact labels
+    canvas.width = 96;
+    canvas.height = 48;
 
-    // Background
-    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Border
-    context.strokeStyle = '#00ff00';
-    context.lineWidth = 2;
-    context.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+    // Transparent background, no border – text only
+    context.clearRect(0, 0, canvas.width, canvas.height);
 
     // Text
     context.fillStyle = '#00ff00';
-    context.font = 'Bold 32px Arial';
+    context.font = 'Bold 24px Arial';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.fillText(`#${id}`, canvas.width / 2, canvas.height / 2);
 
     const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
     return texture;
   }, [id]);
 
   if (!texture) return null;
 
   return (
-    <sprite position={position} scale={[4, 2, 1]}>
+    <sprite position={position} scale={[2.5, 1.25, 1]}>
       <spriteMaterial
         map={texture}
         transparent

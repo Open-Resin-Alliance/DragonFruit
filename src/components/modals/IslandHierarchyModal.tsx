@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Island } from '@/modules/island/types';
+import type { Island } from '@/volumeAnalysis/IslandScan/types';
+import { getIslandHierarchy } from '@/volumeAnalysis/VoxelSystem/IslandVolume';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
 
 type IslandHierarchyModalProps = {
@@ -23,15 +24,15 @@ export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, 
   // Build tree structure - find root islands (no parent)
   const buildTree = (): TreeNode[] => {
     const rootIslands = islands.filter(i => !i.parentId);
-    
+
     const buildNode = (island: Island): TreeNode => {
       const children = islands
         .filter(i => i.parentId === island.id)
         .map(child => buildNode(child));
-      
+
       return { island, children };
     };
-    
+
     return rootIslands.map(root => buildNode(root));
   };
 
@@ -103,17 +104,17 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
       {level > 0 && (
         <>
           {/* Horizontal line to node */}
-          <div 
+          <div
             className="absolute top-6 border-t-2 border-neutral-600"
-            style={{ 
+            style={{
               left: `${(level - 1) * 32 + 16}px`,
               width: '24px'
             }}
           />
           {/* Vertical line from parent */}
-          <div 
+          <div
             className="absolute top-0 bottom-0 border-l-2 border-neutral-600"
-            style={{ 
+            style={{
               left: `${(level - 1) * 32 + 16}px`,
               height: '24px'
             }}
@@ -150,7 +151,7 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
               <span className="text-xs text-neutral-500 font-mono">{layerRange}</span>
               <span className="text-xs text-neutral-400">({layerCount} layers)</span>
             </div>
-            
+
             <div className="flex items-center gap-3">
               <span className="text-sm text-neutral-300">{volume} mm³</span>
               {hasChildren && (
@@ -160,7 +161,7 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
               )}
             </div>
           </div>
-          
+
           {/* Max area info */}
           <div className="text-[10px] text-neutral-500 mt-1">
             Max area: {maxArea} mm² at L{worldMaxAreaLayer}
@@ -172,9 +173,9 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
       {hasChildren && isExpanded && (
         <div className="relative">
           {/* Vertical line for children */}
-          <div 
+          <div
             className="absolute border-l-2 border-neutral-600"
-            style={{ 
+            style={{
               left: `${level * 32 + 16}px`,
               top: '0',
               bottom: '12px'

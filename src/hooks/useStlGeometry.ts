@@ -10,32 +10,26 @@ export type GeometryWithBounds = {
   size: THREE.Vector3;
 };
 
-export function useStlGeometry(fileUrl: string | null): GeometryWithBounds | null {
-  const [geom, setGeom] = useState<GeometryWithBounds | null>(null);
-  useEffect(() => {
-    if (!fileUrl) {
-      setGeom(null);
-      return;
-    }
-    let cancelled = false;
+export async function loadStlGeometry(fileUrl: string): Promise<GeometryWithBounds> {
+  return new Promise((resolve, reject) => {
     const loader = new STLLoader();
-    console.log(`[${new Date().toISOString()}] [useStlGeometry] Starting STLLoader load for ${fileUrl}`);
+    console.log(`[${new Date().toISOString()}] [loadStlGeometry] Starting STLLoader load for ${fileUrl}`);
     const startLoad = performance.now();
+    
     loader.load(
       fileUrl,
       (bufferGeometry) => {
-        if (cancelled) return;
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] STLLoader finished. Took ${(performance.now() - startLoad).toFixed(2)}ms`);
+        console.log(`[${new Date().toISOString()}] [loadStlGeometry] STLLoader finished. Took ${(performance.now() - startLoad).toFixed(2)}ms`);
 
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] Starting Geometry Prep`);
+        console.log(`[${new Date().toISOString()}] [loadStlGeometry] Starting Geometry Prep`);
         const startPrep = performance.now();
         const geometry = new THREE.BufferGeometry();
         geometry.copy(bufferGeometry as THREE.BufferGeometry);
 
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] Computing Normals`);
+        console.log(`[${new Date().toISOString()}] [loadStlGeometry] Computing Normals`);
         geometry.computeVertexNormals();
 
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] Computing BBox`);
+        console.log(`[${new Date().toISOString()}] [loadStlGeometry] Computing BBox`);
         geometry.computeBoundingBox();
 
         const preBBox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
@@ -43,26 +37,50 @@ export function useStlGeometry(fileUrl: string | null): GeometryWithBounds | nul
         // Normalize: center X/Z at 0 and set bottom (minY) to 0 in local space
         geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
         geometry.computeBoundingBox();
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] Geometry Prep finished. Took ${(performance.now() - startPrep).toFixed(2)}ms`);
+        console.log(`[${new Date().toISOString()}] [loadStlGeometry] Geometry Prep finished. Took ${(performance.now() - startPrep).toFixed(2)}ms`);
 
         // Add BVH acceleration for fast raycasting (critical for support placement)
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] Starting BVH Construction`);
+        console.log(`[${new Date().toISOString()}] [loadStlGeometry] Starting BVH Construction`);
         const startBVH = performance.now();
         accelerateGeometry(geometry);
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] BVH Construction finished. Took ${(performance.now() - startBVH).toFixed(2)}ms`);
+        console.log(`[${new Date().toISOString()}] [loadStlGeometry] BVH Construction finished. Took ${(performance.now() - startBVH).toFixed(2)}ms`);
 
         const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
         const center = bbox.getCenter(new THREE.Vector3());
         const size = bbox.getSize(new THREE.Vector3());
 
-        console.log(`[${new Date().toISOString()}] [useStlGeometry] Calling setGeom`);
-        setGeom({ geometry, bbox, center, size });
+        resolve({ geometry, bbox, center, size });
       },
       undefined,
-      () => {
-        setGeom(null);
+      (error) => {
+        reject(error);
       }
     );
+  });
+}
+
+export function useStlGeometry(fileUrl: string | null): GeometryWithBounds | null {
+  const [geom, setGeom] = useState<GeometryWithBounds | null>(null);
+  useEffect(() => {
+    if (!fileUrl) {
+      setGeom(null);
+      return;
+    }
+    
+    let cancelled = false;
+    
+    loadStlGeometry(fileUrl)
+      .then((data) => {
+        if (!cancelled) {
+          console.log(`[${new Date().toISOString()}] [useStlGeometry] Calling setGeom`);
+          setGeom(data);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load STL", err);
+        if (!cancelled) setGeom(null);
+      });
+
     return () => {
       cancelled = true;
     };

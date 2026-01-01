@@ -1,246 +1,217 @@
-// Core types for Support Mode. Mirrors what we need for full-featured supports,
-// but maintains our own naming conventions.
+import * as THREE from 'three';
+import type { ContactCone } from './SupportPrimitives/ContactCone/types';
+import type { ContactDiskProfile } from './SupportPrimitives/ContactCone/types';
 
-export type SupportMode = 'prepare' | 'support';
+export type SupportMode = 'prepare' | 'analysis' | 'support' | 'export';
 
-export type SupportShape = 'cone' | 'cylinder' | 'cube';
+// --- Basic Math Types ---
 
-export interface SupportTipProfile {
-  shape: 'cone';
-  contactDiameterMm: number;
-  bodyDiameterMm: number;
-  lengthMm: number;
-  penetrationMm: number;
-  coneAngleDeg: number;
-  breakpointMm: number;
-}
+export type LimitationCode =
+    | 'ANGLE_TOO_STEEP'
+    | 'KNOT_ABOVE_TIP'
+    | 'COLLISION_WITH_MODEL'
+    | 'TOO_CLOSE_TO_EXISTING'
+    | 'OUT_OF_BOUNDS';
 
-export function createSupportInstance(overrides: Partial<SupportInstance> & { id: string }): SupportInstance {
-  return {
-    id: overrides.id,
-    objectIdTip: overrides.objectIdTip ?? null,
-    objectIdBase: overrides.objectIdBase ?? null,
-    tip: overrides.tip ?? { x: 0, y: 0, z: 0 },
-    tipNormal: overrides.tipNormal ?? { x: 0, y: 0, z: 1 },
-    base: overrides.base ?? { x: 0, y: 0, z: 0 },
-    baseNormal: overrides.baseNormal ?? { x: 0, y: 0, z: 1 },
-    gridNodeIndex: overrides.gridNodeIndex ?? null,
-    isBaseTip: overrides.isBaseTip ?? false,
-    isInFill: overrides.isInFill ?? false,
-    isVisible: overrides.isVisible ?? true,
-    collisionIsAccepted: overrides.collisionIsAccepted ?? false,
-    isCollidingWithObject: overrides.isCollidingWithObject ?? false,
-    parentBaseId: overrides.parentBaseId ?? null,
-    parentTipId: overrides.parentTipId ?? null,
-    parentIds: overrides.parentIds ?? [],
-    group: overrides.group ?? null,
-    tags: overrides.tags ?? [],
-    updatedAt: overrides.updatedAt ?? Date.now(),
-    type: overrides.type ?? 1,
-    settings: overrides.settings ?? createDefaultSupportSettings(),
-  };
-}
+export type WarningCode =
+    | 'ANGLE_VERTICAL_WARNING'
+    | 'SHAFT_ANGLE_TOO_FLAT';
 
-export interface SupportMidProfile {
-  shape: 'cylinder' | 'cube';
-  diameterMm: number;
-  secondaryDiameterMm?: number;
-  isStraight: boolean;
-}
-
-export interface SupportBaseProfile {
-  shape: 'cylinder' | 'cube';
-  diameterMm: number;
-  heightMm: number;
-  sideAngleDeg: number;
-  neckDiameterMm: number;
-  neckHeightMm: number;
-  neckBlend: number; // 0..1 blend factor
-}
-
-export interface SupportBaseFlareProfile {
-  enabled: boolean;
-  diameterMm: number;
-  heightMm: number;
-}
-
-export interface SupportBaseJointProfile {
-  shape: 'cone' | 'cube';
-  contactDiameterMm: number;
-  bodyDiameterMm: number;
-  lengthMm: number;
-  penetrationMm: number;
-  coneAngleDeg: number;
-  allowRotation: boolean;
-}
-
-export interface SupportGridSettings {
-  enabled: boolean;
-  spacingMm: number;
-}
-
-export interface SupportExtraDimensions {
-  tipContactDiameter2Mm?: number;
-  tipBodyDiameter2Mm?: number;
-  baseDiameter2Mm?: number;
-  baseJointBodyDiameter2Mm?: number;
-  baseJointContactDiameter2Mm?: number;
-}
-
-export interface SupportJointSettings {
-  ballDiameterMm: number;
-  maxRotationDeg: number;
-  maxSlideMm: number;
-  defaultJointCount: number;
-}
-
-export interface SupportSettings {
-  tip: SupportTipProfile;
-  mid: SupportMidProfile;
-  base: SupportBaseProfile;
-  baseFlare: SupportBaseFlareProfile;
-  baseJoint: SupportBaseJointProfile;
-  grid: SupportGridSettings;
-  extra?: SupportExtraDimensions;
-  adaptiveBase: boolean;
-  isTrunkStraight: boolean;
-  jointDefaults: SupportJointSettings;
-}
-
-export function createDefaultSupportSettings(): SupportSettings {
-  return {
-    tip: {
-      shape: 'cone',
-      contactDiameterMm: 0.3,
-      bodyDiameterMm: 1.0,
-      lengthMm: 2.5,
-      penetrationMm: 0,
-      coneAngleDeg: 100,
-      breakpointMm: 0,
-    },
-    mid: {
-      shape: 'cylinder',
-      diameterMm: 1.0,
-      secondaryDiameterMm: 1.0,
-      isStraight: true,
-    },
-    base: {
-      shape: 'cylinder',
-      diameterMm: 5.0,
-      heightMm: 0.3,
-      sideAngleDeg: 0,
-      neckDiameterMm: 1.0,
-      neckHeightMm: 0.5,
-      neckBlend: 0.7,
-    },
-    baseFlare: {
-      enabled: true,
-      diameterMm: 3.0,
-      heightMm: 1.5,
-    },
-    baseJoint: {
-      shape: 'cone',
-      contactDiameterMm: 1.0,
-      bodyDiameterMm: 1.0,
-      lengthMm: 2.0,
-      penetrationMm: 0,
-      coneAngleDeg: 100,
-      allowRotation: true,
-    },
-    grid: {
-      enabled: false,
-      spacingMm: 4.0,
-    },
-    extra: {
-      tipContactDiameter2Mm: 0.5,
-      tipBodyDiameter2Mm: 0.8,
-      baseDiameter2Mm: 6.0,
-      baseJointBodyDiameter2Mm: 1.2,
-      baseJointContactDiameter2Mm: 0.6,
-    },
-    adaptiveBase: false,
-    isTrunkStraight: true,
-    jointDefaults: {
-      ballDiameterMm: 1.5,
-      maxRotationDeg: 45,
-      maxSlideMm: 5,
-      defaultJointCount: 1,
-    },
-  };
-}
-
-// Single support instance placed in the scene.
-// This follows the Lychee idea of one object per support with its own
-// embedded settings and world-space placement.
 export interface Vec3 {
-  x: number;
-  y: number;
-  z: number;
+    x: number;
+    y: number;
+    z: number;
 }
 
-export interface SupportInstance {
-  id: string; // e.g. "s1", "s2" or a UUID
+export interface Quaternion {
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+}
 
-  objectIdTip: string | null;
-  objectIdBase?: string | null;
+export interface Transform {
+    pos: Vec3;
+    rot: Quaternion;
+    scale?: Vec3;
+}
 
-  tip: Vec3;
-  tipNormal: Vec3;
-  base: Vec3;
-  baseNormal: Vec3;
+// --- Core Anatomy Entities ---
 
-  gridNodeIndex?: number | null;
-
-  isBaseTip?: boolean;
-  isInFill?: boolean;
-  isVisible?: boolean;
-  collisionIsAccepted?: boolean;
-  isCollidingWithObject?: boolean;
-
-  parentBaseId?: string | null;
-  parentTipId?: string | null;
-  parentIds?: string[];
-
-  group?: string | null;
-  tags?: string[];
-
-  updatedAt?: number;
-  type?: number;
-
-  settings: SupportSettings;
-  joints?: Array<{
+/**
+ * Base interface for all top-level support entities.
+ * Ensures every support element is linked to a specific model.
+ */
+export interface SupportEntity {
     id: string;
-    position: Vec3;
-    rotation?: Vec3;
-    ballDiameterMm: number;
-    parentSegmentId?: string;
-    childSegmentId?: string;
-    order: number;
-    updatedAt?: number;
-  }>;
+    modelId: string; // The model this support belongs to
 }
 
-// Collection structure for supports, similar to Lychee's present.byId/allIds.
-export interface SupportCollection {
-  byId: Record<string, SupportInstance>;
-  allIds: string[];
+/**
+ * Roots: The anchor point on the build plate or raft.
+ * It does NOT contain the vertical shaft (that's the Trunk).
+ */
+export interface Roots extends SupportEntity {
+    transform: Transform; // Position on the plate
+    diameter: number; // Base diameter (bottom of cone)
+    diskHeight: number; // Flat disk thickness
+    coneHeight: number; // Height of transition cone alone
 }
 
-// Preset system for quick support style switching
-export interface SupportPreset {
-  id: string;                    // e.g., "detail", "structure", "anchor", or UUID for custom
-  name: string;                  // Display name
-  description?: string;          // Optional description
-  hotkey?: string;               // Keyboard shortcut (e.g., "1", "2", "3")
-  icon?: string;                 // Icon identifier or emoji
-  isBuiltIn: boolean;            // Cannot be deleted if true
-  settings: SupportSettings;     // Full geometry configuration
-  createdAt?: number;            // Timestamp for custom presets
-  updatedAt?: number;            // Last modified timestamp
+/**
+ * Knot (Anchor): A connection point on a Shaft.
+ * Branches and Braces attach here.
+ */
+export interface Knot {
+    id: string;
+    parentShaftId: string; // The shaft this knot belongs to
+    t?: number; // 0-1 position along the shaft segment (preferred representation)
+    pos: Vec3; // World position on the host shaft
+    diameter?: number; // Host shaft diameter + 0.1mm (computed at creation if absent)
 }
 
-export interface PresetCollection {
-  byId: Record<string, SupportPreset>;
-  allIds: string[];
-  activePresetId: string;        // Currently selected preset
+/**
+ * Joint: A spherical articulation point between shaft segments.
+ */
+export interface Joint {
+    id: string;
+    pos: Vec3;
+    diameter: number;
+}
+
+/**
+ * Segment: A section of a support (straight or curved).
+ */
+export interface BaseSegment {
+    id: string;
+    diameter: number;
+    topJoint?: Joint; // If null, it might be the tip
+    bottomJoint?: Joint; // If null, it connects to Root or Knot
+}
+
+export interface StraightSegment extends BaseSegment {
+    type?: 'straight';
+}
+
+export interface BezierSegment extends BaseSegment {
+    type: 'bezier';
+    controlPoint1: Vec3;
+    controlPoint2: Vec3;
+    startTangent: Vec3;
+    endTangent: Vec3;
+    tension: number;
+    bias: number; // 0..1, 0.5 = balanced
+    resolution: number;
+}
+
+export type Segment = StraightSegment | BezierSegment;
+
+/**
+ * Trunk: A vertical column extending from Roots.
+ */
+export interface Trunk extends SupportEntity {
+    rootId: string; // Link to the Roots anchor
+    baseDiameterMm?: number; // Baseline shaft diameter captured at creation/promotion
+    segments: Segment[];
+    contactCone?: ContactCone; // Terminal piece at model interface
+}
+
+/**
+ * Branch: A column extending from a Knot on another support.
+ */
+export interface Branch extends SupportEntity {
+    parentKnotId: string; // Link to the Knot on the parent
+    segments: Segment[];
+    contactCone?: ContactCone; // Terminal piece at model interface
+}
+
+/**
+ * Leaf: A minimal model -> support connection.
+ * Uses a contact tip on the model and a Knot on a host shaft.
+ * No segments, no joints.
+ */
+export interface Leaf extends SupportEntity {
+    parentKnotId: string;
+    contactCone: ContactCone;
+}
+
+export interface ContactDisk {
+    id: string;
+    pos: Vec3;
+    surfaceNormal: Vec3;
+    coneAxis: Vec3;
+    diskLengthOverride?: number;
+    profile: ContactDiskProfile;
+    contactDiameterMm: number;
+}
+
+export interface Twig extends SupportEntity {
+    segments: Segment[];
+    contactDiskA: ContactDisk;
+    contactDiskB: ContactDisk;
+}
+
+export interface Stick extends SupportEntity {
+    segments: Segment[];
+    contactConeA: ContactCone;
+    contactConeB: ContactCone;
+}
+
+export type BraceCurve = {
+    type: 'bezier';
+    controlPoint1: Vec3;
+    controlPoint2: Vec3;
+    startTangent: Vec3;
+    endTangent: Vec3;
+    tension: number;
+    bias: number;
+    resolution: number;
+};
+
+/**
+ * Brace: A stabilizer bar connecting two supports.
+ */
+export interface Brace extends SupportEntity {
+    startKnotId: string;
+    endKnotId: string;
+    curve?: BraceCurve;
+    profile: {
+        diameter: number;
+    };
+}
+
+// --- Collection State ---
+export interface SupportState {
+    roots: Record<string, Roots>;
+    trunks: Record<string, Trunk>;
+    branches: Record<string, Branch>;
+    leaves: Record<string, Leaf>;
+    twigs: Record<string, Twig>;
+    sticks: Record<string, Stick>;
+    braces: Record<string, Brace>;
+    knots: Record<string, Knot>;
+    // Interaction State
+    selectedId: string | null;
+    selectedCategory?: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | null;
+    hoveredId: string | null;
+    hoveredCategory?: 'model' | 'support' | 'joint' | 'raft' | 'gizmo' | 'none';
+    interactionWarning?: WarningCode | null;
+}
+
+// --- Import/Export Format ---
+export interface DragonfruitImportFormat {
+    version: number;
+    meta: {
+        source: string;
+        objectCenter: Vec3;
+        updatedAt?: number;
+    };
+    roots: Roots[];
+    trunks: Trunk[];
+    branches: Branch[];
+    leaves: Leaf[];
+    twigs?: Twig[];
+    sticks?: Stick[];
+    braces: Brace[];
+    knots: Knot[];
 }

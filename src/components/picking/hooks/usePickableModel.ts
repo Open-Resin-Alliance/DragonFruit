@@ -80,16 +80,12 @@ export function usePickableModel({
     
     // Register if enabled and not already registered
     if (enabled && !hasRegistered.current) {
-      console.log('[usePickableModel] Registering model:', { modelId, mesh: node });
-      
       pickIdRef.current = registerRef.current({
         category: 'model',
         objectId: modelId,
         object: node,
       });
       hasRegistered.current = true;
-      
-      console.log('[usePickableModel] Registered with pickId:', pickIdRef.current);
     }
   };
   

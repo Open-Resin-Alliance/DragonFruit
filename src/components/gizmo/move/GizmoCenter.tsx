@@ -76,6 +76,11 @@ export function GizmoCenter({
     hit.gizmoHandle === handleType;
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Ignore right-click to allow camera orbit controls
+    if (e.button === 2) {
+      return;
+    }
+    
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
     

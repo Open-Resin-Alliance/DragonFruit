@@ -1,12 +1,16 @@
+
 "use client";
 
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import type { ScanResults } from '@/modules/island/ScanOrchestrator';
-import { rleDecode } from '@/modules/island/rle'; // Import rleDecode
+import type { Island } from '@/volumeAnalysis/IslandScan/types';
+import { getIslandPixelsByLayer } from '@/volumeAnalysis/VoxelSystem/IslandVolume';
+import { VOXEL_OFFSET_X, VOXEL_OFFSET_Y, VOXEL_OFFSET_Z, type ScanResults } from '@/volumeAnalysis/IslandScan/ScanOrchestrator';
+import { rleDecode } from '@/volumeAnalysis/IslandScan/rle';
 
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { getScanVisualPosition } from '@/utils/scanPositioning';
+import { generateMeshFromRLE } from '@/volumeAnalysis/VoxelSystem/RleMeshing';
 
 interface IslandVoxelVisualizationProps {
   scanResults: ScanResults | null;
@@ -16,6 +20,7 @@ interface IslandVoxelVisualizationProps {
   colorScheme?: 'unique' | 'lifecycle' | 'height';
   selectedIslandId?: number | null;
   showMerged?: boolean;
+  showTerritory?: boolean;
   centerOffset?: THREE.Vector3;
   zOffset?: number; // Z offset from build plate (bbox.min.z)
   clipLower?: number | null; // Lower clipping plane in world Z
@@ -27,29 +32,93 @@ interface IslandVoxelVisualizationProps {
  * Generate a mesh from voxel positions by creating faces between neighboring voxels
  * This creates a blocky but accurate mesh that follows the voxel structure
  */
-function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layerHeight: number): THREE.BufferGeometry {
+/**
+ * Generate a mesh from voxel positions by creating faces between neighboring voxels.
+ * Returns an array of geometries to handle WebGL index limits (chunking).
+ */
+function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layerHeight: number): THREE.BufferGeometry[] {
   if (positions.length === 0) {
-    return new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    return [new THREE.BoxGeometry(0.1, 0.1, 0.1)];
   }
 
   // Create a spatial hash map for quick neighbor lookup
-  const voxelMap = new Map<string, THREE.Vector3>();
+  // Optimization: Use nested Maps/Sets instead of String keys to avoid massive GC pressure
+  // Map<x, Map<y, Set<z>>>
+  const xMap = new Map<number, Map<number, Set<number>>>();
+
   positions.forEach(pos => {
-    const key = `${Math.round(pos.x * 1000)},${Math.round(pos.y * 1000)},${Math.round(pos.z * 1000)}`;
-    voxelMap.set(key, pos);
+    const ix = Math.round(pos.x * 1000);
+    const iy = Math.round(pos.y * 1000);
+    const iz = Math.round(pos.z * 1000);
+
+    let yMap = xMap.get(ix);
+    if (!yMap) {
+      yMap = new Map<number, Set<number>>();
+      xMap.set(ix, yMap);
+    }
+
+    let zSet = yMap.get(iy);
+    if (!zSet) {
+      zSet = new Set<number>();
+      yMap.set(iy, zSet);
+    }
+
+    zSet.add(iz);
   });
 
-  const vertices: number[] = [];
-  const indices: number[] = [];
+  const geometries: THREE.BufferGeometry[] = [];
+
+  // Safe limit for indices per mesh. WebGL often maxes at ~30M-60M. 
+  // Let's use 20M to be safe across distinct draw calls.
+  // 6 faces * 6 indices = 36 indices per voxel ("worst" case of isolated voxel).
+  const MAX_INDICES = 20_000_000;
+
+  let vertices: number[] = [];
+  let indices: number[] = [];
   let vertexIndex = 0;
 
   const halfSize = voxelSize / 2;
   const halfHeight = layerHeight / 2;
 
+  // Helper to commit current arrays to a geometry
+  const commitGeometry = () => {
+    if (vertices.length === 0) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    geometries.push(geometry);
+
+    // Reset
+    vertices = [];
+    indices = [];
+    vertexIndex = 0;
+  };
+
   // Helper to check if a voxel exists at a position
   const hasVoxel = (x: number, y: number, z: number): boolean => {
-    const key = `${Math.round(x * 1000)},${Math.round(y * 1000)},${Math.round(z * 1000)}`;
-    return voxelMap.has(key);
+    const ix = Math.round(x * 1000);
+    const iy = Math.round(y * 1000);
+    const iz = Math.round(z * 1000);
+
+    // Fast lookup without string allocation
+    const yMap = xMap.get(ix);
+    if (!yMap) return false;
+
+    const zSet = yMap.get(iy);
+    if (!zSet) return false;
+
+    return zSet.has(iz);
+  };
+
+  const addFaces = (v0: number[], v1: number[], v2: number[], v3: number[]) => {
+    // Check limits before adding
+    if (indices.length + 6 > MAX_INDICES) {
+      commitGeometry();
+    }
+
+    addQuad(vertices, indices, vertexIndex, v0, v1, v2, v3);
+    vertexIndex += 4;
   };
 
   // For each voxel, create faces for exposed sides
@@ -63,8 +132,7 @@ function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layer
       const v1 = [x + halfSize, y + halfSize, z - halfHeight];
       const v2 = [x + halfSize, y + halfSize, z + halfHeight];
       const v3 = [x - halfSize, y + halfSize, z + halfHeight];
-      addQuad(vertices, indices, vertexIndex, v0, v1, v2, v3);
-      vertexIndex += 4;
+      addFaces(v0, v1, v2, v3);
     }
 
     // Back face (-Y)
@@ -73,8 +141,7 @@ function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layer
       const v1 = [x - halfSize, y - halfSize, z + halfHeight];
       const v2 = [x + halfSize, y - halfSize, z + halfHeight];
       const v3 = [x + halfSize, y - halfSize, z - halfHeight];
-      addQuad(vertices, indices, vertexIndex, v0, v1, v2, v3);
-      vertexIndex += 4;
+      addFaces(v0, v1, v2, v3);
     }
 
     // Right face (+X)
@@ -83,8 +150,7 @@ function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layer
       const v1 = [x + halfSize, y - halfSize, z + halfHeight];
       const v2 = [x + halfSize, y + halfSize, z + halfHeight];
       const v3 = [x + halfSize, y + halfSize, z - halfHeight];
-      addQuad(vertices, indices, vertexIndex, v0, v1, v2, v3);
-      vertexIndex += 4;
+      addFaces(v0, v1, v2, v3);
     }
 
     // Left face (-X)
@@ -93,8 +159,7 @@ function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layer
       const v1 = [x - halfSize, y + halfSize, z - halfHeight];
       const v2 = [x - halfSize, y + halfSize, z + halfHeight];
       const v3 = [x - halfSize, y - halfSize, z + halfHeight];
-      addQuad(vertices, indices, vertexIndex, v0, v1, v2, v3);
-      vertexIndex += 4;
+      addFaces(v0, v1, v2, v3);
     }
 
     // Top face (+Z)
@@ -103,8 +168,7 @@ function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layer
       const v1 = [x - halfSize, y + halfSize, z + halfHeight];
       const v2 = [x + halfSize, y + halfSize, z + halfHeight];
       const v3 = [x + halfSize, y - halfSize, z + halfHeight];
-      addQuad(vertices, indices, vertexIndex, v0, v1, v2, v3);
-      vertexIndex += 4;
+      addFaces(v0, v1, v2, v3);
     }
 
     // Bottom face (-Z)
@@ -113,17 +177,14 @@ function generateIslandMesh(positions: THREE.Vector3[], voxelSize: number, layer
       const v1 = [x + halfSize, y - halfSize, z - halfHeight];
       const v2 = [x + halfSize, y + halfSize, z - halfHeight];
       const v3 = [x - halfSize, y + halfSize, z - halfHeight];
-      addQuad(vertices, indices, vertexIndex, v0, v1, v2, v3);
-      vertexIndex += 4;
+      addFaces(v0, v1, v2, v3);
     }
   });
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
+  // Final commit
+  commitGeometry();
 
-  return geometry;
+  return geometries;
 }
 
 /**
@@ -185,6 +246,7 @@ export function IslandVoxelVisualization({
   colorScheme = 'unique',
   selectedIslandId = null,
   showMerged = false,
+  showTerritory = false,
   centerOffset,
   zOffset = 0,
   clipLower = null,
@@ -198,28 +260,51 @@ export function IslandVoxelVisualization({
       return [];
     }
 
-    const { grid, islandLabelsPerLayer, islands } = scanResults;
+    const { grid, islandLabelsPerLayer, territoryLabelsPerLayer, islands } = scanResults;
+
+    // SOURCE SELECTION: Territory vs Island
+    const activeLabels = (showTerritory && territoryLabelsPerLayer) ? territoryLabelsPerLayer : islandLabelsPerLayer;
+
     const meshData: Array<{
       id: number;
-      geometry: THREE.BufferGeometry;
+      geometries: THREE.BufferGeometry[];
       color: THREE.Color;
       opacity: number;
       isSelected: boolean;
     }> = [];
 
     // Create a map of island ID to island data for quick lookup
+    // If showing Territory, we might not have 'islands' metadata for IDs.
+    // We synthesize dummy islands.
+    let visibleIslands: any[] = []; // Type 'any' to handle dummy objects
+
+    if (showTerritory && territoryLabelsPerLayer) {
+      // Collect all unique IDs from territory RLE
+      const uniqueIds = new Set<number>();
+      for (const layer of territoryLabelsPerLayer) {
+        if (!layer) continue;
+        for (let y = 0; y < layer.height; y++) {
+          const row = layer.rows[y];
+          for (let i = 0; i < row.length; i += 3) {
+            if (row[i + 2] > 0) uniqueIds.add(row[i + 2]);
+          }
+        }
+      }
+      visibleIslands = Array.from(uniqueIds).map(id => ({ id, status: 'active' }));
+    } else {
+      // Standard Island Mode
+      visibleIslands = islands.filter(island => {
+        if (!showMerged && island.parentId !== undefined) {
+          return false; // Hide merged islands
+        }
+        return true;
+      });
+    }
+
     const islandMap = new Map(islands.map(island => [island.id, island]));
 
-    // Filter islands based on showMerged setting
-    const visibleIslands = islands.filter(island => {
-      if (!showMerged && island.parentId !== undefined) {
-        return false; // Hide merged islands
-      }
-      return true;
-    });
-
     // Find max layer for height-based coloring
-    const maxLayer = islandLabelsPerLayer.length - 1;
+    const maxLayer = activeLabels.length - 1;
 
     // Pre-calculate grid constants to avoid repeated property access
     const { originX, originZ, px_mm, width, height } = grid;
@@ -231,9 +316,11 @@ export function IslandVoxelVisualization({
     // but the parent's lastLayer doesn't get updated
     const islandLayerRanges = new Map<number, { first: number; last: number }>();
 
-    // Iterate RLE layers to find ranges
-    for (let layer = 0; layer < islandLabelsPerLayer.length; layer++) {
-      const layerLabels = islandLabelsPerLayer[layer];
+    // Iterate RLE layers to find ranges (USING SELECTED LABELS)
+    for (let layer = 0; layer < activeLabels.length; layer++) {
+      const layerLabels = activeLabels[layer];
+      if (!layerLabels) continue; // Safety
+
       // Iterate rows
       for (let y = 0; y < layerLabels.height; y++) {
         const row = layerLabels.rows[y];
@@ -260,100 +347,6 @@ export function IslandVoxelVisualization({
       const startLayer = layerRange.first;
       const endLayer = layerRange.last;
 
-      // Use simple array - push is fast enough for modern JS engines
-      const positions: THREE.Vector3[] = [];
-
-      // Collect SURFACE voxel positions only (not solid interior)
-      // A voxel is on the surface if it has at least one neighbor that's not part of this island
-
-      // Sliding window buffers for neighbor checking
-      // We decode 3 layers at a time: prev, current, next
-      let prevBuffer: Int32Array | null = null;
-      let currBuffer: Int32Array | null = null;
-      let nextBuffer: Int32Array | null = null;
-
-      // Initialize buffers for startLayer
-      if (startLayer > 0) {
-        prevBuffer = new Int32Array(layerSize);
-        // We need a helper to decode RLE labels to Int32Array grid
-        // rleDecode returns Uint8Array (binary), we need ID grid.
-        // We need a custom decode function here or update rleDecode.
-        // I'll inline a simple decoder here.
-        decodeRleLabelsToBuffer(islandLabelsPerLayer[startLayer - 1], prevBuffer, width);
-      }
-
-      currBuffer = new Int32Array(layerSize);
-      decodeRleLabelsToBuffer(islandLabelsPerLayer[startLayer], currBuffer, width);
-
-      if (startLayer < islandLabelsPerLayer.length - 1) {
-        nextBuffer = new Int32Array(layerSize);
-        decodeRleLabelsToBuffer(islandLabelsPerLayer[startLayer + 1], nextBuffer, width);
-      }
-
-      for (let layer = startLayer; layer <= endLayer; layer++) {
-        const layerZ = zOffset + layer * layerHeightMm;
-
-        // Iterate current buffer pixels
-        for (let i = 0; i < layerSize; i++) {
-          if (currBuffer![i] === island.id) {
-            // Check neighbors
-            const row = Math.floor(i / width);
-            const col = i % width;
-
-            const left = col > 0 ? currBuffer![i - 1] : 0;
-            const right = col < width - 1 ? currBuffer![i + 1] : 0;
-            const up = row > 0 ? currBuffer![i - width] : 0;
-            const down = row < height - 1 ? currBuffer![i + width] : 0;
-
-            const below = prevBuffer ? prevBuffer[i] : 0;
-            const above = nextBuffer ? nextBuffer[i] : 0;
-
-            const isSurface =
-              left !== island.id ||
-              right !== island.id ||
-              up !== island.id ||
-              down !== island.id ||
-              below !== island.id ||
-              above !== island.id;
-
-            if (isSurface) {
-              const worldX = originX + col * px_mm;
-              const worldY = negOriginZ - row * px_mm;
-              positions.push(new THREE.Vector3(worldX, worldY, layerZ));
-            }
-          }
-        }
-
-        // Shift buffers for next layer
-        if (layer < endLayer) {
-          prevBuffer = currBuffer; // Reuse buffer if possible? No, types match.
-          currBuffer = nextBuffer;
-
-          // Load new next buffer
-          if (layer + 2 < islandLabelsPerLayer.length) {
-            nextBuffer = new Int32Array(layerSize);
-            decodeRleLabelsToBuffer(islandLabelsPerLayer[layer + 2], nextBuffer, width);
-          } else {
-            nextBuffer = null;
-          }
-
-          // If currBuffer was null (start of loop edge case?), create it
-          // But logic ensures it's populated.
-          // Wait, if nextBuffer was null in previous iter, currBuffer becomes null.
-          // But we loop until endLayer.
-          // If layer == endLayer, we don't need next iter buffers.
-          // So this shift logic is fine.
-          // Except if nextBuffer was null (last layer), currBuffer becomes null, but we exit loop.
-          // Actually, if layer < endLayer, we enter next iter.
-          // So currBuffer must be valid.
-          // If nextBuffer was null (because layer+1 was out of bounds), then layer must be last layer?
-          // No, endLayer could be last layer.
-          // If layer < endLayer, then layer+1 exists. So nextBuffer was valid.
-        }
-      }
-
-      if (positions.length === 0) continue;
-
       // Determine color for this island
       const isSelected = selectedIslandId !== null && island.id === selectedIslandId;
       const color = isSelected
@@ -361,14 +354,23 @@ export function IslandVoxelVisualization({
         : getIslandColor(island.id, colorScheme, island, maxLayer);
 
       // Determine opacity
-      const finalOpacity = isSelected ? 0.9 : opacity;
+      const finalOpacity = isSelected ? 1.0 : opacity;
 
-      // Generate mesh from voxel positions by creating faces for exposed sides
-      const geometry = generateIslandMesh(positions, px_mm, layerHeightMm);
+      // Generate mesh directly from RLE data (Greedy Meshing)
+      // This skips the expensive position collection & map overhead
+      const geometries = generateMeshFromRLE(
+        island.id,
+        activeLabels,
+        grid,
+        layerHeightMm,
+        zOffset,
+        startLayer,
+        endLayer
+      );
 
       meshData.push({
         id: island.id,
-        geometry,
+        geometries,
         color,
         opacity: finalOpacity,
         isSelected,
@@ -376,7 +378,7 @@ export function IslandVoxelVisualization({
     }
 
     return meshData;
-  }, [enabled, scanResults, layerHeightMm, opacity, colorScheme, selectedIslandId, showMerged, centerOffset, zOffset]);
+  }, [enabled, scanResults, layerHeightMm, opacity, colorScheme, selectedIslandId, showMerged, showTerritory, centerOffset, zOffset]);
 
   // Create clipping planes (cheap, can update every frame)
   const clippingPlanes = useMemo(() => {
@@ -397,14 +399,18 @@ export function IslandVoxelVisualization({
   return (
     <group position={getScanVisualPosition(transform)}>
       {islandMeshData.map((data) => (
-        <IslandSmoothMesh
-          key={data.id}
-          geometry={data.geometry}
-          color={data.color}
-          opacity={data.opacity}
-          isSelected={data.isSelected}
-          clippingPlanes={clippingPlanes}
-        />
+        <group key={data.id}> {/* Wrap chunks in a group (or fragment) */}
+          {data.geometries.map((geom, idx) => (
+            <IslandSmoothMesh
+              key={`${data.id}-${idx}`}
+              geometry={geom}
+              color={data.color}
+              opacity={data.opacity}
+              isSelected={data.isSelected}
+              clippingPlanes={clippingPlanes}
+            />
+          ))}
+        </group>
       ))}
     </group>
   );
@@ -454,7 +460,7 @@ function IslandSmoothMesh({
         roughness={0.7}
         emissive={isSelected ? color : new THREE.Color(0x000000)}
         emissiveIntensity={isSelected ? 0.3 : 0}
-        side={THREE.DoubleSide}
+        side={THREE.FrontSide}
         clippingPlanes={clippingPlanes}
         clipIntersection
       />

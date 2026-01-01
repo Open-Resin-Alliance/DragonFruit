@@ -1,12 +1,14 @@
+
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import type { IslandMarker } from '@/modules/island/islandOverlayLogic';
+import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
+import { applyIslandOverlay as drawIslandOverlay } from '@/volumeAnalysis/IslandScan/islandOverlayPainter';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import { getScanVisualPosition } from '@/utils/scanPositioning';
 
 type IslandOverlayProps = {
   markers: IslandMarker[];
-  meshRef: THREE.Mesh;
+  meshRef?: THREE.Mesh | null;
   brushRadiusMm: number;
   color: string;
   opacity: number;
@@ -23,7 +25,7 @@ type IslandOverlayProps = {
  * Applies the same transform as the main mesh to keep overlays aligned.
  */
 export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity, transform, centerOffset, selectedIslandId, clipLower, clipUpper }: IslandOverlayProps) {
-  console.log(`[${new Date().toISOString()}] [IslandOverlay] Render start`);
+  // console.log(`[${ new Date().toISOString() }][IslandOverlay] Render start`);
   const threeColor = useMemo(() => new THREE.Color(color), [color]);
   const visibleColor = useMemo(() => new THREE.Color('#ffff00'), []); // Bright yellow when visible
   const occludedColor = useMemo(() => new THREE.Color('#fF6600'), []); // Vibrant red-orange when behind mesh
@@ -42,18 +44,18 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
     return planes;
   }, [clipLower, clipUpper]);
 
-  console.log('[IslandOverlay] Rendering with:', {
-    markerCount: markers.length,
-    color,
-    opacity,
-    hasTransform: !!transform,
-    hasCenterOffset: !!centerOffset,
-    centerOffset: centerOffset ? { x: centerOffset.x, y: centerOffset.y, z: centerOffset.z } : null,
-    selectedIslandId
-  });
+  // console.log('[IslandOverlay] Rendering with:', {
+  //   markerCount: markers.length,
+  //   color,
+  //   opacity,
+  //   hasTransform: !!transform,
+  //   hasCenterOffset: !!centerOffset,
+  //   centerOffset: centerOffset ? { x: centerOffset.x, y: centerOffset.y, z: centerOffset.z } : null,
+  //   selectedIslandId
+  // });
 
   if (markers.length === 0) {
-    console.log('[IslandOverlay] No markers to render');
+    // console.log('[IslandOverlay] No markers to render');
     return null;
   }
 
@@ -62,6 +64,27 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
     <group position={getScanVisualPosition(transform)}>
       {markers.map((marker) => {
         if (!marker.geometry) return null;
+
+        // Special handling for Markers (Negative IDs)
+        if (marker.id < 0) {
+          const isSeed = marker.id < -1_000_000;
+          const markerColor = isSeed ? '#00ff00' : '#ffff00'; // Green for Seed, Yellow for Center
+
+          return (
+            <mesh
+              key={marker.id}
+              geometry={marker.geometry}
+              renderOrder={99999}
+            >
+              <meshBasicMaterial
+                color={markerColor}
+                depthTest={false}
+                depthWrite={false}
+                clippingPlanes={clippingPlanes}
+              />
+            </mesh>
+          );
+        }
 
         const isSelected = marker.id === selectedIslandId;
 

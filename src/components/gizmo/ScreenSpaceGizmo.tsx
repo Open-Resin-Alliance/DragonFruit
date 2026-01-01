@@ -12,10 +12,14 @@ import type { TransformGizmoProps } from './types';
  * Calculates scale based on camera distance so the gizmo appears the same size
  * regardless of zoom level, like standard 3D software gizmos.
  */
-export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & { meshRef?: React.RefObject<THREE.Group | THREE.Mesh | null> }) {
+export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & { 
+  meshRef?: React.RefObject<THREE.Group | THREE.Mesh | null>;
+  scaleFactor?: number;
+}) {
   const { camera } = useThree();
   const [scale, setScale] = useState(1);
   const [livePosition, setLivePosition] = useState<[number, number, number]>([0, 0, 0]);
+  const scaleFactor = props.scaleFactor ?? 0.04;
   
   // Update scale and position every frame based on mesh position
   useFrame(() => {
@@ -35,7 +39,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & { me
     }
     
     const distance = camera.position.distanceTo(position);
-    const newScale = distance * 0.04;
+    const newScale = distance * scaleFactor;
     setScale(newScale);
   });
 

@@ -287,11 +287,16 @@ export function GizmoScale({
   };
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    // Ignore right-click to allow camera orbit controls
+    if (e.button === 2) {
+      return;
+    }
+    
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
     
-    // Detect mouse button: 0 = left (uniform), 2 = right (per-axis)
-    const isUniform = e.button === 0;
+    // Only left-click (uniform) scaling is now allowed
+    const isUniform = true;
     setIsUniformScale(isUniform);
     
     // Store initial distance from gizmo center

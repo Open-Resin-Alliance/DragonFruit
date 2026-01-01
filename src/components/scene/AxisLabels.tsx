@@ -32,25 +32,27 @@ export function AxisLabels({ size = 100 }: { size?: number }) {
   const yTexture = React.useMemo(() => createLabelTexture('Y', '#00ff00'), []);
   const zTexture = React.useMemo(() => createLabelTexture('Z', '#0000ff'), []);
   
+  const nullRaycast = () => null;
+
   return (
     <>
       {/* X axis - Red */}
       {xTexture && (
-        <sprite position={[labelOffset, 0, 0]} scale={[8, 8, 1]}>
+        <sprite position={[labelOffset, 0, 0]} scale={[8, 8, 1]} raycast={nullRaycast}>
           <spriteMaterial map={xTexture} transparent sizeAttenuation={true} />
         </sprite>
       )}
       
       {/* Y axis - Green */}
       {yTexture && (
-        <sprite position={[0, labelOffset, 0]} scale={[8, 8, 1]}>
+        <sprite position={[0, labelOffset, 0]} scale={[8, 8, 1]} raycast={nullRaycast}>
           <spriteMaterial map={yTexture} transparent sizeAttenuation={true} />
         </sprite>
       )}
       
       {/* Z axis - Blue */}
       {zTexture && (
-        <sprite position={[0, 0, labelOffset]} scale={[8, 8, 1]}>
+        <sprite position={[0, 0, labelOffset]} scale={[8, 8, 1]} raycast={nullRaycast}>
           <spriteMaterial map={zTexture} transparent sizeAttenuation={true} />
         </sprite>
       )}

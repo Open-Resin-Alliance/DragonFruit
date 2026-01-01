@@ -15,6 +15,8 @@ export type PickableCategory =
   | 'model'      // The main STL mesh
   | 'support'    // Support structures (trunks, branches, leaves)
   | 'joint'      // Ball joints on supports
+  | 'knot'       // Anchors on shafts
+  | 'segment'    // Individual support segments
   | 'raft'       // Raft/base structures
   | 'gizmo'      // Transform gizmo handles (only when visible)
   | 'none';      // Background / nothing hit
@@ -140,4 +142,6 @@ export interface PickingContextValue {
   resume: () => void;
   /** Whether picking is currently paused */
   isPaused: boolean;
+  /** Whether a drag operation is in progress */
+  isDragging: boolean;
 }

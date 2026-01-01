@@ -77,7 +77,8 @@ export interface GizmoConfig {
   size?: number;
   opacity?: number;
   enableLighting?: boolean;  // Enable emissive materials and point lights (disable for performance)
-  
+  handleScale?: number; // Scale factor for handles (arrows/rings) relative to gizmo size
+
   // Constraints
   constrainToSurface?: boolean;
   constrainToPlane?: boolean;

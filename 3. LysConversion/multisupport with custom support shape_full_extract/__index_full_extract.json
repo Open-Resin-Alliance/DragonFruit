@@ -1,0 +1,2489 @@
+{
+  "source": "C:\\Users\\tyman\\OneDrive\\AutoSupport\\3. LysConversion\\multisupport with custom support shape.lys",
+  "out_dir": "C:\\Users\\tyman\\OneDrive\\AutoSupport\\3. LysConversion\\multisupport with custom support shape_full_extract",
+  "manifest_version": "3.1.0",
+  "files": [
+    {
+      "name": "9daa4c19f9d0dbdb3c141164fd3ce770.bin",
+      "size": 155828,
+      "offset": 0,
+      "sha256_expected": "3d6cb1f0dd5bea24985fdf4c7fe81f61e4dd18969be824d766fec55f53dd4a04",
+      "sha256_actual": "3d6cb1f0dd5bea24985fdf4c7fe81f61e4dd18969be824d766fec55f53dd4a04",
+      "sha256_ok": true,
+      "path": "C:\\Users\\tyman\\OneDrive\\AutoSupport\\3. LysConversion\\multisupport with custom support shape_full_extract\\9daa4c19f9d0dbdb3c141164fd3ce770.bin"
+    },
+    {
+      "name": "preview.png",
+      "size": 54008,
+      "offset": 155828,
+      "sha256_expected": "49884eb2ac8f289b81350f6502900ca64f100aa8fa0a93476d460e9b9b2a5837",
+      "sha256_actual": "49884eb2ac8f289b81350f6502900ca64f100aa8fa0a93476d460e9b9b2a5837",
+      "sha256_ok": true,
+      "path": "C:\\Users\\tyman\\OneDrive\\AutoSupport\\3. LysConversion\\multisupport with custom support shape_full_extract\\preview.png"
+    },
+    {
+      "name": "scene.bin",
+      "size": 58409,
+      "offset": 209836,
+      "sha256_expected": "4968f82f49d7c59cc6a233d6de564b20636aebf3e43ef62c35f89ede13028bd0",
+      "sha256_actual": "4968f82f49d7c59cc6a233d6de564b20636aebf3e43ef62c35f89ede13028bd0",
+      "sha256_ok": true,
+      "path": "C:\\Users\\tyman\\OneDrive\\AutoSupport\\3. LysConversion\\multisupport with custom support shape_full_extract\\scene.bin"
+    }
+  ],
+  "support_findings": [
+    {
+      "path": "scene.bin.decrypted.slicer.effects.type",
+      "type": "str",
+      "value_preview": "antialiasV2"
+    },
+    {
+      "path": "scene.bin.decrypted.slicer.infill.type",
+      "type": "str",
+      "value_preview": "lattice"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports",
+      "type": "dict",
+      "keys": [
+        "supportCreatorMode",
+        "paintingThresholdHeavy",
+        "defaultSupportFDM",
+        "supportGridGap",
+        "groupMode",
+        "marginArrangeAll",
+        "supportMedium",
+        "smallNormalLineError",
+        "inlineSupportsParameters",
+        "maxTotalGrowth",
+        "supportLight",
+        "clippingPixelPerfect",
+        "paintingInterval",
+        "isSupportGrid",
+        "showBottomBar"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.tip.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.base.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.baseTip.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupportFDM.mid.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportMedium.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportLight.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.defaultSupport.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.tip.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.base.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.baseTip.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.autoSupportFDM.mid.type",
+      "type": "str",
+      "value_preview": "cube"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.bracingPreset.settings.bp1.name",
+      "type": "str",
+      "value_preview": "Small Object Bracing"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.bracingPreset.settings.bp2.name",
+      "type": "str",
+      "value_preview": "Tall Object Bracing"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.bracingPreset.settings.bp3.name",
+      "type": "str",
+      "value_preview": "Strong Bracing"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.bracingPreset.settings.bp4.name",
+      "type": "str",
+      "value_preview": "Default Bracing"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.name",
+      "type": "str",
+      "value_preview": "Light Mini"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp4.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.name",
+      "type": "str",
+      "value_preview": "Medium Mini"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp6.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.name",
+      "type": "str",
+      "value_preview": "Heavy Mini"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp7.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.name",
+      "type": "str",
+      "value_preview": "Mini Light"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp1.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.name",
+      "type": "str",
+      "value_preview": "Mini Medium"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp2.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.name",
+      "type": "str",
+      "value_preview": "Mini Heavy"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportsPresets.presets.sp3.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.settings.supports.supportHeavy.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.infill.preset.type",
+      "type": "str",
+      "value_preview": "lattice"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.hollowBlockers.defaultHollowBlocker.id",
+      "type": "NoneType",
+      "value_preview": null
+    },
+    {
+      "path": "scene.bin.decrypted.settings.hollowBlockers.defaultHollowBlocker.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wizard.id",
+      "type": "NoneType",
+      "value_preview": null
+    },
+    {
+      "path": "scene.bin.decrypted.settings.foundation.preset.angle",
+      "type": "int",
+      "value_preview": 200
+    },
+    {
+      "path": "scene.bin.decrypted.settings.foundation.preset.type",
+      "type": "str",
+      "value_preview": "vectorielWall"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.holes.defaultHole.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.holes.defaultHole.hole.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.autosupportPresets.byId.asp0.name",
+      "type": "str",
+      "value_preview": "Default"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.autosupportPresets.byId.asp1.name",
+      "type": "str",
+      "value_preview": "TableFlip Foundry"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wilson.categories[0].name",
+      "type": "str",
+      "value_preview": "Library"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wilson.categories[1].name",
+      "type": "str",
+      "value_preview": "FileTools"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wilson.categories[2].name",
+      "type": "str",
+      "value_preview": "GoogleAnalytics"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wilson.categories[3].name",
+      "type": "str",
+      "value_preview": "LycheeFileManager"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wilson.categories[4].name",
+      "type": "str",
+      "value_preview": "LicenseManager"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wilson.categories[5].name",
+      "type": "str",
+      "value_preview": "Authenticator"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.wilson.categories[6].name",
+      "type": "str",
+      "value_preview": "Supports"
+    },
+    {
+      "path": "scene.bin.decrypted.settings.batch.msla.raft",
+      "type": "dict",
+      "keys": [
+        "enabled"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.batch.fdm.raft",
+      "type": "dict",
+      "keys": [
+        "enabled"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.settings.paint.angle",
+      "type": "int",
+      "value_preview": 30
+    },
+    {
+      "path": "scene.bin.decrypted.supports",
+      "type": "dict",
+      "keys": [
+        "present"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.type",
+      "type": "NoneType",
+      "value_preview": null
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1280.id",
+      "type": "str",
+      "value_preview": "s1280"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1270.id",
+      "type": "str",
+      "value_preview": "s1270"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1260.id",
+      "type": "str",
+      "value_preview": "s1260"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1271.id",
+      "type": "str",
+      "value_preview": "s1271"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1261.id",
+      "type": "str",
+      "value_preview": "s1261"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1272.id",
+      "type": "str",
+      "value_preview": "s1272"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1262.id",
+      "type": "str",
+      "value_preview": "s1262"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1273.id",
+      "type": "str",
+      "value_preview": "s1273"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1263.id",
+      "type": "str",
+      "value_preview": "s1263"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1274.id",
+      "type": "str",
+      "value_preview": "s1274"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1264.id",
+      "type": "str",
+      "value_preview": "s1264"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1275.id",
+      "type": "str",
+      "value_preview": "s1275"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1265.id",
+      "type": "str",
+      "value_preview": "s1265"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1276.id",
+      "type": "str",
+      "value_preview": "s1276"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1266.id",
+      "type": "str",
+      "value_preview": "s1266"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1277.id",
+      "type": "str",
+      "value_preview": "s1277"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1267.id",
+      "type": "str",
+      "value_preview": "s1267"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1278.id",
+      "type": "str",
+      "value_preview": "s1278"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1257.id",
+      "type": "str",
+      "value_preview": "s1257"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1268.id",
+      "type": "str",
+      "value_preview": "s1268"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.type",
+      "type": "NoneType",
+      "value_preview": null
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1279.id",
+      "type": "str",
+      "value_preview": "s1279"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1258.id",
+      "type": "str",
+      "value_preview": "s1258"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1269.id",
+      "type": "str",
+      "value_preview": "s1269"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.tip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.tip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.base",
+      "type": "dict",
+      "keys": [
+        "type",
+        "diameter",
+        "length",
+        "angle",
+        "joinDiameter",
+        "joinLength",
+        "joinCone"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.base.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.base.angle",
+      "type": "int",
+      "value_preview": 0
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.baseTip.type",
+      "type": "str",
+      "value_preview": "cone"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.baseTip.angle",
+      "type": "int",
+      "value_preview": 100
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.settings.mid.type",
+      "type": "str",
+      "value_preview": "cylinder"
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.base",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.type",
+      "type": "int",
+      "value_preview": 1
+    },
+    {
+      "path": "scene.bin.decrypted.supports.present.byId.s1259.id",
+      "type": "str",
+      "value_preview": "s1259"
+    },
+    {
+      "path": "scene.bin.decrypted.override.fdm.printer.type",
+      "type": "str",
+      "value_preview": ""
+    },
+    {
+      "path": "scene.bin.decrypted.override.msla.printer.type",
+      "type": "str",
+      "value_preview": ""
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.position",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.name",
+      "type": "str",
+      "value_preview": "Test"
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.foundation.angle",
+      "type": "int",
+      "value_preview": 200
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.foundation.type",
+      "type": "str",
+      "value_preview": "vectorielWall"
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.properties.hash",
+      "type": "str",
+      "value_preview": "9daa4c19f9d0dbdb3c141164fd3ce770"
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.type",
+      "type": "str",
+      "value_preview": "file"
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.id",
+      "type": "str",
+      "value_preview": "o15"
+    },
+    {
+      "path": "scene.bin.decrypted.objects.present.byId.o15.rotation",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "path": "scene.bin.decrypted.plates.present.byId.pl0.id",
+      "type": "str",
+      "value_preview": "pl0"
+    },
+    {
+      "path": "scene.bin.decrypted.plates.present.byId.pl0.name",
+      "type": "str",
+      "value_preview": ""
+    },
+    {
+      "path": "scene.bin.decrypted.plates.present.byId.pl0.position",
+      "type": "dict",
+      "keys": [
+        "x",
+        "y",
+        "z"
+      ]
+    }
+  ]
+}

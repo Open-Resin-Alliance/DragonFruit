@@ -4,33 +4,89 @@ import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { OrbitControls } from '@react-three/drei';
-import { useThree } from '@react-three/fiber';
-import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { useThree, useFrame } from '@react-three/fiber';
 import { CrossSectionCap } from '@/components/scene/CrossSectionCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
+import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
+import { MeshClassificationRenderer } from '@/components/scene/MeshClassificationRenderer';
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { AxisLabels } from '@/components/scene/AxisLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { CameraFocusController } from '@/components/scene/CameraFocusController';
-import { PickingProvider, PickingDebugOverlay } from '@/components/picking';
-import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
+import { PickingProvider, PickingDebugOverlay, usePicking } from '@/components/picking';
+import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight, useSelection } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
-import type { IslandMarker } from '@/modules/island/islandOverlayLogic';
-import type { ScanResults } from '@/modules/island/ScanOrchestrator';
+import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
+import type { ScanResults } from '@/volumeAnalysis/islandVolume/steps/voxelization/ScanOrchestrator';
+import type { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillSimulator';
+import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
-import type { SupportMode, SupportInstance, SupportSettings } from '@/supports/types';
+import type { SupportMode } from '@/supports/types';
 import { SupportRenderer } from '@/supports/SupportRenderer';
-import { SupportPreview } from '@/supports/SupportPreview';
-import BranchPreview from '../../supports/BranchSupports/rendering/BranchPreview';
-import { JointPreviewSphere } from '@/supports/components/JointPreviewSphere';
+import { SupportBuilder } from '@/supports/rendering';
+import type { SupportData } from '@/supports/rendering';
+import { SupportPreview } from '@/supports_legacy/SupportPreview';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
+import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
-import { getCurrentSupportSettings, addJointToSupport, updateJointPosition, updateJointPositionLive } from '@/supports/state';
-import { constrainBranchJointToShaft } from '@/supports/BranchSupports/constraints/branchJointConstraint';
-import { updateBranchJointsForParent } from '@/supports/BranchSupports/constraints/updateBranchJoints';
+import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
+import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
+import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
+import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
+import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
+import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
+import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
+import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
+
+import { GhostOverlay } from '@/features/lys-ghost/GhostOverlay';
+import { subscribe, getSnapshot } from '@/supports/state';
+import { PickingStateSyncer } from './PickingStateSyncer';
+import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { CameraFocusHotkeyController, CameraIntroController, useStlLoadCameraIntro } from '@/components/scene/camera';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
+
+function SelectionSync({ activeModelId }: { activeModelId: string | null }) {
+  const { select, deselect, state } = useSelection();
+
+  useEffect(() => {
+    if (activeModelId && state.selectedModelId !== activeModelId) {
+      select(activeModelId);
+    } else if (!activeModelId && state.selectedModelId !== null) {
+      deselect();
+    }
+  }, [activeModelId, select, deselect, state.selectedModelId]);
+
+  return null;
+}
+
+function useInteractionWarning() {
+  const [warning, setWarning] = React.useState(getSnapshot().interactionWarning);
+  React.useEffect(() => {
+    return subscribe(() => {
+      const w = getSnapshot().interactionWarning;
+      setWarning(w);
+    });
+  }, []);
+  return warning;
+}
+
+/**
+ * Wrapper that always applies PickingProvider, but conditionally enables debug mode.
+ */
+function PickingProviderWrapper({ enabled, children }: { enabled?: boolean; children: React.ReactNode }) {
+  // Always render PickingProvider, pass enabled as debug flag
+  return <PickingProvider debug={enabled}>{children}</PickingProvider>;
+}
+
+function LoggingHelper({ mode }: { mode?: string }) {
+  React.useEffect(() => {
+    console.log('[SceneCanvas] Mode in Canvas:', mode);
+  }, [mode]);
+  return null;
+}
 
 function EnableLocalClipping() {
   const { gl } = useThree();
@@ -48,6 +104,36 @@ function CameraProvider({ cameraRef }: { cameraRef: React.MutableRefObject<THREE
   return null;
 }
 
+function CameraClipPlaneStabilizer() {
+  const { camera, controls } = useThree();
+
+  useFrame(() => {
+    const perspective = camera as THREE.PerspectiveCamera;
+    if ((perspective as any).isPerspectiveCamera !== true) return;
+
+    const orbitTarget = (controls as any)?.target as THREE.Vector3 | undefined;
+    if (!orbitTarget) return;
+
+    const dist = perspective.position.distanceTo(orbitTarget);
+    if (!Number.isFinite(dist) || dist <= 0) return;
+
+    // Depth precision fix:
+    // A too-small near plane combined with a too-large far plane causes depth-buffer precision
+    // issues that can make the model fail to occlude small geometry when zoomed in.
+    // Keep near reasonably small but not extreme, and keep far tight.
+    const desiredNear = Math.max(0.02, Math.min(0.5, dist / 200));
+    const desiredFar = Math.min(5000, Math.max(200, dist * 50));
+
+    if (Math.abs(perspective.near - desiredNear) > 1e-6 || Math.abs(perspective.far - desiredFar) > 1e-3) {
+      perspective.near = desiredNear;
+      perspective.far = desiredFar;
+      perspective.updateProjectionMatrix();
+    }
+  });
+
+  return null;
+}
+
 function Lights({ ambientIntensity, directionalIntensity }: { ambientIntensity: number; directionalIntensity: number }) {
   return (
     <>
@@ -59,52 +145,61 @@ function Lights({ ambientIntensity, directionalIntensity }: { ambientIntensity: 
   );
 }
 
-/**
- * Wrapper that conditionally applies PickingProvider.
- * When disabled, just renders children directly.
- */
-function PickingProviderWrapper({ enabled, children }: { enabled?: boolean; children: React.ReactNode }) {
-  if (enabled) {
-    return <PickingProvider debug>{children}</PickingProvider>;
-  }
-  return <>{children}</>;
-}
-
 function Helpers() {
+  const nullRaycast = () => null;
+
   return (
     <>
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
-      <gridHelper args={[200, 40, '#333333', '#333333']} position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]} />
+      <gridHelper
+        args={[200, 40, '#333333', '#333333']}
+        position={[0, 0, 0]}
+        rotation={[Math.PI / 2, 0, 0]}
+        raycast={nullRaycast}
+      />
       {/* Axes: X=red, Y=green, Z=blue(up) */}
-      <axesHelper args={[100]} />
+      <axesHelper
+        args={[100]}
+        raycast={nullRaycast}
+      />
       <AxisLabels size={100} />
     </>
   );
 }
 
-function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMeshRef, materialRoughness, transform, mode, onSupportClick, onSupportHover, onSupportSelect, disableRaycast, blockSupportPlacement, suppressNextClickRef, modelId, isSelected }: {
+function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMeshRef, materialRoughness, transform, mode, onSupportClick, onSupportHover, onActiveModelChange, disableRaycast, blockSupportPlacement, suppressNextClickRef, modelId, isSelected, isBranchPlacementActive, isLeafPlacementActive, isBracePlacementActive, onModelHoverPointChange }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
   clipUpper?: number | null;
   meshColor?: string;
   /** Ref to the group (for gizmo positioning) */
-  meshRef?: React.RefObject<THREE.Mesh | null>;
+  meshRef?: React.Ref<THREE.Mesh | null>;
   /** Ref to the actual mesh (for outline effect) */
-  actualMeshRef?: React.MutableRefObject<THREE.Mesh | null>;
+  actualMeshRef?: React.Ref<THREE.Mesh | null>;
   materialRoughness?: number;
   transform?: ModelTransform | null;
   mode?: SupportMode;
   onSupportClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
-  onSupportSelect?: (id: string | null) => void;
+  onActiveModelChange?: (id: string | null) => void;
   disableRaycast?: boolean;
   blockSupportPlacement?: boolean;
   suppressNextClickRef?: React.RefObject<boolean>;
   /** Model ID for picking registration */
-  modelId?: string;
+  modelId: string;
   /** Whether model is selected (tints material) */
   isSelected?: boolean;
+  /** Whether branch placement mode is active (Alt held) */
+  isBranchPlacementActive?: boolean;
+  /** Whether leaf placement mode is active (Alt+Shift held) */
+  isLeafPlacementActive?: boolean;
+  isBracePlacementActive?: boolean;
+  onModelHoverPointChange?: (point: THREE.Vector3 | null) => void;
 }) {
+  // Access GPU picking state to detect gizmo hover
+  // Note: This works because StlMesh is rendered inside PickingProvider
+  const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
+
   // Build clipping planes for a band [clipLower, clipUpper] on Z axis
   // Clipping planes work in WORLD space
   // clipLower/clipUpper are already in world space (0 = bottom of mesh)
@@ -125,8 +220,8 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMes
   }, [clipLower, clipUpper]);
 
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] [SceneCanvas] StlMesh received new geometry`);
-  }, [geometry]);
+    console.log(`[${new Date().toISOString()}] [SceneCanvas] StlMesh received new geometry for ${modelId}`);
+  }, [geometry, modelId]);
 
   // Calculate center offset for positioning
   const centerOffset = React.useMemo(() => {
@@ -162,34 +257,42 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMes
   // Group has the transform, mesh inside is offset to center the geometry
   return (
     <group
-      ref={meshRef as any}
+      ref={meshRef}
       position={transform?.position || new THREE.Vector3(0, 0, 0)}
       rotation={transform?.rotation || new THREE.Euler(0, 0, 0)}
       scale={transform?.scale || new THREE.Vector3(1, 1, 1)}
     >
       <mesh
-          ref={(node) => {
-            // Assign to refs
-            internalMeshRef.current = node;
-            if (actualMeshRef) actualMeshRef.current = node;
-          }}
-          geometry={geometry}
-          position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}
-          castShadow
-          receiveShadow
-          onClick={(e) => {
-          console.log('[SceneCanvas] Mesh clicked, mode:', mode);
-          
+        ref={(node) => {
+          // Assign to refs
+          internalMeshRef.current = node;
+          if (typeof actualMeshRef === 'function') actualMeshRef(node);
+          else if (actualMeshRef) (actualMeshRef as React.MutableRefObject<THREE.Mesh | null>).current = node;
+        }}
+        userData={{ modelId }}
+        geometry={geometry}
+        position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}
+        castShadow
+        receiveShadow
+        onClick={(e) => {
+          console.log('[SceneCanvas] Mesh clicked, mode:', mode, 'id:', modelId);
+
           // Model selection in prepare mode - dispatch custom event
           if (mode === 'prepare') {
             e.stopPropagation();
             window.__modelClickedThisFrame = true;
-            window.dispatchEvent(new CustomEvent('model-clicked', { 
-              detail: { modelId: modelId || 'default-model' } 
+            window.dispatchEvent(new CustomEvent('model-clicked', {
+              detail: { modelId: modelId }
             }));
+
+            // Update active model in parent state
+            if (onActiveModelChange) {
+              onActiveModelChange(modelId);
+            }
+
             return; // Don't process further in prepare mode
           }
-          
+
           if (mode === 'support') {
             // Suppress single click after external drag end
             if (suppressNextClickRef?.current) {
@@ -209,24 +312,42 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMes
             }
 
             // Deselect any selected support when clicking on the model
-            if (onSupportSelect) onSupportSelect(null);
+            // BUT not when in branch placement mode (we're setting the tip, not deselecting)
+            if (!isBranchPlacementActive && !isLeafPlacementActive && !isBracePlacementActive) {
+              clearSelection();
+            }
 
             if (onSupportClick) {
-              console.log('[SceneCanvas Mesh] Calling onSupportClick with event');
+              console.log('[SceneCanvas Mesh] Calling onSupportClick with event, branchMode:', isBranchPlacementActive);
               e.stopPropagation();
               onSupportClick(e);
             }
           }
         }}
         onPointerMove={(e) => {
+          if (hit.category === 'gizmo' || hit.category === 'support') {
+            onModelHoverPointChange?.(null);
+          } else {
+            onModelHoverPointChange?.(e.point.clone());
+          }
+
           if (mode === 'support' && onSupportHover) {
             // Mute hover when placement is blocked
             if (blockSupportPlacement) return;
+
+            // Mute hover if hovering a gizmo OR support (using GPU picking for accuracy)
+            if (hit.category === 'gizmo' || hit.category === 'support') {
+              onSupportHover(null);
+              return;
+            }
+
             e.stopPropagation();
             onSupportHover(e);
           }
         }}
         onPointerOut={() => {
+          onModelHoverPointChange?.(null);
+
           if (mode === 'support' && onSupportHover) {
             onSupportHover(null);
           }
@@ -249,12 +370,15 @@ function StlMesh({ geometry, clipLower, clipUpper, meshColor, meshRef, actualMes
   );
 }
 
-export function SceneCanvas({
-  geom,
+function SceneCanvasComponent({
+  models = [],
+  activeModelId,
+  // Legacy props kept for compatibility if needed, but models replaces geom
+  // geom, 
   clipLower,
   clipUpper,
-  meshColor,
-  meshVisible,
+  meshColor, // Global fallback color? Each model has color.
+  meshVisible, // Global fallback visibility?
   disableRaycast,
   hideCrossSectionCap,
   onCameraChange,
@@ -274,40 +398,47 @@ export function SceneCanvas({
   voxelColorScheme,
   voxelSelectedIslandId,
   voxelShowMerged,
+  voxelShowTerritory,
   voxelOpacity,
   transformMode,
   transform,
   onTransformChange,
+  onTransformChangeEnd, // Was onTransformEnd in previous code, checking usage
   onTransformEnd,
   crossSectionMode,
   pxMm,
   showIslandIdLabels,
   mode,
-  supports,
   onSupportClick,
   onSupportHover,
-  supportPreview,
-  selectedSupportId,
-  onSupportSelect,
-  hoveredSupportId,
-  onSupportHoverChange,
-  jointCreationMode,
-  jointPreview,
-  onJointPreviewChange,
-  selectedJointId,
-  onJointSelect,
-  hoveredJointId,
-  onJointHoverChange,
-  branchPreviewState,
-  branchStateRef,
-  branchBasePosition,
-  leafPreviewState,
-  leafStateRef,
-  leafSocketPosition,
-  gpuPickingTest = false,
-  selectionHighlightMode = 'spotlight' as SelectionHighlightMode,
+  onActiveModelChange,
+  trunkPlacementPreview,
+  branchPlacementPreview,
+  leafPlacementPreview,
+  bracePlacementPreview,
+  jointPlacementPreview,
+  gpuPickingTest,
+  selectionHighlightMode,
+  blockSupportPlacement,
+  supportsRef,
+  ghostData,
+  isBranchPlacementActive,
+  isLeafPlacementActive,
+  isBracePlacementActive,
+  branchTipPosition,
+  branchHoverPosition,
+  leafTipPosition,
+  leafHoverPosition,
+  children,
+  expansionSimulator,
+  showExpansion,
+  classificationFaceLabels,
+  classificationGeometry,
+  showClassification
 }: {
-  geom: GeometryWithBounds | null;
+  models?: LoadedModel[];
+  activeModelId?: string | null;
+  // geom: GeometryWithBounds | null;
   clipLower?: number | null;
   clipUpper?: number | null;
   meshColor?: string;
@@ -331,639 +462,311 @@ export function SceneCanvas({
   voxelColorScheme?: 'unique' | 'lifecycle' | 'height';
   voxelSelectedIslandId?: number | null;
   voxelShowMerged?: boolean;
+  voxelShowTerritory?: boolean;
   voxelOpacity?: number;
   transformMode?: TransformMode;
   transform?: ModelTransform;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
+  onTransformChangeEnd?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   onTransformEnd?: (operation: 'move' | 'rotate' | 'scale') => void;
   crossSectionMode?: 'smooth' | 'rasterized';
   pxMm?: number;
   showIslandIdLabels?: boolean;
   mode?: SupportMode;
-  supports?: SupportInstance[];
   onSupportClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
-  supportPreview?: { tip: { x: number; y: number; z: number }; base: { x: number; y: number; z: number }; tipNormal: { x: number; y: number; z: number }; validationLevel?: 'valid' | 'invalid'; joints?: any[]; parentBaseId?: string | null } | null;
-  selectedSupportId?: string | null;
-  onSupportSelect?: (id: string | null) => void;
-  hoveredSupportId?: string | null;
-  onSupportHoverChange?: (id: string | null) => void;
-  jointCreationMode?: boolean;
-  jointPreview?: { supportId: string; position: { x: number; y: number; z: number }; segmentIndex: number } | null;
-  onJointPreviewChange?: (preview: { supportId: string; position: { x: number; y: number; z: number }; segmentIndex: number } | null) => void;
-  selectedJointId?: string | null;
-  onJointSelect?: (id: string | null) => void;
-  hoveredJointId?: string | null;
-  onJointHoverChange?: (id: string | null) => void;
-  branchPreviewState?: import('@/supports/BranchSupports/types').BranchPlacementState;
-  branchStateRef?: React.RefObject<import('@/supports/BranchSupports/types').BranchPlacementState>;
-  branchBasePosition?: import('@/supports/types').Vec3 | null;
-  leafPreviewState?: import('@/supports/LeafSupports/types').LeafPlacementState;
-  leafStateRef?: React.RefObject<import('@/supports/LeafSupports/types').LeafPlacementState>;
-  leafSocketPosition?: import('@/supports/types').Vec3 | null;
-  /** Enable GPU picking test mode - shows test gizmo and debug overlay */
+  onActiveModelChange?: (id: string | null) => void;
+  trunkPlacementPreview?: SupportData | null;
+  branchPlacementPreview?: SupportData | null;
+  leafPlacementPreview?: SupportData | null;
+  bracePlacementPreview?: import('@/supports/SupportTypes/Brace/bracePlacementState').BracePreviewData | null;
+  jointPlacementPreview?: { pos: { x: number; y: number; z: number }; diameter: number } | null;
   gpuPickingTest?: boolean;
-  /** Selection highlight mode */
   selectionHighlightMode?: SelectionHighlightMode;
+  blockSupportPlacement?: boolean;
+  supportsRef?: React.RefObject<THREE.Group | null>;
+  ghostData?: any;
+  isBranchPlacementActive?: boolean;
+  isLeafPlacementActive?: boolean;
+  isBracePlacementActive?: boolean;
+  branchTipPosition?: { x: number; y: number; z: number } | null;
+  branchHoverPosition?: { x: number; y: number; z: number } | null;
+  leafTipPosition?: { x: number; y: number; z: number } | null;
+  leafHoverPosition?: { x: number; y: number; z: number } | null;
+
+  children?: React.ReactNode;
+
+  // Expansion Visuals
+  expansionSimulator?: BasinFillSimulator | BasinFillProxy | null;
+  showExpansion?: boolean;
+
+  // Classification Visuals
+  classificationFaceLabels?: Int32Array;
+  classificationGeometry?: THREE.BufferGeometry;
+  showClassification?: boolean;
 }) {
-  const meshRef = React.useRef<THREE.Mesh>(null);
-  const actualMeshRef = React.useRef<THREE.Mesh | null>(null);
+  const meshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
+  const actualMeshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
+
+  const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
+  const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
+
   const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
-  const [mouseScreenY, setMouseScreenY] = React.useState<number>(0.5); // 0 = top, 1 = bottom
-  const [mouseScreenPos, setMouseScreenPos] = React.useState<{ x: number; y: number }>({ x: 0.5, y: 0.5 }); // NDC coords
-  const onJointPreviewChangeRef = React.useRef(onJointPreviewChange);
-  const supportsRef = React.useRef(supports);
-  const lastHoveredSupportRef = React.useRef<string | null>(null);
+
   const cameraRef = React.useRef<THREE.Camera | null>(null);
-  const canvasSizeRef = React.useRef({ width: 0, height: 0 });
-  // Live-selected joint info and position ref for gizmo (must be stable hooks order)
-  const jointLivePosRef = React.useRef<THREE.Vector3 | null>(null);
-  // Suppress the very next canvas click after gizmo drag ends
   const suppressNextCanvasClickRef = React.useRef(false);
-  const selectedJointInfo = React.useMemo(() => {
-    if (!supports || !selectedJointId) return null;
-    for (const s of supports) {
-      const j = s.joints?.find(j => j.id === selectedJointId);
-      if (j) {
-        return { supportId: s.id, position: j.position } as {
-          supportId: string;
-          position: { x: number; y: number; z: number };
-        };
-      }
-    }
-    return null;
-  }, [supports, selectedJointId]);
 
-  // Keep live position in sync when selection changes
-  React.useEffect(() => {
-    if (selectedJointInfo) {
-      if (!jointLivePosRef.current) {
-        jointLivePosRef.current = new THREE.Vector3(
-          selectedJointInfo.position.x,
-          selectedJointInfo.position.y,
-          selectedJointInfo.position.z
-        );
-      } else {
-        jointLivePosRef.current.set(
-          selectedJointInfo.position.x,
-          selectedJointInfo.position.y,
-          selectedJointInfo.position.z
-        );
-      }
-    } else {
-      jointLivePosRef.current = null;
-    }
-  }, [selectedJointInfo]);
+  const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId } = useStlLoadCameraIntro(models);
 
-  // Keep refs updated
+  const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
+  const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
+    lastHoveredModelPointRef.current = point;
+  }, []);
+
+  const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
+
+  const updateCameraBelowBuildPlate = React.useCallback(() => {
+    const cameraZ = cameraRef.current?.position?.z;
+    if (typeof cameraZ !== 'number') return;
+
+    const next = cameraZ < -0.01;
+    setIsCameraBelowBuildPlate((prev) => (prev === next ? prev : next));
+  }, []);
+
   React.useEffect(() => {
-    onJointPreviewChangeRef.current = onJointPreviewChange;
-    supportsRef.current = supports;
-  }, [onJointPreviewChange, supports]);
+    const visible = !!branchHoverPosition && !branchTipPosition && !branchPlacementPreview;
+    if (prevBranchHoverDotVisibleRef.current === null) {
+      prevBranchHoverDotVisibleRef.current = visible;
+      return;
+    }
+    if (prevBranchHoverDotVisibleRef.current !== visible) {
+      prevBranchHoverDotVisibleRef.current = visible;
+      console.log('[BranchHoverDot]', visible ? 'show' : 'hide', {
+        pos: branchHoverPosition,
+        isBranchPlacementActive,
+        time: performance.now(),
+      });
+    }
+  }, [branchHoverPosition, branchTipPosition, branchPlacementPreview, isBranchPlacementActive]);
+
+  React.useEffect(() => {
+    const visible = !!leafHoverPosition && !leafTipPosition && !leafPlacementPreview;
+    if (prevLeafHoverDotVisibleRef.current === null) {
+      prevLeafHoverDotVisibleRef.current = visible;
+      return;
+    }
+    if (prevLeafHoverDotVisibleRef.current !== visible) {
+      prevLeafHoverDotVisibleRef.current = visible;
+      console.log('[LeafHoverDot]', visible ? 'show' : 'hide', {
+        pos: leafHoverPosition,
+        isLeafPlacementActive,
+        time: performance.now(),
+      });
+    }
+  }, [leafHoverPosition, leafTipPosition, leafPlacementPreview, isLeafPlacementActive]);
+
+  // Computed refs for active model
+  const activeGroupRef = React.useMemo(() => ({
+    get current() { return activeModelId ? meshRefs.current[activeModelId] : null }
+  }), [activeModelId]);
+
+  const activeActualMeshRef = React.useMemo(() => ({
+    get current() { return activeModelId ? actualMeshRefs.current[activeModelId] : null }
+  }), [activeModelId]);
+
+
+
+  const activeModel = React.useMemo(() => {
+    if (!activeModelId) return null;
+    return models.find(m => m.id === activeModelId) ?? null;
+  }, [models, activeModelId]);
+
+  const activeModelTransform = React.useMemo(() => {
+    if (!activeModel) return null;
+    if (transform && activeModelId === activeModel.id) return transform;
+    return activeModel.transform;
+  }, [activeModel, transform, activeModelId]);
+
+  // Interaction State
+  const { isDraggingHandle } = useCurveInteractionState();
+  const interactionWarning = useInteractionWarning();
 
   // Listen for selection events to show/hide gizmo
   React.useEffect(() => {
     const handleModelClicked = () => setIsModelSelected(true);
     const handleModelDeselected = () => setIsModelSelected(false);
-    
+
     window.addEventListener('model-clicked', handleModelClicked);
     window.addEventListener('model-deselected', handleModelDeselected);
-    
+
     return () => {
       window.removeEventListener('model-clicked', handleModelClicked);
       window.removeEventListener('model-deselected', handleModelDeselected);
     };
   }, []);
 
-  // Update joint preview position based on mouse screen Y and joint creation mode
-  React.useEffect(() => {
-    const callback = onJointPreviewChangeRef.current;
-    if (!callback) return;
-    // If not in joint creation mode, do nothing (parent clears on keyup)
-    if (!jointCreationMode) return;
-
-    // In joint creation mode, use hovered support OR last hovered support
-    if (jointCreationMode) {
-      // Update last hovered if we're currently hovering
-      if (hoveredSupportId) {
-        lastHoveredSupportRef.current = hoveredSupportId;
-      }
-
-      const targetSupportId = lastHoveredSupportRef.current;
-
-      if (targetSupportId && supportsRef.current) {
-        const support = supportsRef.current.find(s => s.id === targetSupportId);
-        if (support) {
-          // Calculate shaft endpoints based on support type
-          const tipLength = support.settings.tip.lengthMm;
-          const baseHeight = support.settings.base.heightMm;
-          const tipNormal = support.tipNormal;
-          const tipDir = { x: tipNormal.x, y: tipNormal.y, z: tipNormal.z };
-          const isBranch = !!support.parentBaseId;
-
-          const tipEnd = {
-            x: support.tip.x + tipDir.x * tipLength,
-            y: support.tip.y + tipDir.y * tipLength,
-            z: support.tip.z + tipDir.z * tipLength,
-          };
-
-          let shaftEnd: { x: number; y: number; z: number };
-          if (isBranch) {
-            // For branches: shaft ends at branch joint
-            const branchJoint = support.joints?.find(j => j.type === 'branch');
-            if (branchJoint) {
-              shaftEnd = branchJoint.position;
-            } else {
-              // Fallback: use base if no branch joint
-              shaftEnd = support.base;
-            }
-          } else {
-            // For trunks: shaft ends at base top
-            shaftEnd = {
-              x: support.base.x,
-              y: support.base.y,
-              z: support.base.z + baseHeight,
-            };
-          }
-
-          // Project shaft endpoints to screen space for accurate mapping
-          let t = mouseScreenY;
-
-          if (cameraRef.current) {
-            const camera = cameraRef.current;
-
-            // Project shaft start and end to screen space
-            const tipEndVec = new THREE.Vector3(tipEnd.x, tipEnd.y, tipEnd.z);
-            const shaftEndVec = new THREE.Vector3(shaftEnd.x, shaftEnd.y, shaftEnd.z);
-
-            tipEndVec.project(camera);
-            shaftEndVec.project(camera);
-
-            // Convert from NDC (-1 to 1) to screen space (0 to 1)
-            const tipScreenY = (1 - tipEndVec.y) / 2;
-            const shaftScreenY = (1 - shaftEndVec.y) / 2;
-
-            // Map mouse Y relative to shaft's screen position
-            if (Math.abs(shaftScreenY - tipScreenY) > 0.001) {
-              t = (mouseScreenY - tipScreenY) / (shaftScreenY - tipScreenY);
-              t = Math.max(0, Math.min(1, t));
-            }
-          } else {
-            // Fallback to sensitivity-based mapping if camera not available
-            const sensitivity = 1.3;
-            const adjustedY = (mouseScreenY - 0.5) * sensitivity + 0.5;
-            t = Math.max(0, Math.min(1, adjustedY));
-          }
-
-          // Build current shaft path: tipEnd -> joints (in order) -> shaftEnd
-          const joints = (support.joints || []).slice().sort((a, b) => a.order - b.order);
-          const pathPoints: THREE.Vector3[] = [
-            new THREE.Vector3(tipEnd.x, tipEnd.y, tipEnd.z),
-            ...joints.map(j => new THREE.Vector3(j.position.x, j.position.y, j.position.z)),
-            new THREE.Vector3(shaftEnd.x, shaftEnd.y, shaftEnd.z),
-          ];
-
-          // Compute total length
-          const segLengths: number[] = [];
-          let totalLen = 0;
-          for (let i = 0; i < pathPoints.length - 1; i++) {
-            const len = pathPoints[i].distanceTo(pathPoints[i + 1]);
-            segLengths.push(len);
-            totalLen += len;
-          }
-
-          // Find position along the polyline at distance d = t * totalLen
-          let d = t * totalLen;
-          let pos = new THREE.Vector3(pathPoints[0].x, pathPoints[0].y, pathPoints[0].z);
-          for (let i = 0; i < segLengths.length; i++) {
-            if (d <= segLengths[i]) {
-              const a = pathPoints[i];
-              const b = pathPoints[i + 1];
-              const lt = segLengths[i] === 0 ? 0 : d / segLengths[i];
-              pos.set(
-                a.x + (b.x - a.x) * lt,
-                a.y + (b.y - a.y) * lt,
-                a.z + (b.z - a.z) * lt,
-              );
-              break;
-            }
-            d -= segLengths[i];
-            if (i === segLengths.length - 1) {
-              pos.copy(pathPoints[pathPoints.length - 1]);
-            }
-          }
-
-          const position = { x: pos.x, y: pos.y, z: pos.z };
-
-          callback({
-            supportId: targetSupportId,
-            position,
-            segmentIndex: 0,
-          });
-        } else {
-          callback(null);
-        }
-      } else {
-        callback(null);
-      }
-    } else {
-      // Clear last hovered when exiting joint creation mode
-      lastHoveredSupportRef.current = null;
-    }
-  }, [jointCreationMode, hoveredSupportId, mouseScreenY]);
-
-  // Compute 3D world position for branch base-follow from screen coords
-  const branchBaseWorldPos = React.useMemo(() => {
-    if (!branchPreviewState || branchPreviewState.stage === 'idle' || !branchPreviewState.contact || !cameraRef.current) {
-      return null;
-    }
-
-    // Use contact point Z as the depth plane for unprojection
-    const contactZ = branchPreviewState.contact.z;
-    const camera = cameraRef.current;
-
-    // Convert screen coords (0-1) to NDC (-1 to 1)
-    const ndcX = mouseScreenPos.x * 2 - 1;
-    const ndcY = -(mouseScreenPos.y * 2 - 1); // Y is flipped in NDC
-
-    // Unproject at contact Z depth
-    const contactVec = new THREE.Vector3(branchPreviewState.contact.x, branchPreviewState.contact.y, branchPreviewState.contact.z);
-    contactVec.project(camera);
-
-    // Use contact's NDC Z for consistent depth
-    const worldPos = new THREE.Vector3(ndcX, ndcY, contactVec.z);
-    worldPos.unproject(camera);
-
-    return { x: worldPos.x, y: worldPos.y, z: worldPos.z };
-  }, [branchPreviewState, mouseScreenPos]);
-
-  // Compute 3D world position for leaf socket-follow from screen coords
-  const leafSocketWorldPos = React.useMemo(() => {
-    if (!leafPreviewState || !leafPreviewState.isActive || !leafPreviewState.contactPoint || !cameraRef.current) {
-      return null;
-    }
-
-    // Use contact point Z as the depth plane for unprojection
-    const contactZ = leafPreviewState.contactPoint.z;
-    const camera = cameraRef.current;
-
-    // Convert screen coords (0-1) to NDC (-1 to 1)
-    const ndcX = mouseScreenPos.x * 2 - 1;
-    const ndcY = -(mouseScreenPos.y * 2 - 1); // Y is flipped in NDC
-
-    // Unproject at contact Z depth
-    const contactVec = new THREE.Vector3(leafPreviewState.contactPoint.x, leafPreviewState.contactPoint.y, leafPreviewState.contactPoint.z);
-    contactVec.project(camera);
-
-    // Use contact's NDC Z for consistent depth
-    const worldPos = new THREE.Vector3(ndcX, ndcY, contactVec.z);
-    worldPos.unproject(camera);
-
-    return { x: worldPos.x, y: worldPos.y, z: worldPos.z };
-  }, [leafPreviewState, mouseScreenPos]);
-
-  // Trigger snap logic when branch base world position updates
-  const branchBasePosRef = React.useRef(branchBaseWorldPos);
-  React.useEffect(() => {
-    branchBasePosRef.current = branchBaseWorldPos;
-  }, [branchBaseWorldPos]);
-
-  React.useEffect(() => {
-    if (branchBasePosRef.current && onSupportHover) {
-      // Call hover handler with computed world position for snap logic
-      // Use a fake intersection object with just the point we need
-      const fakeHit = {
-        point: new THREE.Vector3(branchBasePosRef.current.x, branchBasePosRef.current.y, branchBasePosRef.current.z),
-        object: { userData: {} }, // Prevent userData errors
-        // Add camera position for depth-aware snapping
-        cameraPosition: cameraRef.current ? {
-          x: cameraRef.current.position.x,
-          y: cameraRef.current.position.y,
-          z: cameraRef.current.position.z
-        } : undefined
-      } as any;
-      onSupportHover(fakeHit);
-    }
-  }, [mouseScreenPos.x, mouseScreenPos.y, branchPreviewState?.stage]); // Only trigger on mouse move or stage change
-
-  // Trigger snap logic when leaf socket world position updates
-  const leafSocketPosRef = React.useRef(leafSocketWorldPos);
-  React.useEffect(() => {
-    leafSocketPosRef.current = leafSocketWorldPos;
-  }, [leafSocketWorldPos]);
-
-  React.useEffect(() => {
-    if (leafSocketPosRef.current && onSupportHover) {
-      // Call hover handler with computed world position for snap logic
-      // Use a fake intersection object with just the point we need
-      const fakeHit = {
-        point: new THREE.Vector3(leafSocketPosRef.current.x, leafSocketPosRef.current.y, leafSocketPosRef.current.z),
-        object: { userData: {} }, // Prevent userData errors
-        // Add camera position for depth-aware snapping
-        cameraPosition: cameraRef.current ? {
-          x: cameraRef.current.position.x,
-          y: cameraRef.current.position.y,
-          z: cameraRef.current.position.z
-        } : undefined
-      } as any;
-      onSupportHover(fakeHit);
-    }
-  }, [mouseScreenPos.x, mouseScreenPos.y, leafPreviewState?.isActive]); // Only trigger on mouse move or leaf active state change
-
-  // Calculate center offset for mesh positioning
-  const centerOffset = React.useMemo(() => {
-    if (!geom) return undefined;
-    const bbox = geom.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geom.geometry.getAttribute('position') as THREE.BufferAttribute);
-    return bbox.getCenter(new THREE.Vector3());
-  }, [geom]);
-
-  // Build transform matrix from transform state
-  // Must account for the mesh offset inside the group
-  const transformMatrix = React.useMemo(() => {
-    if (!transform || !geom) return undefined;
-
-    // Calculate center offset
-    const bbox = geom.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geom.geometry.getAttribute('position') as THREE.BufferAttribute);
-    const center = bbox.getCenter(new THREE.Vector3());
-
-    // Build transform: translate to group position, rotate, scale, then apply mesh offset
-    const matrix = new THREE.Matrix4();
-
-    // Start with group transform
-    matrix.compose(transform.position, new THREE.Quaternion().setFromEuler(transform.rotation), transform.scale);
-
-    // Apply the mesh offset (geometry centering)
-    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    matrix.multiply(offsetMatrix);
-
-    return matrix;
-  }, [
-    transform?.position.x,
-    transform?.position.y,
-    transform?.position.z,
-    transform?.rotation.x,
-    transform?.rotation.y,
-    transform?.rotation.z,
-    transform?.scale.x,
-    transform?.scale.y,
-    transform?.scale.z,
-    geom
-  ]);
-
-  // Track if we clicked on a support to prevent deselection
-  const supportClickedRef = React.useRef(false);
-
-  // Map joint events from SupportRenderer to parent setters and prevent background deselect
-  const handleJointSelect = React.useCallback((supportId: string, jointId: string) => {
-    // Prevent canvas background handler from deselecting
-    supportClickedRef.current = true;
-    // Select the parent support if not already
-    if (onSupportSelect) onSupportSelect(supportId);
-    // Select the joint
-    if (onJointSelect) onJointSelect(jointId);
-  }, [onSupportSelect, onJointSelect]);
-
-  const handleJointHoverChange = React.useCallback((supportId: string, jointId: string | null) => {
-    if (onJointHoverChange) onJointHoverChange(jointId);
-  }, [onJointHoverChange]);
-
-  // Handle mouse move to track screen position for joint preview and branch base-follow
-  const handleMouseMove = React.useCallback((e: React.MouseEvent) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width; // 0 = left, 1 = right
-    const y = (e.clientY - rect.top) / rect.height; // 0 = top, 1 = bottom
-    setMouseScreenY(y);
-    setMouseScreenPos({ x, y });
-  }, []);
-
-  // Handle canvas background clicks (deselect support OR create joint OR finalize branch)
-  // Note: Model selection/deselection is handled by SelectionManager
+  // Handle canvas background clicks (deselect support)
   const handleCanvasClick = React.useCallback((e: React.MouseEvent) => {
-    console.log('[Canvas] handleCanvasClick fired, mode:', mode, 'branchStage:', branchPreviewState?.stage);
-    
-    // In prepare mode, selection is handled by SelectionManager
-    if (mode === 'prepare') {
+    console.log('[Canvas] handleCanvasClick fired, mode:', mode);
+
+    // If model was just clicked, ignore this background click
+    if (window.__modelClickedThisFrame) {
+      console.log('[Canvas] Ignoring click (model clicked this frame)');
       return;
     }
-    
+
+    // If a gizmo drag just ended, ignore this click
+    if (suppressNextCanvasClickRef.current || (window as any).__gizmoDragEndedThisFrame) {
+      suppressNextCanvasClickRef.current = false;
+      (window as any).__gizmoDragEndedThisFrame = false;
+      e.stopPropagation();
+      // @ts-ignore
+      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
+      return;
+    }
+
+    if (mode === 'prepare') {
+      // Deselect model if background is clicked
+      if (onActiveModelChange) {
+        console.log('[Canvas] Background clicked, deselecting model');
+        onActiveModelChange(null);
+      }
+      return;
+    }
+
     if (mode !== 'support') return;
 
-    // If a gizmo drag just ended, ignore this click (prevents unintended deselect)
-    if (suppressNextCanvasClickRef.current) {
-      suppressNextCanvasClickRef.current = false;
-      // Prevent any parent handlers (like support placement) from seeing this click
-      e.stopPropagation();
-      // Some environments also need native stop
-      // @ts-ignore
-      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-      return;
-    }
+    // Background was clicked, deselect via V2 logic
+    console.log('[Canvas] Background clicked, deselecting');
+    clearSelection();
+  }, [mode, onActiveModelChange]);
 
-    // If currently dragging the gizmo, do not allow any clicks
-    if (isGizmoDragging) {
-      e.stopPropagation();
-      // @ts-ignore
-      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-      return;
-    }
+  React.useEffect(() => {
+    updateCameraBelowBuildPlate();
+  }, [updateCameraBelowBuildPlate]);
 
-    // If a joint is selected and background is clicked, deselect it
-    if (selectedJointId && !supportClickedRef.current) {
-      console.log('[Canvas] Background clicked with joint selected, deselecting joint');
-      if (onJointSelect) onJointSelect(null);
-      e.stopPropagation();
-      // @ts-ignore
-      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-      return;
-    }
+  const hidePlateContactPrimitives = isCameraBelowBuildPlate;
 
-    // If in joint creation mode, create joint at preview position
-    if (jointCreationMode && jointPreview) {
-      console.log('[Joint Creation] Creating joint at position:', jointPreview.position);
-      addJointToSupport(jointPreview.supportId, jointPreview.position);
-      e.stopPropagation();
-      // @ts-ignore
-      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-      return;
-    }
+  const handleOrbitChange = React.useCallback(() => {
+    updateCameraBelowBuildPlate();
+    onCameraChange?.();
+  }, [onCameraChange, updateCameraBelowBuildPlate]);
 
-    // If in leaf placement mode (waiting for second click), finalize leaf placement
-    const leafHasContact = leafStateRef?.current?.contactPoint;
-    if (leafHasContact && onSupportClick) {
-      console.log('[Canvas] Leaf contact set - finalizing on click');
-      // Call onSupportClick with empty hit to trigger leaf finalization
-      onSupportClick({} as any);
-      e.stopPropagation();
-      // @ts-ignore
-      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-      return;
-    }
-
-    // If in branch base-follow mode, finalize branch placement
-    const branchStage = branchStateRef?.current?.stage || branchPreviewState?.stage;
-    console.log('[Canvas] Checking branch stage:', branchStage);
-    if (branchStage === 'baseFollow' && onSupportClick) {
-      console.log('[Canvas] Branch base-follow click detected - finalizing');
-      // Call onSupportClick with empty hit to trigger branch finalization
-      onSupportClick({} as any);
-      e.stopPropagation();
-      // @ts-ignore
-      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-      return;
-    }
-
-    // If a support was clicked, the flag will be set
-    if (supportClickedRef.current) {
-      // Reset the flag
-      supportClickedRef.current = false;
-    } else {
-      // Background was clicked, deselect
-      console.log('[Canvas] Background clicked, deselecting');
-      // Clear any selected joint
-      if (onJointSelect) onJointSelect(null);
-      // Clear any selected support
-      if (onSupportSelect) onSupportSelect(null);
-      // Reset the flag
-      supportClickedRef.current = false;
-    }
-  }, [mode, onSupportSelect, onJointSelect, jointCreationMode, jointPreview]);
+  const handleOrbitEnd = React.useCallback(() => {
+    updateCameraBelowBuildPlate();
+    onCameraEnd?.();
+  }, [onCameraEnd, updateCameraBelowBuildPlate]);
 
   return (
     <div
       style={{ width: '100%', height: '100%' }}
       onClick={handleCanvasClick}
-      onMouseMove={handleMouseMove}
     >
       <Canvas
-        style={{ width: '100%', height: '100%', backgroundColor: '#202020' }}
-        camera={{ position: [150, 150, 150], fov: 50, up: [0, 0, 1] }}
+        style={{ width: '100%', height: '100%', backgroundColor: '#202020', display: 'block' }}
+        camera={defaultCamera}
         shadows
-        gl={{ stencil: true }}
+        dpr={[1, 10]}
+        gl={{ stencil: true, logarithmicDepthBuffer: true }}
       >
+        <LoggingHelper mode={mode} />
         <Lights ambientIntensity={ambientIntensity ?? 1.2} directionalIntensity={directionalIntensity ?? 0.3} />
         <Helpers />
         <EnableLocalClipping />
         <CameraProvider cameraRef={cameraRef} />
+        <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper enabled={gpuPickingTest}>
+          <PickingStateSyncer />
+
           {/* Selection Provider - manages model selection state */}
-          <SelectionProvider initialSelection="default-model">
+          <SelectionProvider initialSelection={activeModelId || "default-model"}>
+            <SelectionSync activeModelId={activeModelId ?? null} />
             {/* Selection Manager - handles click-to-select/deselect logic */}
             <SelectionManager enabled={mode === 'prepare'} mode={mode} />
-            
+
             <React.Suspense fallback={null}>
-              {geom && (
-              <>
-                {/* Raft renders when enabled; no separate preview mode */}
-                <RaftRenderer />
-                {/* Footprint border shows combined model + raft outline with margin */}
-                <FootprintBorderRenderer modelGeometry={geom} modelTransform={transform} />
-                {meshVisible !== false && (
-                  <StlMesh
-                    geometry={geom.geometry}
-                    clipLower={clipLower}
-                    clipUpper={clipUpper}
-                    meshColor={meshColor}
-                    meshRef={meshRef}
-                    actualMeshRef={actualMeshRef}
-                    materialRoughness={materialRoughness}
-                    transform={transform}
-                    mode={mode}
-                    onSupportClick={onSupportClick}
-                    onSupportHover={onSupportHover}
-                    onSupportSelect={onSupportSelect}
-                    disableRaycast={disableRaycast}
-                    blockSupportPlacement={isGizmoDragging || !!selectedJointId}
-                    suppressNextClickRef={suppressNextCanvasClickRef}
-                    modelId="default-model"
-                    isSelected={isModelSelected && mode === 'prepare' && selectionHighlightMode === 'tint'}
+              {models.map(model => {
+                const isActive = model.id === activeModelId;
+                // Use props.transform if active (for smooth drag), else model.transform
+                const transformToUse = isActive && transform ? transform : model.transform;
+                // Use per-model visibility
+                if (!model.visible) return null;
+
+                return (
+                  <React.Fragment key={model.id}>
+                    <StlMesh
+                      modelId={model.id}
+                      geometry={model.geometry.geometry}
+                      clipLower={clipLower}
+                      clipUpper={clipUpper}
+                      meshColor={model.color || meshColor} // Use model color
+                      meshRef={(el: THREE.Mesh | null) => { meshRefs.current[model.id] = el; }}
+                      actualMeshRef={(el: THREE.Mesh | null) => { actualMeshRefs.current[model.id] = el; }}
+                      materialRoughness={materialRoughness}
+                      transform={transformToUse}
+                      mode={mode}
+                      onSupportClick={onSupportClick}
+                      onSupportHover={onSupportHover}
+                      onActiveModelChange={onActiveModelChange}
+                      disableRaycast={disableRaycast}
+                      blockSupportPlacement={isGizmoDragging || blockSupportPlacement}
+                      suppressNextClickRef={suppressNextCanvasClickRef}
+                      isSelected={isActive && isModelSelected && mode === 'prepare' && selectionHighlightMode === 'tint'}
+                      isBranchPlacementActive={isBranchPlacementActive}
+                      isLeafPlacementActive={isLeafPlacementActive}
+                      isBracePlacementActive={isBracePlacementActive}
+                      onModelHoverPointChange={onModelHoverPointChange}
+                    />
+
+                    {/* Cross-section cap (fill) at the cut plane - Render per model */}
+                    {clipUpper != null && !hideCrossSectionCap && (
+                      <CrossSectionCap
+                        geometry={model.geometry.geometry}
+                        y={clipUpper}
+                        color="#FFFFFF"
+                        // We need the matrix for THIS model
+                        transformMatrix={(() => {
+                          // Duplicate logic from previous SceneCanvas to build matrix
+                          const t = transformToUse;
+                          if (!t) return undefined;
+
+                          const bbox = model.geometry.bbox;
+                          const center = model.geometry.center;
+
+                          const matrix = new THREE.Matrix4();
+                          matrix.compose(t.position, new THREE.Quaternion().setFromEuler(t.rotation), t.scale);
+                          const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+                          matrix.multiply(offsetMatrix);
+                          return matrix;
+                        })()}
+                        mode={crossSectionMode}
+                        pxMm={pxMm}
+                        visible={!hideCrossSectionCap && clipUpper != null}
+                      />
+                    )}
+                  </React.Fragment>
+                );
+              })}
+
+              {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
+              {!hidePlateContactPrimitives && (
+                <>
+                  <RaftRenderer />
+                  <LineRaftRenderer />
+                  <FootprintBorderRenderer
+                    modelGeometry={activeModel ? activeModel.geometry : null}
+                    modelTransform={activeModelTransform}
                   />
-                )}
-              {/* Cross-section cap (fill) at the cut plane */}
-              {clipLower != null && !hideCrossSectionCap && (
-                <CrossSectionCap
-                  geometry={geom.geometry}
-                  y={clipLower}
-                  color={meshColor}
-                  transformMatrix={transformMatrix}
-                  mode={crossSectionMode}
-                  pxMm={pxMm}
-                  visible={!hideCrossSectionCap && clipLower != null}
-                />
+                </>
               )}
-              {islandMarkers && islandMarkers.length > 0 && meshRef.current && (
-                <IslandOverlay
-                  markers={islandMarkers}
-                  meshRef={meshRef.current}
-                  brushRadiusMm={overlayBrushRadius ?? 2.0}
-                  color={overlayColor ?? '#ff1744'}
-                  opacity={overlayOpacity ?? 0.6}
-                  transform={transform}
-                  centerOffset={centerOffset}
-                  selectedIslandId={overlaySelectedIslandId}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
-                />
-              )}
-              {showIslandIdLabels && scanResults && layerHeightMm && geom && (
-                <IslandIdLabels
-                  islands={scanResults.islands}
-                  scanResults={scanResults}
-                  layerHeightMm={layerHeightMm}
-                  enabled={true}
-                  bboxMinZ={geom.bbox.min.z}
-                />
-              )}
-              {voxelEnabled && scanResults && layerHeightMm && (
-                <IslandVoxelVisualization
-                  scanResults={scanResults}
-                  layerHeightMm={layerHeightMm}
-                  enabled={voxelEnabled}
-                  opacity={voxelOpacity}
-                  colorScheme={voxelColorScheme}
-                  selectedIslandId={voxelSelectedIslandId}
-                  showMerged={voxelShowMerged}
-                  centerOffset={centerOffset}
-                  zOffset={scanBBox?.min.z ?? 0}
-                  clipLower={clipLower}
-                  clipUpper={clipUpper}
-                  transform={transform}
-                />
-              )}
-              {/* Branch Preview (Alt-held branch placement) */}
-              {branchPreviewState && branchPreviewState.stage !== 'idle' && (
-                // Lazy import to avoid direct coupling
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                (() => {
-                  const BranchPreview = require('@/supports/BranchSupports/rendering/BranchPreview').default;
-                  return (
-                    <BranchPreview
-                      state={branchPreviewState}
-                      basePosition={branchBaseWorldPos || branchBasePosition || null}
-                      supports={supports}
-                    />
-                  );
-                })()
-              )}
-              {/* Leaf Preview (Ctrl+Alt-held leaf placement) */}
-              {leafPreviewState && leafPreviewState.isActive && leafPreviewState.contactPoint && (
-                // Lazy import to avoid direct coupling
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                (() => {
-                  const LeafPreview = require('@/supports/LeafSupports/rendering/LeafPreview').default;
-                  return (
-                    <LeafPreview
-                      state={leafPreviewState}
-                      socketPosition={leafSocketWorldPos || leafSocketPosition || null}
-                    />
-                  );
-                })()
-              )}
-              {transformMode === 'transform' && meshRef.current && isModelSelected && (
+
+              {/* Gizmo attached to active model */}
+              {mode === 'prepare' && transformMode === 'transform' && activeModelId && isModelSelected && (
                 <UnifiedGizmo
-                  meshRef={meshRef}
+                  meshRef={activeGroupRef as React.RefObject<THREE.Mesh>}
                   position={[
                     transform?.position.x ?? 0,
                     transform?.position.y ?? 0,
@@ -976,222 +779,221 @@ export function SceneCanvas({
                   enableLighting
                   onDragStateChange={setIsGizmoDragging}
                   onMove={(delta) => {
-                    if (meshRef.current) {
-                      meshRef.current.position.add(delta);
+                    if (activeGroupRef.current) {
+                      activeGroupRef.current.position.add(delta);
                     }
                   }}
                   onMoveEnd={() => {
                     window.__gizmoDragEndedThisFrame = true;
-                    if (meshRef.current && onTransformChange) {
+                    if (activeGroupRef.current && onTransformChange) {
                       onTransformChange(
-                        meshRef.current.position.clone(),
-                        meshRef.current.rotation.clone(),
-                        meshRef.current.scale.clone()
+                        activeGroupRef.current.position.clone(),
+                        activeGroupRef.current.rotation.clone(),
+                        activeGroupRef.current.scale.clone()
                       );
                     }
                   }}
                   onRotate={(axis, angle) => {
-                    if (meshRef.current) {
+                    if (activeGroupRef.current) {
                       const worldAxis = new THREE.Vector3(
                         axis === 'x' ? 1 : 0,
                         axis === 'y' ? 1 : 0,
                         axis === 'z' ? 1 : 0
                       );
                       const quaternion = new THREE.Quaternion().setFromAxisAngle(worldAxis, -angle);
-                      meshRef.current.quaternion.premultiply(quaternion);
+                      activeGroupRef.current.quaternion.premultiply(quaternion);
                     }
                   }}
                   onRotateEnd={() => {
                     window.__gizmoDragEndedThisFrame = true;
-                    if (meshRef.current && onTransformChange) {
+                    if (activeGroupRef.current && onTransformChange) {
                       onTransformChange(
-                        meshRef.current.position.clone(),
-                        meshRef.current.rotation.clone(),
-                        meshRef.current.scale.clone()
+                        activeGroupRef.current.position.clone(),
+                        activeGroupRef.current.rotation.clone(),
+                        activeGroupRef.current.scale.clone()
                       );
                     }
                     onTransformEnd?.('rotate');
                   }}
                   onScaleStart={() => {
-                    if (meshRef.current) {
-                      initialScaleRef.current.copy(meshRef.current.scale);
+                    if (activeGroupRef.current) {
+                      initialScaleRef.current.copy(activeGroupRef.current.scale);
                     }
                   }}
                   onScale={(axis, factor) => {
-                    if (meshRef.current) {
+                    if (activeGroupRef.current) {
                       if (axis === 'uniform') {
-                        meshRef.current.scale.copy(initialScaleRef.current).multiplyScalar(factor);
+                        activeGroupRef.current.scale.copy(initialScaleRef.current).multiplyScalar(factor);
                       } else {
-                        meshRef.current.scale.copy(initialScaleRef.current);
-                        if (axis === 'x') meshRef.current.scale.x *= factor;
-                        if (axis === 'y') meshRef.current.scale.y *= factor;
-                        if (axis === 'z') meshRef.current.scale.z *= factor;
+                        activeGroupRef.current.scale.copy(initialScaleRef.current);
+                        if (axis === 'x') activeGroupRef.current.scale.x *= factor;
+                        if (axis === 'y') activeGroupRef.current.scale.y *= factor;
+                        if (axis === 'z') activeGroupRef.current.scale.z *= factor;
                       }
                     }
                   }}
                   onScaleEnd={() => {
                     window.__gizmoDragEndedThisFrame = true;
-                    if (meshRef.current && onTransformChange) {
+                    if (activeGroupRef.current && onTransformChange) {
                       onTransformChange(
-                        meshRef.current.position.clone(),
-                        meshRef.current.rotation.clone(),
-                        meshRef.current.scale.clone()
+                        activeGroupRef.current.position.clone(),
+                        activeGroupRef.current.rotation.clone(),
+                        activeGroupRef.current.scale.clone()
                       );
                     }
                   }}
                 />
               )}
-            </>
-          )}
-          {/* Render supports */}
-          {supports && supports.length > 0 && (() => {
-            const branchStage = branchStateRef?.current?.stage || branchPreviewState?.stage || 'idle';
-            const isInBranchFollow = branchStage === 'baseFollow';
-            const leafHasContact = leafStateRef?.current?.contactPoint;
-            const isInLeafPlacement = !!leafHasContact;
-            return (
-              <SupportRenderer
-                supports={supports}
-                selectedId={selectedSupportId}
-                onSelect={
-                  // Disable support selection during branch base-follow mode OR leaf placement mode
-                  (isInBranchFollow || isInLeafPlacement) ? undefined : onSupportSelect
-                }
-                hoveredId={
-                  (isGizmoDragging || jointCreationMode || branchStateRef?.current?.stage === 'baseFollow' || branchPreviewState?.stage === 'baseFollow')
-                    ? null
-                    : (selectedJointInfo && hoveredSupportId === selectedJointInfo.supportId)
-                      ? null
-                      : hoveredSupportId
-                }
-                onHoverChange={onSupportHoverChange}
-                supportClickedRef={supportClickedRef}
-                selectedJointId={selectedJointId}
-                onJointSelect={handleJointSelect}
-                hoveredJointId={isGizmoDragging ? null : hoveredJointId}
-                onJointHoverChange={handleJointHoverChange}
-                jointCreationMode={jointCreationMode}
+
+              {/* Render supports (New V2 System) */}
+              {/* Note: SupportRenderer renders supports from store. TODO: Filter by active model or show all? */}
+              <SupportRenderer mode={mode} ref={supportsRef} hidePlateContactPrimitives={hidePlateContactPrimitives} />
+
+
+
+              <IslandOverlay
+                markers={islandMarkers ?? []}
+                meshRef={activeActualMeshRef.current}
+                brushRadiusMm={overlayBrushRadius ?? 2}
+                color={overlayColor ?? '#FF0000'}
+                opacity={overlayOpacity ?? 0.5}
+                transform={transform}
+                selectedIslandId={overlaySelectedIslandId}
+                clipLower={clipLower}
+                clipUpper={clipUpper}
               />
-            );
-          })()}
-          {/* Render support preview (disabled during joint creation, gizmo drag, or when a joint is selected) */}
-          {supportPreview && (
-            // Lazy import to avoid direct coupling
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            (() => {
-              const BranchPreview = require('@/supports/BranchSupports/rendering/BranchPreview').default;
-              return supportPreview.parentBaseId ? (
-                <BranchPreview
-                  state={{
-                    contact: supportPreview.tip,
-                    contactNormal: supportPreview.tipNormal || { x: 0, y: 1, z: 0 },
-                    snap: {
-                      position: supportPreview.base,
-                      trunkId: supportPreview.parentBaseId,
-                      distance: 0
-                    }
-                  }}
-                  supports={supports}
-                />
-              ) : (
-                <SupportPreview
-                  tip={supportPreview.tip}
-                  base={supportPreview.base}
-                  settings={getCurrentSupportSettings()}
-                  tipNormal={supportPreview.tipNormal}
-                  validationLevel={supportPreview.validationLevel}
-                  joints={supportPreview.joints}
-                />
-              );
-            })()
-          )}
-          {/* Render joint creation preview */}
-          {jointCreationMode && jointPreview && (() => {
-            const support = supports?.find(s => s.id === jointPreview.supportId);
-            if (!support) return null;
-            const shaftDiameter = support.settings.mid.diameterMm;
-            const jointDiameter = shaftDiameter + 0.1;
-            return (
-              <JointPreviewSphere
-                position={jointPreview.position}
-                diameter={jointDiameter}
+
+              <IslandVoxelVisualization
+                scanResults={scanResults ?? null}
+                layerHeightMm={layerHeightMm ?? 0.05}
+                enabled={voxelEnabled ?? false}
+                opacity={voxelOpacity}
+                colorScheme={voxelColorScheme}
+                selectedIslandId={voxelSelectedIslandId}
+                showMerged={voxelShowMerged}
+                showTerritory={voxelShowTerritory}
+                transform={transform}
+                zOffset={scanBBox?.min.z ?? 0}
+                clipLower={clipLower}
+                clipUpper={clipUpper}
               />
-            );
-          })()}
-          {/* Joint move gizmo */}
-          {selectedJointInfo && jointLivePosRef.current && (
-            <UnifiedGizmo
-              position={[jointLivePosRef.current.x, jointLivePosRef.current.y, jointLivePosRef.current.z]}
-              rotation={[0, 0, 0]}
-              enableMove
-              enableRotate={false}
-              enableScale={false}
-              enableLighting
-              onDragStateChange={setIsGizmoDragging}
-              onMove={(delta) => {
-                // Live update joint position for immediate feedback
-                jointLivePosRef.current!.add(delta);
 
-                // Check if this is a branch joint that needs to be constrained
-                const currentSupport = supports?.find(s => s.id === selectedJointInfo.supportId);
-                const joint = currentSupport?.joints?.find(j => j.id === selectedJointId);
-                let finalPosition = {
-                  x: jointLivePosRef.current!.x,
-                  y: jointLivePosRef.current!.y,
-                  z: jointLivePosRef.current!.z,
-                };
+              <IslandExpansionVisualization
+                simulator={expansionSimulator ?? null}
+                transform={transform}
+                enabled={showExpansion ?? false}
+              />
 
-                if (joint?.type === 'branch' && joint.lockedToSupportId && supports) {
-                  // Find parent support
-                  const parentSupport = supports.find(s => s.id === joint.lockedToSupportId);
-                  if (parentSupport) {
-                    // Constrain to parent shaft
-                    finalPosition = constrainBranchJointToShaft(finalPosition, joint, parentSupport);
-                    // Update live position ref to constrained position
-                    jointLivePosRef.current!.set(finalPosition.x, finalPosition.y, finalPosition.z);
-                  }
-                }
+              <MeshClassificationRenderer
+                geometry={classificationGeometry}
+                faceLabels={classificationFaceLabels}
+                transform={transform}
+                visible={showClassification ?? false}
+              />
 
-                // Use live (history-muted) updates during drag for smoothness
-                updateJointPositionLive(selectedJointInfo.supportId, selectedJointId!, finalPosition);
+              {scanResults && (
+                <IslandIdLabels
+                  islands={scanResults.islands}
+                  scanResults={scanResults}
+                  layerHeightMm={layerHeightMm ?? 0.05}
+                  enabled={showIslandIdLabels ?? false}
+                  bboxMinZ={scanBBox?.min.z ?? 0}
+                />
+              )}
 
-                // Update any branch joints attached to this support (live)
-                if (supports) {
-                  const branchUpdates = updateBranchJointsForParent(selectedJointInfo.supportId, supports);
-                  for (const update of branchUpdates) {
-                    updateJointPositionLive(update.supportId, update.jointId, update.newPosition);
-                  }
-                }
-              }}
-              onMoveEnd={() => {
-                // Suppress the next canvas click so selection is preserved
-                suppressNextCanvasClickRef.current = true;
-                // Commit a single undoable update at the end of drag
-                if (jointLivePosRef.current) {
-                  updateJointPosition(selectedJointInfo.supportId, selectedJointId!, {
-                    x: jointLivePosRef.current.x,
-                    y: jointLivePosRef.current.y,
-                    z: jointLivePosRef.current.z,
-                  });
+              {/* Render V2 Trunk Placement Preview (hide when in branch/leaf mode) */}
+              {trunkPlacementPreview && !blockSupportPlacement && !isDraggingHandle && !isBranchPlacementActive && !isLeafPlacementActive && !branchPlacementPreview && (
+                <SupportBuilder
+                  data={trunkPlacementPreview}
+                  isPreview
+                  hidePlateContactPrimitives={hidePlateContactPrimitives}
+                />
+              )}
 
-                  // Update any branch joints attached to this support
-                  if (supports) {
-                    const branchUpdates = updateBranchJointsForParent(selectedJointInfo.supportId, supports);
-                    for (const update of branchUpdates) {
-                      updateJointPosition(update.supportId, update.jointId, update.newPosition);
-                    }
-                  }
-                }
-              }}
-            />
-          )}
+              {/* Render Branch Hover Preview Dot - shows when Alt is held before first click */}
+              {/* Uses tip contact diameter to match actual tip size */}
+              {branchHoverPosition && !branchTipPosition && !branchPlacementPreview && (
+                <mesh position={[branchHoverPosition.x, branchHoverPosition.y, branchHoverPosition.z]} raycast={() => null}>
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <meshStandardMaterial color="#00ff00" transparent opacity={0.5} emissive="#00ff00" emissiveIntensity={0.3} />
+                </mesh>
+              )}
+
+              {/* Render Branch Tip Marker - only show when NO preview is visible */}
+              {/* Once preview shows, the contact cone at the tip replaces this marker */}
+              {isBranchPlacementActive && branchTipPosition && !branchPlacementPreview && (
+                <mesh position={[branchTipPosition.x, branchTipPosition.y, branchTipPosition.z]} raycast={() => null}>
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
+                </mesh>
+              )}
+
+              {/* Render Branch Placement Preview - ALWAYS show when data exists */}
+              {/* Don't check blockSupportPlacement - branch placement needs to work while hovering supports */}
+              {branchPlacementPreview && isBranchPlacementActive && !isDraggingHandle && (
+                <SupportBuilder
+                  data={branchPlacementPreview}
+                  isPreview
+                  hidePlateContactPrimitives={hidePlateContactPrimitives}
+                />
+              )}
+
+              {/* Render Leaf Hover Preview Dot - shows when Alt+Shift is held before first click */}
+              {/* Uses tip contact diameter to match actual tip size */}
+              {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && (
+                <mesh position={[leafHoverPosition.x, leafHoverPosition.y, leafHoverPosition.z]} raycast={() => null}>
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <meshStandardMaterial color="#00ff00" transparent opacity={0.5} emissive="#00ff00" emissiveIntensity={0.3} />
+                </mesh>
+              )}
+
+              {/* Render Leaf Tip Marker - only show when NO preview is visible */}
+              {/* Once preview shows, the contact cone at the tip replaces this marker */}
+              {isLeafPlacementActive && leafTipPosition && !leafPlacementPreview && (
+                <mesh position={[leafTipPosition.x, leafTipPosition.y, leafTipPosition.z]} raycast={() => null}>
+                  <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
+                  <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
+                </mesh>
+              )}
+
+              {/* Render Leaf Placement Preview - ALWAYS show when data exists */}
+              {/* Don't check blockSupportPlacement - leaf placement needs to work while hovering supports */}
+              {leafPlacementPreview && !isDraggingHandle && (
+                <SupportBuilder
+                  data={leafPlacementPreview}
+                  isPreview
+                  hidePlateContactPrimitives={hidePlateContactPrimitives}
+                />
+              )}
+
+              {/* Render Brace Placement Preview */}
+              {bracePlacementPreview && !isDraggingHandle && (
+                <BracePreviewRenderer preview={bracePlacementPreview} />
+              )}
+
+              {/* Render V2 Joint Placement Preview */}
+              {jointPlacementPreview && (
+                <JointPlacementPreview position={jointPlacementPreview.pos} diameter={jointPlacementPreview.diameter} />
+              )}
+
+              {/* Branch Placement Controller - handles snapping logic */}
+              {mode === 'support' && <BranchPlacementController />}
+
+              {/* Leaf Placement Controller - handles snapping logic */}
+              {mode === 'support' && <LeafPlacementController />}
+
+              {/* Brace Placement Controller - handles snapping logic */}
+              {mode === 'support' && <BracePlacementController />}
+
+              {/* LYS Ghost Viewer (Temporary) */}
+              <GhostOverlay data={ghostData} visible={!!ghostData} />
             </React.Suspense>
-            
+
           </SelectionProvider>
         </PickingProviderWrapper>
         {/* Selection outline - renders when model is selected */}
         <SelectionOutlineRenderer
-          meshRef={actualMeshRef}
+          meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
           enabled={mode === 'prepare' && selectionHighlightMode === 'fresnel'}
           color="#82ccff"
           intensity={0.38}
@@ -1202,7 +1004,7 @@ export function SceneCanvas({
         />
         {/* Selection spotlight - illuminates only the selected model via layers */}
         <SelectionSpotlight
-          meshRef={actualMeshRef}
+          meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
           enabled={mode === 'prepare' && isModelSelected && selectionHighlightMode === 'spotlight'}
           color="#ffeacc"
           intensity={1.5}
@@ -1212,26 +1014,51 @@ export function SceneCanvas({
           radius={60}
           affectAll
         />
-          <OrbitControls
-            makeDefault
-            enableDamping={false}
-            enabled={!isGizmoDragging}
-            onChange={onCameraChange}
-            onEnd={onCameraEnd}
-            mouseButtons={
-              mode === 'support'
-                ? { MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
-                : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
-            }
-          />
+        <OrbitControls
+          makeDefault
+          enableDamping={false}
+          enabled={!isGizmoDragging}
+          onChange={handleOrbitChange}
+          onEnd={handleOrbitEnd}
+          target={orbitTarget}
+          mouseButtons={
+            mode === 'support'
+              ? { MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+              : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+          }
+        />
+        <CameraFocusHotkeyController
+          hoverPointRef={lastHoveredModelPointRef}
+          setOrbitTargetFromPoint={setOrbitTargetFromPoint}
+        />
+        <CameraIntroController
+          bounds={introBoundsSnapshot}
+          runId={cameraIntroRunId}
+          onComplete={() => { }}
+        />
         <CameraFocusController
           selectedIslandId={overlaySelectedIslandId ?? null}
           islandMarkers={islandMarkers ?? []}
         />
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
+        {children}
       </Canvas>
+
+      {/* Support Limitation Tooltip Overlay */}
+      <SupportLimitationFeedback
+        error={leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null}
+        warning={
+          leafPlacementPreview?.warning ??
+          (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
+          trunkPlacementPreview?.warning ??
+          interactionWarning ??
+          null
+        }
+      />
+
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
     </div>
   );
 }
+export const SceneCanvas = SceneCanvasComponent;

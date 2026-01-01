@@ -9,28 +9,28 @@ interface TransformToolbarProps {
 export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) {
   const buttons: Array<{ mode: TransformMode; label: string; icon: string }> = [
     { mode: 'select', label: 'Select', icon: '👆' },
-    { mode: 'transform', label: 'Transform', icon: '⬙' },
+    { mode: 'transform', label: 'Modify', icon: '⬙' },
   ];
 
   return (
-    <div className="absolute left-4 top-20 z-10 flex flex-col gap-1 bg-neutral-800/90 backdrop-blur-sm rounded-lg p-2 shadow-lg">
+    <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 flex flex-row gap-2 bg-neutral-800/95 backdrop-blur-sm rounded-lg p-1.5 shadow-xl border border-neutral-700/50">
       {buttons.map((btn) => (
         <button
           key={btn.mode}
           onClick={() => onModeChange(btn.mode)}
           className={`
-            w-16 h-16 flex flex-col items-center justify-center gap-1 rounded-lg
+            w-14 h-14 flex flex-col items-center justify-center gap-0.5 rounded-md
             transition-all duration-200
             ${
               mode === btn.mode
                 ? 'bg-blue-500 text-white shadow-md'
-                : 'bg-neutral-700 text-neutral-300 hover:bg-neutral-600'
+                : 'bg-neutral-700/50 text-neutral-400 hover:bg-neutral-700 hover:text-neutral-200'
             }
           `}
           title={btn.label}
         >
-          <span className="text-2xl">{btn.icon}</span>
-          <span className="text-[10px] font-medium">{btn.label}</span>
+          <span className="text-xl">{btn.icon}</span>
+          <span className="text-[9px] font-medium uppercase tracking-wide">{btn.label}</span>
         </button>
       ))}
     </div>
