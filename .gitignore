@@ -45,3 +45,9 @@ next-env.d.ts
 # local
 tsc_output.txt
 todo_list
+
+# backups
+2. Backup/
+
+# lys conversion artifacts
+/3. LysConversion/
