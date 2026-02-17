@@ -10,14 +10,21 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
   const buttons: Array<{ mode: TransformMode; label: string; icon: string }> = [
     { mode: 'select', label: 'Select', icon: '👆' },
     { mode: 'transform', label: 'Modify', icon: '⬙' },
+    { mode: 'smoothing', label: 'Smooth', icon: '🖌️' },
   ];
+
+  const handleModeClick = React.useCallback((next: TransformMode) => {
+    React.startTransition(() => {
+      onModeChange(next);
+    });
+  }, [onModeChange]);
 
   return (
     <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 flex flex-row gap-2 bg-neutral-800/95 backdrop-blur-sm rounded-lg p-1.5 shadow-xl border border-neutral-700/50">
       {buttons.map((btn) => (
         <button
           key={btn.mode}
-          onClick={() => onModeChange(btn.mode)}
+          onClick={() => handleModeClick(btn.mode)}
           className={`
             w-14 h-14 flex flex-col items-center justify-center gap-0.5 rounded-md
             transition-all duration-200

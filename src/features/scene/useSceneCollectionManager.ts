@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadStlGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { loadFromLychee } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
@@ -9,18 +9,124 @@ import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
-import { useLycheeImport, type LycheeImportResult } from '@/features/lys-conversion/useLycheeImport';
+import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
+import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry } from '@/utils/bvh';
+import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
+
+type PersistedMeshAppearance = {
+  v: 1;
+  shaderType: MeshShaderType;
+  matcapVariant: MatcapVariant;
+  flatUseVertexColors: boolean;
+  toonSteps: number;
+  ambientIntensity: number;
+  directionalIntensity: number;
+  materialRoughness: number;
+  wireframeThicknessPx: number;
+  xrayOpacity: number;
+  meshColor: string;
+};
+
+const MESH_APPEARANCE_STORAGE_KEY = 'mesh-appearance-settings';
+
+const DEFAULT_MESH_COLOR = '#a3a3a3';
+const DEFAULT_AMBIENT_INTENSITY = 0.6;
+const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
+const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
+const DEFAULT_WIREFRAME_THICKNESS_PX = 1.5;
+const DEFAULT_XRAY_OPACITY = 0.25;
+const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
+const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
+const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
+const DEFAULT_TOON_STEPS = 5;
+
+function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof input === 'number' ? input : Number(input);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function clampHexColor(input: unknown, fallback: string): string {
+  if (typeof input !== 'string') return fallback;
+  const s = input.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s) || /^#[0-9a-fA-F]{3}$/.test(s)) return s;
+  return fallback;
+}
+
+function clampMatcapVariant(input: unknown, fallback: MatcapVariant): MatcapVariant {
+  return input === 'neutral' || input === 'cool' || input === 'warm' ? input : fallback;
+}
+
+function clampPersistedMeshShaderType(input: unknown, fallback: MeshShaderType): MeshShaderType {
+  return input === 'soft_clay'
+    || input === 'toon'
+    || input === 'normal_debug'
+    || input === 'wireframe'
+    || input === 'xray'
+    ? input
+    : fallback;
+}
+
+function clampBoolean(input: unknown, fallback: boolean): boolean {
+  return typeof input === 'boolean' ? input : fallback;
+}
+
+function clampInt(input: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof input === 'number' ? input : Number(input);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const raw = window.localStorage.getItem(MESH_APPEARANCE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedMeshAppearance>;
+
+    const shaderType = clampPersistedMeshShaderType(parsed.shaderType, DEFAULT_SHADER_TYPE);
+
+    return {
+      v: 1,
+      shaderType,
+      matcapVariant: clampMatcapVariant(parsed.matcapVariant, DEFAULT_MATCAP_VARIANT),
+      flatUseVertexColors: clampBoolean(parsed.flatUseVertexColors, DEFAULT_FLAT_USE_VERTEX_COLORS),
+      toonSteps: clampInt(parsed.toonSteps, 2, 16, DEFAULT_TOON_STEPS),
+      ambientIntensity: clampNumber(parsed.ambientIntensity, 0, 4, DEFAULT_AMBIENT_INTENSITY),
+      directionalIntensity: clampNumber(parsed.directionalIntensity, 0, 4, DEFAULT_DIRECTIONAL_INTENSITY),
+      materialRoughness: clampNumber(parsed.materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
+      wireframeThicknessPx: clampNumber(parsed.wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
+      xrayOpacity: clampNumber(parsed.xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
+      meshColor: clampHexColor(parsed.meshColor, DEFAULT_MESH_COLOR),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeMeshAppearanceToLocalStorage(next: PersistedMeshAppearance): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(MESH_APPEARANCE_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+}
 
 export interface LoadedModel {
   id: string;
   name: string;
   fileUrl: string;
+  fileSizeBytes?: number;
   geometry: GeometryWithBounds;
   transform: ModelTransform;
   visible: boolean;
   color: string;
   polygonCount: number;
+  ignoreAutoLift?: boolean;
 }
 
 type DebugPrimitiveType =
@@ -38,6 +144,8 @@ import { deleteSupportsForModel } from '@/supports/PlacementLogic/SupportModelLi
 import { clearSelection } from '@/supports/interaction/SupportSelection';
 
 export function useSceneCollectionManager() {
+  const persistedAppearance = useMemo(() => readMeshAppearanceFromLocalStorage(), []);
+
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
 
@@ -228,9 +336,39 @@ export function useSceneCollectionManager() {
   }, [isDebugModelName, models, tryRevokeObjectUrl]);
 
   // Lighting controls (Global)
-  const [ambientIntensity, setAmbientIntensity] = useState<number>(0.6);
-  const [directionalIntensity, setDirectionalIntensity] = useState<number>(0.8);
-  const [materialRoughness, setMaterialRoughness] = useState<number>(0.65);
+  const [ambientIntensity, setAmbientIntensity] = useState<number>(persistedAppearance?.ambientIntensity ?? DEFAULT_AMBIENT_INTENSITY);
+  const [directionalIntensity, setDirectionalIntensity] = useState<number>(persistedAppearance?.directionalIntensity ?? DEFAULT_DIRECTIONAL_INTENSITY);
+  const [materialRoughness, setMaterialRoughness] = useState<number>(persistedAppearance?.materialRoughness ?? DEFAULT_MATERIAL_ROUGHNESS);
+
+  // Shader-specific settings (Global)
+  const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(persistedAppearance?.wireframeThicknessPx ?? DEFAULT_WIREFRAME_THICKNESS_PX);
+  const [xrayOpacity, setXrayOpacity] = useState<number>(persistedAppearance?.xrayOpacity ?? DEFAULT_XRAY_OPACITY);
+
+  // Mesh shader selection (Global)
+  const [shaderType, setShaderType] = useState<MeshShaderType>(persistedAppearance?.shaderType ?? DEFAULT_SHADER_TYPE);
+  const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(persistedAppearance?.matcapVariant ?? DEFAULT_MATCAP_VARIANT);
+  const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(persistedAppearance?.flatUseVertexColors ?? DEFAULT_FLAT_USE_VERTEX_COLORS);
+  const [toonSteps, setToonSteps] = useState<number>(persistedAppearance?.toonSteps ?? DEFAULT_TOON_STEPS);
+
+  useEffect(() => {
+    const prev = readMeshAppearanceFromLocalStorage();
+
+    const persistedShaderType = clampPersistedMeshShaderType(shaderType, prev?.shaderType ?? DEFAULT_SHADER_TYPE);
+
+    writeMeshAppearanceToLocalStorage({
+      v: 1,
+      shaderType: persistedShaderType,
+      matcapVariant,
+      flatUseVertexColors,
+      toonSteps: clampInt(toonSteps, 2, 16, DEFAULT_TOON_STEPS),
+      ambientIntensity: clampNumber(ambientIntensity, 0, 4, DEFAULT_AMBIENT_INTENSITY),
+      directionalIntensity: clampNumber(directionalIntensity, 0, 4, DEFAULT_DIRECTIONAL_INTENSITY),
+      materialRoughness: clampNumber(materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
+      wireframeThicknessPx: clampNumber(wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
+      xrayOpacity: clampNumber(xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
+      meshColor: prev?.meshColor ?? DEFAULT_MESH_COLOR,
+    });
+  }, [ambientIntensity, directionalIntensity, materialRoughness, shaderType, matcapVariant, flatUseVertexColors, toonSteps, wireframeThicknessPx, xrayOpacity]);
 
   // Global application mode
   const [mode, setMode] = useState<SupportMode>('prepare');
@@ -256,12 +394,16 @@ export function useSceneCollectionManager() {
     // Read auto-lift settings from storage (mirroring useTransformManager logic)
     let autoLift = false;
     let liftDistance = 5;
+    let preferredMeshColor = DEFAULT_MESH_COLOR;
     if (typeof window !== 'undefined') {
       try {
         const savedLift = window.localStorage.getItem('autoLift');
         if (savedLift) autoLift = JSON.parse(savedLift);
         const savedDist = window.localStorage.getItem('liftDistance');
         if (savedDist) liftDistance = parseFloat(savedDist);
+
+        const savedAppearance = readMeshAppearanceFromLocalStorage();
+        if (savedAppearance?.meshColor) preferredMeshColor = savedAppearance.meshColor;
       } catch { }
     }
 
@@ -277,7 +419,7 @@ export function useSceneCollectionManager() {
         const geom = await loadStlGeometry(url);
 
         // Initialize paint
-        const color = '#a3a3a3'; // Default color
+        const color = preferredMeshColor;
         clearPaintToBase(geom.geometry, new THREE.Color(color));
 
         // Calculate initial transform with auto-lift
@@ -332,6 +474,7 @@ export function useSceneCollectionManager() {
           id: generateId(),
           name: file.name,
           fileUrl: url,
+          fileSizeBytes: file.size,
           geometry: geom,
           transform: {
             position: new THREE.Vector3(0, 0, initialZ),
@@ -406,6 +549,76 @@ export function useSceneCollectionManager() {
 
   }, [activeModelId]);
 
+  // NEW: LYS Import (1-step)
+  const lysImport = useLysImport();
+
+  const handleImportLysFile = useCallback(async (file: File) => {
+    const result = await lysImport.importFile(file);
+    if (result && result.geometry) {
+      try {
+        const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId } = result;
+
+        // Process geometry (bounds, center, normals, BVH)
+        const processed = await processGeometry(rawGeom, { center: false });
+
+        // Initialize paint
+        const color = '#a3a3a3';
+        clearPaintToBase(processed.geometry, new THREE.Color(color));
+
+        // Compute transformed local bounds exactly like StlMesh uses geometry:
+        // geometry is rendered with a local offset (-center), then group transform is applied.
+        // We transform centered bounds by imported rotation+scale (no translation), then place
+        // translation so world min Z lands at the Lychee lift value.
+        const centeredBounds = processed.bbox.clone();
+        centeredBounds.translate(new THREE.Vector3(-processed.center.x, -processed.center.y, -processed.center.z));
+
+        const localTransform = new THREE.Matrix4().compose(
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Quaternion().setFromEuler(importedTransform.rotation),
+          importedTransform.scale
+        );
+        centeredBounds.applyMatrix4(localTransform);
+
+        const lycheeLiftZ = Number.isFinite(importedTransform.position.z) ? importedTransform.position.z : 0;
+        const finalPosition = new THREE.Vector3(
+          importedTransform.position.x,
+          importedTransform.position.y,
+          lycheeLiftZ - centeredBounds.min.z
+        );
+
+        const model: LoadedModel = {
+          id: importedModelId || generateId(),
+          name: file.name,
+          fileUrl: '', // No URL
+          fileSizeBytes: file.size,
+          geometry: processed,
+          transform: {
+            position: finalPosition,
+            rotation: importedTransform.rotation, // Keep rotation
+            scale: importedTransform.scale        // Keep scale
+          },
+          visible: true,
+          color,
+          polygonCount: processed.geometry.getAttribute('position').count / 3,
+          ignoreAutoLift: true,
+        };
+
+        setModels(prev => [...prev, model]);
+        setActiveModelId(model.id);
+        console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
+      } catch (err) {
+        console.error("[SceneCollection] Failed to process LYS geometry:", err);
+      }
+    }
+  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase]);
+
+  const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleImportLysFile(e.target.files[0]);
+      e.target.value = '';
+    }
+  }, [handleImportLysFile]);
+
   // Legacy Lychee loader wrapper
   const handleLoadLychee = async () => {
     try {
@@ -428,7 +641,7 @@ export function useSceneCollectionManager() {
       // But here we assume raw Lychee as per the goal.
       // LysConverter.convert handles the Raw Lychee structure.
       // Dynamic import to avoid circular deps if any (though usually fine here)
-      const { LysConverter } = await import('@/features/lys-conversion/LysConverter');
+      const { LysConverter } = await import('@/components/lys-import/LysConverter');
 
       console.log('[SceneCollection] Converting Lychee file...');
       const converted = LysConverter.convert(json, getSettings());
@@ -498,10 +711,36 @@ export function useSceneCollectionManager() {
 
   const setMeshColor = useCallback((color: string) => {
     if (activeModelId) {
-      setModels(prev => prev.map(m => m.id === activeModelId ? { ...m, color } : m));
-      // Persistence could be added here
+      setModels(prev => prev.map(m => {
+        if (m.id !== activeModelId) return m;
+
+        try {
+          clearPaintToBase(m.geometry.geometry, new THREE.Color(color));
+        } catch (err) {
+          console.error('[SceneCollection] Failed to apply mesh color to geometry:', err);
+        }
+
+        return { ...m, color };
+      }));
+
+      const prev = readMeshAppearanceFromLocalStorage();
+
+      const persistedShaderType = clampPersistedMeshShaderType(prev?.shaderType ?? shaderType, DEFAULT_SHADER_TYPE);
+      writeMeshAppearanceToLocalStorage({
+        v: 1,
+        shaderType: persistedShaderType,
+        matcapVariant: prev?.matcapVariant ?? matcapVariant,
+        flatUseVertexColors: prev?.flatUseVertexColors ?? flatUseVertexColors,
+        toonSteps: prev?.toonSteps ?? toonSteps,
+        ambientIntensity: prev?.ambientIntensity ?? ambientIntensity,
+        directionalIntensity: prev?.directionalIntensity ?? directionalIntensity,
+        materialRoughness: prev?.materialRoughness ?? materialRoughness,
+        wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
+        xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
+        meshColor: clampHexColor(color, DEFAULT_MESH_COLOR),
+      });
     }
-  }, [activeModelId]);
+  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, materialRoughness, shaderType, matcapVariant, toonSteps, wireframeThicknessPx, xrayOpacity]);
 
   const setMeshVisible = useCallback((visible: boolean) => {
     if (activeModelId) {
@@ -589,6 +828,18 @@ export function useSceneCollectionManager() {
     setDirectionalIntensity,
     materialRoughness,
     setMaterialRoughness,
+    wireframeThicknessPx,
+    setWireframeThicknessPx,
+    xrayOpacity,
+    setXrayOpacity,
+    shaderType,
+    setShaderType,
+    matcapVariant,
+    setMatcapVariant,
+    flatUseVertexColors,
+    setFlatUseVertexColors,
+    toonSteps,
+    setToonSteps,
     mode,
     setMode,
     selectionHighlightMode,
@@ -604,6 +855,12 @@ export function useSceneCollectionManager() {
     handleLycheeJsonFile: lycheeImport.processJsonFile,
     handleLycheeStlFile,
     cancelLycheeImport: lycheeImport.cancelImport,
+
+    // LYS Import (1-step)
+    importLysFile: handleImportLysFile,
+    onImportLysChange,
+    isLysLoading: lysImport.isLoading,
+    lysError: lysImport.error,
 
     // Debug primitives
     addDebugPrimitive,

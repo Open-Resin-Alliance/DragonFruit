@@ -20,8 +20,8 @@ Contains presets for:
 ### Objects
 Located under `objects.present.byId`.
 Example `o5`:
-- `center`: {x, y, z} (Object Center in World Space).
-- `position`: {x, y, z} (Translation).
+- `center` / `formerCenter`: {x, y, z} (Model pivot candidate for model-relative interpretation).
+- `position`: {x, y, z} (World placement translation on plate/build volume).
 - `dimension`: {x, y, z}.
 - `supportsBase`: Array of support IDs.
 
@@ -47,9 +47,15 @@ Each support is an object with a unique ID (e.g., `s410`).
 - `objectIdBase`: ID of object base touches.
 
 ### Coordinate System Analysis
-**Conclusion**: Support coordinates are **relative to the Object Center**.
-- **Formula**: `WorldPoint = ObjectCenter + LocalPoint`
-- This explains why support Z values are often negative (they are below the object center).
+**Conclusion (Current)**:
+- Support payload fields are treated as **model-relative** geometry.
+- Object world placement is handled by object transform fields (`position`, `rotation`, `scale`) as a separate concern.
+- Pivot source priority for model-relative interpretation: `center`, then `formerCenter`, then zero fallback.
+
+**Operational rule**:
+- Build support-local geometry first from support fields (`base`, `tip`, `tipNormal`, lengths/settings).
+- Apply world placement second at the model-entity level.
+- Keep root/base Z anchoring behavior explicit (floor/plate special case).
 
 ### Graph Structure
 - Supports form a graph via `parentBaseId` and `parentId`.
@@ -69,15 +75,18 @@ Each support is an object with a unique ID (e.g., `s410`).
 | `parentId` | `parent` reference | |
 
 ### Conversion Logic
-1.  **Parse Objects**: Extract `center` and `position`.
+1.  **Parse Objects**: Extract `center`/`formerCenter`, `position`, `rotation`, and `scale`.
 2.  **Parse Supports**:
-    - Apply `ObjectCenter` offset to `base` and `tip` coordinates.
+    - Build support geometry in model-relative space from support fields.
     - Resolve `parentBaseId` links to reconstruct the tree.
-3.  **Reconstruct Geometry**:
+3.  **Place Model Entity**:
+    - Apply object world transform to model + attached supports as one placement step.
+4.  **Reconstruct Geometry**:
     - **Type 1**: Generate standard trunk/branch. Check `mini` flag for styling.
     - **Type 0**: Generate auxiliary connection.
     - **Settings**: Apply diameter, length, and angle overrides from `settings`.
 
 ### TODO
-- [ ] Implement LYS importer based on this mapping.
+- [ ] Implement two-stage conversion contract (model-local reconstruction, then world placement).
+- [ ] Validate world-move-only case: support-local payload remains invariant while object position changes.
 - [ ] Verify visual alignment of imported supports.

@@ -29,6 +29,12 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
     heightMm > 0 && layerHeightMm > 0 ? Math.ceil(heightMm / layerHeightMm) : 0
   ), [heightMm, layerHeightMm]);
 
+  const currentHeightMm = useMemo(() => {
+    if (!hasGeometry) return 0;
+    const height = layerIndex * layerHeightMm;
+    return Math.min(Math.max(height, 0), Math.max(heightMm, 0));
+  }, [hasGeometry, layerIndex, layerHeightMm, heightMm]);
+
   const clipLower = useMemo(() => null, []); // Always show from bottom
 
   const clipUpper = useMemo(() => {
@@ -47,6 +53,7 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
     setLayerIndex,
     layerHeightMm,
     heightMm,
+    currentHeightMm,
     numLayers,
     clipLower,
     clipUpper

@@ -8,11 +8,15 @@ type AnatomyPreviewDomRect = {
 type AnatomyPreviewState = {
     domRect: AnatomyPreviewDomRect | null;
     activeSettingKey: string | null;
+    activeSettingValue: number | null;
+    showTuner: boolean;
 };
 
 let currentState: AnatomyPreviewState = {
     domRect: null,
     activeSettingKey: null,
+    activeSettingValue: null,
+    showTuner: false,
 };
 
 type Listener = () => void;
@@ -51,6 +55,22 @@ export function setAnatomyPreviewActiveSettingKey(activeSettingKey: string | nul
     currentState = {
         ...currentState,
         activeSettingKey,
+    };
+    notify();
+}
+
+export function setAnatomyPreviewActiveSettingValue(activeSettingValue: number | null): void {
+    currentState = {
+        ...currentState,
+        activeSettingValue,
+    };
+    notify();
+}
+
+export function setAnatomyPreviewShowTuner(showTuner: boolean): void {
+    currentState = {
+        ...currentState,
+        showTuner,
     };
     notify();
 }

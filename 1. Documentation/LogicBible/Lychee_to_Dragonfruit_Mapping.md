@@ -33,30 +33,34 @@ Lychee data (`scene.decrypted.json`) is a flat list of support entities with par
 | **Type 1 (Child)** | `parentBaseId: "sXXX"`, `isBaseTip: true` | **Branch** | Create `Knot` on parent `sXXX`. Create `Branch` from Knot to `tip`. |
 | **Type 0** | `parentBaseId: "sXXX"`, `parentTipId: "sYYY"` | **Brace** | Create `Knot A` on `sXXX`. Create `Knot B` on `sYYY`. Create `Brace` between them. |
 | **Mini Support** | `"mini": true` | **Trunk/Branch** | Map to `Trunk` or `Branch` but use "Mini" Preset settings (thinner diameters). |
-| **Coordinates** | `base: {x,y,z}`, `tip: {x,y,z}` | **World Space** | **CRITICAL**: Lychee coords are relative to Object Center. `DF_Pos = Obj_Center + LYS_Pos`. |
+| **Coordinates** | `base: {x,y,z}`, `tip: {x,y,z}`, `tipNormal` | **Model-Local (Stage 1)** | Build support geometry in model-local space first. Apply object world transform as Stage 2 placement. |
 
 ## 3. Conversion Algorithm
 
 ### Step 1: Pre-processing
-1.  **Load Objects**: Identify the target model and get its `Center` coordinates.
+1.  **Load Objects**: Identify target model(s) and get pivot/transform fields.
+    - Pivot priority: `center`, else `formerCenter`, else zero fallback.
 2.  **Index Supports**: Create a lookup map of all Lychee supports by ID.
 3.  **Sort by Dependency**: Process supports in topological order (Parents before Children).
 
 ### Step 2: Entity Creation
 1.  **Iterate Sorted Supports**:
     *   **If Type 1 & No Parent**:
-        *   Instantiate `Roots` at `ObjectCenter + base`.
-        *   Instantiate `Trunk` segment from `Roots` to `ObjectCenter + tip`.
+        *   Instantiate `Roots` from model-local base logic.
+        *   Instantiate `Trunk` segment from model-local base/knee/socket/tip logic.
         *   Attach `Contact Cone` at `tip` if touching model.
     *   **If Type 1 & Has Parent**:
         *   Find Parent Support in Dragonfruit format.
-        *   Calculate `Knot` position on Parent Shaft closest to `ObjectCenter + base`.
+        *   Calculate `Knot` position on Parent Shaft closest to local `base` projection.
         *   Instantiate `Knot` at that position.
-        *   Instantiate `Branch` from `Knot` to `ObjectCenter + tip`.
+        *   Instantiate `Branch` from `Knot` to local `tip`.
     *   **If Type 0 (Brace)**:
         *   Find Start Parent (`parentBaseId`) and End Parent (`parentTipId`).
         *   Instantiate `Knot A` on Start Parent and `Knot B` on End Parent.
         *   Instantiate `Brace` connecting A and B.
+
+### Step 2.5: World Placement
+Apply object world transform (`position`, `rotation`, `scale`) to each model entity and its attached supports as one placement step.
 
 ### Step 3: Geometry Reconstruction
 *   **Shafts**: Lychee supports are often single segments. Dragonfruit supports can be multi-segment. Initially, map 1 Lychee support = 1 Shaft segment.
@@ -71,7 +75,7 @@ Lychee data (`scene.decrypted.json`) is a flat list of support entities with par
 
 ### Phase 2: LYS Importer
 *   [ ] Create `LycheeImporter` class.
-*   [ ] Implement coordinate transformation logic (`World = Center + Local`).
+*   [ ] Implement two-stage coordinate logic (model-local reconstruction, then world placement).
 *   [ ] Implement the "Type 1" (Trunk/Branch) builder.
 *   [ ] Implement the "Type 0" (Brace) builder.
 
@@ -80,6 +84,6 @@ Lychee data (`scene.decrypted.json`) is a flat list of support entities with par
 *   [ ] Verify imported supports visually match Lychee (position, thickness, hierarchy).
 
 ## 5. Key Decisions & Rules
-*   **Coordinate System**: Always convert to World Space immediately upon import.
+*   **Coordinate System**: Reconstruct supports in model-local space first, then apply world placement.
 *   **Immutability**: Imported Lychee supports should be editable native Dragonfruit supports, not a special "read-only" type.
 *   **Validation**: If a Lychee parent is missing, the child is orphaned (maybe convert to a Trunk rooted at its base position).

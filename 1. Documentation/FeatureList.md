@@ -1,14 +1,14 @@
 [ ] Shaped supports
 [ ] Hot Keys
-[ ] Smoothing brush
+[X] Smoothing brush
 [X] Grid Supports
 [ ] Blender style controls G = grab + z = axis
 [X] Support Joint creation
 [X] crenellated raft
 [X] multi joint support creation
-[ ] Angular tip contact shape correction forced round even at angles.
+[X] Angular tip contact shape correction forced round even at angles.
 [ ] selective bracing logic. Multi axis bracing with a connected support count option. EG: 5 connected supports in groups. 
-[ ] "build-a-raft" allow users to select raft features, instead of raft types.
+[] "build-a-raft" allow users to select raft features, instead of raft types.
 [ ] Support collision avoidance - Do not allow support shafts to cross the mesh of the model.
 [X] Color for the support angle when adjusting joints
 [X] curved supports?
@@ -21,4 +21,4 @@
 
     I think selecting a specific support, then "select matching supports" would be more intuitive and would be far more useful than what lychee has.
 
-[ ] Trunk deletion advanced behavior: toggle between cascade-delete connected branches vs rebuild/promote a connected branch into a new trunk (choose highest attachment when multiple). Other branches reconnect their knots to the new trunk
+[X] Trunk deletion advanced behavior: toggle between cascade-delete connected branches vs rebuild/promote a connected branch into a new trunk (choose highest attachment when multiple). Other branches reconnect their knots to the new trunk

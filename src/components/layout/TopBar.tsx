@@ -1,55 +1,77 @@
 "use client";
 
-import React from 'react';
-import { MeshAppearancePopover } from '@/components/controls/MeshAppearancePopover';
+import React, { useState } from 'react';
+import { SettingsModal } from '@/components/settings/SettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { SelectionHighlightMode } from '@/components/selection';
+import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
+import { getAnatomyPreviewState, setAnatomyPreviewShowTuner, subscribeToAnatomyPreviewState } from '@/supports/Settings/AnatomyPreview/previewState';
 
 interface TopBarProps {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  fileName: string | null;
   layerHeightMicron: number;
   onLayerHeightChange: (value: number) => void;
   layerHeightMm: number;
   meshColor: string;
   onMeshColorChange: (color: string) => void;
+  shaderType: MeshShaderType;
+  onShaderTypeChange: (shaderType: MeshShaderType) => void;
+  matcapVariant: MatcapVariant;
+  onMatcapVariantChange: (variant: MatcapVariant) => void;
+  flatUseVertexColors: boolean;
+  onFlatUseVertexColorsChange: (value: boolean) => void;
+  toonSteps: number;
+  onToonStepsChange: (value: number) => void;
   ambientIntensity: number;
   onAmbientIntensityChange: (value: number) => void;
   directionalIntensity: number;
   onDirectionalIntensityChange: (value: number) => void;
   materialRoughness: number;
   onMaterialRoughnessChange: (value: number) => void;
-  meshVisible: boolean;
-  onMeshVisibleChange: (visible: boolean) => void;
+  xrayOpacity: number;
+  onXrayOpacityChange: (value: number) => void;
   // New: global application mode (prepare vs support)
   mode: SupportMode;
   onModeChange: (mode: SupportMode) => void;
   // Selection highlight mode
   selectionHighlightMode: SelectionHighlightMode;
   onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
+  // New: LYS Import
+  onImportLysChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
 export function TopBar({
   onFileChange,
-  fileName,
   layerHeightMicron,
   onLayerHeightChange,
   layerHeightMm,
   meshColor,
   onMeshColorChange,
+  shaderType,
+  onShaderTypeChange,
+  matcapVariant,
+  onMatcapVariantChange,
+  flatUseVertexColors,
+  onFlatUseVertexColorsChange,
+  toonSteps,
+  onToonStepsChange,
   ambientIntensity,
   onAmbientIntensityChange,
   directionalIntensity,
   onDirectionalIntensityChange,
   materialRoughness,
   onMaterialRoughnessChange,
-  meshVisible,
-  onMeshVisibleChange,
+  xrayOpacity,
+  onXrayOpacityChange,
   mode,
   onModeChange,
   selectionHighlightMode,
   onSelectionHighlightModeChange,
+  onImportLysChange,
 }: TopBarProps) {
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
+
   return (
     <div className="fixed top-0 left-0 right-0 h-14 bg-neutral-900 border-b border-neutral-700 z-50 flex items-center px-4 gap-4">
       {/* Logo/Title */}
@@ -76,12 +98,26 @@ export function TopBar({
           onChange={onFileChange}
           className="hidden"
         />
-        {fileName && (
-          <span className="text-sm text-neutral-400">
-            {fileName}
-          </span>
-        )}
       </div>
+
+      {/* Import LYS Button */}
+      {onImportLysChange && (
+        <div className="flex items-center gap-2">
+          <label
+            htmlFor="lys-file-input"
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded cursor-pointer transition-colors"
+          >
+            Import LYS
+          </label>
+          <input
+            id="lys-file-input"
+            type="file"
+            accept=".lys"
+            onChange={onImportLysChange}
+            className="hidden"
+          />
+        </div>
+      )}
 
       {/* Divider */}
       <div className="h-8 w-px bg-neutral-700" />
@@ -144,6 +180,8 @@ export function TopBar({
           Support
         </button>
 
+
+
         <button
           type="button"
           onClick={() => onModeChange('export')}
@@ -177,44 +215,68 @@ export function TopBar({
         </select>
       </div>
 
-      {/* Divider */}
-      <div className="h-8 w-px bg-neutral-700" />
+      {mode === 'support' && (
+        <>
+          <div className="h-8 w-px bg-neutral-700 mx-2" />
+          <button
+            type="button"
+            onClick={() => {
+              console.log('Toggling Tuner:', !previewState.showTuner);
+              setAnatomyPreviewShowTuner(!previewState.showTuner);
+            }}
+            className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${previewState.showTuner
+              ? 'bg-gradient-to-r from-pink-500 to-rose-500 border-pink-400 text-white shadow-[0_0_10px_rgba(236,72,153,0.3)]'
+              : 'bg-neutral-800 border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700'
+              }`}
+            title="Toggle Anatomy Preview Tuner"
+          >
+            Tuner
+          </button>
+        </>
+      )}
 
-      {/* Mesh Appearance Popover */}
-      <MeshAppearancePopover
+      <div className="flex-1" />
+
+      <button
+        type="button"
+        onClick={() => setIsSettingsOpen(true)}
+        className="p-2 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 transition-colors"
+        title="Settings"
+        aria-label="Settings"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+          />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      </button>
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
         meshColor={meshColor}
         onMeshColorChange={onMeshColorChange}
+        shaderType={shaderType}
+        onShaderTypeChange={onShaderTypeChange}
+        matcapVariant={matcapVariant}
+        onMatcapVariantChange={onMatcapVariantChange}
+        flatUseVertexColors={flatUseVertexColors}
+        onFlatUseVertexColorsChange={onFlatUseVertexColorsChange}
+        toonSteps={toonSteps}
+        onToonStepsChange={onToonStepsChange}
         ambientIntensity={ambientIntensity}
         onAmbientIntensityChange={onAmbientIntensityChange}
         directionalIntensity={directionalIntensity}
         onDirectionalIntensityChange={onDirectionalIntensityChange}
         materialRoughness={materialRoughness}
         onMaterialRoughnessChange={onMaterialRoughnessChange}
+        xrayOpacity={xrayOpacity}
+        onXrayOpacityChange={onXrayOpacityChange}
       />
-
-      {/* Hide Mesh Toggle */}
-      <button
-        onClick={() => onMeshVisibleChange(!meshVisible)}
-        className={`px-3 py-1.5 rounded text-sm transition-colors ${meshVisible
-          ? 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'
-          : 'bg-blue-600 hover:bg-blue-700 text-white'
-          }`}
-        title={meshVisible ? 'Hide mesh' : 'Show mesh'}
-      >
-        {meshVisible ? (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-          </svg>
-        ) : (
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-          </svg>
-        )}
-      </button>
-
-      {/* Future tools will go here */}
-      <div className="flex-1" />
     </div>
   );
 }

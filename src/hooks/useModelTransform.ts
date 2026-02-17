@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import * as THREE from 'three';
 
-export type TransformMode = 'select' | 'transform';
+export type TransformMode = 'select' | 'transform' | 'smoothing';
 
 export interface ModelTransform {
   position: THREE.Vector3;
@@ -35,6 +35,7 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
   const [autoSnapEnabled, setAutoSnapEnabled] = useState<boolean>(true); // Auto-snap enabled by default
 
   const setPosition = useCallback((x: number, y: number, z: number) => {
+    console.log('[useModelTransform] setPosition:', { x, y, z, stack: new Error().stack });
     setPositionState(new THREE.Vector3(x, y, z));
   }, []);
 
@@ -73,13 +74,13 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
     // We want it at liftDistance
     // So adjust position by the difference
     const offset = liftDistance - currentLowestWorldZ;
-    
+
     console.log('[snapToLift]', {
       currentLowestWorldZ,
       liftDistance,
       offset
     });
-    
+
     setPositionState(prev => {
       const newZ = prev.z + offset;
       console.log('[snapToLift] Position change:', { oldZ: prev.z, offset, newZ });
@@ -93,12 +94,12 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
     // We want it at 0
     // So adjust position by the difference
     const offset = 0 - currentLowestWorldZ;
-    
+
     console.log('[snapToPlatform]', {
       currentLowestWorldZ,
       offset
     });
-    
+
     setPositionState(prev => {
       const newZ = prev.z + offset;
       console.log('[snapToPlatform] Position change:', { oldZ: prev.z, offset, newZ });

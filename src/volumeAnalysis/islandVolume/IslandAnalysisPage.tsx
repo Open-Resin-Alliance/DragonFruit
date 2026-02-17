@@ -88,36 +88,26 @@ export function IslandAnalysisPage() {
                     activeModelId={scene.activeModelId}
                     meshColor="#444444"
                     meshVisible={true}
-                    // We can use islandMarkers prop for Step 1 visualization!
-                    // We map our Vector3s to the format expected: { islandId: number, position: Vector3 }
-                    islandMarkers={markers.map((p, i) => ({
-                        islandId: i,
-                        position: p,
-                        // Optional: visual type
-                        // We map our Vector3s to the format expected: { id: number, geometry: BufferGeometry }
-                        // We must clone and translate the geometry to the correct position because IslandOverlay renders them inside a group
-                        islandMarkers={
-                            markers.map((p, i) => {
-                                const geom = sphereGeom.clone();
-                                geom.translate(p.x, p.y, p.z);
-                                return {
-                                    id: i,
-                                    geometry: geom
-                                };
-                            }) as any
-                        }
-                        // Note: SceneCanvas expects specific types, we might need to conform or patch it.
-                        // Checking SceneCanvas props... it takes 'islandMarkers: IslandMarker[]'
-                        />
+                    islandMarkers={markers.map((p, i) => {
+                        const geom = sphereGeom.clone();
+                        geom.translate(p.x, p.y, p.z);
+                        return {
+                            id: -(i + 1),
+                            centerX: p.x,
+                            centerY: p.y,
+                            baseZ: p.z,
+                            pixelCount: 1,
+                            geometry: geom,
+                        };
+                    })}
+                />
 
-                        {/* Step 1 Check Overlay */ }
-                {
-                            stepManager.steps[1] === 'complete' && markers.length > 0 && (
-                                <div className="absolute top-4 left-4 bg-black/70 p-2 rounded text-green-400 pointer-events-none">
-                                    ✓ Step 1 Visualized: {markers.length} Lowest Points
-                                </div>
-                            )
-                        }
+                {/* Step 1 Check Overlay */}
+                {stepManager.steps[1] === 'complete' && markers.length > 0 && (
+                    <div className="absolute top-4 left-4 bg-black/70 p-2 rounded text-green-400 pointer-events-none">
+                        ✓ Step 1 Visualized: {markers.length} Lowest Points
+                    </div>
+                )}
             </div>
         </div>
     );

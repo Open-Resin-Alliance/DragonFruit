@@ -11,7 +11,7 @@ type TabDef = {
 const TABS: TabDef[] = [
     { kind: 'trunk', label: 'Trunk' },
     { kind: 'raft', label: 'Raft' },
-    { kind: 'branch', label: 'Branch' },
+    { kind: 'grid', label: 'Grid' },
     { kind: 'stick', label: 'Stick' },
 ];
 
@@ -54,6 +54,18 @@ function TabIcon({ kind }: { kind: SupportKind }) {
                 <path d="M18 6c-6 0-10 4-10 10" />
                 <path d="M8 16c6 0 10-4 10-10" />
                 <path d="M9 15l6-6" />
+            </svg>
+        );
+    }
+
+    if (kind === 'grid') {
+        return (
+            <svg {...common}>
+                <path d="M3 3h18v18H3z" />
+                <path d="M3 9h18" />
+                <path d="M3 15h18" />
+                <path d="M9 3v18" />
+                <path d="M15 3v18" />
             </svg>
         );
     }

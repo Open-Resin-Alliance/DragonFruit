@@ -3,10 +3,8 @@ import * as THREE from 'three';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { branchPlacementStore, useBranchPlacementState } from './branchPlacementState';
-import { DEFAULT_KEYBINDINGS, matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-
-// Get the configured hotkey for branch placement
-const BRANCH_KEY = DEFAULT_KEYBINDINGS.SUPPORTS.BRANCH_PLACEMENT.key;
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 
 /**
  * Branch Placement Hook
@@ -20,6 +18,10 @@ const BRANCH_KEY = DEFAULT_KEYBINDINGS.SUPPORTS.BRANCH_PLACEMENT.key;
  * which runs inside the Canvas.
  */
 export function useBranchPlacement() {
+    const { getHotkey } = useHotkeyConfig();
+    const binding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
+    const BRANCH_KEY = binding.key;
+
     const { isPlacementDisabled } = useInteractionStatus();
     const state = useBranchPlacementState();
 
@@ -71,7 +73,7 @@ export function useBranchPlacement() {
             window.removeEventListener('blur', blur);
             window.removeEventListener('pointermove', pointerMove, true);
         };
-    }, []);
+    }, [BRANCH_KEY]);
 
     // Escape to cancel
     useEffect(() => {

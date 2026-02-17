@@ -218,6 +218,117 @@ Current contract:
 **Location**: `src/supports/`
 *... (No changes)*
 
+---
+
+## LYS Import System (Native)
+
+**Location**: `src/components/lys-import/`
+
+### Goal
+Import Lychee Slicer (`.lys`) scenes directly without external Python dependencies, preserving exact positioning and orientation.
+
+### Core Components
+1. **`LysParser.ts`**:
+   - Parses the binary LYS format.
+   - Decrypts `scene.bin` using a hardcoded key (`DEFAULT_APP_ID`).
+   - Extracts geometry (largest `.bin` file).
+   - **Crucial**: Converts geometry to **Non-Indexed** (`toNonIndexed()`) to ensure **Flat Shading** (sharp edges), matching STL behavior and avoiding smoothing artifacts.
+
+2. **`useLysImport.ts`**:
+   - React hook that manages the file reading and parsing status.
+
+3. **`useSceneCollectionManager.ts` (Integration)**:
+   - Handles the "Load then Position" strategy.
+   - **Floor + Delta**: Models are initially loaded at the "Floor" (Bottom = Z0). The LYS position is then applied as a *delta* offset.
+     - *Critical*: The floor calculation must account for `transform.scale.z` (e.g. 0.25x scaling).
+   - Stores original LYS transform data in `model.lysMetadata`.
+
+### LYS Support Reconstruction Contract (Current)
+
+Authoritative implementation lives in:
+- `src/components/lys-import/LysConverter.ts`
+
+Current behavioral contract:
+
+1. **Ownership routing (multi-object safe)**
+   - Support owner resolution priority:
+     1) `objectIdTip` if valid,
+     2) `objectIdBase` if valid,
+     3) fallback object (`o15`, then first with `supportsBase`, else first object).
+   - Mixed valid ownership (`objectIdTip !== objectIdBase`) uses `objectIdTip` and logs warning.
+
+2. **Transform staging**
+   - Stage A (reconstruction): apply object scale + rotation + `position.z` to support points.
+   - Stage B (placement): after reconstruction, apply only object `position.x/y` to generated entities.
+
+3. **Root/base transform special case**
+   - Root base uses floor policy and explicit XY handling.
+   - Base XY receives scale but not object rotation for root floor anchoring.
+
+4. **Tip normal handling**
+   - `tipNormal` is transformed with inverse scale + object rotation, then normalized.
+   - Tip cone/socket solver prefers this transformed Lychee normal when available.
+
+5. **Knee vs socket solve split (critical parity behavior)**
+   - Visible knee joint height source priority:
+     - `settings.base.joinLength` -> `settings.base.newJoinLength` -> root-cap fallback.
+   - Socket solve anchor height source priority:
+     - `settings.base.newJoinLength` -> `settings.base.joinLength` -> root-cap fallback.
+   - This split is required to match current Lychee side-view trunk geometry.
+
+6. **Tip cone/socket solve policy**
+   - Tip cone joint (socket) is solved from fixed tip length and cone axis.
+   - With Lychee normal present, solver evaluates both `+n` and `-n` and chooses the socket candidate closer to the shaft start anchor.
+   - Root/branch import paths use strict Lychee coordinate mode (no raycast-based tip re-snapping for parity path).
+
+---
+
+## Mesh Smoothing (STL)
+
+Mesh smoothing is implemented as a dedicated feature domain under:
+
+- `src/features/mesh-smoothing/`
+
+### Goals
+
+- Keep interaction smooth while dragging.
+- Defer heavy geometry work until stroke end.
+- Provide a gap-free, Photoshop/Blender-like visual preview while painting.
+- Prevent transparency stacking in the preview (overlaps must not darken).
+
+### Authoritative Entry Points
+
+- Pointer interactions are driven from:
+  - `src/components/scene/SceneCanvas/StlMesh.tsx`
+- Global scene bindings (e.g. pointer-up finalize, wheel-to-resize) live in:
+  - `src/features/mesh-smoothing/SceneMeshSmoothingBindings.tsx`
+
+### Brush State + Preview Buffers
+
+- Brush state is an external store in:
+  - `src/features/mesh-smoothing/brushController.ts`
+- During a stroke we record *samples* (point + normal) into fixed-capacity typed arrays.
+- Large cursor jumps are filled by inserting intermediate samples so the preview remains continuous.
+
+### GPU Preview Overlay (During Stroke)
+
+- Rendered by:
+  - `src/features/mesh-smoothing/MeshSmoothingBrushCursor.tsx`
+- Preview is drawn as an **instanced stamp** marker (a union of brush-sized circles), aligned to the surface normal per sample.
+- A dedicated **stencil bit** is used so each pixel shades at most once per frame (no opacity stacking), even when stamps overlap.
+- The WebGL canvas must enable stencil:
+  - `src/components/scene/SceneCanvas/SceneCanvas.tsx` (`gl={{ stencil: true }}`)
+
+### Geometry Smoothing (On Stroke End)
+
+- Engine + worker orchestration:
+  - `src/features/mesh-smoothing/meshSmoothingEngine.ts`
+  - `src/features/mesh-smoothing/meshSmoothing.worker.ts`
+- Heavy topology prep is cached per geometry and is a primary source of first-use cost:
+  - `src/features/mesh-smoothing/topologyCache.ts`
+
+---
+
 ### ✅ Phase 2: Rendering (DONE)
 **Location**: `src/supports/` (domain folders)
 
@@ -321,6 +432,31 @@ The Support sidebar (`src/supports/Settings/SupportSidebar.tsx`) currently provi
     - Wall Height/Wall Thickness/Gap Width: wall highlighted, base dimmed.
   - Preview tuner supports camera tuning without camera snapback while orbiting.
 
+## Support Presets System (V2) - v109
+
+The Support Presets system has been overhauled to support persistence, customization, and advanced UX flows.
+
+### Storage & Persistence
+- **Storage**: Presets are saved to `localStorage` under `support-presets-v1`.
+- **Loading Strategy**: On load, stored presets are merged with built-in defaults.
+  - Stored values take precedence for settings/names.
+  - Built-in IDs (`detail`, `structure`, `anchor`) are preserved.
+  - New built-in defaults are adopted if no storage exists for them.
+
+### Drift Detection (Smart Deselection)
+- **Logic**: When settings change, `checkPresetDrift(currentSettings)` runs.
+- **Comparison**: Deep compares essential fields against the active preset.
+- **Exclusions**: Specifically IGNORES fields that should be independent of presets:
+  - `grid` (Spacing, Enabled)
+  - `tip.coneAngle*` (Normal/Locked/Adaptive)
+  - `raft` (Managed separately)
+- **Result**: If a mismatch is found in a non-excluded field, the active preset is set to `null` (deselected).
+
+### Save Workflow
+- **Exclusions**: Saving a preset reads current values BUT explicitly restores the *preset's original values* for excluded fields (Grid/ConeAngle) to ensure they don't pollute the preset.
+- **Confirmation**: A strictly local UI state in `PresetSelector` intercepts the save action to show an overlay.
+
+
 2.  **`AnatomyPreviewConfig.ts`**: Centralized configuration.
     *   **Colors**: Define Highlight/Dim/Normal colors.
     *   **Camera**: FOV, Initial Position, Zoom limits.
@@ -383,10 +519,18 @@ This is what allows global recomputation when geometry changes (joint delete/mer
     *   Manages GPU picking registration and determines visual state (color/emissive) based on hover/selection/suppression props.
 
 4.  **`PickingProvider` Integration**:
-    *   **CRITICAL FIX**: `SceneCanvas.tsx` now *always* renders `PickingProvider`, ensuring `usePicking` context is available even when debug mode is off. `gpuPickingTest` prop now only toggles the debug overlay.
+    *   **CRITICAL FIX**: The SceneCanvas implementation now *always* renders `PickingProvider`, ensuring `usePicking` context is available even when debug mode is off. `gpuPickingTest` now only toggles the debug overlay.
+        *   **Implementation**: `src/components/scene/SceneCanvas/SceneCanvas.tsx`
+        *   **Public entry point**: `src/components/scene/SceneCanvas.tsx` (re-export)
+
+    *   **SceneCanvas internal layout** (kept small and self-contained):
+        *   `src/components/scene/SceneCanvas/SceneCanvas.tsx` (main viewport orchestrator)
+        *   `src/components/scene/SceneCanvas/SceneEnvironment.tsx` (lights/helpers/camera utilities)
+        *   `src/components/scene/SceneCanvas/SceneSelectionAndPicking.tsx` (picking + selection wrappers)
+        *   `src/components/scene/SceneCanvas/StlMesh.tsx` (interactive STL mesh)
 
 5.  **STL Load Camera Intro (Viewport UX)**:
-    *   **Location**: `src/components/scene/camera/useStlLoadCameraIntro.ts` + `src/components/scene/camera/CameraIntroController.tsx` (wired from `SceneCanvas.tsx`)
+    *   **Location**: `src/components/scene/camera/useStlLoadCameraIntro.ts` + `src/components/scene/camera/CameraIntroController.tsx` (wired from `src/components/scene/SceneCanvas/SceneCanvas.tsx`)
     *   **Behavior**:
         *   On the first model load (0 models → 1 model), the camera performs a smooth (~1s) intro movement.
         *   The final camera position is computed from scene bounds so the full model fits in view, regardless of model size.
@@ -398,6 +542,13 @@ This is what allows global recomputation when geometry changes (joint delete/mer
     *   **Behavior**:
         *   Pressing `F` refocuses the OrbitControls target to the current mouse hover point on the STL mesh.
         *   If the mouse is not over the STL mesh, the hotkey does nothing.
+
+7.  **Viewport Lighting (Camera Headlight Fill)**:
+    *   **Goal**: Lychee-like “front fill” highlights while preserving overhead shadows.
+    *   **Implementation**: `src/components/scene/SceneCanvas/SceneEnvironment.tsx`
+        *   Headlight is a camera-following point light.
+        *   Uses **no distance falloff** (`decay=0`) so it remains effective at any zoom.
+    *   **Default intensity**: `1.0` (wired from `src/components/scene/SceneCanvas/SceneCanvas.tsx`, via `headlightIntensity ?? 1.0`)
 
 ### ✅ Phase 4: Refactoring & Interaction Polish (DONE)
 **Location**: `src/features/` and `src/supports/interaction/`
@@ -767,6 +918,7 @@ If you follow this checklist, the brace knots will stay snapped during:
 ### 4. Preview Visibility / Freezing
 **Issue**: Preview overlapped existing supports or "froze" when moving fast.
 **Fix**: `SceneCanvas` explicitly guards rendering of `SupportBuilder` using `!blockSupportPlacement`. `useTrunkPlacement` also clears state on status change.
+    *   **Implementation**: `src/components/scene/SceneCanvas/SceneCanvas.tsx`
 
 ### 4b. Preview Can Steal Hover (Raycast + GPU Picking)
 **Issue**: During placement, preview geometry can cross under the cursor and steal the hover hit, causing the model hit to drop out and the preview to flicker/disappear.
@@ -782,6 +934,7 @@ If you follow this checklist, the brace knots will stay snapped during:
 ### 5. Gizmo Deselection on Release
 **Issue**: Releasing the gizmo handle caused the joint to deselect (click propagated to canvas).
 **Fix**: `JointGizmo` sets `window.__gizmoDragEndedThisFrame = true` in `onMoveEnd`. `SceneCanvas.handleCanvasClick` checks this flag and skips deselection.
+    *   **Implementation**: `src/components/scene/SceneCanvas/SceneCanvas.tsx`
 
 ### 6. Preview Responsiveness (Geometry + Click Feedback)
 **Issue**: Preview interactions could feel visually “clunky” due to heavy per-update geometry work and/or waiting for the next `useFrame` tick to show feedback after a click.
@@ -815,6 +968,7 @@ The system now supports loading, selecting, and transforming multiple STL models
 *   **Selection/Deselection**:
     *   **Model Click**: Sets active model. Sets `window.__modelClickedThisFrame` to prevent background click from immediately deselecting.
     *   **Background Click**: `SceneCanvas` wrapper handles clicks. If no model was clicked in the same frame, it calls `onActiveModelChange(null)` to deselect.
+        *   **Implementation**: `src/components/scene/SceneCanvas/SceneCanvas.tsx`
 *   **Persistence**: Transform changes (Gizmo or Auto-Lift) are synced back to `scene.models` via a `useEffect` in `page.tsx`, ensuring state is preserved when switching models.
 
 ---
@@ -892,6 +1046,7 @@ The tip has a user setting that controls whether we bias the **cone axis** to be
     2.  Status is stored in `SupportData` (`error`, `warning`, `angle` fields).
     3.  `SupportBuilder` consumes data to set color and render text.
     4.  `SceneCanvas` consumes data to render tooltip.
+        *   **Implementation**: `src/components/scene/SceneCanvas/SceneCanvas.tsx`
 
 ### 4. Interaction Rules
 *   **Errors**: `onSupportClick` aborts immediately. No support created.

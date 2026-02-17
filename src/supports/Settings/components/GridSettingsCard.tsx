@@ -26,51 +26,23 @@ export function GridSettingsCard({ grid, onChange }: GridSettingsCardProps) {
                     />
                 </label>
             </div>
-            {grid.enabled && (
-                <div className="grid grid-cols-2 gap-1.5">
-                    <label className="flex flex-col gap-0.5">
-                        <span className="text-[9px] text-neutral-400">Spacing</span>
-                        <NumberInput
-                            value={grid.spacingMm}
-                            onChange={(val) => {
-                                let safeVal = val;
-                                if (safeVal < 1) safeVal = 1;
-                                if (safeVal > 10) safeVal = 10;
-                                onChange({ spacingMm: safeVal });
-                            }}
-                            className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
-                        />
-                    </label>
-
-                    <label className="flex flex-col gap-0.5">
-                        <span className="text-[9px] text-neutral-400">Min Angle</span>
-                        <NumberInput
-                            value={grid.minBranchAngleDeg}
-                            onChange={(val) => {
-                                let safeVal = val;
-                                if (safeVal < 5) safeVal = 5;
-                                if (safeVal > 89) safeVal = 89;
-                                onChange({ minBranchAngleDeg: safeVal });
-                            }}
-                            className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
-                        />
-                    </label>
-
-                    <label className="flex flex-col gap-0.5 col-span-2">
-                        <span className="text-[9px] text-neutral-400">Attach Step (mm)</span>
-                        <NumberInput
-                            value={grid.attachSearchStepMm}
-                            onChange={(val) => {
-                                let safeVal = val;
-                                if (safeVal < 0.25) safeVal = 0.25;
-                                if (safeVal > 20) safeVal = 20;
-                                onChange({ attachSearchStepMm: safeVal });
-                            }}
-                            className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
-                        />
-                    </label>
-                </div>
-            )}
+            {/* Always show grid options, but disable if grid is off */}
+            <div className={`grid grid-cols-2 gap-1.5 ${!grid.enabled ? 'opacity-80' : ''}`}>
+                <label className="flex flex-col gap-0.5">
+                    <span className={`text-[9px] ${!grid.enabled ? 'text-neutral-600' : 'text-neutral-400'}`}>Spacing</span>
+                    <NumberInput
+                        value={grid.spacingMm}
+                        disabled={!grid.enabled}
+                        onChange={(val) => {
+                            let safeVal = val;
+                            if (safeVal < 1) safeVal = 1;
+                            if (safeVal > 10) safeVal = 10;
+                            onChange({ spacingMm: safeVal });
+                        }}
+                        className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners disabled:bg-neutral-900 disabled:text-neutral-600 disabled:border-neutral-800 disabled:cursor-not-allowed"
+                    />
+                </label>
+            </div>
         </div>
     );
 }

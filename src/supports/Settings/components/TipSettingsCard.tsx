@@ -9,19 +9,35 @@ interface TipSettingsCardProps {
     onChange: (tip: Partial<TipProfile>) => void;
 }
 
+import { subscribeToAnatomyPreviewState, getAnatomyPreviewState, setAnatomyPreviewActiveSettingKey } from '@/supports/Settings/AnatomyPreview/previewState';
+import { useSyncExternalStore } from 'react';
+
 export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
+    const previewState = useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
+    const activeKey = previewState.activeSettingKey;
+
+    const getInputClass = (key: string) => {
+        const isActive = activeKey === key;
+        const base = "w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border focus:outline-none no-spinners transition-colors";
+        return isActive
+            ? `${base} border-blue-500 ring-1 ring-blue-500/50`
+            : `${base} border-neutral-600 focus:border-blue-500`;
+    };
+
     return (
         <div className="bg-neutral-750 rounded p-1 mb-1">
             <div className="flex items-center justify-between mb-1">
                 <span className="text-xs font-semibold text-neutral-300">Tip</span>
                 <span className="text-[9px] text-neutral-500 uppercase tracking-wide">{tip.shape}</span>
             </div>
-            
+
             {/* Contact Type Selector */}
             <div className="mb-1.5">
                 <select
                     value={tip.type || 'disk'}
                     onChange={(e) => onChange({ type: e.target.value as any })}
+                    onFocus={() => setAnatomyPreviewActiveSettingKey('tip.type')}
+                    onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
                     className="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
                 >
                     <option value="disk">Contact Disk</option>
@@ -37,6 +53,8 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                 <select
                     value={tip.coneAngleMode ?? 'normal'}
                     onChange={(e) => onChange({ coneAngleMode: e.target.value as any })}
+                    onFocus={() => setAnatomyPreviewActiveSettingKey('tip.coneAngleMode')}
+                    onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
                     className="w-full px-1.5 py-1 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none"
                 >
                     <option value="normal">Normal</option>
@@ -59,7 +77,9 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                             if (safeVal > 90) safeVal = 90;
                             onChange({ adaptiveConeAngleOffsetDeg: safeVal });
                         }}
-                        className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                        onFocus={() => setAnatomyPreviewActiveSettingKey('tip.adaptiveConeAngleOffsetDeg')}
+                        onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
+                        className={getInputClass('tip.adaptiveConeAngleOffsetDeg')}
                     />
                 </div>
             )}
@@ -70,7 +90,9 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                     <NumberInput
                         value={tip.contactDiameterMm}
                         onChange={(val) => onChange({ contactDiameterMm: val })}
-                        className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                        onFocus={() => setAnatomyPreviewActiveSettingKey('tip.contactDiameterMm')}
+                        onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
+                        className={getInputClass('tip.contactDiameterMm')}
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
@@ -78,7 +100,9 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                     <NumberInput
                         value={tip.bodyDiameterMm}
                         onChange={(val) => onChange({ bodyDiameterMm: val })}
-                        className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                        onFocus={() => setAnatomyPreviewActiveSettingKey('tip.bodyDiameterMm')}
+                        onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
+                        className={getInputClass('tip.bodyDiameterMm')}
                     />
                 </label>
                 <label className="flex flex-col gap-0.5">
@@ -86,7 +110,9 @@ export function TipSettingsCard({ tip, onChange }: TipSettingsCardProps) {
                     <NumberInput
                         value={tip.lengthMm}
                         onChange={(val) => onChange({ lengthMm: val })}
-                        className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                        onFocus={() => setAnatomyPreviewActiveSettingKey('tip.lengthMm')}
+                        onBlur={() => setAnatomyPreviewActiveSettingKey(null)}
+                        className={getInputClass('tip.lengthMm')}
                     />
                 </label>
             </div>

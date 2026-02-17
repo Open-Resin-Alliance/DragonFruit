@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { DEFAULT_KEYBINDINGS, matchesConfiguredHotkeyDown } from './hotkeyConfig';
+import { matchesConfiguredHotkeyDown } from './hotkeyConfig';
+import { useHotkeyConfig } from './HotkeyContext';
 
 function isTextInput(element: EventTarget | null): boolean {
   if (!element || !(element instanceof HTMLElement)) return false;
@@ -9,15 +10,15 @@ function isTextInput(element: EventTarget | null): boolean {
   return false;
 }
 
-const CAMERA_FOCUS_KEY = DEFAULT_KEYBINDINGS.CAMERA.FOCUS_PICK.key;
-
 export function useCameraFocusHotkey(onTrigger: () => void) {
+  const { getHotkey } = useHotkeyConfig();
+  const focusKey = getHotkey('CAMERA', 'FOCUS_PICK');
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (isTextInput(e.target)) return;
 
-      const matches = matchesConfiguredHotkeyDown(e, { key: CAMERA_FOCUS_KEY });
+      const matches = matchesConfiguredHotkeyDown(e, { key: focusKey.key, modifier: focusKey.modifier });
       if (matches && !e.repeat) {
         e.preventDefault();
         onTrigger();
@@ -35,5 +36,5 @@ export function useCameraFocusHotkey(onTrigger: () => void) {
       window.removeEventListener('keydown', down, true);
       window.removeEventListener('blur', blur);
     };
-  }, [onTrigger]);
+  }, [onTrigger, focusKey]);
 }

@@ -1,236 +1,272 @@
 # Lychee Slicer (LYS) Conversion Master Bible
 
-**Last Updated:** December 4, 2025
-**Status:** Active / In-Development
+**Last Updated:** February 15, 2026  
+**Status:** Canonical Reference (Current Workflow)
 
-## 1. Executive Summary & Philosophy
+## 1) Purpose
 
-This document serves as the single source of truth for the Lychee Slicer (`.lys`) to Dragonfruit import system. It consolidates all previous architectural notes, roadmaps, and mapping strategies into one comprehensive guide.
+This document is the exact, implementation-aligned reference for Dragonfruit LYS import behavior.
 
-### The "Smart Retargeting" Philosophy
-Our approach is **High-Fidelity Mapping** to Dragonfruit's native system.
-1.  **System Logic**: We use Dragonfruit's *logic* for how components behave (e.g., Roots, Base Flares, Joint visualization).
-2.  **Instance Data**: We use Lychee's *data* for critical dimensions (Positions, Angles, Diameters, Lengths).
+This document defines:
+- the authoritative transform order,
+- ownership routing,
+- support reconstruction rules,
+- and exact field-level semantics used for parity with Lychee.
 
-**Correction:** We DO replicate Lychee's visual settings (Diameters, Lengths) by mapping them to the specific properties of the generated Dragonfruit support instances.
-*   If Lychee has a 0.8mm tip, the imported Dragonfruit support will have a 0.8mm tip.
-*   If Lychee has a 5mm shaft, the imported support will have a 5mm shaft.
-
-**Goal:** The imported support is a native Dragonfruit entity "hydrated" with Lychee's specific dimensions. It is fully editable and behaves like a support the user placed manually with those specific settings.
+This document is **not** a roadmap. It is a behavioral contract.
 
 ---
 
-## 2. Technical Architecture
+## 2) Canonical Nomenclature (Use These Terms)
 
-### 2.1 The Coordinate System Challenge
-Lychee uses a complex, implicit coordinate system that combines "Object Space", "World Space", and "Intrinsic Offsets". Dragonfruit uses a pure Z-Up World Space.
+To avoid ambiguity, use the names below consistently:
 
-#### The "Golden Rule" of Transformation
-Lychee objects possess a `center` property that is NOT just metadata—it is an **Intrinsic Geometric Offset**. To align our Normalized STL (Bottom-Centered at 0,0,0) with Lychee's data, we apply the following transform:
+1. **Root / Foot**
+   - Dragonfruit: `Roots`
+   - Lychee source fields: `base`, `settings.base.*`
+   - Platform-anchored support origin.
 
-```typescript
-FinalPosition = Position + (Center * Scale)
-```
+2. **Knee Joint** (the one user identified visually)
+   - Dragonfruit: first trunk joint above root (`joint0`)
+   - Visible knee height source: `settings.base.joinLength`
 
-*   `Position`: The explicit translation from the JSON.
-*   `Center`: The implicit offset vector from the JSON.
-*   `Scale`: The scaling vector.
+3. **Tip Cone Joint** (user terminology; also called Socket Joint)
+   - Dragonfruit: `socketJoint` at base of contact cone
+   - Solved from tip position, tip length, and cone axis normal.
 
-#### Point Transformation Logic
-Supports in Lychee are stored in mixed spaces:
+4. **Tip Contact Point**
+   - Dragonfruit: `contactCone.pos`
+   - Lychee source: `tip`
 
-1.  **Support Tip (Contact Point)**:
-    *   Stored in **Local Object Space**.
-    *   Formula: `WorldTip = (LocalTip + Center) * Scale + Position`
-2.  **Support Base (Root Point)**:
-    *   Stored in a hybrid World Space relative to the Object Position.
-    *   Formula: `WorldBase = Position + LocalBase` (simplified for X/Y).
-    *   *Note: Z-height scaling logic handles the difference between "Floor" and "Object" relative heights.*
-
-### 2.2 Data Models
-
-#### Lychee (Source)
-A flat list of entities with loose references.
-*   **Format**: JSON (`scene.decrypted.json`).
-*   **Structure**: `supports.present.byId` (Map of ID -> Support).
-*   **Key Fields**:
-    *   `base`: {x,y,z}
-    *   `tip`: {x,y,z}
-    *   `parentId`: String[] (Implicit hierarchy).
-    *   `settings`: **CRITICAL**. Contains overrides for `tip.diameter`, `base.joinDiameter` (shaft), etc.
-
-#### Dragonfruit (Target)
-A strictly typed, graph-based structure defined in `AnatomyOfSupports`.
-*   **Roots**: The anchor on the build plate. (Disk + Cone).
-*   **Trunk**: Main vertical column. (List of Segments).
-*   **Branch**: Child column originating from another support.
-*   **Knot**: The connection point on a parent shaft.
-*   **Contact Cone**: The interface with the model.
-
-### 2.3 System Anatomy & Nomenclature (The Rosetta Stone)
-
-To avoid confusion with Lychee's internal naming (e.g., `baseTip`), we use the following standardized mapping to Dragonfruit's anatomy.
-
-| Concept | Lychee JSON Term | Dragonfruit Anatomy | Description |
-| :--- | :--- | :--- | :--- |
-| **The Foot** | `base` | **Roots** | The anchor point on the build plate (Disk + Transition Cone). |
-| **First Segment** | `baseTip` | **Segment 0** | The vertical shaft segment connecting the Roots to the first Joint. |
-| **First Joint** | *Implicit* (Top of `baseTip`) | **Joint 0** | The spherical joint where the first segment ends and the main shaft begins. |
-| **Main Shaft** | `mid` | **Segment 1** | The main shaft segment connecting Joint 0 to the Contact Cone. |
-| **The Head** | `tip` | **Contact Cone** | The connection assembly (Cone + Sphere) touching the model. |
-| **The Socket** | *Implicit* (Bottom of `tip`) | **Socket Joint** | The point where the Shaft connects to the Head. |
-
-**Note on "baseTip"**: In Dragonfruit terms, this defines the geometry of **Segment 0**. It dictates the height of the first **Joint** (Joint 0) relative to the Roots.
+5. **Cone Axis / Tip Orientation**
+   - Dragonfruit: `contactCone.normal`
+   - Lychee source: `tipNormal` (transformed into object-applied support space)
 
 ---
 
-## 3. Conversion Logic (The Pipeline)
+## 3) End-to-End Import Contract
 
-The conversion process is compartmentalized in `src/features/lys-conversion/`.
+### 3.1 Primary Input
+- Import from `.lys` scene.
+- No external Python converter is required in the canonical path.
 
-### Phase 1: Pre-Processing
-1.  **Load JSON**: Parse `.lys` (or decrypted JSON).
-2.  **Extract Transform**: Identify the target object and calculate the `Position`, `Scale`, and `Center`.
-3.  **Load STL**: User provides the STL file.
-4.  **Normalize & Align**: The STL is loaded, normalized to bottom-center, and then the "Golden Rule" transform is applied to visually match the Lychee scene.
+### 3.2 Two-Stage Transform Contract
 
-### Phase 1.5: Ghost Mesh for Surface Alignment (Raycast Snap)
+1. **Stage A (support reconstruction frame):**
+   - Use per-object transform context.
+   - Apply object **scale**, then **rotation**, then **position.z** to support payload points.
+   - Reconstruct supports (roots/trunks/branches/braces/leaves) in this model-private interpretation.
 
-To ensure Contact Disks are placed **flush** on the model surface (not floating or buried), we create an invisible "Ghost Mesh" and raycast against it.
+2. **Stage B (world placement):**
+   - Apply only object `position.x` and `position.y` to generated entities.
+   - Do not re-solve support geometry from Stage B translation.
 
-#### The Problem
-Lychee's tip coordinates are often slightly off the actual surface due to slicer tolerances. We need to "snap" the tip to the exact surface point and capture the surface normal for correct disk orientation.
-
-#### The Solution: Ghost Mesh + Raycast
-1.  **Create Ghost Mesh**: In `useLycheeImport.ts`, we spawn a temporary `THREE.Mesh` using the loaded STL geometry.
-2.  **Replicate Visual Transform**: The ghost mesh MUST be positioned identically to the visible `StlMesh` component.
-3.  **Raycast**: For each support, cast a ray from the Socket towards the Tip. The intersection point becomes the snapped position; the face normal becomes the `surfaceNormal`.
-
-#### Ray Origin: Start at Socket (v69 Fix)
-The ray **MUST** originate at the Socket Joint, not far behind it.
-
-**Why?** If the ray starts 50mm behind the socket, it will hit the **outer wall** of hollow geometry (cylinders, tubes) before reaching the actual contact point on the inner surface. Starting at the socket ensures the ray only travels through the cone's path and hits the correct surface.
-
-#### CRITICAL: The Center Offset Bug (v12 Fix)
-
-The visible `StlMesh` component uses a **nested transform structure**:
-```
-<group position={finalPosition} rotation={finalRotation} scale={finalScale}>
-  <mesh position={-geometry.center} />  <!-- Center offset! -->
-</group>
-```
-
-The ghost mesh MUST replicate this hierarchy:
-```typescript
-// useLycheeImport.ts
-const ghostGroup = new THREE.Group();
-ghostGroup.position.copy(finalPosition);
-ghostGroup.scale.copy(finalScale);
-ghostGroup.rotation.copy(finalRotation);
-
-const mesh = new THREE.Mesh(geometry.geometry, material);
-mesh.position.set(-centerOffset.x, -centerOffset.y, -centerOffset.z); // CRITICAL!
-
-ghostGroup.add(mesh);
-ghostGroup.updateMatrixWorld(true);
-```
-
-**Without the center offset**, the ghost mesh is displaced from the visible mesh, causing all raycasts to MISS.
-
-### Phase 2: Entity Mapping (Retargeting)
-
-The `LysConverter.convert` function takes the Lychee Data and the **Current Dragonfruit Settings** (as defaults).
-
-#### 3.1 Roots & Trunks (Type 1 - Grounded)
-Supports with `parentBaseId: null` are Roots.
-1.  **Placement**:
-    *   Base/Tip Positions calculated using transforms.
-    *   **Base Transform**: Use `v.x + pos.x` (World Relative to Object Pos, Z is Floor).
-    *   **Tip Transform**: Use `(v + center) * scale + pos` (Full Object Space).
-2.  **Trunk Construction (Joint 0 Logic)**:
-    *   **Joint 0 (The Knee)**: Placed explicitly at the top of the Dragonfruit Root visual structure.
-    *   **Z Calculation**: `Root.z + TotalBaseHeight` (e.g., 0.8mm). We **IGNORE** Lychee's `baseTip.length` for positioning to prevent the "High Knee" issue on scaled supports.
-    *   **Result**: Segment 0 is embedded in the root or just above it, ensuring the shaft emerges cleanly.
-3.  **Socket Placement (Vertical Priority)**:
-    *   Lychee supports typically feature a vertical main shaft with an angled tip cone.
-    *   **Logic**:
-        *   Calculate Horizontal Distance (`H`) between Knee and Tip.
-        *   If `H <= TipLength`: **Force Vertical**. Place Socket directly above Knee. `Socket.z = Tip.z - sqrt(TipLen^2 - H^2)`.
-        *   If `H > TipLength`: **Fallback to Lean**. Project Socket from Tip towards Knee.
-4.  **Geometry Mapping (Hydration)**:
-    *   **Shaft Diameter**: `Lychee.settings.base.joinDiameter` -> `Trunk.segment.diameter`.
-    *   **Tip Diameter**: `Lychee.settings.tip.diameter` -> `Trunk.contactCone.profile.bodyDiameterMm`.
-    *   **Tip Length**: `Lychee.settings.tip.length` -> `Trunk.contactCone.profile.lengthMm`.
-    *   **Roots**: Use Dragonfruit Global Defaults (Diameter/Height). *Reason: Lychee roots are often mesh-based or malformed; we prefer clean Dragonfruit roots.*
-5.  **Reactivity**:
-    *   Generated supports are standard Dragonfruit data structures.
-    *   They react to "Base Flare" toggles because the *Renderer* observes the global setting.
-    *   They are editable because they are valid `Trunk` objects.
-
-#### 3.2 Branches (Type 1 - Child) - *IN PROGRESS*
-Supports with `parentBaseId: "sXXX"` are Branches.
-1.  **Dependency Order**: Must process Parents before Children.
-2.  **Knot Calculation**:
-    *   The child's `base` point in Lychee is a point in space.
-    *   We project this point onto the **Parent's Shaft Segment**.
-    *   We calculate the `t` value (0.0 - 1.0) along the segment.
-3.  **Creation**:
-    *   Create a `Knot` on the parent at `t`.
-    *   Create a `Branch` entity linked to that Knot.
-    *   **Style**: Inherit diameter from Lychee settings (just like Trunks).
-
-#### 3.3 Braces (Type 0) - *PLANNED*
-Supports connecting two existing supports.
-*   Lychee: `parentBaseId` (Start) and `parentTipId` (End).
-*   Dragonfruit: `Brace` entity connecting `Knot A` (Start) to `Knot B` (End).
+### 3.3 Pivot Policy
+- Canonical pivot field: `formerCenter`.
+- Fallback chain: `formerCenter` -> `center` -> `{ x: 0, y: 0, z: 0 }`.
 
 ---
 
-## 4. Entity Mapping Table
+## 4) Ownership and Grouping Rules
 
-| Lychee Property | Dragonfruit Property | Logic |
-| :--- | :--- | :--- |
-| `settings.baseTip` | **Joint 0** | Defines the location of the first joint above roots. |
-| `settings.baseTip.length` | `Joint.z` (Offset) | Adds to Root Z + Base Z to find Joint 0 Height. |
-| `settings.baseTip.diameter` | `Segment[0].diameter` | Diameter of the first segment (Roots -> Joint 0). |
-| `settings.base.joinDiameter` | `Segment[1].diameter` | Diameter of the main shaft (Joint 0 -> Socket). |
-| `settings.tip.diameter` | `ContactCone.profile.bodyDiameterMm` | Upper tip thickness. |
-| `settings.tip.pointDiameter` | `ContactCone.profile.contactDiameterMm` | Contact point thickness. |
-| `settings.tip.length` | `ContactCone.profile.lengthMm` | Length of the tip cone/disk. |
-| `base` (Coordinates) | `Roots.transform.pos` | Ground position. |
-| `tip` (Coordinates) | `ContactCone.pos` | Contact position. |
+## 4.1 Object Scope
+- Never assume single-object scenes.
+
+### 4.2 Support Ownership Priority
+For each support, ownership resolution is deterministic:
+1. If `objectIdTip` resolves to an existing object, use it.
+2. Else if `objectIdBase` resolves to an existing object, use it.
+3. Else use fallback object (preferred `o15`, else first object with `supportsBase`, else first object id).
+
+### 4.3 Mixed Ownership
+- If both `objectIdTip` and `objectIdBase` exist and differ, importer logs a warning and uses `objectIdTip`.
 
 ---
 
-## 5. Implementation Status & Roadmap
+## 5) Exact Transform Math Used for Support Geometry
 
-### ✅ Completed
-*   **File Processing**: JSON parsing and STL normalization.
-*   **Coordinate Transforms**: The "Golden Rule" is verified and working.
-*   **Roots & Trunks**: Type 1 supports generate correctly.
-*   **Reactivity**: Base Flare settings update imported supports live.
-*   **Surface Alignment (v12)**: Ghost Mesh raycast snaps Contact Disks flush to model surface with correct normals.
+## 5.1 Point Transform (`base` / `tip` payload)
+For object-scoped support points:
+- Start from source payload point `(x, y, z)`.
+- Multiply by object scale.
+- Apply object quaternion (`XYZ` euler-derived).
+- Add object lift vector `(0, 0, position.z)`.
 
-### 🚧 In Progress
-*   **Dimension Mapping**:
-    *   [ ] Update `LysConverter` to use `Lychee.settings` for diameters/lengths instead of overriding with global defaults.
-*   **Branching Logic**:
-    *   [ ] Implement Topological Sort (or Two-Pass) for dependency handling.
-    *   [ ] Implement "Point-to-Segment" projection math for Knot placement.
-    *   [ ] Update `LysConverter` to generate `Branches` instead of `Trunks` for children.
+### 5.2 Root Base Special-Case Transform
+Root/base XY is intentionally treated differently:
+- Start from `(base.x, base.y, 0)`.
+- Apply only object scale on XY.
+- Do **not** rotate base XY for floor anchoring logic.
 
-### 📅 Planned
-*   **Bracing**:
-    *   [ ] Map Type 0 supports to Brace entities.
-*   **Optimization**:
-    *   [ ] Handle large file performance (thousands of supports).
-*   **Branching Logic**:
-    *   [ ] Implement Topological Sort (or Two-Pass) for dependency handling.
-    *   [ ] Implement "Point-to-Segment" projection math for Knot placement.
-    *   [ ] Update `LysConverter` to generate `Branches` instead of `Trunks` for children.
+### 5.3 Normal Transform (`tipNormal`)
+When `tipNormal` exists:
+- Build vector from payload as-is `(x, y, z)`.
+- Apply inverse scale per component.
+- Apply object quaternion.
+- Normalize.
 
-### 📅 Planned
-*   **Bracing**:
-    *   [ ] Map Type 0 supports to Brace entities.
-*   **Optimization**:
-    *   [ ] Handle large file performance (thousands of supports).
+This transformed normal is the preferred normal for tip cone socket solving.
+
+---
+
+## 6) Root/Trunk Synthesis Contract
+
+### 6.1 Root Entity
+- Root position: `{ x: transformedBaseX, y: transformedBaseY, z: 0 }`.
+- Root remains explicitly floor-anchored.
+
+### 6.2 Diameter Sources
+- Trunk pillar diameter priority:
+  1. `settings.base.joinDiameter`
+  2. `settings.tip.diameter`
+  3. Dragonfruit shaft default
+
+### 6.3 Knee Joint vs Tip Solve Anchor (Critical)
+Lychee contains two relevant knee-related values:
+- `settings.base.joinLength`
+- `settings.base.newJoinLength`
+
+Importer uses them for **different purposes**:
+
+1. **Visible Knee Joint Height**
+   - Source priority: `joinLength`, fallback `newJoinLength`, then fallback to root cap height.
+   - Clamped to be above root cap by small epsilon.
+
+2. **Tip Cone Solve Anchor Height**
+   - Source priority: `newJoinLength`, fallback `joinLength`, then fallback to root cap height.
+   - Used for contact cone/socket solve start position.
+
+This split is intentional and required for current Lychee visual parity.
+
+### 6.4 Root Trunk Segment Structure
+Current trunk from root is two straight segments:
+1. Root-top -> Knee joint (`joint0`)
+2. Knee joint -> Tip cone joint (`socketJoint`)
+
+---
+
+## 7) Contact Assembly (Tip Cone) Contract
+
+Contact assembly is shared across roots and branches.
+
+### 7.1 Inputs
+- Tip point (`tipWorld`)
+- Start/anchor point (knee solve point for roots, knot point for branches)
+- Tip settings (`length`, `diameter`, `pointDiameter`)
+- Optional transformed Lychee tip normal
+
+### 7.2 Tip Cone Joint (Socket Joint) Solve
+If a valid Lychee normal is present:
+1. Normalize the normal.
+2. Build two candidate axes (`+n`, `-n`).
+3. Build two candidate socket points at `tip + axis * tipLength`.
+4. Pick candidate whose socket is closer to start anchor.
+
+If no valid Lychee normal:
+- Use geometric fallback from start->tip vector and tip length constraints.
+
+### 7.3 Strict Lychee Coordinate Mode
+Current root and branch import calls use strict mode:
+- Do not raycast-adjust tip point.
+- Do not apply contact disk standoff offset.
+- Trust Lychee tip payload and normal directly.
+
+Result:
+- `contactCone.pos` remains the Lychee tip position in transformed support space.
+- `socketJoint` is aligned from that tip by solved cone axis and fixed tip length.
+
+---
+
+## 8) Branch / Leaf / Brace Classification Rules
+
+### 8.1 Parent Inference
+Parent ids are read from:
+- `parentId` (array/string/number variants)
+- fallback from `parentBaseId` + `parentTipId`
+
+### 8.2 Type Classification
+- Parent count = 0 -> root candidate
+- Parent count = 1 -> branch candidate
+- Parent count >= 2 -> brace candidate
+
+### 8.3 Leaf Threshold
+For single-parent children:
+- Compute shaft length = distance(knot, tipPoint) - tipLength
+- If shaft length <= `0.2`, classify as leaf; else branch
+
+---
+
+## 9) Stage B World XY Placement Rules
+
+After each object slice is reconstructed:
+- Apply object XY offset to:
+  - root positions,
+  - trunk/branch joints,
+  - branch bezier control points,
+  - cones,
+  - leaves,
+  - knots.
+
+Joint IDs are deduplicated during shift to avoid double-translation.
+
+---
+
+## 10) Field-Level Reference (What Matters)
+
+### 10.1 Object Fields
+- `objects.present.byId.<id>.position`
+- `objects.present.byId.<id>.rotation`
+- `objects.present.byId.<id>.scale`
+- `objects.present.byId.<id>.formerCenter` / `center`
+
+### 10.2 Support Fields (Geometry-Relevant)
+- `supports.present.byId.<id>.base`
+- `supports.present.byId.<id>.tip`
+- `supports.present.byId.<id>.tipNormal`
+- `supports.present.byId.<id>.settings.base.joinLength`
+- `supports.present.byId.<id>.settings.base.newJoinLength`
+- `supports.present.byId.<id>.settings.base.joinDiameter`
+- `supports.present.byId.<id>.settings.tip.length`
+- `supports.present.byId.<id>.settings.tip.diameter`
+- `supports.present.byId.<id>.settings.tip.pointDiameter`
+- `supports.present.byId.<id>.objectIdTip` / `objectIdBase`
+- `supports.present.byId.<id>.parentId` / `parentBaseId` / `parentTipId`
+
+### 10.3 Metadata / Noise Fields (Usually Non-Geometry)
+- `updatedAt`
+- `slicerSettingsUpdatedAt`
+- `supports.present.changedIds`
+
+---
+
+## 11) Validation Protocol (Required)
+
+1. **World-Position-Only Diff Test**
+   - Move model in Lychee plate XY.
+   - Expect object `position` changes.
+   - Expect support payload (`base`, `tip`, `tipNormal`, key lengths) unchanged.
+
+2. **Knee Parity Check (Side View)**
+   - Verify visible knee matches `settings.base.joinLength` height behavior.
+   - Verify tip cone joint remains fixed-length from tip contact point.
+
+3. **Tip Normal Orientation Check**
+   - Confirm cone axis follows transformed Lychee tip normal direction (with sign chosen by nearest anchor candidate).
+
+4. **Multi-Object Ownership Check**
+   - Mixed-object support scenes must route by `objectIdTip`/`objectIdBase` and place each object slice with its own Stage B XY.
+
+---
+
+## 12) Operational Rules (Do Not Violate)
+
+1. Prefer direct Lychee fields over inferred heuristics.
+2. Keep Stage A reconstruction and Stage B placement separate.
+3. Keep root floor anchoring explicit.
+4. Keep Z-up interpretation in docs.
+5. Treat this document as canonical; log experiments in Scratch docs.
+
+Related experiment logs:
+- `Scratch/LYS_Import_Coordinate_Findings.md`
+- `Scratch/LYS_TipCone_Baseline_V1.md`
+- `Scratch/LYS_Importer_OnePass_Development_Plan.md`

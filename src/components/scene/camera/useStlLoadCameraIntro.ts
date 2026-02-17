@@ -79,9 +79,29 @@ export function useStlLoadCameraIntro(models: LoadedModel[]): StlLoadCameraIntro
     if (!sceneWorldBounds) return;
 
     const snap = sceneWorldBounds.clone();
-    const center = snap.getCenter(new THREE.Vector3());
-    setIntroBoundsSnapshot(snap);
-    setOrbitTarget([center.x, center.y, center.z]);
+
+    // Only update if bounds actually changed (prevent infinite loop on ref change)
+    if (!introBoundsSnapshot || !introBoundsSnapshot.equals(snap) || cameraIntroRunId) {
+      // Note: checking cameraIntroRunId here just to ensure we run on new ID, 
+      // but we should ideally track 'lastRunId' to avoid re-running.
+      // Actually, if runId changes, we definitely run.
+      // If runId same, we check bounds.
+
+      // Simpler: Just rely on React state bail-out? No, Box3 is new object.
+      // So we must manually check equality.
+      setIntroBoundsSnapshot(prev => {
+        if (prev && prev.equals(snap)) return prev;
+        return snap;
+      });
+
+      const center = snap.getCenter(new THREE.Vector3());
+      setOrbitTarget(prev => {
+        if (Math.abs(prev[0] - center.x) < 0.001 &&
+          Math.abs(prev[1] - center.y) < 0.001 &&
+          Math.abs(prev[2] - center.z) < 0.001) return prev;
+        return [center.x, center.y, center.z];
+      });
+    }
   }, [cameraIntroRunId, sceneWorldBounds]);
 
   return {

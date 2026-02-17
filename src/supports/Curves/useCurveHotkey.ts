@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
 import { curveInteractionStore } from './curveInteractionState';
-import { DEFAULT_KEYBINDINGS } from '@/hotkeys/hotkeyConfig';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { getSnapshot, toggleSegmentCurve } from '../state';
 
 export function useCurveHotkey(mode: string) {
+    const { getHotkey } = useHotkeyConfig();
+    const binding = getHotkey('SUPPORTS', 'CURVE_MODE');
     useEffect(() => {
         // Only enable in support mode? Or globally?
         // Presumably support mode.
@@ -13,13 +15,13 @@ export function useCurveHotkey(mode: string) {
             const target = e.target as HTMLElement;
             if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return;
 
-            if (e.key.toLowerCase() === DEFAULT_KEYBINDINGS.SUPPORTS.CURVE_MODE.key && !e.repeat) {
+            if (e.key.toLowerCase() === binding.key.toLowerCase() && !e.repeat) {
                 curveInteractionStore.setIsActive(true);
             }
         };
 
         const handleKeyUp = (e: KeyboardEvent) => {
-            if (e.key.toLowerCase() === DEFAULT_KEYBINDINGS.SUPPORTS.CURVE_MODE.key) {
+            if (e.key.toLowerCase() === binding.key.toLowerCase()) {
                 curveInteractionStore.setIsActive(false);
 
                 // Toggle Selected Segment on release
@@ -40,5 +42,5 @@ export function useCurveHotkey(mode: string) {
             window.removeEventListener('keyup', handleKeyUp);
             curveInteractionStore.setIsActive(false);
         };
-    }, [mode]);
+    }, [mode, binding]);
 }

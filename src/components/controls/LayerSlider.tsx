@@ -8,6 +8,8 @@ type LayerSliderProps = {
   step: number;
   value: number;
   onChange: (next: number) => void;
+  currentHeightMm?: number;
+  maxHeightMm?: number;
   className?: string;
   showValue?: boolean;
   onToggleMode?: () => void;
@@ -15,13 +17,18 @@ type LayerSliderProps = {
   docked?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, className, showValue = false, onToggleMode, crossSectionMode = 'smooth', docked = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, maxHeightMm, className, showValue = false, onToggleMode, crossSectionMode = 'smooth', docked = false }: LayerSliderProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const [inputValue, setInputValue] = React.useState(String(Math.round(value)));
   const [showError, setShowError] = React.useState(false);
   const [isShiftHeld, setIsShiftHeld] = React.useState(false);
   const dragShiftModeRef = React.useRef<boolean>(false); // Lock shift mode for entire drag
+
+  const formatMm = React.useCallback((mm: number) => {
+    if (!Number.isFinite(mm)) return '0';
+    return mm.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+  }, []);
 
   // Update input value when slider value changes externally
   React.useEffect(() => {
@@ -195,8 +202,11 @@ export function LayerSlider({ min, max, step, value, onChange, className, showVa
     >
       {/* Max layer label above slider */}
       {showValue && (
-        <div className="absolute left-1/2 -translate-x-1/2 top-0 -mt-10 w-12 rounded border border-neutral-600 bg-neutral-800/90 px-1 py-0.5 text-center text-xs text-neutral-400 shadow tabular-nums">
-          {max}
+        <div className="absolute left-1/2 -translate-x-1/2 top-0 -mt-12 min-w-16 rounded border border-neutral-600 bg-neutral-800/90 px-1.5 py-0.5 text-center text-xs text-neutral-400 shadow tabular-nums">
+          <div>{max}</div>
+          {typeof maxHeightMm === 'number' && (
+            <div className="text-[10px] text-neutral-300">{formatMm(maxHeightMm)} mm</div>
+          )}
         </div>
       )}
       
@@ -222,6 +232,12 @@ export function LayerSlider({ min, max, step, value, onChange, className, showVa
           }}
         >
           <div className="relative">
+            {showValue && typeof currentHeightMm === 'number' && (
+              <div className="absolute right-full mr-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-neutral-600 bg-neutral-800/90 px-1.5 py-0.5 text-[10px] text-neutral-200 shadow tabular-nums pointer-events-none">
+                {formatMm(currentHeightMm)} mm
+              </div>
+            )}
+
             {crossSectionMode === 'rasterized' ? (
               // Pixelated thumb for raster mode - bigger with chunkier pixels
               <svg width="28" height="28" viewBox="0 0 28 28" className="cursor-context-menu drop-shadow-lg">

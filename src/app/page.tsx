@@ -20,7 +20,8 @@ import { Sidebar } from '@/components/ui/Sidebar';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
-
+import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
+import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 
 import { initializeBVH } from '@/utils/bvh';
 
@@ -32,6 +33,8 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
+
+import { MESH_SHADER_OPTIONS, type MeshShaderType } from '@/features/shaders/mesh';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -56,29 +59,61 @@ export default function Home() {
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
   const [displayActiveModelId, setDisplayActiveModelId] = React.useState<string | null>(null);
 
+  const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
+  const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
+
   // Sync transform manager when active model changes
   useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
       const t = scene.activeModel.transform;
-      // 1. Update transform manager to match model
-      transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
-      transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
-      transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
+
+      console.log('[Home] Syncing transform from model:', {
+        id: scene.activeModelId,
+        pos: t.position,
+        ignoreAutoLift: scene.activeModel.ignoreAutoLift
+      });
+
+      // If model requests to ignore auto-lift/snap (e.g. LYS import), disable it in the hook
+      if (scene.activeModel.ignoreAutoLift) {
+        transformMgr.transformHook.setAutoSnapEnabled(false);
+      } else {
+        transformMgr.transformHook.setAutoSnapEnabled(true);
+      }
+
+      // 1. Update transform manager to match model ONLY if different
+      // This prevents infinite loop when model object reference changes but values are same
+      const currentT = transformMgr.transform;
+      const EPSILON = 0.0001;
+
+      const posChanged = currentT.position.distanceToSquared(t.position) > EPSILON;
+      const rotChanged =
+        Math.abs(currentT.rotation.x - t.rotation.x) > EPSILON ||
+        Math.abs(currentT.rotation.y - t.rotation.y) > EPSILON ||
+        Math.abs(currentT.rotation.z - t.rotation.z) > EPSILON;
+      const scaleChanged = currentT.scale.distanceToSquared(t.scale) > EPSILON;
+
+      if (posChanged || rotChanged || scaleChanged) {
+        transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
+        transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
+        transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
+      }
 
       // 2. Only AFTER updating transform, update the display ID
       setDisplayActiveModelId(scene.activeModelId);
     } else {
       setDisplayActiveModelId(null);
     }
-  }, [scene.activeModelId]);
+  }, [scene.activeModelId, scene.activeModel]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
   useEffect(() => {
-    if (scene.activeModelId) {
+    // Only update if the local transform state has been synchronized with the new model
+    // This prevents overwriting the new model's transform with the old transform state on load
+    if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
       scene.updateModelTransform(scene.activeModelId, transformMgr.transform);
     }
-  }, [transformMgr.transform, scene.activeModelId]);
+  }, [transformMgr.transform, scene.activeModelId, displayActiveModelId]);
 
   // Wrap transform change to update local state
   const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
@@ -140,6 +175,9 @@ export default function Home() {
     }, 0);
   };
 
+  const handleCameraChange = React.useCallback(() => { }, []);
+  const handleCameraEnd = React.useCallback(() => { }, []);
+
   const sidebarContent = React.useMemo(() => {
     if (scene.mode === 'support') {
       return <SupportSidebar />;
@@ -150,6 +188,10 @@ export default function Home() {
     }
 
     if (scene.mode === 'prepare') {
+      if (transformMgr.transformMode === 'smoothing') {
+        return <MeshSmoothingSettingsPanel />;
+      }
+
       return <div />;
     }
 
@@ -158,30 +200,38 @@ export default function Home() {
     }
 
     return <div />;
-  }, [scene.mode]);
+  }, [scene.mode, transformMgr.transformMode]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100">
       <TopBar
         onFileChange={scene.onFileChange}
-        fileName={scene.fileName}
         layerHeightMicron={slicing.layerHeightMicron}
         onLayerHeightChange={slicing.setLayerHeightMicron}
         layerHeightMm={slicing.layerHeightMm}
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
+        shaderType={scene.shaderType}
+        onShaderTypeChange={scene.setShaderType}
+        matcapVariant={scene.matcapVariant}
+        onMatcapVariantChange={scene.setMatcapVariant}
+        flatUseVertexColors={scene.flatUseVertexColors}
+        onFlatUseVertexColorsChange={scene.setFlatUseVertexColors}
+        toonSteps={scene.toonSteps}
+        onToonStepsChange={scene.setToonSteps}
         ambientIntensity={scene.ambientIntensity}
         onAmbientIntensityChange={scene.setAmbientIntensity}
         directionalIntensity={scene.directionalIntensity}
         onDirectionalIntensityChange={scene.setDirectionalIntensity}
         materialRoughness={scene.materialRoughness}
         onMaterialRoughnessChange={scene.setMaterialRoughness}
-        meshVisible={scene.meshVisible}
-        onMeshVisibleChange={scene.setMeshVisible}
+        xrayOpacity={scene.xrayOpacity}
+        onXrayOpacityChange={scene.setXrayOpacity}
         mode={scene.mode}
         onModeChange={scene.setMode}
         selectionHighlightMode={scene.selectionHighlightMode}
         onSelectionHighlightModeChange={scene.setSelectionHighlightMode}
+        onImportLysChange={scene.onImportLysChange}
       />
 
       <FloatingPanelStack>
@@ -298,10 +348,15 @@ export default function Home() {
             clipUpper={slicing.clipUpper}
             meshColor={scene.meshColor}
             meshVisible={scene.meshVisible}
+            shaderType={effectiveShaderType}
+            matcapVariant={scene.matcapVariant}
+            flatUseVertexColors={scene.flatUseVertexColors}
+            toonSteps={scene.toonSteps}
+            xrayOpacity={scene.xrayOpacity}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
-            onCameraChange={() => { }}
-            onCameraEnd={() => { }}
+            onCameraChange={handleCameraChange}
+            onCameraEnd={handleCameraEnd}
             islandMarkers={[
               ...(islands.overlayEnabled ? islands.islandMarkers : []),
             ] as any}
@@ -349,7 +404,27 @@ export default function Home() {
             supportsRef={supportsRef}
             ghostData={ghostData}
           >
+            {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
+              <MeshSmoothingBrushCursor />
+            )}
           </SceneCanvas>
+
+          <div className="absolute top-2 right-2 z-20">
+            <select
+              value={sessionShaderOverride ?? ''}
+              onChange={(e) => setSessionShaderOverride((e.target.value || null) as MeshShaderType | null)}
+              className="rounded border border-neutral-700 bg-neutral-900/80 text-neutral-200 focus:outline-none focus:ring-0"
+              style={{ fontSize: 10, padding: '1px 4px', height: 18 }}
+              title="Session shader (does not change defaults)"
+            >
+              <option value="">Default</option>
+              {MESH_SHADER_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* Transform Toolbar */}
           {scene.geom && scene.mode === 'prepare' && (
@@ -394,11 +469,8 @@ export default function Home() {
           {/* Model Info Overlay Card */}
           <ModelStatsCard
             model={scene.models.find(m => m.id === displayActiveModelId) || null}
-            layerIndex={slicing.layerIndex}
             numLayers={slicing.numLayers}
             heightMm={slicing.heightMm}
-            clipUpper={slicing.clipUpper}
-            scanData={islands.scanData}
           />
 
           <LayerSlider
@@ -407,6 +479,8 @@ export default function Home() {
             step={1}
             value={slicing.layerIndex}
             onChange={(v) => slicing.setLayerIndex(Math.round(v))}
+            currentHeightMm={slicing.currentHeightMm}
+            maxHeightMm={slicing.heightMm}
             showValue={true}
             onToggleMode={() => slicing.setCrossSectionMode(prev => prev === 'smooth' ? 'rasterized' : 'smooth')}
             crossSectionMode={slicing.crossSectionMode}
@@ -414,7 +488,7 @@ export default function Home() {
           />
         </div>
 
-        <Sidebar side="right" fixed={false} widthClass="w-64" className="border-l border-neutral-800" contentClassName="space-y-0">
+        <Sidebar side="right" fixed={false} widthClass="w-80" className="border-l border-neutral-800" contentClassName="space-y-0">
           {sidebarContent}
         </Sidebar>
       </div>

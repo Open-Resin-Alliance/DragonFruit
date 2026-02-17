@@ -1,11 +1,18 @@
 import { useEffect } from 'react';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
-import { DEFAULT_KEYBINDINGS, matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-
-const BRACE_KEY = DEFAULT_KEYBINDINGS.SUPPORTS.BRANCH_PLACEMENT.key;
+import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 
 export function useBracePlacement() {
+    const { getHotkey } = useHotkeyConfig();
+    // Intentionally using BRANCH_PLACEMENT key as per original code (or should it be its own?)
+    // Original code used DEFAULT_KEYBINDINGS.SUPPORTS.BRANCH_PLACEMENT.key
+    // We will stick to that to preserve behavior, or maybe add a brace specific one if needed.
+    // For now, mirroring original behavior.
+    const binding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
+    const BRACE_KEY = binding.key;
+
     const { isPlacementDisabled } = useInteractionStatus();
     const state = useBracePlacementState();
 
@@ -40,7 +47,7 @@ export function useBracePlacement() {
             window.removeEventListener('keyup', up);
             window.removeEventListener('blur', blur);
         };
-    }, []);
+    }, [BRACE_KEY]);
 
     useEffect(() => {
         const handleEscape = (e: KeyboardEvent) => {

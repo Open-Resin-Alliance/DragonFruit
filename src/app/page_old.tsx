@@ -15,6 +15,8 @@ import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { SupportSidebar } from '@/supports/Settings';
+import type { SupportMode } from '@/supports/types';
+import type { MeshShaderType } from '@/features/shaders/mesh';
 
 import { useModelTransform } from '@/hooks/useModelTransform';
 import { runIslandScan, runScanlineScan, type ScanResults } from '@/modules/island/ScanOrchestrator';
@@ -61,9 +63,12 @@ export default function Home() {
 
   const geom = useStlGeometry(fileUrl);
   // Global application mode: prepare (default) or support.
-  const [mode, setMode] = useState<'prepare' | 'support'>('prepare');
+  const [mode, setMode] = useState<SupportMode>('prepare');
   // Selection highlight mode
   const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
+
+  // Mesh shader selection (Global)
+  const [shaderType, setShaderType] = useState<MeshShaderType>('soft_clay');
 
   // V2 Trunk Placement
   const trunkPlacementV2 = useTrunkPlacementV2();
@@ -492,20 +497,19 @@ export default function Home() {
     <div className="relative h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100">
       <TopBar
         onFileChange={onFileChange}
-        fileName={fileName}
         layerHeightMicron={layerHeightMicron}
         onLayerHeightChange={setLayerHeightMicron}
         layerHeightMm={layerHeightMm}
         meshColor={meshColor}
         onMeshColorChange={setMeshColor}
+        shaderType={shaderType}
+        onShaderTypeChange={setShaderType}
         ambientIntensity={ambientIntensity}
         onAmbientIntensityChange={setAmbientIntensity}
         directionalIntensity={directionalIntensity}
         onDirectionalIntensityChange={setDirectionalIntensity}
         materialRoughness={materialRoughness}
         onMaterialRoughnessChange={setMaterialRoughness}
-        meshVisible={meshVisible}
-        onMeshVisibleChange={setMeshVisible}
         mode={mode}
         onModeChange={setMode}
         selectionHighlightMode={selectionHighlightMode}
@@ -667,28 +671,28 @@ export default function Home() {
 
             <IslandOverlayControls
               enabled={overlayEnabled}
-              onToggle={setOverlayEnabled}
-              brushRadius={overlayBrushRadius}
+              onEnabledChange={setOverlayEnabled}
+              brushRadiusMm={overlayBrushRadius}
               onBrushRadiusChange={setOverlayBrushRadius}
               color={overlayColor}
               onColorChange={setOverlayColor}
               opacity={overlayOpacity}
               onOpacityChange={setOverlayOpacity}
-              showLabels={showIslandIdLabels}
-              onToggleLabels={setShowIslandIdLabels}
               taper={overlayTaper}
               onTaperChange={setOverlayTaper}
+              islandCount={islandMarkers.length}
             />
 
             <IslandVoxelControls
               enabled={voxelEnabled}
-              onToggle={setVoxelEnabled}
+              onEnabledChange={setVoxelEnabled}
               opacity={voxelOpacity}
               onOpacityChange={setVoxelOpacity}
               colorScheme={voxelColorScheme}
               onColorSchemeChange={setVoxelColorScheme}
               showMerged={voxelShowMerged}
-              onToggleShowMerged={setVoxelShowMerged}
+              onShowMergedChange={setVoxelShowMerged}
+              islandCount={scanData?.islands.length ?? 0}
             />
           </>
         ) : (

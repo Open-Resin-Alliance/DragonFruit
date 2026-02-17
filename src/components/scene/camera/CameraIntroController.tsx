@@ -116,7 +116,7 @@ export function CameraIntroController({ bounds, runId, onComplete }: CameraIntro
         activeRunIdRef.current = 0;
       }
     };
-  }, [bounds, camera, controls, onComplete, runId, size.height, size.width]);
+  }, [camera, controls, onComplete, runId, size.height, size.width]);
 
   return null;
 }

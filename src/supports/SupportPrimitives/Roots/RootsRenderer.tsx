@@ -129,17 +129,19 @@ export function RootsRenderer({
             )}
 
             {/* Spherical top - trunk shaft embeds into this */}
-            <mesh position={[sphereCenter.x, sphereCenter.y, sphereCenter.z]} raycast={raycast}>
-                <sphereGeometry args={[sphereRadius, 16, 12]} />
-                <meshStandardMaterial
-                    color={finalConeColor}
-                    emissive={emissive}
-                    emissiveIntensity={emissiveIntensity}
-                    transparent={transparent}
-                    opacity={opacity}
-                    depthWrite={!transparent}
-                />
-            </mesh>
+            {coneHeight > 0 && (
+                <mesh position={[sphereCenter.x, sphereCenter.y, sphereCenter.z]} raycast={raycast}>
+                    <sphereGeometry args={[sphereRadius, 16, 12]} />
+                    <meshStandardMaterial
+                        color={finalConeColor}
+                        emissive={emissive}
+                        emissiveIntensity={emissiveIntensity}
+                        transparent={transparent}
+                        opacity={opacity}
+                        depthWrite={!transparent}
+                    />
+                </mesh>
+            )}
         </group>
     );
 }

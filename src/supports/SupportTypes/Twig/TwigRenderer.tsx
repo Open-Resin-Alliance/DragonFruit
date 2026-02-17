@@ -1,10 +1,11 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import { Twig } from '../../types';
+import { ContactDisk, Twig } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk';
+import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk/ContactDiskRenderer';
+import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
@@ -38,7 +39,7 @@ export function TwigRenderer({
     selectedColor: '#80fffd',
   });
 
-  const handleClick = (e: any) => {
+  const handleClick = (e: unknown) => {
     handleSupportClick(e, twig.id, !!isInteractable);
   };
 
@@ -53,20 +54,35 @@ export function TwigRenderer({
     return Array.from(map.values());
   }, [twig.segments]);
 
-  twig.segments.forEach((seg, index) => {
+  const getDiskTipCenter = (disk: ContactDisk) => {
+    const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+    return {
+      x: disk.pos.x + disk.surfaceNormal.x * thickness,
+      y: disk.pos.y + disk.surfaceNormal.y * thickness,
+      z: disk.pos.z + disk.surfaceNormal.z * thickness,
+    };
+  };
+
+  twig.segments.forEach((seg) => {
     let startPoint: THREE.Vector3;
     let endPoint: THREE.Vector3;
+    let diameterStart = seg.diameter;
+    let diameterEnd = seg.diameter;
 
     if (seg.bottomJoint) {
       startPoint = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
     } else {
-      startPoint = new THREE.Vector3(twig.contactDiskA.pos.x, twig.contactDiskA.pos.y, twig.contactDiskA.pos.z);
+      const diskATipCenter = getDiskTipCenter(twig.contactDiskA);
+      startPoint = new THREE.Vector3(diskATipCenter.x, diskATipCenter.y, diskATipCenter.z);
+      diameterStart = twig.contactDiskA.contactDiameterMm;
     }
 
     if (seg.topJoint) {
       endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
     } else {
-      endPoint = new THREE.Vector3(twig.contactDiskB.pos.x, twig.contactDiskB.pos.y, twig.contactDiskB.pos.z);
+      const diskBTipCenter = getDiskTipCenter(twig.contactDiskB);
+      endPoint = new THREE.Vector3(diskBTipCenter.x, diskBTipCenter.y, diskBTipCenter.z);
+      diameterEnd = twig.contactDiskB.contactDiameterMm;
     }
 
     const startPosVec = { x: startPoint.x, y: startPoint.y, z: startPoint.z };
@@ -102,6 +118,8 @@ export function TwigRenderer({
           start={startPosVec}
           end={endPosVec}
           diameter={seg.diameter}
+          diameterStart={diameterStart}
+          diameterEnd={diameterEnd}
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
@@ -139,7 +157,7 @@ export function TwigRenderer({
 
   return (
     <group onClick={handleClick}>
-      <group ref={pickRef as any}>
+      <group ref={pickRef as React.Ref<THREE.Group>}>
         {shafts}
         {diskA}
         {diskB}

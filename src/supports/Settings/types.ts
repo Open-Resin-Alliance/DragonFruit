@@ -184,5 +184,5 @@ export interface SupportPreset {
 export interface PresetCollection {
     byId: Record<string, SupportPreset>;
     allIds: string[];
-    activePresetId: string;
+    activePresetId: string | null;
 }

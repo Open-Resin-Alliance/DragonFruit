@@ -1,6 +1,8 @@
 "use client";
 
+
 import React, { useState, useEffect } from 'react';
+import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import {
     getSettings,
     subscribeToSettings,
@@ -12,15 +14,17 @@ import {
     updateRootsProfile,
     updateJointProfile,
 } from './state';
+import { checkPresetDrift } from './presets';
 import { createDefaultSettings } from './types';
 import {
     PresetSelector,
     RaftSettingsCard,
+    GridSettingsCard,
     SupportKindTabs,
 } from './components';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
-import { setAnatomyPreviewActiveSettingKey } from './AnatomyPreview/previewState';
+import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
 import {
     getSupportKindSnapshot,
     setActiveSupportKind,
@@ -32,6 +36,7 @@ import {
     setRaftSettings,
     updateRaftSettings,
 } from '../Rafts/Crenelated/RaftState';
+import { updateGridSettings } from './state';
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
 
 /**
@@ -41,12 +46,15 @@ import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
  * Displays presets and editable settings for tip, shaft, roots, base flare, and grid.
  */
 export function SupportSidebar() {
+    usePresetHotkeys();
     const [settings, setLocalSettings] = useState(() => getSettings());
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
     const raftSettings = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+    const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
+    const activeKey = previewState.activeSettingKey;
 
     const makeRowFocusHandlers = React.useCallback((key: string) => {
         return {
@@ -78,7 +86,9 @@ export function SupportSidebar() {
         setLocalSettings(getSettings());
 
         const unsubscribeSettings = subscribeToSettings(() => {
-            setLocalSettings(getSettings());
+            const current = getSettings();
+            setLocalSettings(current);
+            checkPresetDrift(current);
         });
         return () => {
             unsubscribeSettings();
@@ -117,6 +127,20 @@ export function SupportSidebar() {
         setAnatomyPreviewActiveSettingKey(null);
     }, []);
 
+    const getInputProps = (key: string, baseClass: string) => {
+        const isActive = activeKey === key;
+        if (isActive) {
+            return {
+                className: `${baseClass} ring-2`,
+                style: {
+                    borderColor: '#FD5290',
+                    '--tw-ring-color': '#FD5290',
+                } as React.CSSProperties
+            };
+        }
+        return { className: baseClass };
+    };
+
     return (
         <div className="h-full w-full flex flex-col">
             <div className="px-1 py-1 border-b border-neutral-800">
@@ -140,6 +164,16 @@ export function SupportSidebar() {
                             onChange={(partial) => updateRaftSettings(partial)}
                         />
                     </div>
+                ) : activeKind === 'grid' ? (
+                    <div className="space-y-2">
+                        <div className="w-full h-[300px] bg-transparent border border-neutral-700 rounded overflow-hidden">
+                            <SupportAnatomyPreviewSlot />
+                        </div>
+                        <GridSettingsCard
+                            grid={settings.grid}
+                            onChange={(partial) => updateGridSettings(partial)}
+                        />
+                    </div>
                 ) : (
                     <div className="flex gap-1">
                         <div className="w-[110px] flex-shrink-0 bg-transparent border border-neutral-700 rounded overflow-hidden flex flex-col">
@@ -156,7 +190,10 @@ export function SupportSidebar() {
                                         <NumberInput
                                             value={settings.tip.contactDiameterMm}
                                             onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
-                                            className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                            {...getInputProps(
+                                                'tip.contactDiameterMm',
+                                                "w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                            )}
                                         />
                                     </div>
 
@@ -166,7 +203,10 @@ export function SupportSidebar() {
                                             <NumberInput
                                                 value={settings.tip.lengthMm}
                                                 onChange={(val) => updateTipProfile({ lengthMm: val })}
-                                                className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                {...getInputProps(
+                                                    'tip.lengthMm',
+                                                    "w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                )}
                                             />
                                         </div>
                                     )}
@@ -221,7 +261,10 @@ export function SupportSidebar() {
                                             <NumberInput
                                                 value={settings.shaft.diameterMm}
                                                 onChange={(val) => updateShaftProfile({ diameterMm: val })}
-                                                className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                {...getInputProps(
+                                                    'shaft.diameterMm',
+                                                    "w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                )}
                                             />
                                         </div>
                                     )}
@@ -277,7 +320,7 @@ export function SupportSidebar() {
                     </div>
                 )}
 
-                {activeKind !== 'raft' && (
+                {activeKind === 'trunk' && (
                     <div className="w-full overflow-hidden">
                         <div className="bg-neutral-900/40 rounded border border-neutral-700">
                             <PresetSelector />
@@ -285,7 +328,7 @@ export function SupportSidebar() {
                     </div>
                 )}
 
-                {activeKind !== 'raft' && (
+                {activeKind === 'trunk' && (
                     <div className="text-[10px] text-neutral-400 bg-neutral-900/40 rounded p-1.5 border border-neutral-700">
                         <div className="font-medium text-neutral-300 mb-0.5">Placement</div>
                         <p className="leading-tight">

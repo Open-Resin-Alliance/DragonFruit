@@ -10,6 +10,11 @@ When you make changes in this codebase, you must follow my organization rules:
   - Do not create generic buckets like `hooks/`, `utils/`, `components/` at the top of a feature area.
   - Instead, create a feature folder (or use an existing one) and put everything for that feature inside it.
 
+- **Single Source of Truth (SSOT) for adjustable values: no magic numbers.**
+  - Any user-adjustable numeric value must define its constraints (min/max/step/default) once (typically in the feature’s settings module) and export them.
+  - UI controls (sliders/inputs), persistence (load/save/clamp), and runtime logic must all reference those exported constants/helpers.
+  - Do not hardcode the same limits in multiple places.
+
 - **Compartmentalize tightly: one concern per file, grouped under the feature folder.**
   - If we add a new support type (or any new domain feature), it gets its own folder, and inside that folder we keep:
     - Rendering/UI for that feature

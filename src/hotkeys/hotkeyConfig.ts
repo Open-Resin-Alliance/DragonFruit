@@ -20,7 +20,23 @@ export const UNIVERSAL_HOTKEYS = {
 
 // Default keybindings for application features.
 // These are intended to be customizable by the user in the future.
-export const DEFAULT_KEYBINDINGS = {
+export interface HotkeyBinding {
+    key: string;
+    modifier?: string; // 'ctrl', 'shift', 'alt', 'ctrl+shift', etc.
+    description: string;
+}
+
+export interface HotkeyCategory {
+    [actionName: string]: HotkeyBinding;
+}
+
+export interface HotkeyConfig {
+    [categoryName: string]: HotkeyCategory;
+}
+
+// Default keybindings for application features.
+// These are intended to be customizable by the user in the future.
+export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
     SUPPORTS: {
         JOINT_CREATION: {
             key: 'j',
@@ -44,6 +60,35 @@ export const DEFAULT_KEYBINDINGS = {
         FOCUS_PICK: {
             key: 'f',
             description: 'Press to refocus the camera at the mouse cursor (over model)'
+        }
+    },
+    PRESETS: {
+        APPLY_DETAIL: {
+            key: '1',
+            description: 'Apply Detail Preset'
+        },
+        APPLY_STRUCTURE: {
+            key: '2',
+            description: 'Apply Structure Preset'
+        },
+        APPLY_ANCHOR: {
+            key: '3',
+            description: 'Apply Anchor Preset'
+        },
+        APPLY_CUSTOM_1: {
+            key: '1',
+            modifier: 'ctrl',
+            description: 'Apply Custom 1 Preset'
+        },
+        APPLY_CUSTOM_2: {
+            key: '2',
+            modifier: 'ctrl',
+            description: 'Apply Custom 2 Preset'
+        },
+        APPLY_CUSTOM_3: {
+            key: '3',
+            modifier: 'ctrl',
+            description: 'Apply Custom 3 Preset'
         }
     }
 } as const;
@@ -117,4 +162,3 @@ export function matchesConfiguredHotkeyUp(
 
     return false;
 }
-

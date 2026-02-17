@@ -16,19 +16,26 @@ export function NumberInput({ value, onChange, className, onBlur, ...props }: Nu
     if (!isEditing.current) {
       // Handle floating point precision display if needed, 
       // but generally toString() is fine for sync
-      setDisplayValue(safeValue.toString());
+      setDisplayValue(Number(safeValue.toFixed(2)).toString());
     }
   }, [safeValue]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVal = e.target.value;
-    setDisplayValue(newVal);
 
-    // Only push to parent if it's a valid number
-    // We allow empty string locally, but don't push it
+    // Allow empty, minus, or valid float
     if (newVal === '' || newVal === '-') {
-        return;
+      setDisplayValue(newVal);
+      return;
     }
+
+    // Check decimal places
+    const parts = newVal.split('.');
+    if (parts[1] && parts[1].length > 2) {
+      return; // Reject modification if more than 2 decimals
+    }
+
+    setDisplayValue(newVal);
 
     const parsed = parseFloat(newVal);
     if (!isNaN(parsed)) {
@@ -38,27 +45,27 @@ export function NumberInput({ value, onChange, className, onBlur, ...props }: Nu
 
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     isEditing.current = false;
-    
+
     // Check if current display value is empty or invalid
     const parsed = parseFloat(displayValue);
-    
+
     if (displayValue === '' || isNaN(parsed)) {
-        // Restore previous valid value
-        setDisplayValue(safeValue.toString());
+      // Restore previous valid value
+      setDisplayValue(Number(safeValue.toFixed(2)).toString());
     } else {
-        // Ensure standard formatting (e.g. remove trailing decimal points)
-        // But also respect the parent's update which triggers the Effect.
-        // However, if parent value didn't change (e.g. parsed same as value), Effect won't run.
-        // So force a sync.
-        setDisplayValue(safeValue.toString());
+      // Ensure standard formatting (e.g. remove trailing decimal points)
+      // But also respect the parent's update which triggers the Effect.
+      // However, if parent value didn't change (e.g. parsed same as value), Effect won't run.
+      // So force a sync.
+      setDisplayValue(Number(parsed.toFixed(2)).toString());
     }
 
     if (onBlur) onBlur(e);
   };
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
-      isEditing.current = true;
-      if (props.onFocus) props.onFocus(e);
+    isEditing.current = true;
+    if (props.onFocus) props.onFocus(e);
   };
 
   return (

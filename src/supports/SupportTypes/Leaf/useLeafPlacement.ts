@@ -3,12 +3,14 @@ import * as THREE from 'three';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
-import { DEFAULT_KEYBINDINGS, matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-
-const LEAF_KEY = DEFAULT_KEYBINDINGS.SUPPORTS.LEAF_PLACEMENT.key;
-const LEAF_MODIFIER = DEFAULT_KEYBINDINGS.SUPPORTS.LEAF_PLACEMENT.modifier;
+import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 
 export function useLeafPlacement() {
+    const { getHotkey } = useHotkeyConfig();
+    const binding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
+    const LEAF_KEY = binding.key;
+    const LEAF_MODIFIER = binding.modifier;
     const { isPlacementDisabled } = useInteractionStatus();
     const state = useLeafPlacementState();
 
@@ -39,7 +41,7 @@ export function useLeafPlacement() {
             window.removeEventListener('keydown', down);
             window.removeEventListener('keyup', up);
         };
-    }, []);
+    }, [LEAF_KEY, LEAF_MODIFIER]);
 
     useEffect(() => {
         const handleEscape = (e: KeyboardEvent) => {

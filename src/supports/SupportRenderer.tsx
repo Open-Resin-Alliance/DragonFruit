@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useSyncExternalStore, forwardRef, useImperativeHandle } from 'react';
+import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { subscribe, getSnapshot } from './state';
 import { TrunkRenderer } from './SupportTypes/Trunk/TrunkRenderer';
@@ -23,9 +23,11 @@ import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 interface SupportRendererProps {
     mode?: SupportMode;
     hidePlateContactPrimitives?: boolean;
+    clipLower?: number | null;
+    clipUpper?: number | null;
 }
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
@@ -46,6 +48,45 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     // Expose the group ref to parent components
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
+
+    const clippingPlanes = useMemo(() => {
+        const planes: THREE.Plane[] = [];
+
+        if (clipLower != null) {
+            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
+        }
+
+        if (clipUpper != null) {
+            planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
+        }
+
+        return planes;
+    }, [clipLower, clipUpper]);
+
+    useEffect(() => {
+        const root = groupRef.current;
+        if (!root) return;
+
+        const nextClippingPlanes = clippingPlanes.length > 0 ? clippingPlanes : null;
+
+        const applyMaterialClipping = (material: THREE.Material) => {
+            const clipMaterial = material as THREE.Material & { clippingPlanes?: THREE.Plane[] | null };
+            if (clipMaterial.clippingPlanes === nextClippingPlanes) return;
+            clipMaterial.clippingPlanes = nextClippingPlanes;
+            material.needsUpdate = true;
+        };
+
+        root.traverse((obj) => {
+            const mesh = obj as THREE.Mesh;
+            if (!mesh.material) return;
+
+            if (Array.isArray(mesh.material)) {
+                mesh.material.forEach(applyMaterialClipping);
+            } else {
+                applyMaterialClipping(mesh.material);
+            }
+        });
+    }, [clippingPlanes, state]);
 
     return (
         <group ref={groupRef}>

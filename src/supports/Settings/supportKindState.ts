@@ -1,4 +1,4 @@
-export type SupportKind = 'trunk' | 'raft' | 'leaf' | 'branch' | 'stick' | 'twig';
+export type SupportKind = 'trunk' | 'raft' | 'leaf' | 'branch' | 'stick' | 'twig' | 'grid';
 
 type SupportKindState = {
     kind: SupportKind;

@@ -5,17 +5,9 @@ import ReactDOM from 'react-dom';
 import * as THREE from 'three';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, TransformControls } from '@react-three/drei';
-import { buildTrunkData } from '@/supports/SupportTypes/Trunk/trunkBuilder';
-import { buildBranchData } from '@/supports/SupportTypes/Branch/branchBuilder';
-import { buildLeafData } from '@/supports/SupportTypes/Leaf/leafBuilder';
-import { buildStick } from '@/supports/SupportTypes/Stick/stickBuilder';
-import { buildTwig } from '@/supports/SupportTypes/Twig/twigBuilder';
-import { SupportBuilder } from '@/supports/rendering/SupportBuilder';
-import { resolveConeAxisPolicy } from '@/supports/PlacementLogic/ConeAxisPolicy';
-import type { SupportTipProfile } from '@/supports/SupportPrimitives/ContactCone/types';
-import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
-import { buildRaftPreviewBaseCircles, buildRaftPreviewSupports } from './PreviewTypes/Raft/previewSupports';
-import { buildRaftPreviewMeshes, disposeRaftPreviewMeshes } from './PreviewTypes/Raft/buildRaftPreviewMeshes';
+import { RaftPreview } from './PreviewTypes/Raft/RaftPreview';
+import { GridPreview } from './PreviewTypes/Grid/GridPreview';
+import { TrunkPreview } from './PreviewTypes/Trunk/TrunkPreview';
 import { subscribeToSettings, getSettingsSnapshot } from '../state';
 import { subscribeToAnatomyPreviewState, getAnatomyPreviewState, setAnatomyPreviewActiveSettingKey } from './previewState';
 import { ANATOMY_CONFIG } from './AnatomyPreviewConfig';
@@ -23,6 +15,9 @@ import { getTargetFocusState } from './AnatomyPreviewCameraLogic';
 import type { SupportKind } from '../supportKindState';
 import { getSupportKindSnapshot, subscribeToSupportKindState } from '../supportKindState';
 import { getRaftSettings, subscribeToRaftStore } from '../../Rafts/Crenelated/RaftState';
+import { resolveConeAxisPolicy } from '@/supports/PlacementLogic/ConeAxisPolicy';
+import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import type { SupportTipProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 
 // Define the shape of our captured config
 interface CapturedConfig {
@@ -311,6 +306,7 @@ function PreviewContent({
         rootsDiskHeightMm: settings.roots.diskHeightMm,
         rootsConeHeightMm: settings.roots.coneHeightMm,
         jointCount: settings.joint.defaultJointCount,
+        shaftDiameterMm: settings.shaft.diameterMm,
     });
 
     // ANIMATION ENGINE
@@ -318,17 +314,41 @@ function PreviewContent({
 
     // Sync global settings to liveConfig for Roots
     // This allows sidebar changes to update the preview while preserving the structure for the Tuner
+    // Sync global settings to liveConfig for Roots
+    // This allows sidebar changes to update the preview while preserving the structure for the Tuner
     React.useEffect(() => {
+        let tipContact = settings.tip.contactDiameterMm;
+        let tipLength = settings.tip.lengthMm;
+        let shaftDiameter = settings.shaft.diameterMm;
+
+        // Apply Overrides if hovering a preset
+        if (previewState.activeSettingValue !== null) {
+            if (previewState.activeSettingKey === 'tip.contactDiameterMm') tipContact = previewState.activeSettingValue;
+            if (previewState.activeSettingKey === 'tip.lengthMm') tipLength = previewState.activeSettingValue;
+            if (previewState.activeSettingKey === 'shaft.diameterMm') shaftDiameter = previewState.activeSettingValue;
+        }
+
         setLiveConfig(prev => ({
             ...prev,
             rootsDiameterMm: settings.roots.diameterMm,
             rootsDiskHeightMm: settings.roots.diskHeightMm,
             rootsConeHeightMm: settings.roots.coneHeightMm,
             jointCount: settings.joint.defaultJointCount,
-            tipContactDiameterMm: settings.tip.contactDiameterMm,
-            tipLengthMm: settings.tip.lengthMm,
+            tipContactDiameterMm: tipContact,
+            tipLengthMm: tipLength,
+            shaftDiameterMm: shaftDiameter,
         }));
-    }, [settings.roots.diameterMm, settings.roots.diskHeightMm, settings.roots.coneHeightMm, settings.joint.defaultJointCount, settings.tip.contactDiameterMm, settings.tip.lengthMm]);
+    }, [
+        settings.roots.diameterMm,
+        settings.roots.diskHeightMm,
+        settings.roots.coneHeightMm,
+        settings.joint.defaultJointCount,
+        settings.tip.contactDiameterMm,
+        settings.tip.lengthMm,
+        settings.shaft.diameterMm,
+        previewState.activeSettingKey,
+        previewState.activeSettingValue
+    ]);
 
     // Maintain a REF to liveConfig for useFrame to avoid stale closures
     const liveConfigRef = React.useRef(liveConfig);
@@ -393,6 +413,7 @@ function PreviewContent({
                 jointCount: s.jointCount ?? prev.jointCount,
                 tipContactDiameterMm: s.tipContactDiameterMm ?? prev.tipContactDiameterMm,
                 tipLengthMm: s.tipLengthMm ?? prev.tipLengthMm,
+                shaftDiameterMm: prev.shaftDiameterMm,
             }));
         }
     }, [manualOverride, camera]);
@@ -579,139 +600,7 @@ function PreviewContent({
         }
     }, [liveConfig, setDebugData]);
 
-    // Rebuild support data whenever settings OR liveConfig changes
-    const supportData = React.useMemo(() => {
-        // Shared camera math for "cone-like" tips
-        const lengthMm = settings.tip.lengthMm;
 
-        // Map Display Angle [0, -90] to Internal Trig Angle [0, 90]
-        // -90 -> 90 (Vertical Up)
-        // 0 -> 0 (Horizontal Right)
-        const internalAngle = Math.abs(liveConfig.coneAngleDeg);
-        const angleRad = THREE.MathUtils.degToRad(internalAngle);
-
-        const nx = Math.cos(angleRad);
-        const nz = Math.sin(angleRad);
-
-        // buildTrunkData/PlacementLogic uses TipNormal + cone-axis policy to find the Socket.
-        // socketPos = tipPos + surfaceNormal * diskThickness + coneAxis * lengthMm.
-        // 1. To make the cone point UP/RIGHT from Socket to Tip:
-        //    Tip must be at +X, +Z relative to Socket.
-        //    So TipNormal (from Tip to Socket) must be (-nx, 0, -nz).
-        const tipNormal = { x: -nx, y: 0, z: -nz };
-
-        // 2. Keep the trunk centered at X=0 even when cone-angle mode is Locked/Adaptive.
-        // In those modes, PlacementLogic may choose a cone axis different from the surface normal.
-        // We compute the same cone axis + disk thickness and place the tip so the resulting socket X remains 0.
-        const tipProfile: SupportTipProfile = {
-            type: 'disk',
-            contactDiameterMm: liveConfig.tipContactDiameterMm,
-            bodyDiameterMm: settings.shaft.diameterMm,
-            lengthMm: liveConfig.tipLengthMm,
-            penetrationMm: settings.tip.penetrationMm,
-            diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
-            maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
-            standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4),
-        };
-
-        const coneAngleMode = settings.tip.coneAngleMode ?? 'normal';
-        const adaptiveConeAngleOffsetDeg = settings.tip.adaptiveConeAngleOffsetDeg ?? 30;
-
-        const { coneAxis } = resolveConeAxisPolicy({
-            surfaceNormal: tipNormal,
-            coneAngleMode,
-            adaptiveConeAngleOffsetDeg,
-        });
-
-        const diskThickness = calculateDiskThickness(tipNormal, coneAxis, tipProfile);
-        const tipX = -(tipNormal.x * diskThickness + coneAxis.x * tipProfile.lengthMm);
-
-        const tipPos = { x: tipX, y: 0, z: liveConfig.previewHeightMm };
-
-        if (activeKind === 'trunk' || activeKind === 'raft') {
-            return buildTrunkData({
-                tipPos: tipPos,
-                tipNormal: tipNormal,
-                modelId: 'anatomy-preview',
-                overrides: {
-                    rootsDiameterMm: liveConfig.rootsDiameterMm,
-                    rootsDiskHeightMm: liveConfig.rootsDiskHeightMm,
-                    rootsConeHeightMm: liveConfig.rootsConeHeightMm,
-                    shaftDiameterMm: settings.shaft.diameterMm,
-                    jointCount: liveConfig.jointCount,
-                    tipContactDiameterMm: liveConfig.tipContactDiameterMm,
-                    tipBodyDiameterMm: settings.shaft.diameterMm,
-                    tipLengthMm: liveConfig.tipLengthMm,
-                }
-            }).supportData;
-        }
-
-        if (activeKind === 'branch') {
-            const parentKnot = {
-                id: 'anatomy-preview-knot',
-                parentShaftId: 'anatomy-preview-shaft',
-                pos: { x: 0, y: 0, z: 8 },
-                diameter: settings.shaft.diameterMm + 0.1,
-            };
-
-            const branchTipPos = { x: 2.5, y: 0, z: liveConfig.previewHeightMm };
-            return buildBranchData({
-                tipPos: branchTipPos,
-                tipNormal: tipNormal,
-                modelId: 'anatomy-preview',
-                parentKnot,
-            }).supportData;
-        }
-
-        if (activeKind === 'leaf') {
-            const parentKnot = {
-                id: 'anatomy-preview-knot',
-                parentShaftId: 'anatomy-preview-shaft',
-                pos: { x: 0, y: 0, z: 8 },
-                diameter: settings.shaft.diameterMm + 0.1,
-            };
-
-            const leafTipPos = { x: 2.2, y: 0, z: liveConfig.previewHeightMm };
-            return buildLeafData({
-                tipPos: leafTipPos,
-                surfaceNormal: tipNormal,
-                modelId: 'anatomy-preview',
-                parentKnot,
-                hostDiameterMm: settings.shaft.diameterMm,
-            }).supportData;
-        }
-
-        if (activeKind === 'stick') {
-            const aPos = { x: -2.8, y: 0, z: 10.5 };
-            const bPos = { x: 2.8, y: 0, z: 7.5 };
-            const aNormal = { x: 0, y: 0, z: 1 };
-            const bNormal = { x: 0, y: 0, z: 1 };
-            const built = buildStick({ modelId: 'anatomy-preview', aPos, aNormal, bPos, bNormal });
-            const seg = built.stick.segments[0];
-
-            return {
-                id: built.stick.id,
-                startPos: seg.bottomJoint?.pos ?? aPos,
-                segments: [seg],
-                contactCones: [built.stick.contactConeA, built.stick.contactConeB],
-            };
-        }
-
-        // twig
-        const aPos = { x: -2.8, y: 0, z: 10.5 };
-        const bPos = { x: 2.8, y: 0, z: 7.5 };
-        const aNormal = { x: 0, y: 0, z: 1 };
-        const bNormal = { x: 0, y: 0, z: 1 };
-        const built = buildTwig({ modelId: 'anatomy-preview', aPos, aNormal, bPos, bNormal });
-        const seg = built.twig.segments[0];
-
-        return {
-            id: built.twig.id,
-            startPos: seg.bottomJoint?.pos ?? aPos,
-            segments: [seg],
-            contactDisks: [built.twig.contactDiskA, built.twig.contactDiskB],
-        };
-    }, [activeKind, settings, liveConfig]);
 
     const groupRef = React.useRef<THREE.Group>(null);
 
@@ -745,9 +634,9 @@ function PreviewContent({
             camera.updateProjectionMatrix();
             hasFramed.current = true;
         }
-    }, [supportData, activeKind, camera]);
+    }, [activeKind, camera]);
 
-    const showPreviewTuner = ANATOMY_CONFIG.rendering.showPreviewTuner;
+    const showPreviewTuner = previewState.showTuner;
 
     // --- Anatomy Highlight Logic ---
     const HIGHLIGHT_COLOR = ANATOMY_CONFIG.colors.highlight;
@@ -801,65 +690,7 @@ function PreviewContent({
         return overrides;
     }, [previewState.activeSettingKey]);
 
-    const raftPreviewMeshes = React.useMemo(() => {
-        if (activeKind !== 'raft') return null;
-        if (raftSettings.bottomMode === 'off') return null;
 
-        const focusKey = previewState.activeSettingKey;
-
-        const rRaw = settings.roots.diameterMm / 2;
-        const r = Math.min(3.0, Math.max(0.25, Number.isFinite(rRaw) ? rRaw : 0.75));
-
-        // 5-point pattern: center + 4 corners
-        const spread = 4;
-
-        const circles = buildRaftPreviewBaseCircles({ rootsDiameterMm: r * 2, spreadMm: spread });
-
-        return buildRaftPreviewMeshes({
-            circles,
-            raftSettings,
-            focusKey,
-            colors: {
-                normal: NORMAL_COLOR,
-                dim: DIM_COLOR,
-                highlight: HIGHLIGHT_COLOR,
-            },
-        });
-    }, [
-        activeKind,
-        previewState.activeSettingKey,
-        settings.roots.diameterMm,
-        raftSettings.bottomMode,
-        raftSettings.thickness,
-        raftSettings.chamferAngle,
-        raftSettings.lineWidthMm,
-        raftSettings.lineHeightMm,
-        raftSettings.wallHeight,
-        raftSettings.wallThickness,
-        raftSettings.crenulationGapWidth,
-        raftSettings.crenulationSpacing,
-        raftSettings.wallEnabled,
-    ]);
-
-    const raftPreviewSupports = React.useMemo(() => {
-        if (activeKind !== 'raft') return null;
-        if (raftSettings.bottomMode === 'off') return null;
-
-        const rRaw = settings.roots.diameterMm / 2;
-        const r = Math.min(3.0, Math.max(0.25, Number.isFinite(rRaw) ? rRaw : 0.75));
-
-        // 5-point pattern: center + 4 corners
-        const spread = 4;
-        const circles = buildRaftPreviewBaseCircles({ rootsDiameterMm: r * 2, spreadMm: spread });
-        return buildRaftPreviewSupports({ previewHeightMm: liveConfig.previewHeightMm, circles });
-    }, [activeKind, raftSettings.bottomMode, settings.roots.diameterMm, liveConfig.previewHeightMm]);
-
-    React.useEffect(() => {
-        return () => {
-            if (!raftPreviewMeshes) return;
-            disposeRaftPreviewMeshes(raftPreviewMeshes);
-        };
-    }, [raftPreviewMeshes]);
 
     // Pass support config up to parent for the Overlay
     React.useEffect(() => {
@@ -913,45 +744,32 @@ function PreviewContent({
             )}
 
             <group ref={groupRef}>
-                {activeKind === 'raft' ? (
-                    <>
-                        {raftPreviewSupports?.map((data) => (
-                            <SupportBuilder
-                                key={data.id}
-                                data={data}
-                                isPreview={true}
-                                raftOverride={{ bottomMode: raftSettings.bottomMode, thickness: raftSettings.thickness }}
-                                previewMaterialOverride={{ color: '#d4d4d4', opacity: 0.12 }}
-                                rootsDiskMaterialOverride={{ transparent: false, opacity: 1, depthWrite: true }}
-                                anatomyOverrides={{
-                                    rootsDisk: NORMAL_COLOR,
-                                }}
-                            />
-                        ))}
+                {activeKind === 'raft' && (
+                    <RaftPreview
+                        settings={settings}
+                        liveConfig={liveConfig}
+                        activeKind={activeKind}
+                        raftSettings={raftSettings}
+                        previewState={previewState}
+                    />
+                )}
 
-                        {raftPreviewMeshes?.kind === 'solid' && (
-                            <>
-                                <primitive object={raftPreviewMeshes.baseMesh} />
-                                {raftPreviewMeshes.wallMesh && <primitive object={raftPreviewMeshes.wallMesh} />}
-                            </>
-                        )}
+                {activeKind === 'grid' && (
+                    <GridPreview
+                        settings={settings}
+                        liveConfig={liveConfig}
+                        activeKind={activeKind}
+                        previewState={previewState}
+                        anatomyOverrides={anatomyOverrides}
+                    />
+                )}
 
-                        {raftPreviewMeshes?.kind === 'line' && (
-                            <>
-                                {raftPreviewMeshes.beamMeshes.map((m, i) => (
-                                    <primitive key={`beam-${i}`} object={m} />
-                                ))}
-                                {raftPreviewMeshes.borderMesh && <primitive object={raftPreviewMeshes.borderMesh} />}
-                                {raftPreviewMeshes.wallMesh && <primitive object={raftPreviewMeshes.wallMesh} />}
-                            </>
-                        )}
-                    </>
-                ) : (
-                    <SupportBuilder
-                        data={supportData}
-                        isPreview={ANATOMY_CONFIG.rendering.showAsGhostPreview}
-                        raftOverride={{ bottomMode: 'off', thickness: 0 }}
-                        highlightJoints={previewState.activeSettingKey === 'joint.defaultJointCount'}
+                {activeKind !== 'raft' && activeKind !== 'grid' && (
+                    <TrunkPreview
+                        settings={settings}
+                        liveConfig={liveConfig}
+                        activeKind={activeKind}
+                        previewState={previewState}
                         anatomyOverrides={anatomyOverrides}
                     />
                 )}
@@ -981,7 +799,8 @@ export function SupportAnatomyPreviewCanvas() {
     const [debugData, setDebugData] = React.useState<CapturedConfig | null>(null);
     const [manualOverride, setManualOverride] = React.useState<{ data: Partial<CapturedConfig>; category: 'camera' | 'support'; timestamp: number } | null>(null);
     const [autoCameraEnabled, setAutoCameraEnabled] = React.useState(true);
-    const showPreviewTuner = ANATOMY_CONFIG.rendering.showPreviewTuner;
+    const previewState = React.useSyncExternalStore(subscribeToAnatomyPreviewState, getAnatomyPreviewState, getAnatomyPreviewState);
+    const showPreviewTuner = previewState.showTuner;
 
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
