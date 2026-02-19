@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 
 interface TerritoryVoxelControlsProps {
     enabled: boolean;
@@ -29,52 +30,70 @@ export function TerritoryVoxelControls({
     const [expanded, setExpanded] = React.useState(false);
 
     return (
-        <div className="bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl">
-            <div className="flex items-center justify-between py-1 border-b border-neutral-700 mb-1">
-                <div className="flex items-center gap-1.5">
-                    <button
-                        onClick={() => setExpanded(!expanded)}
-                        className="p-0.5 hover:bg-neutral-700 rounded transition-colors"
-                        title={expanded ? 'Collapse card' : 'Expand card'}
-                    >
-                        <svg
-                            className={`w-3 h-3 transform transition-transform ${expanded ? 'text-blue-500' : 'text-neutral-500'}`}
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
+        <Card>
+            <CardHeader
+                left={(
+                    <>
+                        <IconButton
+                            onClick={() => setExpanded(!expanded)}
+                            className="!p-0.5"
+                            title={expanded ? 'Collapse card' : 'Expand card'}
                         >
-                            {expanded ? (
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            ) : (
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                            )}
-                        </svg>
+                            <svg
+                                className="w-3 h-3 transform transition-transform"
+                                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                {expanded ? (
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                ) : (
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                )}
+                            </svg>
+                        </IconButton>
+                        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Territory Voxels</h3>
+                    </>
+                )}
+                right={(
+                    <button
+                        type="button"
+                        onClick={() => onEnabledChange(!enabled)}
+                        className="h-8 min-w-[74px] rounded-md border px-2.5 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                        style={enabled
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                                color: 'var(--accent-contrast)',
+                            }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-1)',
+                                color: 'var(--text-muted)',
+                            }}
+                        title="Toggle Territory Voxels"
+                    >
+                        {enabled ? 'ON' : 'OFF'}
                     </button>
-                    <h3 className="text-xs font-semibold text-neutral-200">Territory Voxels</h3>
-                </div>
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={(e) => onEnabledChange(e.target.checked)}
-                        className="w-3 h-3 rounded border-neutral-600 bg-neutral-700 text-blue-500 focus:ring-1 focus:ring-blue-500 focus:ring-offset-0"
-                    />
-                    <span className="text-[9px] text-neutral-400 uppercase tracking-wide">{enabled ? 'On' : 'Off'}</span>
-                </label>
-            </div>
+                )}
+                hideDivider={!expanded}
+            />
 
-            {islandCount > 0 && (
-                <div className="text-[9px] text-neutral-400 mb-1 px-1">
-                    {islandCount} island{islandCount !== 1 ? 's' : ''} detected
-                </div>
-            )}
+            {(islandCount > 0 || expanded) && (
+                <div className="px-2.5 pt-2 pb-3">
+                    {islandCount > 0 && (
+                        <div className="ui-meta mb-2">
+                            {islandCount} island{islandCount !== 1 ? 's' : ''} detected
+                        </div>
+                    )}
 
-            {expanded && (
-                <div className="space-y-2 mt-1.5">
-                    <div className="flex flex-col gap-0.5">
+                    {expanded && (
+                        <div className="space-y-2.5">
+                            <div className="flex flex-col gap-1">
                         <div className="flex items-center justify-between">
-                            <label className="text-[9px] text-neutral-400">Opacity</label>
-                            <span className="text-[9px] text-neutral-300">{Math.round(opacity * 100)}%</span>
+                            <label className="ui-meta">Opacity</label>
+                            <span className="ui-meta" style={{ color: 'var(--text-strong)' }}>{Math.round(opacity * 100)}%</span>
                         </div>
                         <input
                             type="range"
@@ -84,18 +103,18 @@ export function TerritoryVoxelControls({
                             value={opacity}
                             onChange={(e) => onOpacityChange(parseFloat(e.target.value))}
                             disabled={!enabled}
-                            className="w-full h-1.5 bg-neutral-700 rounded-lg appearance-none cursor-pointer disabled:opacity-50 accent-purple-500"
+                            className="ui-range"
                         />
                     </div>
 
-                    <div className="text-[9px] text-neutral-500 pt-1 border-t border-neutral-700 leading-tight">
-                        <p>Visualizes 'Vertical Watershed' territories, preserving identity after merges.</p>
+                    <div className="ui-meta pt-1.5 border-t leading-snug" style={{ borderColor: 'var(--border-subtle)' }}>
+                        <p>Visualizes &apos;Vertical Watershed&apos; territories, preserving identity after merges.</p>
                     </div>
 
                     {/* Analysis Settings */}
-                    <div className="pt-1 border-t border-neutral-700">
+                    <div className="pt-1.5 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
                         <div className="flex items-center justify-between">
-                            <label className="text-[9px] text-neutral-400" title="Prioritize surface connectivity to prevent internal tunneling">Surface Priority Mode</label>
+                            <label className="ui-meta" title="Prioritize surface connectivity to prevent internal tunneling">Surface Priority Mode</label>
                             <button
                                 type="button"
                                 onClick={() => {
@@ -108,21 +127,23 @@ export function TerritoryVoxelControls({
                                     }
                                 }}
                                 disabled={!onUseSurfaceContiguityChange || !enabled}
-                                className={`w-7 h-4 rounded-full flex items-center px-0.5 transition-colors ${useSurfaceContiguity ? 'bg-blue-500' : 'bg-neutral-600'
-                                    } ${(!onUseSurfaceContiguityChange || !enabled) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                className={`w-9 h-5 rounded-full flex items-center px-0.5 transition-colors ${(!onUseSurfaceContiguityChange || !enabled) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                style={{ background: useSurfaceContiguity ? 'var(--accent)' : 'var(--surface-2)' }}
                             >
                                 <span
-                                    className={`w-3 h-3 rounded-full bg-white shadow transform transition-transform ${useSurfaceContiguity ? 'translate-x-3' : 'translate-x-0'
+                                    className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${useSurfaceContiguity ? 'translate-x-4' : 'translate-x-0'
                                         }`}
                                 />
                             </button>
                         </div>
-                        <div className="text-[8px] text-neutral-500 mt-0.5">
+                        <div className="mt-1 text-[10px] leading-snug" style={{ color: 'color-mix(in srgb, var(--text-muted), black 20%)' }}>
                             {onRescan ? 'Automatically recalculates territory when toggled.' : 'Toggles between internal centroid (OFF) and surface neighbor (ON) logic. Requires Re-Scan.'}
                         </div>
                     </div>
+                        </div>
+                    )}
                 </div>
             )}
-        </div>
+        </Card>
     );
 }

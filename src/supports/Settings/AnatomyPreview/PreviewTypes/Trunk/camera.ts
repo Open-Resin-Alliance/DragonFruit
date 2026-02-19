@@ -7,6 +7,12 @@ export const SUPPORT_HOME_FOCUS_STATE: CameraFocusState = {
     zoom: ANATOMY_CONFIG.camera.orthographicZoom,
 };
 
+export const TRUNK_HOME_FOCUS_STATE: CameraFocusState = {
+    position: [0, -49.53, 10],
+    target: [0, 0, 8],
+    zoom: 30,
+};
+
 export const TIP_FOCUS_STATE: CameraFocusState = {
     position: [1.66, -49.25, 10],
     target: [1.66, 0.28, 14.9],

@@ -161,8 +161,8 @@ export function TransformGizmo({
   };
 
   const isDimmed = (part: string) => {
-    // Dim all parts except the hovered or active one
-    const focusedPart = activePart || hoveredPart;
+    // Only dim while actively dragging; do not dim on hover.
+    const focusedPart = activePart;
     return focusedPart !== null && focusedPart !== part;
   };
 

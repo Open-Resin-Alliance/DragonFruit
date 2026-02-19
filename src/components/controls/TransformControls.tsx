@@ -2,6 +2,30 @@ import React, { useState } from 'react';
 import * as THREE from 'three';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
+
+interface SectionHeaderProps {
+  title: string;
+  expanded: boolean;
+  onToggle: () => void;
+}
+
+function SectionHeader({ title, expanded, onToggle }: SectionHeaderProps) {
+  return (
+    <button
+      onClick={onToggle}
+      className="w-full flex items-center justify-between py-1 text-sm font-semibold transition-colors"
+      style={{ color: 'var(--text-strong)' }}
+    >
+      <span>{title}</span>
+      {expanded ? (
+        <ChevronDown className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+      ) : (
+        <ChevronRight className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
+      )}
+    </button>
+  );
+}
 
 interface TransformControlsProps {
   // Position
@@ -53,11 +77,14 @@ export function TransformControls({
   onLift,
   onDrop,
 }: TransformControlsProps) {
+  const [expanded, setExpanded] = useState(true);
   const [moveExpanded, setMoveExpanded] = useState(true);
   const [rotateExpanded, setRotateExpanded] = useState(true);
   const [scaleExpanded, setScaleExpanded] = useState(true);
   const [uniformScaling, setUniformScaling] = useState(true);
   const [scaleUnit, setScaleUnit] = useState<'mm' | '%'>('%');
+
+  const compactButtonClass = 'ui-button ui-button-secondary px-2.5 py-2 text-sm min-h-10';
 
   // Conversion helpers
   const toDegrees = (rad: number) => (rad * 180) / Math.PI;
@@ -122,110 +149,127 @@ export function TransformControls({
     }
   };
 
-  // Section header component
-  const SectionHeader = ({ 
-    title, 
-    expanded, 
-    onToggle 
-  }: { 
-    title: string; 
-    expanded: boolean; 
-    onToggle: () => void;
-  }) => (
-    <button
-      onClick={onToggle}
-      className="w-full flex items-center justify-between py-1 text-sm font-semibold text-neutral-200 hover:text-white transition-colors"
-    >
-      <span>{title}</span>
-      {expanded ? (
-        <ChevronDown className="w-4 h-4 text-neutral-400" />
-      ) : (
-        <ChevronRight className="w-4 h-4 text-neutral-400" />
-      )}
-    </button>
-  );
-
   return (
-    <div className="absolute left-72 top-20 z-10 bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl w-64 max-h-[calc(100vh-120px)] overflow-y-auto">
+    <Card
+      className="w-full overflow-x-hidden shadow-xl"
+    >
+      <CardHeader
+        left={(
+          <>
+            <IconButton
+              onClick={() => setExpanded(!expanded)}
+              title={expanded ? 'Collapse card' : 'Expand card'}
+              className="!p-0.5"
+            >
+              <svg
+                className="w-3 h-3 transform transition-transform"
+                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {expanded ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                )}
+              </svg>
+            </IconButton>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Transform
+            </h3>
+          </>
+        )}
+        hideDivider={!expanded}
+      />
+
+      {expanded ? (
+        <div className="px-2.5 pt-1 pb-2.5 max-h-[calc(100vh-180px)] overflow-y-auto space-y-2">
       
       {/* MOVE SECTION */}
-      <div className="border-b border-neutral-700">
+      <div
+        className="rounded-md border p-2.5"
+        style={{
+          background: 'color-mix(in srgb, #4f8cff, var(--surface-1) 91%)',
+          borderColor: 'color-mix(in srgb, #4f8cff, var(--border-subtle) 62%)',
+        }}
+      >
         <SectionHeader title="Move" expanded={moveExpanded} onToggle={() => setMoveExpanded(!moveExpanded)} />
         {moveExpanded && (
-          <div className="pb-1">
+          <div className="pt-1.5 space-y-2">
             {/* XYZ Position Inputs */}
-            <div className="flex gap-1.5 mb-1">
+            <div className="flex gap-1.5">
               <div className="flex-1">
-                <label className="text-[9px] text-red-400 font-medium mb-0.5 block">X</label>
+                <label className="ui-label mb-1 block" style={{ color: '#f87171' }}>X</label>
                 <NumberInput
                   value={parseFloat(position.x.toFixed(2))}
                   onChange={(val) => handlePositionChange('x', val)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[9px] text-green-400 font-medium mb-0.5 block">Y</label>
+                <label className="ui-label mb-1 block" style={{ color: '#4ade80' }}>Y</label>
                 <NumberInput
                   value={parseFloat(position.y.toFixed(2))}
                   onChange={(val) => handlePositionChange('y', val)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[9px] text-blue-400 font-medium mb-0.5 block">Z</label>
+                <label className="ui-label mb-1 block" style={{ color: '#60a5fa' }}>Z</label>
                 <NumberInput
                   value={parseFloat(position.z.toFixed(2))}
                   onChange={(val) => handlePositionChange('z', val)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
             </div>
 
             {/* Action Buttons */}
-            <div className="grid grid-cols-3 gap-1.5 mb-1">
+            <div className="grid grid-cols-3 gap-1.5">
               <button
                 onClick={onCenter}
-                className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
+                className={compactButtonClass}
               >
                 Center
               </button>
               <button
                 onClick={() => modelBBox && onPlatform(modelBBox)}
                 disabled={!modelBBox}
-                className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`${compactButtonClass} disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 Platform
               </button>
               <button
                 onClick={handleArrangeAll}
                 disabled={!modelBBox}
-                className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`${compactButtonClass} disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 Arrange
               </button>
             </div>
 
             {/* Lift Object Section */}
-            <div className="bg-neutral-750 rounded p-1">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] text-neutral-400">Auto lift</span>
+            <div className="rounded-md border p-2.5 space-y-2" style={{ background: 'var(--surface-0)', borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Auto lift</span>
                 <div className="flex gap-1">
                   <button
                     onClick={() => onAutoLiftChange(true)}
-                    className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                    className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
                       autoLift
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
+                        ? 'ui-button-primary'
+                        : 'ui-button-secondary'
                     }`}
                   >
                     on
                   </button>
                   <button
                     onClick={() => onAutoLiftChange(false)}
-                    className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                    className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
                       !autoLift
-                        ? 'bg-neutral-600 text-white'
-                        : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
+                        ? 'ui-button-primary'
+                        : 'ui-button-secondary'
                     }`}
                   >
                     off
@@ -233,12 +277,12 @@ export function TransformControls({
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5 mb-1">
-                <span className="text-[10px] text-neutral-400">Dist (mm)</span>
+              <div className="grid grid-cols-[auto_1fr] items-center gap-2">
+                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Distance (mm)</span>
                 <NumberInput
                   value={liftDistance}
                   onChange={(val) => onLiftDistanceChange(val)}
-                  className="flex-1 px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
 
@@ -246,14 +290,14 @@ export function TransformControls({
                 <button
                   onClick={onLift}
                   disabled={!modelBBox}
-                  className="px-1.5 py-1 text-[10px] bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="ui-button ui-button-primary px-2.5 py-2 text-sm min-h-10 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Lift
                 </button>
                 <button
                   onClick={onDrop}
                   disabled={!modelBBox}
-                  className="px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="ui-button ui-button-secondary px-2.5 py-2 text-sm min-h-10 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Drop
                 </button>
@@ -264,41 +308,47 @@ export function TransformControls({
       </div>
 
       {/* ROTATE SECTION */}
-      <div className="border-b border-neutral-700">
+      <div
+        className="rounded-md border p-2.5"
+        style={{
+          background: 'color-mix(in srgb, #8f6cff, var(--surface-1) 91%)',
+          borderColor: 'color-mix(in srgb, #8f6cff, var(--border-subtle) 62%)',
+        }}
+      >
         <SectionHeader title="Rotate" expanded={rotateExpanded} onToggle={() => setRotateExpanded(!rotateExpanded)} />
         {rotateExpanded && (
-          <div className="pb-1">
+          <div className="pt-1.5 space-y-2">
             {/* XYZ Rotation Inputs */}
-            <div className="flex gap-1.5 mb-1">
+            <div className="flex gap-1.5">
               <div className="flex-1">
-                <label className="text-[9px] text-red-400 font-medium mb-0.5 block">X</label>
+                <label className="ui-label mb-1 block" style={{ color: '#f87171' }}>X</label>
                 <NumberInput
                   value={parseFloat(toDegrees(rotation.x).toFixed(2))}
                   onChange={(val) => handleRotationChange('x', val)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[9px] text-green-400 font-medium mb-0.5 block">Y</label>
+                <label className="ui-label mb-1 block" style={{ color: '#4ade80' }}>Y</label>
                 <NumberInput
                   value={parseFloat(toDegrees(rotation.y).toFixed(2))}
                   onChange={(val) => handleRotationChange('y', val)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[9px] text-blue-400 font-medium mb-0.5 block">Z</label>
+                <label className="ui-label mb-1 block" style={{ color: '#60a5fa' }}>Z</label>
                 <NumberInput
                   value={parseFloat(toDegrees(rotation.z).toFixed(2))}
                   onChange={(val) => handleRotationChange('z', val)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
             </div>
 
             <button
               onClick={onResetRotation}
-              className="w-full px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
+              className="ui-button ui-button-secondary w-full px-2.5 py-2 text-sm min-h-10"
             >
               Reset Rotation
             </button>
@@ -307,42 +357,48 @@ export function TransformControls({
       </div>
 
       {/* SCALE SECTION */}
-      <div>
+      <div
+        className="rounded-md border p-2.5"
+        style={{
+          background: 'color-mix(in srgb, #2eb67d, var(--surface-1) 91%)',
+          borderColor: 'color-mix(in srgb, #2eb67d, var(--border-subtle) 62%)',
+        }}
+      >
         <SectionHeader title="Scale" expanded={scaleExpanded} onToggle={() => setScaleExpanded(!scaleExpanded)} />
         {scaleExpanded && (
-          <div className="pb-1">
+          <div className="pt-1.5 space-y-2">
             {/* Scale Factor Inputs */}
-            <div className="flex gap-1.5 mb-1">
+            <div className="flex gap-1.5">
               <div className="flex-1">
-                <label className="text-[9px] text-red-400 font-medium mb-0.5 block">X</label>
+                <label className="ui-label mb-1 block" style={{ color: '#f87171' }}>X</label>
                 <NumberInput
                   value={parseFloat(getScaleDisplayValue('x').toFixed(2))}
                   onChange={(val) => handleScaleChange('x', val)}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-red-500 focus:outline-none no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[9px] text-green-400 font-medium mb-0.5 block">Y</label>
+                <label className="ui-label mb-1 block" style={{ color: '#4ade80' }}>Y</label>
                 <NumberInput
                   value={parseFloat(getScaleDisplayValue('y').toFixed(2))}
                   onChange={(val) => handleScaleChange('y', val)}
                   disabled={uniformScaling}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-green-500 focus:outline-none disabled:opacity-50 no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm disabled:opacity-50 no-spinners"
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[9px] text-blue-400 font-medium mb-0.5 block">Z</label>
+                <label className="ui-label mb-1 block" style={{ color: '#60a5fa' }}>Z</label>
                 <NumberInput
                   value={parseFloat(getScaleDisplayValue('z').toFixed(2))}
                   onChange={(val) => handleScaleChange('z', val)}
                   disabled={uniformScaling}
-                  className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none disabled:opacity-50 no-spinners"
+                  className="ui-input w-full px-2 py-1.5 text-sm disabled:opacity-50 no-spinners"
                 />
               </div>
               <div className="flex items-end">
                 <button
                   onClick={() => setScaleUnit(scaleUnit === 'mm' ? '%' : 'mm')}
-                  className="px-1.5 py-0.5 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors mb-0.5"
+                  className="ui-button ui-button-secondary px-2.5 py-1.5 text-sm min-h-10 mb-0"
                 >
                   {scaleUnit}
                 </button>
@@ -350,25 +406,25 @@ export function TransformControls({
             </div>
 
             {/* Uniform Scaling Toggle */}
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-neutral-400">Uniform</span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Uniform</span>
               <div className="flex gap-1">
                 <button
                   onClick={() => setUniformScaling(true)}
-                  className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                  className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
                     uniformScaling
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
+                      ? 'ui-button-primary'
+                      : 'ui-button-secondary'
                   }`}
                 >
                   on
                 </button>
                 <button
                   onClick={() => setUniformScaling(false)}
-                  className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                  className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
                     !uniformScaling
-                      ? 'bg-neutral-600 text-white'
-                      : 'bg-neutral-700 text-neutral-400 hover:bg-neutral-600'
+                      ? 'ui-button-primary'
+                      : 'ui-button-secondary'
                   }`}
                 >
                   off
@@ -378,14 +434,16 @@ export function TransformControls({
 
             <button
               onClick={onResetScale}
-              className="w-full px-1.5 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
+              className="ui-button ui-button-secondary w-full px-2.5 py-2 text-sm min-h-10"
             >
               Reset Scale
             </button>
           </div>
         )}
       </div>
-    </div>
+      </div>
+      ) : null}
+    </Card>
   );
 }
 

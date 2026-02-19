@@ -38,9 +38,19 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
       position = props.position as THREE.Vector3;
     }
     
-    const distance = camera.position.distanceTo(position);
-    const newScale = distance * scaleFactor;
-    setScale(newScale);
+    let newScale: number;
+    if ((camera as any).isOrthographicCamera) {
+      const ortho = camera as THREE.OrthographicCamera;
+      const worldHeight = (ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom);
+      newScale = worldHeight * scaleFactor;
+    } else {
+      const distance = camera.position.distanceTo(position);
+      newScale = distance * scaleFactor;
+    }
+
+    if (Math.abs(newScale - scale) > 1e-4) {
+      setScale(newScale);
+    }
   });
 
   // Use live position from mesh if available, otherwise use props

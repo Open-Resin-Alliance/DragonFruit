@@ -26,6 +26,8 @@ type PersistedMeshAppearance = {
   wireframeThicknessPx: number;
   xrayOpacity: number;
   meshColor: string;
+  hoverTintStrength: number;
+  selectedTintStrength: number;
 };
 
 const MESH_APPEARANCE_STORAGE_KEY = 'mesh-appearance-settings';
@@ -40,6 +42,8 @@ const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
 const DEFAULT_TOON_STEPS = 5;
+const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
+const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
 
 function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
   const n = typeof input === 'number' ? input : Number(input);
@@ -100,6 +104,8 @@ function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
       wireframeThicknessPx: clampNumber(parsed.wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(parsed.xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
       meshColor: clampHexColor(parsed.meshColor, DEFAULT_MESH_COLOR),
+      hoverTintStrength: clampNumber(parsed.hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
+      selectedTintStrength: clampNumber(parsed.selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
     };
   } catch {
     return null;
@@ -143,11 +149,36 @@ import { getSnapshot } from '@/supports/state';
 import { deleteSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
 
+type ImportProgressState = {
+  active: boolean;
+  type: 'mesh' | 'scene' | null;
+  label: string;
+  detail: string;
+  progress: number | null;
+};
+
+type ModelClipboardEntry = {
+  name: string;
+  fileSizeBytes?: number;
+  geometry: GeometryWithBounds;
+  transform: ModelTransform;
+  color: string;
+  polygonCount: number;
+};
+
 export function useSceneCollectionManager() {
   const persistedAppearance = useMemo(() => readMeshAppearanceFromLocalStorage(), []);
 
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry | null>(null);
+  const [importProgress, setImportProgress] = useState<ImportProgressState>({
+    active: false,
+    type: null,
+    label: '',
+    detail: '',
+    progress: null,
+  });
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
 
@@ -349,6 +380,9 @@ export function useSceneCollectionManager() {
   const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(persistedAppearance?.matcapVariant ?? DEFAULT_MATCAP_VARIANT);
   const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(persistedAppearance?.flatUseVertexColors ?? DEFAULT_FLAT_USE_VERTEX_COLORS);
   const [toonSteps, setToonSteps] = useState<number>(persistedAppearance?.toonSteps ?? DEFAULT_TOON_STEPS);
+  const [preferredMeshColor, setPreferredMeshColor] = useState<string>(persistedAppearance?.meshColor ?? DEFAULT_MESH_COLOR);
+  const [hoverTintStrength, setHoverTintStrength] = useState<number>(persistedAppearance?.hoverTintStrength ?? DEFAULT_HOVER_TINT_STRENGTH);
+  const [selectedTintStrength, setSelectedTintStrength] = useState<number>(persistedAppearance?.selectedTintStrength ?? DEFAULT_SELECTED_TINT_STRENGTH);
 
   useEffect(() => {
     const prev = readMeshAppearanceFromLocalStorage();
@@ -367,15 +401,29 @@ export function useSceneCollectionManager() {
       wireframeThicknessPx: clampNumber(wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
       meshColor: prev?.meshColor ?? DEFAULT_MESH_COLOR,
+      hoverTintStrength: clampNumber(hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
+      selectedTintStrength: clampNumber(selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
     });
-  }, [ambientIntensity, directionalIntensity, materialRoughness, shaderType, matcapVariant, flatUseVertexColors, toonSteps, wireframeThicknessPx, xrayOpacity]);
+  }, [ambientIntensity, directionalIntensity, flatUseVertexColors, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
 
   // Global application mode
   const [mode, setMode] = useState<SupportMode>('prepare');
-  const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
+  const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('tint');
 
   // Helper to generate IDs
   const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+
+  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds): GeometryWithBounds => {
+    const clonedGeometry = source.geometry.clone();
+    accelerateGeometry(clonedGeometry);
+
+    return {
+      geometry: clonedGeometry,
+      bbox: source.bbox.clone(),
+      center: source.center.clone(),
+      size: source.size.clone(),
+    };
+  }, []);
 
   // Active model derived state
   const activeModel = useMemo(() =>
@@ -409,14 +457,33 @@ export function useSceneCollectionManager() {
 
     const newModels: LoadedModel[] = [];
 
-    // Process sequentially to avoid freezing UI too much
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const url = URL.createObjectURL(file);
+    setImportProgress({
+      active: true,
+      type: 'mesh',
+      label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing geometry…',
+      progress: null,
+    });
 
-      try {
-        console.log(`[SceneCollection] Loading ${file.name}...`);
-        const geom = await loadStlGeometry(url);
+    try {
+      // Process sequentially to avoid freezing UI too much
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const url = URL.createObjectURL(file);
+
+        setImportProgress({
+          active: true,
+          type: 'mesh',
+          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          detail: files.length > 1
+            ? `${i + 1}/${files.length}: ${file.name}`
+            : `Loading ${file.name}`,
+          progress: null,
+        });
+
+        try {
+          console.log(`[SceneCollection] Loading ${file.name}...`);
+          const geom = await loadStlGeometry(url);
 
         // Initialize paint
         const color = preferredMeshColor;
@@ -486,19 +553,38 @@ export function useSceneCollectionManager() {
           polygonCount: geom.geometry.getAttribute('position').count / 3
         };
 
-        newModels.push(model);
-      } catch (err) {
-        console.error(`Failed to load ${file.name}`, err);
-        URL.revokeObjectURL(url); // Cleanup if failed
-      }
-    }
+          newModels.push(model);
+        } catch (err) {
+          console.error(`Failed to load ${file.name}`, err);
+          URL.revokeObjectURL(url); // Cleanup if failed
+        }
 
-    if (newModels.length > 0) {
-      setModels(prev => [...prev, ...newModels]);
-      // If no active model, select the first new one
-      if (!activeModelId) {
-        setActiveModelId(newModels[0].id);
+        setImportProgress({
+          active: true,
+          type: 'mesh',
+          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          detail: files.length > 1
+            ? `${Math.min(i + 1, files.length)}/${files.length} processed`
+            : 'Finalizing model…',
+          progress: null,
+        });
       }
+
+      if (newModels.length > 0) {
+        setModels(prev => [...prev, ...newModels]);
+        // If no active model, select the first new one
+        if (!activeModelId) {
+          setActiveModelId(newModels[0].id);
+        }
+      }
+    } finally {
+      setImportProgress({
+        active: false,
+        type: null,
+        label: '',
+        detail: '',
+        progress: null,
+      });
     }
   }, [activeModelId]);
 
@@ -549,13 +635,73 @@ export function useSceneCollectionManager() {
 
   }, [activeModelId]);
 
+  const copyModel = useCallback((id: string) => {
+    const source = models.find((m) => m.id === id);
+    if (!source) return false;
+
+    setModelClipboard({
+      name: source.name,
+      fileSizeBytes: source.fileSizeBytes,
+      geometry: cloneGeometryWithBounds(source.geometry),
+      transform: {
+        position: source.transform.position.clone(),
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      color: source.color,
+      polygonCount: source.polygonCount,
+    });
+
+    return true;
+  }, [cloneGeometryWithBounds, models]);
+
+  const cutModel = useCallback((id: string) => {
+    const copied = copyModel(id);
+    if (!copied) return false;
+    deleteModel(id);
+    return true;
+  }, [copyModel, deleteModel]);
+
+  const pasteModel = useCallback(() => {
+    if (!modelClipboard) return null;
+
+    const id = generateId();
+    const pastedModel: LoadedModel = {
+      id,
+      name: `${modelClipboard.name} Copy`,
+      fileUrl: '',
+      fileSizeBytes: modelClipboard.fileSizeBytes,
+      geometry: cloneGeometryWithBounds(modelClipboard.geometry),
+      transform: {
+        position: modelClipboard.transform.position.clone().add(new THREE.Vector3(6, 6, 0)),
+        rotation: modelClipboard.transform.rotation.clone(),
+        scale: modelClipboard.transform.scale.clone(),
+      },
+      visible: true,
+      color: modelClipboard.color,
+      polygonCount: modelClipboard.polygonCount,
+    };
+
+    setModels((prev) => [...prev, pastedModel]);
+    setActiveModelId(id);
+    return id;
+  }, [cloneGeometryWithBounds, generateId, modelClipboard]);
+
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
 
   const handleImportLysFile = useCallback(async (file: File) => {
-    const result = await lysImport.importFile(file);
-    if (result && result.geometry) {
-      try {
+    setImportProgress({
+      active: true,
+      type: 'scene',
+      label: 'Importing scene…',
+      detail: file.name,
+      progress: null,
+    });
+
+    try {
+      const result = await lysImport.importFile(file);
+      if (result && result.geometry) {
         const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId } = result;
 
         // Process geometry (bounds, center, normals, BVH)
@@ -606,9 +752,17 @@ export function useSceneCollectionManager() {
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
-      } catch (err) {
-        console.error("[SceneCollection] Failed to process LYS geometry:", err);
       }
+    } catch (err) {
+      console.error("[SceneCollection] Failed to process LYS geometry:", err);
+    } finally {
+      setImportProgress({
+        active: false,
+        type: null,
+        label: '',
+        detail: '',
+        progress: null,
+      });
     }
   }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase]);
 
@@ -705,42 +859,47 @@ export function useSceneCollectionManager() {
   }, [activeModelId, deleteModel, mode]);
 
   // Helper accessors for active model (compatibility)
-  const activeMeshColor = activeModel?.color ?? '#a3a3a3';
+  const activeMeshColor = activeModel?.color ?? preferredMeshColor;
   const activeMeshVisible = activeModel?.visible ?? true;
   const activeFileName = activeModel?.name ?? null;
 
   const setMeshColor = useCallback((color: string) => {
+    const normalizedColor = clampHexColor(color, DEFAULT_MESH_COLOR);
+    setPreferredMeshColor(normalizedColor);
+
     if (activeModelId) {
       setModels(prev => prev.map(m => {
         if (m.id !== activeModelId) return m;
 
         try {
-          clearPaintToBase(m.geometry.geometry, new THREE.Color(color));
+          clearPaintToBase(m.geometry.geometry, new THREE.Color(normalizedColor));
         } catch (err) {
           console.error('[SceneCollection] Failed to apply mesh color to geometry:', err);
         }
 
-        return { ...m, color };
+        return { ...m, color: normalizedColor };
       }));
-
-      const prev = readMeshAppearanceFromLocalStorage();
-
-      const persistedShaderType = clampPersistedMeshShaderType(prev?.shaderType ?? shaderType, DEFAULT_SHADER_TYPE);
-      writeMeshAppearanceToLocalStorage({
-        v: 1,
-        shaderType: persistedShaderType,
-        matcapVariant: prev?.matcapVariant ?? matcapVariant,
-        flatUseVertexColors: prev?.flatUseVertexColors ?? flatUseVertexColors,
-        toonSteps: prev?.toonSteps ?? toonSteps,
-        ambientIntensity: prev?.ambientIntensity ?? ambientIntensity,
-        directionalIntensity: prev?.directionalIntensity ?? directionalIntensity,
-        materialRoughness: prev?.materialRoughness ?? materialRoughness,
-        wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
-        xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
-        meshColor: clampHexColor(color, DEFAULT_MESH_COLOR),
-      });
     }
-  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, materialRoughness, shaderType, matcapVariant, toonSteps, wireframeThicknessPx, xrayOpacity]);
+
+    const prev = readMeshAppearanceFromLocalStorage();
+
+    const persistedShaderType = clampPersistedMeshShaderType(prev?.shaderType ?? shaderType, DEFAULT_SHADER_TYPE);
+    writeMeshAppearanceToLocalStorage({
+      v: 1,
+      shaderType: persistedShaderType,
+      matcapVariant: prev?.matcapVariant ?? matcapVariant,
+      flatUseVertexColors: prev?.flatUseVertexColors ?? flatUseVertexColors,
+      toonSteps: prev?.toonSteps ?? toonSteps,
+      ambientIntensity: prev?.ambientIntensity ?? ambientIntensity,
+      directionalIntensity: prev?.directionalIntensity ?? directionalIntensity,
+      materialRoughness: prev?.materialRoughness ?? materialRoughness,
+      wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
+      xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
+      meshColor: normalizedColor,
+      hoverTintStrength: prev?.hoverTintStrength ?? hoverTintStrength,
+      selectedTintStrength: prev?.selectedTintStrength ?? selectedTintStrength,
+    });
+  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
 
   const setMeshVisible = useCallback((visible: boolean) => {
     if (activeModelId) {
@@ -812,6 +971,7 @@ export function useSceneCollectionManager() {
 
     // Scene context
     sceneBounds,
+    importProgress,
 
     // Actions
     loadFiles,
@@ -820,6 +980,10 @@ export function useSceneCollectionManager() {
     setModelVisibility,
     renameModel,
     deleteModel,
+    copyModel,
+    cutModel,
+    pasteModel,
+    canPasteModel: modelClipboard !== null,
 
     // Scene settings
     ambientIntensity,
@@ -840,6 +1004,10 @@ export function useSceneCollectionManager() {
     setFlatUseVertexColors,
     toonSteps,
     setToonSteps,
+    hoverTintStrength,
+    setHoverTintStrength,
+    selectedTintStrength,
+    setSelectedTintStrength,
     mode,
     setMode,
     selectionHighlightMode,

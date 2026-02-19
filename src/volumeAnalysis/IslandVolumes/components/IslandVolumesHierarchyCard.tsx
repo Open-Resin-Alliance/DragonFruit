@@ -6,6 +6,7 @@ import { rleIntersectDilated, type RleLabels, type RleMask } from '@/volumeAnaly
 import type { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { buildVolumeHierarchy } from '../buildVolumeHierarchy';
 import type { BuildVolumeHierarchyResult } from '../types';
+import { Button, Card, CardHeader } from '@/components/ui/primitives';
 
 interface Props {
   islands: ReturnType<typeof useIslandManager>;
@@ -871,19 +872,24 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
   }, [result]);
 
   return (
-    <div className="bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl space-y-2">
-      <div className="flex items-center justify-between py-1 border-b border-neutral-700">
-        <h3 className="text-xs font-semibold text-neutral-200">Island Volumes: Hierarchy Builder</h3>
-        <button
-          type="button"
-          onClick={() => setResult(null)}
-          className="px-1.5 py-0.5 text-[10px] rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 transition-colors"
-        >
-          Clear
-        </button>
-      </div>
+    <Card>
+      <CardHeader
+        left={<h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island Volumes: Hierarchy Builder</h3>}
+        right={(
+          <Button
+            type="button"
+            onClick={() => setResult(null)}
+            variant="secondary"
+            size="sm"
+            className="!h-8 !px-2.5 !py-0 text-[11px]"
+          >
+            Clear
+          </Button>
+        )}
+      />
 
-      <button
+      <div className="px-2.5 pt-1 pb-2.5 space-y-2">
+      <Button
         type="button"
         disabled={!islands.scanData}
         onClick={() => {
@@ -898,22 +904,26 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
           setVoxelView('nodes');
           applyNodeLabelsToVoxels(scanData, r.nodeLabelsPerLayer);
         }}
-        className="w-full px-2 py-1 text-[10px] rounded bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:opacity-50 text-white transition-colors"
+        variant="primary"
+        size="sm"
+        className="w-full !h-8 !px-2.5 !py-0 text-[11px] disabled:opacity-50"
       >
         Build Hierarchy
-      </button>
+      </Button>
 
       {result && islands.scanData && (
-        <button
+        <Button
           type="button"
           onClick={() => {
             setVoxelView('nodes');
             applyNodeLabelsToVoxels(islands.scanData!, result.nodeLabelsPerLayer);
           }}
-          className="w-full px-2 py-1 text-[10px] rounded bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+          variant="accent"
+          size="sm"
+          className="w-full !h-8 !px-2.5 !py-0 text-[11px]"
         >
           Show Nodes In Voxels
-        </button>
+        </Button>
       )}
 
       {result && (
@@ -926,7 +936,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
               setVoxelView('nodes');
               applyNodeLabelsToVoxels(scanData, remappedLabelSets.nodes);
             }}
-            className={`px-2 py-1 text-[10px] rounded transition-colors ${voxelView === 'nodes' ? 'bg-blue-600 text-white' : 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'}`}
+            className={`ui-button !h-8 px-2.5 py-0 text-[11px] ${voxelView === 'nodes' ? 'ui-button-primary' : 'ui-button-secondary'}`}
           >
             Voxels: Nodes
           </button>
@@ -938,7 +948,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
               setVoxelView('leaves');
               applyNodeLabelsToVoxels(scanData, remappedLabelSets.leaves);
             }}
-            className={`px-2 py-1 text-[10px] rounded transition-colors ${voxelView === 'leaves' ? 'bg-blue-600 text-white' : 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'}`}
+            className={`ui-button !h-8 px-2.5 py-0 text-[11px] ${voxelView === 'leaves' ? 'ui-button-primary' : 'ui-button-secondary'}`}
           >
             Voxels: Leaves
           </button>
@@ -950,7 +960,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
               setVoxelView('systems');
               applyNodeLabelsToVoxels(scanData, remappedLabelSets.systems);
             }}
-            className={`px-2 py-1 text-[10px] rounded transition-colors ${voxelView === 'systems' ? 'bg-blue-600 text-white' : 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'}`}
+            className={`ui-button !h-8 px-2.5 py-0 text-[11px] ${voxelView === 'systems' ? 'ui-button-primary' : 'ui-button-secondary'}`}
           >
             Voxels: Systems
           </button>
@@ -962,7 +972,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
               setVoxelView('boundedSystems');
               applyNodeLabelsToVoxels(scanData, remappedLabelSets.boundedSystems);
             }}
-            className={`px-2 py-1 text-[10px] rounded transition-colors ${voxelView === 'boundedSystems' ? 'bg-blue-600 text-white' : 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'}`}
+            className={`ui-button !h-8 px-2.5 py-0 text-[11px] ${voxelView === 'boundedSystems' ? 'ui-button-primary' : 'ui-button-secondary'}`}
           >
             Voxels: Bounded
           </button>
@@ -974,7 +984,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
               setVoxelView('boundedCaps');
               applyNodeLabelsToVoxels(scanData, remappedLabelSets.boundedCaps);
             }}
-            className={`px-2 py-1 text-[10px] rounded transition-colors ${voxelView === 'boundedCaps' ? 'bg-blue-600 text-white' : 'bg-neutral-700 hover:bg-neutral-600 text-neutral-200'}`}
+            className={`ui-button !h-8 px-2.5 py-0 text-[11px] ${voxelView === 'boundedCaps' ? 'ui-button-primary' : 'ui-button-secondary'}`}
           >
             Voxels: Caps
           </button>
@@ -982,17 +992,19 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && (
-        <button
+        <Button
           type="button"
           onClick={() => setIncludeEventNodes(v => !v)}
-          className="w-full px-2 py-1 text-[10px] rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 transition-colors"
+          variant="secondary"
+          size="sm"
+          className="w-full !h-8 !px-2.5 !py-0 text-[11px]"
         >
           {includeEventNodes ? 'Logical Volumes: Show Ownership Leaves Only' : 'Logical Volumes: Include Event Nodes'}
-        </button>
+        </Button>
       )}
 
       {summary && (
-        <div className="text-[10px] text-neutral-300 bg-neutral-900/50 p-2 rounded space-y-1">
+        <div className="text-[11px] p-2 rounded space-y-1 border" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
           <div>Nodes: {summary.nodes}</div>
           <div>Edges: {summary.edges}</div>
           <div>Overhang Groups: {summary.groups}</div>
@@ -1007,7 +1019,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && result.issues.length > 0 && (
-        <div className="text-[10px] text-red-300 bg-neutral-900/50 p-2 rounded space-y-1 max-h-28 overflow-auto">
+        <div className="text-[11px] p-2 rounded space-y-1 max-h-28 overflow-auto border" style={{ color: '#fca5a5', borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 55%)', background: 'color-mix(in srgb, var(--danger), transparent 90%)' }}>
           {result.issues.slice(0, 20).map((iss, idx) => (
             <div key={idx}>
               L{iss.layerIndex} Node {iss.nodeId}: {iss.code}
@@ -1017,7 +1029,7 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && eventLog.length > 0 && (
-        <div className="text-[10px] text-neutral-300 bg-neutral-900/50 p-2 rounded space-y-1 max-h-40 overflow-auto">
+        <div className="text-[11px] p-2 rounded space-y-1 max-h-40 overflow-auto border" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
           {eventLog.map((r) => (
             <div key={r.layerIndex}>
               L{r.layerIndex}: b{r.birth} m{r.merge} s{r.split} d{r.death}
@@ -1027,8 +1039,8 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && logicalVolumes.length > 0 && (
-        <div className="text-[10px] text-neutral-200 bg-neutral-900/50 p-2 rounded space-y-1 max-h-56 overflow-auto">
-          <div className="text-neutral-400">Logical Volumes ({logicalVolumes.length})</div>
+        <div className="text-[11px] p-2 rounded space-y-1 max-h-56 overflow-auto border" style={{ color: 'var(--text-strong)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+          <div style={{ color: 'var(--text-muted)' }}>Logical Volumes ({logicalVolumes.length})</div>
           {logicalVolumes.slice(0, 50).map(v => (
             <div key={v.id}>
               Node {v.id}: {v.volumeMm3.toFixed(1)}mm³ | base {v.baseAreaMm2.toFixed(1)}mm² | L{v.firstLayer}-{v.lastLayer}
@@ -1038,8 +1050,8 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && systemVolumes.length > 0 && (
-        <div className="text-[10px] text-neutral-200 bg-neutral-900/50 p-2 rounded space-y-1 max-h-56 overflow-auto">
-          <div className="text-neutral-400">System Volumes (Subtree Unions) ({systemVolumes.length})</div>
+        <div className="text-[11px] p-2 rounded space-y-1 max-h-56 overflow-auto border" style={{ color: 'var(--text-strong)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+          <div style={{ color: 'var(--text-muted)' }}>System Volumes (Subtree Unions) ({systemVolumes.length})</div>
           {systemVolumes.slice(0, 30).map(v => (
             <div key={v.rootId}>
               Root {v.rootId}: {v.volumeMm3.toFixed(1)}mm³ | base {v.baseAreaMm2.toFixed(1)}mm² | nodes {v.nodeCount} | L{v.firstLayer}-{v.lastLayer}
@@ -1049,8 +1061,8 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && systemProfiles.length > 0 && (
-        <div className="text-[10px] text-neutral-200 bg-neutral-900/50 p-2 rounded space-y-1 max-h-56 overflow-auto">
-          <div className="text-neutral-400">System Profiles (Merge Nodes Only) ({systemProfiles.length})</div>
+        <div className="text-[11px] p-2 rounded space-y-1 max-h-56 overflow-auto border" style={{ color: 'var(--text-strong)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+          <div style={{ color: 'var(--text-muted)' }}>System Profiles (Merge Nodes Only) ({systemProfiles.length})</div>
           {systemProfiles.slice(0, 30).map(v => (
             <div key={v.rootId}>
               Root {v.rootId}: {v.volumeMm3.toFixed(1)}mm³ | base {v.baseAreaMm2.toFixed(1)}mm² | peak {v.peakAreaMm2.toFixed(1)}mm²@L{v.peakLayer} | h {v.heightMm.toFixed(2)}mm | nodes {v.nodeCount}
@@ -1060,8 +1072,8 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && mergeJunctions.length > 0 && (
-        <div className="text-[10px] text-neutral-200 bg-neutral-900/50 p-2 rounded space-y-1 max-h-56 overflow-auto">
-          <div className="text-neutral-400">Merge Junction Prominence (Top 40)</div>
+        <div className="text-[11px] p-2 rounded space-y-1 max-h-56 overflow-auto border" style={{ color: 'var(--text-strong)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+          <div style={{ color: 'var(--text-muted)' }}>Merge Junction Prominence (Top 40)</div>
           {mergeJunctions.slice(0, 40).map((j, idx) => (
             <div key={idx}>
               {j.childId} → {j.parentId} @L{j.mergeLayer}: ratio {j.areaRatio.toFixed(3)} | childPersist {j.childPersistenceMm.toFixed(2)}mm | childEnd {j.childEndAreaMm2.toFixed(1)}mm² | parentStart {j.parentStartAreaMm2.toFixed(1)}mm²
@@ -1071,16 +1083,16 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {result && cutoffCandidates.bySystem.size > 0 && (
-        <div className="text-[10px] text-neutral-200 bg-neutral-900/50 p-2 rounded space-y-1 max-h-56 overflow-auto">
-          <div className="text-neutral-400">Flat Cutoff Candidates (Incidental Merges, grouped by Bounded System)</div>
+        <div className="text-[11px] p-2 rounded space-y-1 max-h-56 overflow-auto border" style={{ color: 'var(--text-strong)', borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+          <div style={{ color: 'var(--text-muted)' }}>Flat Cutoff Candidates (Incidental Merges, grouped by Bounded System)</div>
           {Array.from(cutoffCandidates.bySystem.entries())
             .sort((a, b) => b[1].length - a[1].length)
             .slice(0, 30)
             .map(([systemId, rows]) => (
               <div key={systemId} className="space-y-0.5">
-                <div className="text-neutral-300">System {systemId}: {rows.length} cutoff junction(s)</div>
+                <div style={{ color: 'var(--text-strong)' }}>System {systemId}: {rows.length} cutoff junction(s)</div>
                 {rows.slice(0, 8).map((r, idx) => (
-                  <div key={idx} className="text-neutral-400">
+                  <div key={idx} style={{ color: 'var(--text-muted)' }}>
                     {r.childId} → {r.parentId} @L{r.mergeLayer}: ratio {r.areaRatio.toFixed(3)} | childPersist {r.childPersistenceMm.toFixed(2)}mm
                   </div>
                 ))}
@@ -1090,10 +1102,11 @@ export function IslandVolumesHierarchyCard({ islands, layerHeightMm }: Props) {
       )}
 
       {!islands.scanData && (
-        <div className="text-[10px] text-neutral-500">
+        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
           Run an Island Scan first.
         </div>
       )}
-    </div>
+      </div>
+    </Card>
   );
 }

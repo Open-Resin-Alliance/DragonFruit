@@ -1,105 +1,21 @@
 "use client";
 
 import React from 'react';
+import { Grid3X3, Pickaxe, Sailboat, WandSparkles, type LucideIcon } from 'lucide-react';
 import type { SupportKind } from '../supportKindState';
 
 type TabDef = {
     kind: SupportKind;
     label: string;
+    icon: LucideIcon;
 };
 
 const TABS: TabDef[] = [
-    { kind: 'trunk', label: 'Trunk' },
-    { kind: 'raft', label: 'Raft' },
-    { kind: 'grid', label: 'Grid' },
-    { kind: 'stick', label: 'Stick' },
+    { kind: 'trunk', label: 'Trunk', icon: Pickaxe },
+    { kind: 'raft', label: 'Raft', icon: Sailboat },
+    { kind: 'grid', label: 'Grid', icon: Grid3X3 },
+    { kind: 'stick', label: 'Stick', icon: WandSparkles },
 ];
-
-function TabIcon({ kind }: { kind: SupportKind }) {
-    const common = {
-        width: 18,
-        height: 18,
-        viewBox: '0 0 24 24',
-        fill: 'none',
-        stroke: 'currentColor',
-        strokeWidth: 2,
-        strokeLinecap: 'round' as const,
-        strokeLinejoin: 'round' as const,
-    };
-
-    if (kind === 'trunk') {
-        return (
-            <svg {...common}>
-                <path d="M12 4v12" />
-                <path d="M8 20h8" />
-                <path d="M9 16h6" />
-            </svg>
-        );
-    }
-
-    if (kind === 'raft') {
-        return (
-            <svg {...common}>
-                <path d="M5 15h14" />
-                <path d="M7 11h10" />
-                <path d="M7 11l-2 4" />
-                <path d="M17 11l2 4" />
-            </svg>
-        );
-    }
-
-    if (kind === 'leaf') {
-        return (
-            <svg {...common}>
-                <path d="M18 6c-6 0-10 4-10 10" />
-                <path d="M8 16c6 0 10-4 10-10" />
-                <path d="M9 15l6-6" />
-            </svg>
-        );
-    }
-
-    if (kind === 'grid') {
-        return (
-            <svg {...common}>
-                <path d="M3 3h18v18H3z" />
-                <path d="M3 9h18" />
-                <path d="M3 15h18" />
-                <path d="M9 3v18" />
-                <path d="M15 3v18" />
-            </svg>
-        );
-    }
-
-    if (kind === 'branch') {
-        return (
-            <svg {...common}>
-                <path d="M12 20V10" />
-                <path d="M12 10l-5-5" />
-                <path d="M12 10l5-5" />
-            </svg>
-        );
-    }
-
-    if (kind === 'stick') {
-        return (
-            <svg {...common}>
-                <path d="M6 18l12-12" />
-                <path d="M7 7h0" />
-                <path d="M17 17h0" />
-                <circle cx="7" cy="17" r="2" />
-                <circle cx="17" cy="7" r="2" />
-            </svg>
-        );
-    }
-
-    return (
-        <svg {...common}>
-            <path d="M7 17l10-10" />
-            <circle cx="7" cy="17" r="1.5" />
-            <circle cx="17" cy="7" r="1.5" />
-        </svg>
-    );
-}
 
 export function SupportKindTabs({
     value,
@@ -112,20 +28,43 @@ export function SupportKindTabs({
         <div className="grid grid-cols-4 gap-1">
             {TABS.map((tab) => {
                 const isActive = tab.kind === value;
+                const Icon = tab.icon;
+
                 return (
                     <button
                         key={tab.kind}
                         type="button"
                         onClick={() => onChange(tab.kind)}
-                        className={
-                            isActive
-                                ? 'flex flex-col items-center justify-center aspect-square rounded bg-blue-600 text-white border border-blue-400/60 shadow-sm'
-                                : 'flex flex-col items-center justify-center aspect-square rounded bg-neutral-800/80 text-neutral-300 border border-neutral-700 hover:bg-neutral-700/80 hover:text-neutral-100'
-                        }
+                        className="flex h-12 cursor-pointer items-center justify-center gap-2 rounded-md border px-2 transition-all duration-150 hover:-translate-y-px hover:brightness-110 hover:shadow-[0_8px_18px_rgba(0,0,0,0.18)]"
+                        style={isActive
+                            ? {
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-0) 78%)',
+                                borderColor: 'color-mix(in srgb, var(--accent), white 14%)',
+                                color: 'var(--text-strong)',
+                                boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), transparent 74%) inset',
+                            }
+                            : {
+                                background: 'var(--surface-1)',
+                                borderColor: 'var(--border-subtle)',
+                                color: 'var(--text-muted)',
+                            }}
                         title={tab.label}
                     >
-                        <div className="leading-none">{<TabIcon kind={tab.kind} />}</div>
-                        <div className="mt-0.5 text-[9px] leading-none font-medium">{tab.label}</div>
+                        <span
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border"
+                            style={isActive
+                                ? {
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 62%)',
+                                    borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
+                                }
+                                : {
+                                    background: 'var(--surface-0)',
+                                    borderColor: 'var(--border-subtle)',
+                                }}
+                        >
+                            <Icon className="h-3.5 w-3.5" />
+                        </span>
+                        <span className="text-[13px] font-semibold leading-none">{tab.label}</span>
                     </button>
                 );
             })}

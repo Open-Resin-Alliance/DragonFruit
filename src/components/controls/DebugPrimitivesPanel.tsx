@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Box, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
+import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 
 export type DebugPrimitiveType =
   | 'pillar'
@@ -12,6 +13,15 @@ export type DebugPrimitiveType =
   | 'finger_palm_arm';
 
 export type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
+
+const PRIMITIVE_STYLE: Record<DebugPrimitiveType, { tint: string; icon: string }> = {
+  pillar: { tint: '#4f8cff', icon: '#93b8ff' },
+  merge_y: { tint: '#33c27f', icon: '#8de7b7' },
+  split_y: { tint: '#a27bff', icon: '#ccb8ff' },
+  earlobe: { tint: '#e56a8a', icon: '#ffc0d1' },
+  bridge: { tint: '#44b6d8', icon: '#9ee6fa' },
+  finger_palm_arm: { tint: '#f0a84f', icon: '#ffd8a3' },
+};
 
 interface DebugPrimitivesPanelProps {
   onAdd: (type: DebugPrimitiveType, size: DebugPrimitiveSizePreset) => void;
@@ -93,85 +103,114 @@ export function DebugPrimitivesPanel({ onAdd, onClear }: DebugPrimitivesPanelPro
   ];
 
   return (
-    <div className="bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl">
-      <div className="flex items-center justify-between py-1 border-b border-neutral-700 mb-1">
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="p-0.5 hover:bg-neutral-700 rounded transition-colors"
-            title={expanded ? 'Collapse card' : 'Expand card'}
-          >
-            <svg
-              className={`w-3 h-3 ${expanded ? 'text-blue-500' : 'text-neutral-500'}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+    <Card>
+      <CardHeader
+        left={(
+          <>
+            <IconButton
+              onClick={() => setExpanded(!expanded)}
+              title={expanded ? 'Collapse card' : 'Expand card'}
+              className="!p-0.5"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
-          </button>
-          <div className="flex items-center gap-1.5">
-            <div className="p-1 rounded bg-neutral-700 text-neutral-400">
-              <Box className="w-3 h-3" />
-            </div>
-            <h3 className="text-xs font-semibold text-neutral-200">Debug Primitives</h3>
-          </div>
-        </div>
-
-        <button
-          onClick={onClear}
-          className="p-1 rounded hover:bg-red-900/50 text-neutral-500 hover:text-red-400 transition-colors"
-          title="Clear Debug Models"
-        >
-          <Trash2 className="w-3 h-3" />
-        </button>
-      </div>
+              <svg
+                className="w-3 h-3 transform transition-transform"
+                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {expanded ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                )}
+              </svg>
+            </IconButton>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Debug Primitives</h3>
+          </>
+        )}
+        right={(
+          <IconButton
+            onClick={onClear}
+            className="!p-1.5 text-red-300 hover:text-red-200"
+            title="Clear Debug Models"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </IconButton>
+        )}
+        hideDivider={!expanded}
+      />
 
       {expanded && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-[10px] text-neutral-400">Size</div>
-            <div className="flex items-center gap-1">
+        <div className="px-2.5 pt-1 pb-2.5 space-y-2.5">
+          <div
+            className="rounded-md border px-2 py-1.5"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 68%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+            }}
+          >
+            <div className="text-[11px] font-medium" style={{ color: 'var(--text-strong)' }}>
+              Quick primitive generator
+            </div>
+            <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              Add test geometry with one click
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 rounded-md border p-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Size</div>
+            <div className="flex items-center gap-1 rounded-md p-0.5" style={{ background: 'var(--surface-0)' }}>
               {(['small', 'medium', 'large'] as const).map((s) => (
-                <button
+                <Button
                   key={s}
                   onClick={() => setSizePreset(s)}
-                  className={`px-2 py-1 rounded-md text-[10px] border transition-colors ${
-                    sizePreset === s
-                      ? 'bg-blue-600 border-blue-500 text-white'
-                      : 'bg-neutral-800 border-neutral-700 text-neutral-300 hover:bg-neutral-700'
-                  }`}
+                  variant={sizePreset === s ? 'primary' : 'secondary'}
+                  size="sm"
+                  className="capitalize"
                 >
                   {s}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-1">
+          <div className="grid grid-cols-3 gap-1.5">
             {buttons.map((b) => (
-              <button
+              <Button
                 key={b.type}
                 onClick={() => onAdd(b.type, sizePreset)}
-                className="h-16 rounded-md border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 transition-colors flex flex-col items-center justify-center gap-1"
+                variant="secondary"
+                className="h-[4.35rem] flex flex-col items-center justify-center gap-1 border"
                 title={`Add ${b.label}`}
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--border-subtle), white 8%)',
+                  background: 'color-mix(in srgb, var(--surface-1), var(--surface-0) 36%)',
+                }}
               >
-                <div className="w-9 h-9 rounded-md bg-neutral-900/60 border border-neutral-700/60 flex items-center justify-center">
-                  <PrimitiveIcon type={b.type} />
+                <div
+                  className="w-9 h-9 rounded-md border flex items-center justify-center"
+                  style={{
+                    background: `color-mix(in srgb, ${PRIMITIVE_STYLE[b.type].tint}, var(--surface-0) 86%)`,
+                    borderColor: `color-mix(in srgb, ${PRIMITIVE_STYLE[b.type].tint}, var(--border-subtle) 45%)`,
+                  }}
+                >
+                  <div style={{ color: PRIMITIVE_STYLE[b.type].icon }}>
+                    <PrimitiveIcon type={b.type} />
+                  </div>
                 </div>
-                <div className="text-[9px] text-neutral-200 text-center leading-tight px-1">
+                <div className="text-[10px] text-center leading-tight px-1" style={{ color: 'var(--text-strong)' }}>
                   {b.label}
                 </div>
-              </button>
+              </Button>
             ))}
           </div>
 
-          <div className="text-[9px] text-neutral-500 leading-snug">
+          <div className="text-[10px] leading-snug" style={{ color: 'var(--text-muted)' }}>
             Creates normal scene models (movable, hideable, deletable).
           </div>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
