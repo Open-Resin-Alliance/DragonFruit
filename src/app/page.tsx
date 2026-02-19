@@ -84,7 +84,6 @@ export default function Home() {
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
-  const [pasteArrangeNonce, setPasteArrangeNonce] = React.useState(0);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(5);
   const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
@@ -107,7 +106,6 @@ export default function Home() {
   } | null>(null);
   const dragDepthRef = React.useRef(0);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
-  const lastHandledPasteArrangeNonceRef = React.useRef(0);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
@@ -273,9 +271,7 @@ export default function Home() {
         }
         break;
       case 'paste':
-        if (scene.pasteCopiedModelsAutoArrange().length > 0) {
-          setPasteArrangeNonce((prev) => prev + 1);
-        }
+        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
         break;
       case 'duplicate':
       case 'arrange':
@@ -285,7 +281,7 @@ export default function Home() {
         break;
     }
     closeEditorContextMenu();
-  }, [closeEditorContextMenu, scene]);
+  }, [arrangeSpacingMm, closeEditorContextMenu, scene]);
 
   React.useEffect(() => {
     if (!editorContextMenuPos) return;
@@ -430,14 +426,10 @@ export default function Home() {
     window.setTimeout(resolve, ms);
   }), []);
 
-  const queueArrangeAfterPaste = React.useCallback(() => {
-    setPasteArrangeNonce((prev) => prev + 1);
-  }, []);
-
-  const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected') => {
+  const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
 
-    const selectedIdSet = new Set(scene.selectedModelIds);
+    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
     const visibleModels = scene.models.filter((m) => {
       if (!m.visible) return false;
       if (scope === 'selected') return selectedIdSet.has(m.id);
@@ -524,55 +516,43 @@ export default function Home() {
           };
         };
 
-        const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => (
-          (() => {
-            const currentZ = current.model.transform.rotation.z;
-            const currentCanonical = normalizeToPi(currentZ);
+        const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => {
+          const currentZ = current.model.transform.rotation.z;
+          const currentCanonical = normalizeToPi(currentZ);
 
-            if (!arrangeAllowRotateOnZ) {
-              const dims = footprintAtAngle(current.baseWidth, current.baseDepth, currentCanonical);
-              return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
-            }
+          if (!arrangeAllowRotateOnZ) {
+            const dims = footprintAtAngle(current.baseWidth, current.baseDepth, currentCanonical);
+            return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
+          }
 
-            const coarseStepDeg = 6;
-            const refineStepDeg = 1;
-            const coarseAngles: number[] = [];
-            for (let deg = 0; deg < 180; deg += coarseStepDeg) {
-              coarseAngles.push(THREE.MathUtils.degToRad(deg));
-            }
-            coarseAngles.push(currentCanonical);
+          const candidateCanonicals: number[] = [currentCanonical];
+          const coarseStepDeg = 15;
+          for (let deg = 0; deg < 180; deg += coarseStepDeg) {
+            candidateCanonicals.push(THREE.MathUtils.degToRad(deg));
+          }
 
-            let bestCanonical = coarseAngles[0];
-            let bestArea = Number.POSITIVE_INFINITY;
-            for (const angle of coarseAngles) {
-              const dims = footprintAtAngle(current.baseWidth, current.baseDepth, angle);
-              const area = dims.width * dims.depth;
-              if (area < bestArea) {
-                bestArea = area;
-                bestCanonical = angle;
-              }
-            }
+          // Ensure we always evaluate the width/depth-swapped alternative from the current pose.
+          candidateCanonicals.push(normalizeToPi(currentCanonical + (Math.PI * 0.5)));
 
-            const refinedAngles = new Set<number>();
-            for (let delta = -coarseStepDeg; delta <= coarseStepDeg; delta += refineStepDeg) {
-              const rad = THREE.MathUtils.degToRad(delta);
-              refinedAngles.add(normalizeToPi(bestCanonical + rad));
-            }
-            refinedAngles.add(currentCanonical);
+          const seenFootprints = new Set<string>();
+          const options: PlacementOption[] = [];
 
-            const options: PlacementOption[] = [];
-            for (const canonical of refinedAngles) {
-              const dims = footprintAtAngle(current.baseWidth, current.baseDepth, canonical);
-              options.push({
-                rotationZ: nearestEquivalentAngle(currentZ, canonical),
-                width: dims.width,
-                depth: dims.depth,
-              });
-            }
+          for (const rawCanonical of candidateCanonicals) {
+            const canonical = normalizeToPi(rawCanonical);
+            const dims = footprintAtAngle(current.baseWidth, current.baseDepth, canonical);
+            const key = `${dims.width.toFixed(3)}:${dims.depth.toFixed(3)}`;
+            if (seenFootprints.has(key)) continue;
+            seenFootprints.add(key);
 
-            return options;
-          })()
-        );
+            options.push({
+              rotationZ: nearestEquivalentAngle(currentZ, canonical),
+              width: dims.width,
+              depth: dims.depth,
+            });
+          }
+
+          return options;
+        };
 
         for (const current of ordered) {
           const options = getAllOptions(current);
@@ -846,15 +826,6 @@ export default function Home() {
       setIsAutoArranging(false);
     }
   }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
-
-  React.useEffect(() => {
-    if (pasteArrangeNonce === 0) return;
-    if (pasteArrangeNonce === lastHandledPasteArrangeNonceRef.current) return;
-    if (scene.mode !== 'prepare') return;
-
-    lastHandledPasteArrangeNonceRef.current = pasteArrangeNonce;
-    void handleAutoArrangeModels('all');
-  }, [handleAutoArrangeModels, pasteArrangeNonce, scene.mode]);
 
   const computeArrangeSlots = React.useCallback((count: number, stepX: number, stepY: number) => {
     const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
@@ -1134,9 +1105,7 @@ export default function Home() {
         if (!scene.canPasteModel) return;
         event.preventDefault();
         event.stopPropagation();
-        if (scene.pasteCopiedModelsAutoArrange().length > 0) {
-          queueArrangeAfterPaste();
-        }
+        scene.pasteCopiedModelsAutoArrange(arrangeSpacingMm);
       }
     };
 
@@ -1144,7 +1113,7 @@ export default function Home() {
     return () => {
       window.removeEventListener('keydown', handleClipboardHotkeys, true);
     };
-  }, [queueArrangeAfterPaste, scene]);
+  }, [arrangeSpacingMm, scene]);
 
   React.useEffect(() => {
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'duplicate') {
