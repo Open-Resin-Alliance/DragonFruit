@@ -11,7 +11,7 @@ import { IslandOverlayControls } from '@/components/controls/IslandOverlayContro
 import { IslandVoxelControls } from '@/components/controls/IslandVoxelControls';
 import { TerritoryVoxelControls } from '@/components/controls/TerritoryVoxelControls';
 import { IslandListCard } from '@/components/controls/IslandListCard';
-import { ModelManagerPanel } from '@/components/controls/ModelManagerPanel';
+import { ModelManagerPanel } from '../components/controls/ModelManagerPanel';
 import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel';
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
@@ -170,8 +170,42 @@ export default function Home() {
 
   const handleModelListContextMenu = React.useCallback((modelId: string, position: { x: number; y: number }) => {
     // Right-clicking a model row should target that model first.
-    scene.setActiveModelId(modelId);
+    if (!scene.selectedModelIds.includes(modelId)) {
+      scene.selectModel(modelId, 'single');
+    }
     setEditorContextMenuPos(position);
+  }, [scene]);
+
+  const handleModelSelection = React.useCallback((modelId: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
+    scene.selectModel(modelId, mode);
+  }, [scene]);
+
+  const handleGroupSelection = React.useCallback((groupId: string, mode: 'single' | 'add' = 'single') => {
+    scene.selectGroup(groupId, mode);
+  }, [scene]);
+
+  const handleGroupSelectedModels = React.useCallback((modelIds: string[]) => {
+    scene.groupModels(modelIds);
+  }, [scene]);
+
+  const handleUngroupSelectedModels = React.useCallback((modelIds: string[]) => {
+    scene.ungroupModels(modelIds);
+  }, [scene]);
+
+  const handleUngroupFolder = React.useCallback((groupId: string) => {
+    scene.ungroupGroup(groupId);
+  }, [scene]);
+
+  const handleRenameFolder = React.useCallback((groupId: string, nextName: string) => {
+    scene.renameGroup(groupId, nextName);
+  }, [scene]);
+
+  const handleSceneModelSelection = React.useCallback((modelId: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => {
+    if (modelId == null) {
+      scene.clearModelSelection();
+      return;
+    }
+    scene.selectModel(modelId, options?.selectionMode ?? 'single');
   }, [scene]);
 
   const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -913,7 +947,8 @@ export default function Home() {
     if (scene.mode === 'prepare') return;
     if (!isSelectAllModelsActive) return;
     setIsSelectAllModelsActive(false);
-  }, [isSelectAllModelsActive, scene.mode]);
+    scene.clearModelSelection();
+  }, [isSelectAllModelsActive, scene]);
 
   React.useEffect(() => {
     const unregister = registerDeleteHandler(
@@ -960,6 +995,11 @@ export default function Home() {
       // Prevent browser-level "select all text in the app" behavior and arm model select-all.
       event.preventDefault();
       event.stopPropagation();
+      const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+      if (visibleIds.length > 0) {
+        scene.setSelectedModelIds(visibleIds);
+        scene.setActiveModelId(visibleIds[0]);
+      }
       setIsSelectAllModelsActive(true);
     };
 
@@ -967,7 +1007,7 @@ export default function Home() {
     return () => {
       window.removeEventListener('keydown', handleGlobalSelectAll, true);
     };
-  }, [scene.mode, scene.models.length]);
+  }, [scene]);
 
   React.useEffect(() => {
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'duplicate') {
@@ -1101,7 +1141,13 @@ export default function Home() {
               key="prepare-models"
               models={scene.models}
               activeModelId={scene.activeModelId}
-              onSelect={scene.setActiveModelId}
+              selectedModelIds={scene.selectedModelIds}
+              onSelect={handleModelSelection}
+              onSelectGroup={handleGroupSelection}
+              onGroupModels={handleGroupSelectedModels}
+              onUngroupModels={handleUngroupSelectedModels}
+              onUngroupGroup={handleUngroupFolder}
+              onRenameGroup={handleRenameFolder}
               onModelContextMenu={handleModelListContextMenu}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
@@ -1420,6 +1466,7 @@ export default function Home() {
           <SceneCanvas
             models={scene.models}
             activeModelId={displayActiveModelId}
+            selectedModelIds={scene.selectedModelIds}
             clipLower={slicing.clipLower}
             clipUpper={slicing.clipUpper}
             meshColor={scene.meshColor}
@@ -1460,7 +1507,7 @@ export default function Home() {
             mode={scene.mode}
             onSupportClick={supports.onModelClick}
             onSupportHover={supports.onModelHover}
-            onActiveModelChange={scene.setActiveModelId}
+            onActiveModelChange={handleSceneModelSelection}
             trunkPlacementPreview={supports.trunkPlacementV2.previewData}
             branchPlacementPreview={supports.branchPlacement.previewData}
             leafPlacementPreview={supports.leafPlacement.previewData}
