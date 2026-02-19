@@ -16,7 +16,7 @@ import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
-import { ArrangePanel } from '@/components/controls/ArrangePanel';
+import { ArrangePanel, type ArrangeAnchorMode } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel } from '@/components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
@@ -80,6 +80,8 @@ export default function Home() {
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(12);
+  const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
+  const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(12);
@@ -380,32 +382,389 @@ export default function Home() {
     await sleep(0);
 
     try {
-      const maxWidth = visibleModels.reduce((acc, model) => Math.max(acc, getModelFootprintMm(model).width), 0);
-      const maxDepth = visibleModels.reduce((acc, model) => Math.max(acc, getModelFootprintMm(model).depth), 0);
+      const modelsWithFootprints = visibleModels.map((model) => {
+        const baseFootprint = getModelFootprintMm(model);
+        return {
+          model,
+          baseWidth: baseFootprint.width,
+          baseDepth: baseFootprint.depth,
+        };
+      });
 
-      const columns = Math.max(1, Math.ceil(Math.sqrt(visibleModels.length)));
-      const rows = Math.ceil(visibleModels.length / columns);
-      const stepX = maxWidth + arrangeSpacingMm;
-      const stepY = maxDepth + arrangeSpacingMm;
-      const centerX = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0;
-      const centerY = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0;
-      const startX = centerX - ((columns - 1) * stepX) * 0.5;
-      const startY = centerY - ((rows - 1) * stepY) * 0.5;
+      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const maxX = minX + scene.view3dSettings.widthMm;
+      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const maxY = minY + scene.view3dSettings.depthMm;
+      const plateWidth = Math.max(1, maxX - minX);
+      const plateDepth = Math.max(1, maxY - minY);
+
+      type PackedEntry = {
+        model: (typeof visibleModels)[number];
+        width: number;
+        depth: number;
+        row: number;
+        indexInRow: number;
+        rotationZ: number;
+      };
+
+      type SpillEntry = {
+        model: (typeof visibleModels)[number];
+        width: number;
+        depth: number;
+        rotationZ: number;
+      };
+
+      type Row = {
+        widthUsed: number;
+        maxDepth: number;
+        items: PackedEntry[];
+      };
+
+      const evaluatePacking = (ordered: typeof modelsWithFootprints, targetRowWidth: number) => {
+        const rows: Row[] = [];
+        const spills: SpillEntry[] = [];
+
+        let occupiedArea = 0;
+        let totalDepthUsed = 0;
+
+        type PlacementOption = {
+          rotationZ: number;
+          width: number;
+          depth: number;
+        };
+
+        const normalizeToPi = (angle: number) => {
+          let a = angle % Math.PI;
+          if (a < 0) a += Math.PI;
+          return a;
+        };
+
+        const nearestEquivalentAngle = (reference: number, canonical: number) => {
+          const twoPi = Math.PI * 2;
+          const k = Math.round((reference - canonical) / twoPi);
+          return canonical + k * twoPi;
+        };
+
+        const footprintAtAngle = (baseWidth: number, baseDepth: number, angleZ: number) => {
+          const c = Math.abs(Math.cos(angleZ));
+          const s = Math.abs(Math.sin(angleZ));
+          return {
+            width: baseWidth * c + baseDepth * s,
+            depth: baseWidth * s + baseDepth * c,
+          };
+        };
+
+        const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => (
+          (() => {
+            const currentZ = current.model.transform.rotation.z;
+            const currentCanonical = normalizeToPi(currentZ);
+
+            if (!arrangeAllowRotateOnZ) {
+              const dims = footprintAtAngle(current.baseWidth, current.baseDepth, currentCanonical);
+              return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
+            }
+
+            const coarseStepDeg = 6;
+            const refineStepDeg = 1;
+            const coarseAngles: number[] = [];
+            for (let deg = 0; deg < 180; deg += coarseStepDeg) {
+              coarseAngles.push(THREE.MathUtils.degToRad(deg));
+            }
+            coarseAngles.push(currentCanonical);
+
+            let bestCanonical = coarseAngles[0];
+            let bestArea = Number.POSITIVE_INFINITY;
+            for (const angle of coarseAngles) {
+              const dims = footprintAtAngle(current.baseWidth, current.baseDepth, angle);
+              const area = dims.width * dims.depth;
+              if (area < bestArea) {
+                bestArea = area;
+                bestCanonical = angle;
+              }
+            }
+
+            const refinedAngles = new Set<number>();
+            for (let delta = -coarseStepDeg; delta <= coarseStepDeg; delta += refineStepDeg) {
+              const rad = THREE.MathUtils.degToRad(delta);
+              refinedAngles.add(normalizeToPi(bestCanonical + rad));
+            }
+            refinedAngles.add(currentCanonical);
+
+            const options: PlacementOption[] = [];
+            for (const canonical of refinedAngles) {
+              const dims = footprintAtAngle(current.baseWidth, current.baseDepth, canonical);
+              options.push({
+                rotationZ: nearestEquivalentAngle(currentZ, canonical),
+                width: dims.width,
+                depth: dims.depth,
+              });
+            }
+
+            return options;
+          })()
+        );
+
+        for (const current of ordered) {
+          const options = getAllOptions(current);
+          const fitOptions = options.filter((opt) => opt.width <= plateWidth && opt.depth <= plateDepth);
+
+          if (fitOptions.length === 0) {
+            const fallback = options.reduce((best, candidate) => {
+              const bestOverflow = Math.max(0, best.width - plateWidth) + Math.max(0, best.depth - plateDepth);
+              const candidateOverflow = Math.max(0, candidate.width - plateWidth) + Math.max(0, candidate.depth - plateDepth);
+              if (candidateOverflow < bestOverflow) return candidate;
+              if (candidateOverflow === bestOverflow && (candidate.width * candidate.depth) < (best.width * best.depth)) return candidate;
+              return best;
+            }, options[0]);
+
+            spills.push({
+              model: current.model,
+              width: fallback.width,
+              depth: fallback.depth,
+              rotationZ: fallback.rotationZ,
+            });
+            continue;
+          }
+
+          let bestPlacement:
+            | { kind: 'same-row'; rowIndex: number; option: PlacementOption; score: number }
+            | { kind: 'new-row'; option: PlacementOption; score: number }
+            | null = null;
+
+          if (rows.length > 0) {
+            for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+              const row = rows[rowIndex];
+              for (const option of fitOptions) {
+                const nextWidth = row.widthUsed + (row.items.length > 0 ? arrangeSpacingMm : 0) + option.width;
+                if (nextWidth > plateWidth) continue;
+
+                const nextDepth = Math.max(row.maxDepth, option.depth);
+                const depthDelta = nextDepth - row.maxDepth;
+                const nextTotalDepth = totalDepthUsed + depthDelta;
+                if (nextTotalDepth > plateDepth) continue;
+
+                // Prefer tighter rows, less depth growth, and widths near target row width.
+                const depthPenalty = depthDelta * 40;
+                const widthPenalty = Math.abs(targetRowWidth - nextWidth) * 0.08;
+                const areaScore = nextWidth * nextDepth;
+                const score = areaScore + depthPenalty + widthPenalty;
+
+                if (!bestPlacement || score < bestPlacement.score) {
+                  bestPlacement = { kind: 'same-row', rowIndex, option, score };
+                }
+              }
+            }
+          }
+
+          for (const option of fitOptions) {
+            const nextTotalDepth = totalDepthUsed + (rows.length > 0 ? arrangeSpacingMm : 0) + option.depth;
+            if (nextTotalDepth > plateDepth) continue;
+
+            const widthPenalty = Math.abs(targetRowWidth - option.width) * 0.12;
+            const score = (option.width * option.depth) + widthPenalty + 10;
+            if (!bestPlacement || score < bestPlacement.score) {
+              bestPlacement = { kind: 'new-row', option, score };
+            }
+          }
+
+          if (!bestPlacement) {
+            const fallback = fitOptions.reduce((best, candidate) => {
+              if (candidate.width < best.width) return candidate;
+              if (candidate.width === best.width && candidate.depth < best.depth) return candidate;
+              return best;
+            }, fitOptions[0]);
+
+            spills.push({
+              model: current.model,
+              width: fallback.width,
+              depth: fallback.depth,
+              rotationZ: fallback.rotationZ,
+            });
+            continue;
+          }
+
+          if (bestPlacement.kind === 'new-row') {
+            const row: Row = { widthUsed: 0, maxDepth: 0, items: [] };
+            rows.push(row);
+            totalDepthUsed += (rows.length > 1 ? arrangeSpacingMm : 0) + bestPlacement.option.depth;
+            row.widthUsed = bestPlacement.option.width;
+            row.maxDepth = bestPlacement.option.depth;
+            row.items.push({
+              model: current.model,
+              width: bestPlacement.option.width,
+              depth: bestPlacement.option.depth,
+              row: rows.length - 1,
+              indexInRow: 0,
+              rotationZ: bestPlacement.option.rotationZ,
+            });
+            occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
+          } else {
+            const row = rows[bestPlacement.rowIndex];
+            const previousDepth = row.maxDepth;
+            row.widthUsed += (row.items.length > 0 ? arrangeSpacingMm : 0) + bestPlacement.option.width;
+            row.maxDepth = Math.max(row.maxDepth, bestPlacement.option.depth);
+            totalDepthUsed += row.maxDepth - previousDepth;
+            row.items.push({
+              model: current.model,
+              width: bestPlacement.option.width,
+              depth: bestPlacement.option.depth,
+              row: bestPlacement.rowIndex,
+              indexInRow: row.items.length,
+              rotationZ: bestPlacement.option.rotationZ,
+            });
+            occupiedArea += bestPlacement.option.width * bestPlacement.option.depth;
+          }
+        }
+
+        const rowDepths = rows.map((r) => r.maxDepth);
+        const rowWidths = rows.map((r) => r.widthUsed);
+        const totalWidth = Math.min(plateWidth, rowWidths.reduce((acc, width) => Math.max(acc, width), 0));
+        const totalDepth = rowDepths.reduce((acc, depth) => acc + depth, 0) + Math.max(0, rows.length - 1) * arrangeSpacingMm;
+
+        const layoutArea = totalWidth * totalDepth;
+        const deadSpace = Math.max(0, layoutArea - occupiedArea);
+        const spillArea = spills.reduce((acc, item) => acc + (item.width * item.depth), 0);
+        const spillPenalty = spills.length * 1_000_000 + spillArea * 100;
+        const aspectPenalty = Math.abs(totalWidth - totalDepth) * 0.05;
+
+        return {
+          rows,
+          spills,
+          rowDepths,
+          totalWidth,
+          totalDepth,
+          score: deadSpace + spillPenalty + aspectPenalty,
+        };
+      };
+
+      const byAreaDesc = [...modelsWithFootprints].sort((a, b) => (b.baseWidth * b.baseDepth) - (a.baseWidth * a.baseDepth));
+      const byMaxSideDesc = [...modelsWithFootprints].sort((a, b) => Math.max(b.baseWidth, b.baseDepth) - Math.max(a.baseWidth, a.baseDepth));
+      const orderingCandidates = [modelsWithFootprints, byAreaDesc, byMaxSideDesc];
+
+      const totalModelArea = modelsWithFootprints.reduce((acc, current) => acc + (current.baseWidth * current.baseDepth), 0);
+      const baseWidth = Math.min(plateWidth, Math.max(30, Math.sqrt(totalModelArea)));
+      const targetRowWidths = [
+        baseWidth * 0.8,
+        baseWidth,
+        baseWidth * 1.2,
+        plateWidth * 0.5,
+        plateWidth * 0.65,
+        plateWidth * 0.8,
+        plateWidth,
+      ]
+        .map((w) => Math.min(plateWidth, Math.max(20, w)));
+
+      const uniqueTargetRowWidths = [...new Set(targetRowWidths.map((w) => Number(w.toFixed(3))))];
+
+      let bestLayout: ReturnType<typeof evaluatePacking> | null = null;
+      for (const ordered of orderingCandidates) {
+        for (const targetRowWidth of uniqueTargetRowWidths) {
+          const layout = evaluatePacking(ordered, targetRowWidth);
+          if (!bestLayout || layout.score < bestLayout.score) {
+            bestLayout = layout;
+          }
+        }
+      }
+
+      if (!bestLayout) return;
+
+      const { rows, spills, rowDepths, totalWidth, totalDepth } = bestLayout;
+
+      let startX = minX + ((maxX - minX) - totalWidth) * 0.5;
+      let startY = minY + ((maxY - minY) - totalDepth) * 0.5;
+
+      if (arrangeAnchorMode === 'front_left') {
+        startX = minX;
+        startY = minY;
+      } else if (arrangeAnchorMode === 'front_right') {
+        startX = maxX - totalWidth;
+        startY = minY;
+      } else if (arrangeAnchorMode === 'back_left') {
+        startX = minX;
+        startY = maxY - totalDepth;
+      } else if (arrangeAnchorMode === 'back_right') {
+        startX = maxX - totalWidth;
+        startY = maxY - totalDepth;
+      }
+
+      const rowCenters: number[] = [];
+      let cursorY = startY;
+      for (let row = 0; row < rowDepths.length; row += 1) {
+        const depth = rowDepths[row];
+        rowCenters[row] = cursorY + depth * 0.5;
+        cursorY += depth + arrangeSpacingMm;
+      }
+
+      const packedWithPositions: Array<PackedEntry & { positionX: number; positionY: number }> = [];
+      rows.forEach((row, rowIndex) => {
+        let rowCursorX = startX;
+        row.items.forEach((item) => {
+          const centerX = rowCursorX + item.width * 0.5;
+          packedWithPositions.push({
+            ...item,
+            positionX: centerX,
+            positionY: rowCenters[rowIndex],
+          });
+          rowCursorX += item.width + arrangeSpacingMm;
+        });
+      });
+
+      const spillWithPositions: Array<SpillEntry & { positionX: number; positionY: number }> = [];
+      if (spills.length > 0) {
+        const outsideGap = Math.max(8, arrangeSpacingMm);
+        let columnLeftX = maxX + outsideGap;
+        let columnYCursor = minY;
+        let columnMaxWidth = 0;
+
+        spills.forEach((item) => {
+          if (columnYCursor > minY && (columnYCursor + item.depth) > maxY) {
+            columnLeftX += columnMaxWidth + outsideGap;
+            columnMaxWidth = 0;
+            columnYCursor = minY;
+          }
+
+          const positionX = columnLeftX + item.width * 0.5;
+          const positionY = columnYCursor + item.depth * 0.5;
+          spillWithPositions.push({ ...item, positionX, positionY });
+
+          columnYCursor += item.depth + arrangeSpacingMm;
+          columnMaxWidth = Math.max(columnMaxWidth, item.width);
+        });
+      }
 
       scene.updateModelTransforms(
-        visibleModels.map((model, index) => {
-          const col = index % columns;
-          const row = Math.floor(index / columns);
-
-          return {
-            id: model.id,
-            transform: {
-              position: new THREE.Vector3(startX + col * stepX, startY + row * stepY, model.transform.position.z),
-              rotation: model.transform.rotation.clone(),
-              scale: model.transform.scale.clone(),
-            },
-          };
-        }),
+        [
+          ...packedWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
+            return {
+              id: model.id,
+              transform: {
+                position: new THREE.Vector3(positionX, positionY, model.transform.position.z),
+                rotation: new THREE.Euler(
+                  model.transform.rotation.x,
+                  model.transform.rotation.y,
+                  rotationZ,
+                  model.transform.rotation.order,
+                ),
+                scale: model.transform.scale.clone(),
+              },
+            };
+          }),
+          ...spillWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
+            return {
+              id: model.id,
+              transform: {
+                position: new THREE.Vector3(positionX, positionY, model.transform.position.z),
+                rotation: new THREE.Euler(
+                  model.transform.rotation.x,
+                  model.transform.rotation.y,
+                  rotationZ,
+                  model.transform.rotation.order,
+                ),
+                scale: model.transform.scale.clone(),
+              },
+            };
+          }),
+        ],
       );
 
       transformMgr.setTransformMode('select');
@@ -416,7 +775,7 @@ export default function Home() {
       }
       setIsAutoArranging(false);
     }
-  }, [arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
 
   const computeArrangeSlots = React.useCallback((count: number, stepX: number, stepY: number) => {
     const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
@@ -834,6 +1193,10 @@ export default function Home() {
                 key="prepare-arrange-panel"
                 spacingMm={arrangeSpacingMm}
                 onSpacingMmChange={setArrangeSpacingMm}
+                allowRotateOnZ={arrangeAllowRotateOnZ}
+                onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
+                anchorMode={arrangeAnchorMode}
+                onAnchorModeChange={setArrangeAnchorMode}
                 onApply={handleAutoArrangeModels}
                 modelCount={scene.models.filter((m) => m.visible).length}
                 isApplying={isAutoArranging}

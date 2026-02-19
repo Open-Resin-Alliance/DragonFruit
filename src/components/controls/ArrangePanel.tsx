@@ -1,17 +1,33 @@
 import React from 'react';
-import { LayoutGrid, Loader2 } from 'lucide-react';
+import { LayoutGrid, Loader2, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
-import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
+
+export type ArrangeAnchorMode = 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
 
 interface ArrangePanelProps {
   spacingMm: number;
   onSpacingMmChange: (value: number) => void;
+  allowRotateOnZ: boolean;
+  onAllowRotateOnZChange: (value: boolean) => void;
+  anchorMode: ArrangeAnchorMode;
+  onAnchorModeChange: (value: ArrangeAnchorMode) => void;
   onApply: () => void;
   modelCount: number;
   isApplying?: boolean;
 }
 
-export function ArrangePanel({ spacingMm, onSpacingMmChange, onApply, modelCount, isApplying = false }: ArrangePanelProps) {
+export function ArrangePanel({
+  spacingMm,
+  onSpacingMmChange,
+  allowRotateOnZ,
+  onAllowRotateOnZChange,
+  anchorMode,
+  onAnchorModeChange,
+  onApply,
+  modelCount,
+  isApplying = false,
+}: ArrangePanelProps) {
   const [expanded, setExpanded] = React.useState(true);
 
   return (
@@ -64,6 +80,48 @@ export function ArrangePanel({ spacingMm, onSpacingMmChange, onApply, modelCount
               className="ui-input mt-1 w-full !h-8 px-2 text-sm no-spinners"
             />
           </div>
+
+          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Placement anchor</div>
+            <Select
+              value={anchorMode}
+              onChange={(e) => onAnchorModeChange(e.target.value as ArrangeAnchorMode)}
+              disabled={isApplying}
+              className="mt-1 w-full !h-8 px-2 text-xs"
+            >
+              <option value="center">Center</option>
+              <option value="front_left">Front Left</option>
+              <option value="front_right">Front Right</option>
+              <option value="back_left">Back Left</option>
+              <option value="back_right">Back Right</option>
+            </Select>
+          </div>
+
+          <button
+            type="button"
+            className="w-full rounded-md border px-2 py-2 text-left transition-colors disabled:opacity-60"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+            onClick={() => onAllowRotateOnZChange(!allowRotateOnZ)}
+            disabled={isApplying}
+            title="Allow auto-arrange to rotate models by 90° on Z when beneficial"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <RotateCw className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+                <span className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Allow Z-rotation</span>
+              </div>
+              <span
+                className="rounded-full border px-2 py-0.5 text-[10px]"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  color: allowRotateOnZ ? 'var(--accent)' : 'var(--text-muted)',
+                  background: allowRotateOnZ ? 'color-mix(in srgb, var(--accent), transparent 88%)' : 'transparent',
+                }}
+              >
+                {allowRotateOnZ ? 'ON' : 'OFF'}
+              </span>
+            </div>
+          </button>
 
           <Button
             onClick={onApply}
