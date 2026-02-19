@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import { Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
 
 interface IslandVoxelControlsProps {
   enabled: boolean;
@@ -31,16 +32,18 @@ export function IslandVoxelControls({
   const [expanded, setExpanded] = React.useState(false);
 
   return (
-    <div className="bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl">
-      <div className="flex items-center justify-between py-1 border-b border-neutral-700 mb-1">
-        <div className="flex items-center gap-1.5">
-          <button
+    <Card>
+      <CardHeader
+        left={(
+          <>
+            <IconButton
             onClick={() => setExpanded(!expanded)}
-            className="p-0.5 hover:bg-neutral-700 rounded transition-colors"
+            className="!p-0.5"
             title={expanded ? 'Collapse card' : 'Expand card'}
           >
             <svg
-              className={`w-3 h-3 transform transition-transform ${expanded ? 'text-blue-500' : 'text-neutral-500'}`}
+              className="w-3 h-3 transform transition-transform"
+              style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -51,46 +54,62 @@ export function IslandVoxelControls({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               )}
             </svg>
+            </IconButton>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island Voxels</h3>
+          </>
+        )}
+        right={(
+          <button
+            type="button"
+            onClick={() => onEnabledChange(!enabled)}
+            className="h-8 min-w-[74px] rounded-md border px-2.5 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+            style={enabled
+              ? {
+                  borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                  color: 'var(--accent-contrast)',
+                }
+              : {
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+            title="Toggle Island Voxels"
+          >
+            {enabled ? 'ON' : 'OFF'}
           </button>
-          <h3 className="text-xs font-semibold text-neutral-200">Island Voxels</h3>
-        </div>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => onEnabledChange(e.target.checked)}
-            className="w-3 h-3 rounded border-neutral-600 bg-neutral-700 text-blue-500 focus:ring-1 focus:ring-blue-500 focus:ring-offset-0"
-          />
-          <span className="text-[9px] text-neutral-400 uppercase tracking-wide">{enabled ? 'On' : 'Off'}</span>
-        </label>
-      </div>
+        )}
+        hideDivider={!expanded}
+      />
 
-      {islandCount > 0 && (
-        <div className="text-[9px] text-neutral-400 mb-1 px-1">
-          {islandCount} island{islandCount !== 1 ? 's' : ''} detected
-        </div>
-      )}
+      {(islandCount > 0 || expanded) && (
+        <div className="px-2.5 pt-2 pb-3">
+          {islandCount > 0 && (
+            <div className="ui-meta mb-2">
+              {islandCount} island{islandCount !== 1 ? 's' : ''} detected
+            </div>
+          )}
 
-      {expanded && (
-        <div className="space-y-2 mt-1.5">
-          <div className="flex flex-col gap-0.5">
-            <label className="text-[9px] text-neutral-400">Color Scheme</label>
-            <select
+          {expanded && (
+            <div className="space-y-2.5">
+              <div className="flex flex-col gap-1">
+            <label className="ui-meta">Color Scheme</label>
+            <Select
               value={colorScheme}
               onChange={(e) => onColorSchemeChange(e.target.value as 'unique' | 'lifecycle' | 'height')}
               disabled={!enabled}
-              className="w-full rounded border border-neutral-700 bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-100 disabled:opacity-50 focus:outline-none focus:border-blue-500"
+              className="w-full !h-8 px-2 py-0 text-sm disabled:opacity-50"
             >
               <option value="unique">Unique Colors</option>
               <option value="lifecycle">Lifecycle (Merge Status)</option>
               <option value="height">Height Gradient</option>
-            </select>
+            </Select>
           </div>
 
-          <div className="flex flex-col gap-0.5">
+          <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <label className="text-[9px] text-neutral-400">Opacity</label>
-              <span className="text-[9px] text-neutral-300">{Math.round(opacity * 100)}%</span>
+              <label className="ui-meta">Opacity</label>
+              <span className="ui-meta" style={{ color: 'var(--text-strong)' }}>{Math.round(opacity * 100)}%</span>
             </div>
             <input
               type="range"
@@ -100,26 +119,28 @@ export function IslandVoxelControls({
               value={opacity}
               onChange={(e) => onOpacityChange(parseFloat(e.target.value))}
               disabled={!enabled}
-              className="w-full h-1.5 bg-neutral-700 rounded-lg appearance-none cursor-pointer disabled:opacity-50 accent-blue-500"
+              className="ui-range"
             />
           </div>
 
-          <label className="flex items-center gap-1.5 py-1 border-t border-neutral-700 cursor-pointer">
+          <label className="flex items-center gap-1.5 py-1.5 border-t cursor-pointer" style={{ borderColor: 'var(--border-subtle)' }}>
             <input
               type="checkbox"
               checked={showMerged}
               onChange={(e) => onShowMergedChange(e.target.checked)}
               disabled={!enabled}
-              className="w-3 h-3 rounded border-neutral-600 bg-neutral-700 text-blue-500 disabled:opacity-50 focus:ring-1 focus:ring-blue-500"
+              className="ui-checkbox !w-4 !h-4"
             />
-            <span className="text-[9px] text-neutral-400">Show Merged Islands</span>
+            <span className="ui-meta">Show Merged Islands</span>
           </label>
 
-          <div className="text-[9px] text-neutral-500 pt-1 border-t border-neutral-700 leading-tight">
+          <div className="ui-meta pt-1.5 border-t leading-snug" style={{ borderColor: 'var(--border-subtle)' }}>
             <p>Visualizes isolated grid-aligned islands.</p>
           </div>
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </Card>
   );
 }

@@ -2,6 +2,7 @@
 
 
 import React, { useState, useEffect } from 'react';
+import { Save, RotateCcw } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import {
     getSettings,
@@ -22,9 +23,10 @@ import {
     GridSettingsCard,
     SupportKindTabs,
 } from './components';
+import { Button } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
-import { setAnatomyPreviewActiveSettingKey, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
+import { setAnatomyPreviewActiveSettingKey, setAnatomyPreviewShowTuner, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
 import {
     getSupportKindSnapshot,
     setActiveSupportKind,
@@ -49,6 +51,11 @@ export function SupportSidebar() {
     usePresetHotkeys();
     const [settings, setLocalSettings] = useState(() => getSettings());
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+    const [baseViewportScale, setBaseViewportScale] = useState(1);
+    const [appliedCompactScale, setAppliedCompactScale] = useState(1);
+    const [isCompactLayout, setIsCompactLayout] = useState(false);
+    const viewportRef = React.useRef<HTMLDivElement | null>(null);
+    const contentRef = React.useRef<HTMLDivElement | null>(null);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
@@ -67,6 +74,42 @@ export function SupportSidebar() {
                 setAnatomyPreviewActiveSettingKey(null);
             },
         };
+    }, []);
+
+    const deriveViewportBaseScale = React.useCallback((viewportWidth: number, viewportHeight: number, contentHeight: number) => {
+        let nextScale = 1;
+
+        // Width-led compact tiers (panel-local, not full window)
+        if (viewportWidth <= 410) nextScale = 0.97;
+        if (viewportWidth <= 390) nextScale = 0.94;
+        if (viewportWidth <= 370) nextScale = 0.91;
+        if (viewportWidth <= 350) nextScale = 0.88;
+        if (viewportWidth <= 330) nextScale = 0.84;
+        if (viewportWidth <= 312) nextScale = 0.8;
+
+        // Height pressure only matters when genuinely short
+        if (viewportHeight <= 960) nextScale = Math.min(nextScale, 0.95);
+        if (viewportHeight <= 860) nextScale = Math.min(nextScale, 0.9);
+        if (viewportHeight <= 760) nextScale = Math.min(nextScale, 0.86);
+        if (viewportHeight <= 680) nextScale = Math.min(nextScale, 0.8);
+
+        // If there is meaningful vertical slack, recover readability (except on very small panes).
+        const verticalSlack = viewportHeight - contentHeight;
+        const isVerySmallPane = viewportWidth <= 335 || viewportHeight <= 700;
+        if (!isVerySmallPane && verticalSlack > 120) {
+            nextScale = Math.min(1, nextScale + 0.07);
+        }
+        if (!isVerySmallPane && verticalSlack > 220) {
+            nextScale = Math.min(1, nextScale + 0.05);
+        }
+
+        // Tall+narrow columns should keep larger fonts when possible.
+        const isTallNarrow = viewportHeight / Math.max(viewportWidth, 1) >= 1.9;
+        if (isTallNarrow) {
+            nextScale = Math.max(nextScale, 0.9);
+        }
+
+        return nextScale;
     }, []);
 
     useEffect(() => {
@@ -94,6 +137,66 @@ export function SupportSidebar() {
             unsubscribeSettings();
         };
     }, []);
+
+    React.useLayoutEffect(() => {
+        const viewportEl = viewportRef.current;
+        const contentEl = contentRef.current;
+        if (!viewportEl || !contentEl) return;
+
+        const computeFitScale = () => {
+            const viewportWidth = viewportEl.clientWidth;
+            const viewportHeight = viewportEl.clientHeight;
+            const contentWidth = contentEl.scrollWidth;
+            const contentHeight = contentEl.scrollHeight;
+
+            if (viewportWidth <= 0 || viewportHeight <= 0 || contentWidth <= 0 || contentHeight <= 0) return;
+
+            const fitWidthScale = viewportWidth / contentWidth;
+            const fitHeightSafety = viewportHeight <= 950 ? 10 : 6;
+            const fitHeightScale = Math.max(0.45, (viewportHeight - fitHeightSafety) / contentHeight);
+            const fitScale = Math.min(1, fitWidthScale, fitHeightScale);
+            const nextBaseScale = deriveViewportBaseScale(viewportWidth, viewportHeight, contentHeight);
+
+            let windowScaleCap = 1;
+            if (typeof window !== 'undefined') {
+                const vw = window.innerWidth;
+                const vh = window.innerHeight;
+                if (vw <= 2000 || vh <= 950) windowScaleCap = 0.88;
+                if (vw <= 1850 || vh <= 900) windowScaleCap = 0.84;
+                if (vw <= 1700 || vh <= 840) windowScaleCap = 0.8;
+            }
+
+            if (Math.abs(nextBaseScale - baseViewportScale) > 0.01) {
+                setBaseViewportScale(nextBaseScale);
+            }
+
+            const minScaleFloor = viewportWidth <= 320 || viewportHeight <= 660
+                ? 0.54
+                : viewportWidth <= 350 || viewportHeight <= 740
+                    ? 0.58
+                    : 0.64;
+
+            const nextScale = Math.max(minScaleFloor, Math.min(nextBaseScale, fitScale, windowScaleCap));
+            const nextCompactLayout = nextScale < 0.9 || viewportHeight <= 880;
+
+            if (Math.abs(nextScale - appliedCompactScale) > 0.01) {
+                setAppliedCompactScale(nextScale);
+            }
+
+            setIsCompactLayout((prev) => (prev === nextCompactLayout ? prev : nextCompactLayout));
+        };
+
+        computeFitScale();
+        const observer = new ResizeObserver(() => {
+            computeFitScale();
+        });
+        observer.observe(viewportEl);
+        observer.observe(contentEl);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [activeKind, appliedCompactScale, baseViewportScale, deriveViewportBaseScale]);
 
     const handleSave = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -133,17 +236,55 @@ export function SupportSidebar() {
             return {
                 className: `${baseClass} ring-2`,
                 style: {
-                    borderColor: '#FD5290',
-                    '--tw-ring-color': '#FD5290',
+                    borderColor: 'var(--accent)',
+                    '--tw-ring-color': 'var(--accent)',
                 } as React.CSSProperties
             };
         }
         return { className: baseClass };
     };
 
+    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base no-spinners';
+    const renderPreviewBox = (heightClass: string, widthClass: string = 'w-full') => (
+        <div
+            data-no-drag="true"
+            className={`relative ${widthClass} ${heightClass} rounded-md border overflow-hidden`}
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+        >
+            <div className="absolute bottom-2.5 left-2.5 z-20">
+                <button
+                    type="button"
+                    onClick={() => setAnatomyPreviewShowTuner(!previewState.showTuner)}
+                    className="rounded-md border px-3 py-1.5 text-[12px] font-semibold transition-colors"
+                    style={{
+                        borderColor: previewState.showTuner ? 'var(--accent)' : 'var(--border-subtle)',
+                        background: previewState.showTuner
+                            ? 'color-mix(in srgb, var(--accent), var(--surface-0) 74%)'
+                            : 'color-mix(in srgb, var(--surface-0), transparent 8%)',
+                        color: previewState.showTuner ? 'var(--text-strong)' : 'var(--text-strong)',
+                    }}
+                    title="Toggle Anatomy Preview Tuner"
+                >
+                    Tuner
+                </button>
+            </div>
+            <SupportAnatomyPreviewSlot />
+        </div>
+    );
+
     return (
-        <div className="h-full w-full flex flex-col">
-            <div className="px-1 py-1 border-b border-neutral-800">
+        <div ref={viewportRef} className="h-full w-full overflow-hidden">
+            <div
+                ref={contentRef}
+                className="h-full w-full flex flex-col"
+                style={{
+                    transform: `scale(${appliedCompactScale})`,
+                    transformOrigin: 'top left',
+                    width: `${100 / appliedCompactScale}%`,
+                    height: `${100 / appliedCompactScale}%`,
+                }}
+            >
+            <div className="px-2.5 py-2">
                 <SupportKindTabs
                     value={activeKind}
                     onChange={(kind) => {
@@ -153,66 +294,69 @@ export function SupportSidebar() {
                 />
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-1 pb-24 pt-2 space-y-2">
+            <div className="flex-1 min-h-0 overflow-hidden px-2.5 pb-3 pt-2 space-y-2.5">
                 {activeKind === 'raft' ? (
-                    <div className="space-y-2">
-                        <div className="w-full h-[300px] bg-transparent border border-neutral-700 rounded overflow-hidden">
-                            <SupportAnatomyPreviewSlot />
+                    <div className="space-y-2.5">
+                        {renderPreviewBox('h-[212px]')}
+                        <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                            <RaftSettingsCard
+                                settings={raftSettings}
+                                onChange={(partial) => updateRaftSettings(partial)}
+                            />
                         </div>
-                        <RaftSettingsCard
-                            settings={raftSettings}
-                            onChange={(partial) => updateRaftSettings(partial)}
-                        />
                     </div>
                 ) : activeKind === 'grid' ? (
-                    <div className="space-y-2">
-                        <div className="w-full h-[300px] bg-transparent border border-neutral-700 rounded overflow-hidden">
-                            <SupportAnatomyPreviewSlot />
+                    <div className="space-y-2.5">
+                        <div className="flex gap-2.5">
+                            {renderPreviewBox('h-auto min-h-[220px]', 'flex-1 min-w-0')}
+                            <div className="flex-1 min-w-0 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                                <GridSettingsCard
+                                    grid={settings.grid}
+                                    onChange={(partial) => updateGridSettings(partial)}
+                                />
+                            </div>
                         </div>
-                        <GridSettingsCard
-                            grid={settings.grid}
-                            onChange={(partial) => updateGridSettings(partial)}
-                        />
                     </div>
                 ) : (
-                    <div className="flex gap-1">
-                        <div className="w-[110px] flex-shrink-0 bg-transparent border border-neutral-700 rounded overflow-hidden flex flex-col">
-                            <SupportAnatomyPreviewSlot />
-                        </div>
+                    <div className="space-y-2.5">
+                        <div className="flex gap-2.5">
+                            {renderPreviewBox('h-auto min-h-[340px]', 'flex-1 min-w-0')}
 
-                        <div className="flex-1 min-w-0 px-0 py-0">
-                            <div className="space-y-0.5">
-                                <div className="text-[10px] font-semibold text-neutral-300 uppercase tracking-wide">Settings</div>
+                            <div className="flex-1 min-w-0 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                            <div className="space-y-2">
+                                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                    Support Geometry
+                                </div>
 
-                                <div className="space-y-1">
-                                    <div className="space-y-0.5" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
-                                        <div className="text-[9px] leading-none text-neutral-300">Contact diameter</div>
+                                <div className="space-y-2 items-start">
+                                    <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.contactDiameterMm')}>
+                                        <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact diameter</div>
                                         <NumberInput
                                             value={settings.tip.contactDiameterMm}
                                             onChange={(val) => updateTipProfile({ contactDiameterMm: val })}
                                             {...getInputProps(
                                                 'tip.contactDiameterMm',
-                                                "w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                compactInputClass
                                             )}
                                         />
                                     </div>
 
                                     {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf' || activeKind === 'stick') && (
-                                        <div className="space-y-0.5" {...makeRowFocusHandlers('tip.lengthMm')}>
-                                            <div className="text-[9px] leading-none text-neutral-300">Contact cone length</div>
+                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
+                                            <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact cone length</div>
                                             <NumberInput
                                                 value={settings.tip.lengthMm}
                                                 onChange={(val) => updateTipProfile({ lengthMm: val })}
                                                 {...getInputProps(
                                                     'tip.lengthMm',
-                                                    "w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                    compactInputClass
                                                 )}
                                             />
                                         </div>
                                     )}
 
                                     {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf' || activeKind === 'stick') && (
-                                        <div className="space-y-0.5" {...makeRowFocusHandlers('tip.coneAngleMode')}>
+                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.coneAngleMode')}>
                                             <div
                                                 className={
                                                     isAdaptiveConeAngle
@@ -220,9 +364,9 @@ export function SupportSidebar() {
                                                         : 'flex items-center'
                                                 }
                                             >
-                                                <div className="text-[9px] leading-none text-neutral-300">Cone Control Angle</div>
+                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Cone control angle</div>
                                                 {isAdaptiveConeAngle && (
-                                                    <div className="text-[9px] leading-none text-neutral-400">Offset (deg)</div>
+                                                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Offset (deg)</div>
                                                 )}
                                             </div>
                                             <div
@@ -235,7 +379,7 @@ export function SupportSidebar() {
                                                 <select
                                                     value={settings.tip.coneAngleMode ?? 'normal'}
                                                     onChange={(e) => updateTipProfile({ coneAngleMode: e.target.value as any })}
-                                                    className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 h-[22px] px-1 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none truncate`}
+                                                    className={`${isAdaptiveConeAngle ? 'w-full' : 'flex-1'} min-w-0 ui-input h-[36px] px-3 py-2 text-base truncate`}
                                                 >
                                                     <option value="normal">Normal</option>
                                                     <option value="locked">Locked</option>
@@ -248,7 +392,7 @@ export function SupportSidebar() {
                                                         onChange={(val) => updateTipProfile({ adaptiveConeAngleOffsetDeg: val })}
                                                         aria-label="Adaptive offset (deg)"
                                                         title="Adaptive offset (deg)"
-                                                        className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                        className={compactInputClass}
                                                     />
                                                 )}
                                             </div>
@@ -256,65 +400,68 @@ export function SupportSidebar() {
                                     )}
 
                                     {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'stick') && (
-                                        <div className="space-y-0.5" {...makeRowFocusHandlers('shaft.diameterMm')}>
-                                            <div className="text-[9px] leading-none text-neutral-300">Trunk diameter</div>
+                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
+                                            <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                                                {activeKind === 'stick' ? 'Stick diameter' : 'Trunk diameter'}
+                                            </div>
                                             <NumberInput
                                                 value={settings.shaft.diameterMm}
                                                 onChange={(val) => updateShaftProfile({ diameterMm: val })}
                                                 {...getInputProps(
                                                     'shaft.diameterMm',
-                                                    "w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                    compactInputClass
                                                 )}
                                             />
                                         </div>
                                     )}
 
                                     {(activeKind === 'trunk' || activeKind === 'branch') && (
-                                        <div className="space-y-0.5" {...makeRowFocusHandlers('joint.defaultJointCount')}>
-                                            <div className="text-[9px] leading-none text-neutral-300">Default joints</div>
+                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('joint.defaultJointCount')}>
+                                            <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Default joints</div>
                                             <NumberInput
                                                 value={settings.joint.defaultJointCount}
                                                 onChange={(val) => updateJointProfile({ defaultJointCount: val })}
-                                                className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                className={compactInputClass}
                                             />
                                         </div>
                                     )}
 
                                     {activeKind === 'trunk' && (
                                         <>
-                                            <div className="pt-0.5 border-t border-neutral-700/60" />
+                                            <div className="pt-1" />
 
-                                            <div className="text-[10px] font-semibold text-neutral-300 uppercase tracking-wide">Roots</div>
+                                            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Roots</div>
 
-                                            <div className="space-y-0.5" {...makeRowFocusHandlers('roots.diameterMm')}>
-                                                <div className="text-[9px] leading-none text-neutral-300">Roots diameter</div>
+                                            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diameterMm')}>
+                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Roots diameter</div>
                                                 <NumberInput
                                                     value={settings.roots.diameterMm}
                                                     onChange={(val) => updateRootsProfile({ diameterMm: val })}
-                                                    className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                    className={compactInputClass}
                                                 />
                                             </div>
 
-                                            <div className="space-y-0.5" {...makeRowFocusHandlers('roots.diskHeightMm')}>
-                                                <div className="text-[9px] leading-none text-neutral-300">Disk height</div>
+                                            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.diskHeightMm')}>
+                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Disk height</div>
                                                 <NumberInput
                                                     value={settings.roots.diskHeightMm}
                                                     onChange={(val) => updateRootsProfile({ diskHeightMm: val })}
-                                                    className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                    className={compactInputClass}
                                                 />
                                             </div>
 
-                                            <div className="space-y-0.5" {...makeRowFocusHandlers('roots.coneHeightMm')}>
-                                                <div className="text-[9px] leading-none text-neutral-300">Cone height</div>
+                                            <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('roots.coneHeightMm')}>
+                                                <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Cone height</div>
                                                 <NumberInput
                                                     value={settings.roots.coneHeightMm}
                                                     onChange={(val) => updateRootsProfile({ coneHeightMm: val })}
-                                                    className="w-full h-[22px] px-2 py-0 text-[11px] leading-none bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                                    className={compactInputClass}
                                                 />
                                             </div>
                                         </>
                                     )}
                                 </div>
+                            </div>
                             </div>
                         </div>
                     </div>
@@ -322,15 +469,15 @@ export function SupportSidebar() {
 
                 {activeKind === 'trunk' && (
                     <div className="w-full overflow-hidden">
-                        <div className="bg-neutral-900/40 rounded border border-neutral-700">
+                        <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                             <PresetSelector />
                         </div>
                     </div>
                 )}
 
-                {activeKind === 'trunk' && (
-                    <div className="text-[10px] text-neutral-400 bg-neutral-900/40 rounded p-1.5 border border-neutral-700">
-                        <div className="font-medium text-neutral-300 mb-0.5">Placement</div>
+                {activeKind === 'trunk' && !isCompactLayout && (
+                    <div className="rounded-md p-2 border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                        <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>Placement</div>
                         <p className="leading-tight">
                             Click model to place support. Tip aligns to surface, base drops to plate.
                         </p>
@@ -338,36 +485,26 @@ export function SupportSidebar() {
                 )}
             </div>
 
-            <div className="px-1 pb-2">
-                <div className="border-t border-neutral-800 pt-2 bg-neutral-900">
-                    {saveStatus !== 'idle' && (
-                        <div
-                            className={
-                                saveStatus === 'saved'
-                                    ? 'mb-1 text-[10px] text-green-400'
-                                    : 'mb-1 text-[10px] text-red-400'
-                            }
-                        >
-                            {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
-                        </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-1">
-                        <button
-                            type="button"
-                            onClick={handleSave}
-                            className="h-[28px] text-[11px] bg-neutral-800 text-neutral-200 rounded border border-neutral-700 hover:bg-neutral-700"
-                        >
-                            Save
-                        </button>
-                        <button
-                            type="button"
-                            onClick={handleRestoreDefaults}
-                            className="h-[28px] text-[11px] bg-neutral-800 text-neutral-200 rounded border border-neutral-700 hover:bg-neutral-700"
-                        >
-                            Restore Defaults
-                        </button>
+            <div className="px-2 pt-1 pb-2">
+                {saveStatus !== 'idle' && (
+                    <div
+                        className="mb-1 text-[10px]"
+                        style={{ color: saveStatus === 'saved' ? '#34d399' : '#f87171' }}
+                    >
+                        {saveStatus === 'saved' ? 'Saved' : 'Save failed'}
                     </div>
+                )}
+                <div className="grid grid-cols-2 gap-1.5">
+                    <Button type="button" onClick={handleSave} variant="primary" size="sm" className="w-full !h-10 !text-[12px] !font-semibold !inline-flex !items-center !justify-center !gap-2">
+                        <Save className="h-3.5 w-3.5" />
+                        <span>Save</span>
+                    </Button>
+                    <Button type="button" onClick={handleRestoreDefaults} variant="accent" size="sm" className="w-full !h-10 !text-[12px] !font-semibold !inline-flex !items-center !justify-center !gap-2">
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        <span>Restore Defaults</span>
+                    </Button>
                 </div>
+            </div>
             </div>
         </div>
     );

@@ -62,9 +62,33 @@ export function TransformGizmo({
   onScaleEnd,
   onDragStateChange,
 }: TransformGizmoProps) {
+  const gizmoRootRef = React.useRef<THREE.Group | null>(null);
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<string | null>(null);
   const [isUniformScale, setIsUniformScale] = useState(false);
+
+  React.useEffect(() => {
+    if (!gizmoRootRef.current) return;
+
+    gizmoRootRef.current.traverse((obj) => {
+      obj.frustumCulled = false;
+      obj.renderOrder = 2500;
+
+      const material = (obj as THREE.Mesh).material;
+      if (!material) return;
+
+      const applyOverlayMaterial = (m: THREE.Material) => {
+        if ('depthTest' in m) (m as THREE.Material & { depthTest: boolean }).depthTest = false;
+        if ('depthWrite' in m) (m as THREE.Material & { depthWrite: boolean }).depthWrite = false;
+      };
+
+      if (Array.isArray(material)) {
+        material.forEach(applyOverlayMaterial);
+      } else {
+        applyOverlayMaterial(material);
+      }
+    });
+  }, []);
 
   if (!visible) return null;
 
@@ -161,8 +185,8 @@ export function TransformGizmo({
   };
 
   const isDimmed = (part: string) => {
-    // Dim all parts except the hovered or active one
-    const focusedPart = activePart || hoveredPart;
+    // Only dim while actively dragging; do not dim on hover.
+    const focusedPart = activePart;
     return focusedPart !== null && focusedPart !== part;
   };
 
@@ -172,7 +196,7 @@ export function TransformGizmo({
   };
 
   return (
-    <group position={posArray} rotation={rotArray} scale={size} renderOrder={999}>
+    <group ref={gizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
       {/* Center plane - XY movement only */}
       {enableMove && showCenter && (
         <GizmoCenter

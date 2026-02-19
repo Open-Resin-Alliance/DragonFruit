@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
-import { getIslandHierarchy } from '@/volumeAnalysis/VoxelSystem/IslandVolume';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
 
 type IslandHierarchyModalProps = {
@@ -19,6 +18,17 @@ type TreeNode = {
 };
 
 export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, zOffsetMm }: IslandHierarchyModalProps) {
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   // Build tree structure - find root islands (no parent)
@@ -39,26 +49,48 @@ export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, 
   const tree = buildTree();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="bg-neutral-900 rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col border border-neutral-700">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="w-full max-w-3xl max-h-[84vh] flex flex-col rounded-xl border shadow-2xl"
+        style={{
+          background: 'var(--surface-0)',
+          borderColor: 'var(--border-subtle)',
+          boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+        }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-neutral-700">
-          <h2 className="text-lg font-semibold text-white">Island Hierarchy</h2>
+        <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+          <div>
+            <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>Island Hierarchy</h2>
+            <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Parent-child merges across detected islands
+            </p>
+          </div>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-neutral-800 rounded transition-colors"
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'var(--surface-1)',
+              color: 'var(--text-muted)',
+            }}
             aria-label="Close"
           >
-            <X className="w-5 h-5 text-neutral-400" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto px-4 py-3">
           {tree.length === 0 ? (
-            <p className="text-neutral-400 text-center py-8">No islands found</p>
+            <p className="text-center py-10 text-sm" style={{ color: 'var(--text-muted)' }}>No islands found.</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {tree.map(node => (
                 <TreeNodeComponent key={node.island.id} node={node} level={0} layerHeightMm={layerHeightMm} zOffsetMm={zOffsetMm} />
               ))}
@@ -67,12 +99,12 @@ export function IslandHierarchyModal({ islands, isOpen, onClose, layerHeightMm, 
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-neutral-700 bg-neutral-800/50">
-          <div className="text-xs text-neutral-400 space-y-1">
-            <p><strong>Legend:</strong></p>
-            <p>• Root islands have no parent (started independently)</p>
-            <p>• Child islands merged into their parent</p>
-            <p>• Volume shows individual island contribution</p>
+        <div className="px-4 py-3 border-t" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="text-[11px] space-y-1" style={{ color: 'var(--text-muted)' }}>
+            <p style={{ color: 'var(--text-strong)' }} className="font-semibold">Legend</p>
+            <p>• Root islands have no parent (independent start)</p>
+            <p>• Child islands merge upward into a parent node</p>
+            <p>• Volume shows each island&apos;s individual contribution</p>
           </div>
         </div>
       </div>
@@ -105,18 +137,20 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
         <>
           {/* Horizontal line to node */}
           <div
-            className="absolute top-6 border-t-2 border-neutral-600"
+            className="absolute top-7 border-t"
             style={{
               left: `${(level - 1) * 32 + 16}px`,
-              width: '24px'
+              width: '24px',
+              borderColor: 'var(--border-subtle)',
             }}
           />
           {/* Vertical line from parent */}
           <div
-            className="absolute top-0 bottom-0 border-l-2 border-neutral-600"
+            className="absolute top-0 bottom-0 border-l"
             style={{
               left: `${(level - 1) * 32 + 16}px`,
-              height: '24px'
+              height: '28px',
+              borderColor: 'var(--border-subtle)',
             }}
           />
         </>
@@ -124,38 +158,46 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
 
       {/* Node */}
       <div
-        className="flex items-center gap-2 p-2 rounded hover:bg-neutral-800 transition-colors relative"
-        style={{ paddingLeft: `${level * 32 + 8}px` }}
+        className="flex items-center gap-2 p-2 rounded-md transition-colors relative border"
+        style={{
+          paddingLeft: `${level * 32 + 8}px`,
+          background: 'var(--surface-1)',
+          borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 20%)',
+        }}
       >
         {/* Expand/Collapse Button */}
         {hasChildren ? (
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="p-0.5 hover:bg-neutral-700 rounded transition-colors z-10 bg-neutral-900"
+            className="h-6 w-6 inline-flex items-center justify-center rounded border transition-colors z-10"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
           >
             {isExpanded ? (
-              <ChevronDown className="w-4 h-4 text-neutral-400" />
+              <ChevronDown className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
             ) : (
-              <ChevronRight className="w-4 h-4 text-neutral-400" />
+              <ChevronRight className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
             )}
           </button>
         ) : (
-          <div className="w-5" /> // Spacer for alignment
+          <div className="w-6" />
         )}
 
         {/* Island Info */}
-        <div className="flex-1 bg-neutral-900 relative z-10">
+        <div className="flex-1 relative z-10">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <span className="font-mono font-bold text-blue-400">#{node.island.id}</span>
-              <span className="text-xs text-neutral-500 font-mono">{layerRange}</span>
-              <span className="text-xs text-neutral-400">({layerCount} layers)</span>
+              <span className="font-mono text-sm font-bold" style={{ color: 'var(--accent)' }}>#{node.island.id}</span>
+              <span className="text-[11px] font-mono" style={{ color: 'var(--text-muted)' }}>{layerRange}</span>
+              <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>({layerCount} layers)</span>
             </div>
 
             <div className="flex items-center gap-3">
-              <span className="text-sm text-neutral-300">{volume} mm³</span>
+              <span className="text-sm" style={{ color: 'var(--text-strong)' }}>{volume} mm³</span>
               {hasChildren && (
-                <span className="text-xs text-neutral-500 bg-neutral-800 px-2 py-0.5 rounded">
+                <span
+                  className="text-[10px] px-2 py-0.5 rounded"
+                  style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}
+                >
                   {node.children.length} {node.children.length === 1 ? 'child' : 'children'}
                 </span>
               )}
@@ -163,7 +205,7 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
           </div>
 
           {/* Max area info */}
-          <div className="text-[10px] text-neutral-500 mt-1">
+          <div className="text-[11px] mt-1" style={{ color: 'var(--text-muted)' }}>
             Max area: {maxArea} mm² at L{worldMaxAreaLayer}
           </div>
         </div>
@@ -174,14 +216,15 @@ function TreeNodeComponent({ node, level, layerHeightMm, zOffsetMm }: TreeNodeCo
         <div className="relative">
           {/* Vertical line for children */}
           <div
-            className="absolute border-l-2 border-neutral-600"
+            className="absolute border-l"
             style={{
               left: `${level * 32 + 16}px`,
               top: '0',
-              bottom: '12px'
+              bottom: '12px',
+              borderColor: 'var(--border-subtle)',
             }}
           />
-          {node.children.map((child, index) => (
+          {node.children.map((child) => (
             <TreeNodeComponent key={child.island.id} node={child} level={level + 1} layerHeightMm={layerHeightMm} zOffsetMm={zOffsetMm} />
           ))}
         </div>

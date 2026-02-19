@@ -2,8 +2,8 @@
 import React, { useState } from 'react';
 import type { Island } from '@/volumeAnalysis/IslandScan/types';
 import { IslandHierarchyModal } from '@/components/modals/IslandHierarchyModal';
-import { getIslandHierarchy } from '@/volumeAnalysis/VoxelSystem/IslandVolume';
-import { Network } from 'lucide-react';
+import { ChevronRight, Network } from 'lucide-react';
+import { Button, Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
 
 type IslandListCardProps = {
   islands: Island[];
@@ -28,14 +28,30 @@ export function IslandListCard({
   layerHeightMm,
   zOffsetMm,
 }: IslandListCardProps) {
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'id' | 'volume' | 'layers'>('id');
   const [showHierarchyModal, setShowHierarchyModal] = useState(false);
+  const [compactHeader, setCompactHeader] = useState(false);
 
-  // Separate active and child islands
+  React.useLayoutEffect(() => {
+    const element = cardRef.current;
+    if (!element) return;
+
+    const updateCompactState = () => {
+      setCompactHeader(element.clientWidth <= 286);
+    };
+
+    updateCompactState();
+    const observer = new ResizeObserver(updateCompactState);
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Separate active islands
   const activeIslands = islands.filter(i => i.status === 'active');
-  const childIslands = islands.filter(i => i.status === 'complete');
 
   // Filter and sort islands
   const filteredIslands = (showMerged ? islands : activeIslands).filter(island => {
@@ -55,101 +71,113 @@ export function IslandListCard({
   });
 
   return (
-    <div className="bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl">
-      {/* Header */}
-      <div className="flex items-center justify-between py-1 border-b border-neutral-700 mb-1">
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="p-0.5 hover:bg-neutral-700 rounded transition-colors"
-            title={expanded ? 'Collapse card' : 'Expand card'}
-          >
-            <svg
-              className={`w-3 h-3 transform transition-transform ${expanded ? 'text-blue-500' : 'text-neutral-500'} `}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+    <div ref={cardRef}>
+    <Card>
+      <CardHeader
+        left={(
+          <>
+            <IconButton
+              onClick={() => setExpanded(!expanded)}
+              className="!p-0.5"
+              title={expanded ? 'Collapse card' : 'Expand card'}
             >
-              {expanded ? (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              ) : (
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              <svg
+                className="w-3 h-3 transform transition-transform"
+                style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {expanded ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                )}
+              </svg>
+            </IconButton>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island IDs</h3>
+          </>
+        )}
+        right={(
+          <Button
+            onClick={() => setShowHierarchyModal(true)}
+            variant="accent"
+            size="sm"
+            className={compactHeader ? '!h-9 !px-2 !py-0 text-[12px] font-semibold' : '!h-9 !px-2.5 !py-0 text-[12px] font-semibold'}
+            title="View island hierarchy tree"
+          >
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              {!compactHeader && (
+                <span
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 45%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 86%)',
+                  }}
+                >
+                  <Network className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary-contrast)' }} />
+                </span>
               )}
-            </svg>
-          </button>
-          <h3 className="text-xs font-semibold text-neutral-200">Island IDs</h3>
-        </div>
-
-        {/* Hierarchy Button */}
-        <button
-          onClick={() => setShowHierarchyModal(true)}
-          className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded transition-colors"
-          title="View island hierarchy tree"
-        >
-          <Network className="w-3 h-3" />
-          <span>Hierarchy</span>
-        </button>
-      </div>
+              <span className="leading-none" style={{ color: 'var(--accent-secondary-contrast)' }}>Hierarchy</span>
+              {!compactHeader && (
+                <ChevronRight className="h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 18%)' }} />
+              )}
+            </span>
+          </Button>
+        )}
+        hideDivider={!expanded}
+      />
 
       {expanded && (
-        <div className="space-y-1">
+        <div className="px-2.5 pt-1 pb-2.5 space-y-1.5">
           {/* Summary stats */}
-          <div className="grid grid-cols-2 gap-1.5 text-[9px]">
-            <div className="bg-neutral-750 rounded p-1">
-              <div className="text-neutral-400">Total Islands</div>
-              <div className="text-neutral-200 font-semibold">{islands.length}</div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="rounded p-1" style={{ background: 'var(--surface-1)' }}>
+              <div className="ui-meta">Total Islands</div>
+              <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{islands.length}</div>
             </div>
-            <div className="bg-neutral-750 rounded p-1">
-              <div className="text-neutral-400">Active</div>
-              <div className="text-neutral-200 font-semibold">{activeIslands.length}</div>
+            <div className="rounded p-1" style={{ background: 'var(--surface-1)' }}>
+              <div className="ui-meta">Active</div>
+              <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{activeIslands.length}</div>
             </div>
           </div>
 
           {/* Show merged toggle */}
-          <label className="flex items-center gap-1.5 cursor-pointer py-0.5">
+          <label className="flex items-center gap-1.5 cursor-pointer py-0.5 px-0.5">
             <input
               type="checkbox"
               checked={showMerged}
               onChange={(e) => onShowMergedChange(e.target.checked)}
-              className="w-3 h-3 rounded border-neutral-600 bg-neutral-700 text-blue-500 focus:ring-1 focus:ring-blue-500 focus:ring-offset-0"
+              className="ui-checkbox"
             />
-            <span className="text-[10px] text-neutral-400">Show child islands</span>
+            <span className="ui-meta">Show child islands</span>
           </label>
 
           {/* Search and sort */}
           <div className="space-y-1">
-            <input
+            <Input
               type="text"
               placeholder="Search island ID..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 border border-neutral-600 rounded text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-blue-500 no-spinners"
+              className="w-full !h-8 px-2 text-sm no-spinners"
             />
             <div className="flex gap-1">
               <button
                 onClick={() => setSortBy('id')}
-                className={`flex - 1 px - 1.5 py - 0.5 text - [10px] rounded ${sortBy === 'id'
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-neutral-700 text-neutral-300 hover:bg-neutral-600'
-                  } `}
+                className={`ui-button flex-1 !h-8 px-2 py-0 text-[11px] ${sortBy === 'id' ? 'ui-button-primary' : 'ui-button-secondary'}`}
               >
                 ID
               </button>
               <button
                 onClick={() => setSortBy('volume')}
-                className={`flex - 1 px - 1.5 py - 0.5 text - [10px] rounded ${sortBy === 'volume'
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-neutral-700 text-neutral-300 hover:bg-neutral-600'
-                  } `}
+                className={`ui-button flex-1 !h-8 px-2 py-0 text-[11px] ${sortBy === 'volume' ? 'ui-button-primary' : 'ui-button-secondary'}`}
               >
                 Volume
               </button>
               <button
                 onClick={() => setSortBy('layers')}
-                className={`flex - 1 px - 1.5 py - 0.5 text - [10px] rounded ${sortBy === 'layers'
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-neutral-700 text-neutral-300 hover:bg-neutral-600'
-                  } `}
+                className={`ui-button flex-1 !h-8 px-2 py-0 text-[11px] ${sortBy === 'layers' ? 'ui-button-primary' : 'ui-button-secondary'}`}
               >
                 Layers
               </button>
@@ -157,8 +185,8 @@ export function IslandListCard({
           </div>
 
           {/* Island list */}
-          <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar">
-            <div className="text-[9px] text-neutral-400 px-1">
+          <div className="space-y-1 max-h-[30rem] overflow-y-auto custom-scrollbar">
+            <div className="ui-meta px-1">
               {sortedIslands.length} island{sortedIslands.length !== 1 ? 's' : ''}
             </div>
             {sortedIslands.map((island) => {
@@ -170,38 +198,43 @@ export function IslandListCard({
                 <div
                   key={island.id}
                   onClick={() => onSelectIsland(isSelected ? null : island.id)}
-                  className={`p - 1.5 rounded cursor - pointer transition - colors ${isSelected
-                    ? 'bg-blue-500/20 border border-blue-500'
-                    : 'bg-neutral-750 border border-transparent hover:bg-neutral-700'
-                    } `}
+                  className={`p-1.5 rounded cursor-pointer transition-colors border ${
+                    isSelected ? '' : 'hover:bg-black/10'
+                  }`}
+                  style={isSelected
+                    ? {
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                      }
+                    : { background: 'var(--surface-1)', borderColor: 'transparent' }}
                 >
                   <div className="flex items-start justify-between gap-1.5">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                        <span className="text-xs font-semibold text-neutral-200">
+                        <span className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                           #{island.id}
                         </span>
                         {island.childIds.length > 0 && (
-                          <span className="text-[9px] px-1 py-0.5 bg-green-500/20 text-green-400 rounded leading-none">
+                          <span className="text-[10px] px-1 py-0.5 bg-green-500/20 text-green-400 rounded leading-none">
                             P+{island.childIds.length}
                           </span>
                         )}
                         {isMerged && island.parentId && (
-                          <span className="text-[9px] px-1 py-0.5 bg-orange-500/20 text-orange-400 rounded leading-none">
+                          <span className="text-[10px] px-1 py-0.5 bg-orange-500/20 text-orange-400 rounded leading-none">
                             C#{island.parentId}
                           </span>
                         )}
                       </div>
-                      <div className="text-[9px] text-neutral-400 leading-tight">
+                      <div className="ui-meta leading-tight">
                         L{island.firstLayer}–{island.lastLayer} ({layerSpan})
                       </div>
-                      <div className="text-[9px] text-neutral-400 leading-tight">
+                      <div className="ui-meta leading-tight">
                         {island.volumeMm3 !== undefined
                           ? `${island.volumeMm3.toFixed(2)} mm³`
                           : `${island.totalAreaMm2.toFixed(1)} mm²`}
                       </div>
                       {island.maxAreaMm2 !== undefined && island.maxAreaLayer !== undefined && (
-                        <div className="text-[9px] text-neutral-500 leading-tight">
+                        <div className="ui-meta leading-tight" style={{ color: 'color-mix(in srgb, var(--text-muted), black 20%)' }}>
                           Max: {island.maxAreaMm2.toFixed(2)} mm² @ L{Math.round(island.maxAreaLayer + (zOffsetMm / layerHeightMm))}
                         </div>
                       )}
@@ -210,12 +243,12 @@ export function IslandListCard({
 
                   {/* Show parent info */}
                   {isMerged && island.parentId && (
-                    <div className="text-[9px] text-neutral-500 mt-1 border-t border-neutral-600 pt-0.5">
+                    <div className="ui-meta mt-1 border-t pt-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
                       → Child of #{island.parentId}
                     </div>
                   )}
                   {island.childIds.length > 0 && (
-                    <div className="text-[9px] text-neutral-500 mt-1 border-t border-neutral-600 pt-0.5">
+                    <div className="ui-meta mt-1 border-t pt-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
                       Children: {island.childIds.map(id => `#${id} `).join(', ')}
                     </div>
                   )}
@@ -226,12 +259,13 @@ export function IslandListCard({
 
           {/* Clear selection button */}
           {selectedIslandId !== null && (
-            <button
+            <Button
               onClick={() => onSelectIsland(null)}
-              className="w-full px-2 py-1 text-[10px] bg-neutral-700 hover:bg-neutral-600 text-neutral-300 rounded transition-colors"
+              className="w-full !h-8 px-2.5 py-0 text-[11px]"
+              size="sm"
             >
               Clear Selection
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -244,6 +278,7 @@ export function IslandListCard({
         layerHeightMm={layerHeightMm}
         zOffsetMm={zOffsetMm}
       />
+    </Card>
     </div>
   );
 }
