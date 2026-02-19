@@ -819,6 +819,8 @@ export default function Home() {
               onFileChange={scene.onFileChange}
               onImportSceneChange={scene.onImportLysChange}
               onDropMeshFiles={handleDroppedMeshFiles}
+              recentOpenedFiles={scene.recentOpenedFiles}
+              onReopenRecentFile={scene.reopenRecentOpenedFile}
               isLoading={showInlineEmptyLoading}
               loadingLabel={importOverlayState.label}
               loadingDetail={importOverlayState.detail}

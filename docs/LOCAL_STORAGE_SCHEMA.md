@@ -97,3 +97,28 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
   ```json
   "true"
   ```
+
+### `app-recent-opened-files`
+
+- **Description**: Stores a rolling FIFO queue of recently opened mesh/scene files shown in the empty-scene dialog.
+- **Location**: `src/features/scene/useSceneCollectionManager.ts`, `src/components/layout/EmptySceneState.tsx`
+- **Schema**: array of entries `{ id: string; name: string; kind: 'mesh' | 'scene'; sizeBytes?: number; openedAt: number }`.
+- **Notes**: queue is capped at 10 entries and evicts oldest records first; opening/reopening a file already in the queue reuses its entry and promotes it to newest (no duplicates); file payloads used for "reopen recent" are cached in IndexedDB (`dragonfruit-recent-files` / `files` store) keyed by `id`.
+- **Example**:
+  ```json
+  [
+    {
+      "id": "d4f4b7e6-3e56-4a68-9b89-6cf8f5f9c0b7",
+      "name": "part_A.stl",
+      "kind": "mesh",
+      "sizeBytes": 512034,
+      "openedAt": 1768574400000
+    },
+    {
+      "id": "4f2b20d0-798b-4f0e-9a89-977fb3228581",
+      "name": "scene.lys",
+      "kind": "scene",
+      "openedAt": 1768573700000
+    }
+  ]
+  ```

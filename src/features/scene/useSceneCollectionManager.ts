@@ -44,6 +44,32 @@ const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
 const DEFAULT_TOON_STEPS = 5;
 const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
+const RECENT_OPENED_FILES_STORAGE_KEY = 'app-recent-opened-files';
+const RECENT_OPENED_FILES_LIMIT = 10;
+const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
+const RECENT_FILES_DB_VERSION = 1;
+const RECENT_FILES_STORE_NAME = 'files';
+
+export type RecentOpenedFileKind = 'mesh' | 'scene';
+
+export type RecentOpenedFileEntry = {
+  id: string;
+  name: string;
+  kind: RecentOpenedFileKind;
+  sizeBytes?: number;
+  openedAt: number;
+};
+
+type RecentOpenedFileBlobRecord = {
+  id: string;
+  name: string;
+  kind: RecentOpenedFileKind;
+  sizeBytes?: number;
+  openedAt: number;
+  type: string;
+  lastModified: number;
+  data: ArrayBuffer;
+};
 
 function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
   const n = typeof input === 'number' ? input : Number(input);
@@ -122,6 +148,173 @@ function writeMeshAppearanceToLocalStorage(next: PersistedMeshAppearance): void 
   }
 }
 
+function openRecentFilesDb(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || typeof window.indexedDB === 'undefined') {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const request = window.indexedDB.open(RECENT_FILES_DB_NAME, RECENT_FILES_DB_VERSION);
+
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(RECENT_FILES_STORE_NAME)) {
+          db.createObjectStore(RECENT_FILES_STORE_NAME, { keyPath: 'id' });
+        }
+      };
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+      request.onblocked = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function putRecentOpenedFileBlob(entry: RecentOpenedFileEntry, file: File): Promise<void> {
+  const db = await openRecentFilesDb();
+  if (!db) return;
+
+  try {
+    const data = await file.arrayBuffer();
+
+    const record: RecentOpenedFileBlobRecord = {
+      id: entry.id,
+      name: entry.name,
+      kind: entry.kind,
+      sizeBytes: entry.sizeBytes,
+      openedAt: entry.openedAt,
+      type: file.type,
+      lastModified: file.lastModified,
+      data,
+    };
+
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(RECENT_FILES_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(RECENT_FILES_STORE_NAME);
+      store.put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } catch {
+    // ignore
+  } finally {
+    db.close();
+  }
+}
+
+async function deleteRecentOpenedFileBlobs(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+
+  const db = await openRecentFilesDb();
+  if (!db) return;
+
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(RECENT_FILES_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(RECENT_FILES_STORE_NAME);
+      ids.forEach((id) => store.delete(id));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function readRecentOpenedFileBlob(entry: RecentOpenedFileEntry): Promise<File | null> {
+  const db = await openRecentFilesDb();
+  if (!db) return null;
+
+  try {
+    return await new Promise<File | null>((resolve) => {
+      const tx = db.transaction(RECENT_FILES_STORE_NAME, 'readonly');
+      const store = tx.objectStore(RECENT_FILES_STORE_NAME);
+      const request = store.get(entry.id);
+
+      request.onsuccess = () => {
+        const result = request.result as RecentOpenedFileBlobRecord | undefined;
+        if (!result || !(result.data instanceof ArrayBuffer)) {
+          resolve(null);
+          return;
+        }
+
+        const blob = new Blob([result.data], { type: result.type || '' });
+        resolve(new File([blob], result.name || entry.name, {
+          type: result.type || '',
+          lastModified: Number.isFinite(result.lastModified) ? result.lastModified : Date.now(),
+        }));
+      };
+
+      request.onerror = () => resolve(null);
+      tx.onerror = () => resolve(null);
+      tx.onabort = () => resolve(null);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function readRecentOpenedFilesFromLocalStorage(): RecentOpenedFileEntry[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(RECENT_OPENED_FILES_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((item): RecentOpenedFileEntry | null => {
+        if (!item || typeof item !== 'object') return null;
+
+        const id = typeof item.id === 'string' ? item.id.trim() : '';
+        const name = typeof item.name === 'string' ? item.name : '';
+        const kind = item.kind === 'mesh' || item.kind === 'scene' ? item.kind : null;
+        const openedAt = Number(item.openedAt);
+        const sizeBytes = typeof item.sizeBytes === 'number' && Number.isFinite(item.sizeBytes) && item.sizeBytes >= 0
+          ? item.sizeBytes
+          : undefined;
+
+        if (!id || !name || !kind || !Number.isFinite(openedAt)) return null;
+
+        return {
+          id,
+          name,
+          kind,
+          sizeBytes,
+          openedAt,
+        };
+      })
+      .filter((item): item is RecentOpenedFileEntry => item !== null)
+      .slice(0, RECENT_OPENED_FILES_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(RECENT_OPENED_FILES_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // ignore
+  }
+}
+
+function generateRecentEntryId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export interface LoadedModel {
   id: string;
   name: string;
@@ -179,6 +372,7 @@ export function useSceneCollectionManager() {
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry | null>(null);
+  const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>(() => readRecentOpenedFilesFromLocalStorage());
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
     type: null,
@@ -432,6 +626,70 @@ export function useSceneCollectionManager() {
     };
   }, []);
 
+  const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
+    if (files.length === 0) return;
+
+    setRecentOpenedFiles((prev) => {
+      const next = [...prev];
+      const removedBlobIds: string[] = [];
+      const now = Date.now();
+
+      files.forEach((file, index) => {
+        const name = file.name?.trim();
+        if (!name) return;
+
+        const sizeBytes = Number.isFinite(file.size) ? file.size : undefined;
+
+        const matches = next.filter(
+          (entry) => entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes,
+        );
+
+        const existingId = matches.length > 0 ? matches[matches.length - 1].id : generateRecentEntryId();
+        const duplicateIds = matches.slice(0, -1).map((entry) => entry.id);
+
+        if (matches.length > 0) {
+          for (let i = next.length - 1; i >= 0; i -= 1) {
+            const entry = next[i];
+            if (entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes) {
+              next.splice(i, 1);
+            }
+          }
+        }
+
+        if (duplicateIds.length > 0) {
+          removedBlobIds.push(...duplicateIds);
+        }
+
+        const entry: RecentOpenedFileEntry = {
+          id: existingId,
+          name,
+          kind,
+          sizeBytes,
+          openedAt: now + index,
+        };
+
+        next.push(entry);
+        void putRecentOpenedFileBlob(entry, file);
+      });
+
+      const overflowCount = Math.max(0, next.length - RECENT_OPENED_FILES_LIMIT);
+      const overflow = overflowCount > 0
+        ? next.slice(0, overflowCount).map((entry) => entry.id)
+        : [];
+      const trimmed = overflowCount > 0
+        ? next.slice(overflowCount)
+        : next;
+
+      writeRecentOpenedFilesToLocalStorage(trimmed);
+
+      if (overflow.length > 0 || removedBlobIds.length > 0) {
+        void deleteRecentOpenedFileBlobs([...removedBlobIds, ...overflow]);
+      }
+
+      return trimmed;
+    });
+  }, []);
+
   // Active model derived state
   const activeModel = useMemo(() =>
     models.find(m => m.id === activeModelId) || null
@@ -451,6 +709,8 @@ export function useSceneCollectionManager() {
     if (files.length === 0) {
       return;
     }
+
+    trackRecentOpenedFiles(files, 'mesh');
 
     // Read auto-lift settings from storage (mirroring useTransformManager logic)
     let autoLift = false;
@@ -601,7 +861,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, waitForUiYield]);
+  }, [activeModelId, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -707,6 +967,8 @@ export function useSceneCollectionManager() {
   const lysImport = useLysImport();
 
   const handleImportLysFile = useCallback(async (file: File) => {
+    trackRecentOpenedFiles([file], 'scene');
+
     setImportProgress({
       active: true,
       type: 'scene',
@@ -782,7 +1044,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, waitForUiYield]);
+  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -790,6 +1052,25 @@ export function useSceneCollectionManager() {
       e.target.value = '';
     }
   }, [handleImportLysFile]);
+
+  const reopenRecentOpenedFile = useCallback(async (entryId: string) => {
+    const entry = recentOpenedFiles.find((item) => item.id === entryId);
+    if (!entry) return false;
+
+    const file = await readRecentOpenedFileBlob(entry);
+    if (!file) {
+      console.warn('[SceneCollection] Unable to restore recent file from local cache.');
+      return false;
+    }
+
+    if (entry.kind === 'scene') {
+      await handleImportLysFile(file);
+      return true;
+    }
+
+    await loadFiles([file]);
+    return true;
+  }, [handleImportLysFile, loadFiles, recentOpenedFiles]);
 
   // Legacy Lychee loader wrapper
   const handleLoadLychee = async () => {
@@ -990,6 +1271,8 @@ export function useSceneCollectionManager() {
     // Scene context
     sceneBounds,
     importProgress,
+    recentOpenedFiles,
+    reopenRecentOpenedFile,
 
     // Actions
     loadFiles,
