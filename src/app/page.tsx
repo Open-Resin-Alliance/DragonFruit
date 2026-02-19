@@ -1144,7 +1144,13 @@ export default function Home() {
     }
 
     const model = scene.activeModel;
-    const { width, depth } = getModelFootprintMm(model);
+    const baseWidth = Math.max(2, Math.abs(model.geometry.size.x * model.transform.scale.x));
+    const baseDepth = Math.max(2, Math.abs(model.geometry.size.y * model.transform.scale.y));
+    const z = model.transform.rotation.z;
+    const c = Math.abs(Math.cos(z));
+    const s = Math.abs(Math.sin(z));
+    const width = (baseWidth * c) + (baseDepth * s);
+    const depth = (baseWidth * s) + (baseDepth * c);
     const height = Math.max(2, Math.abs(model.geometry.size.z * model.transform.scale.z));
 
     const slots: THREE.Vector3[] = [];
@@ -1174,11 +1180,64 @@ export default function Home() {
       }
     } else {
       const totalCount = Math.max(1, duplicateTotalCopies);
-      const stepX = width + duplicateSpacingMm;
-      const stepY = depth + duplicateSpacingMm;
-      slots.push(...computeArrangeSlots(totalCount, stepX, stepY).map((slot) => (
-        new THREE.Vector3(slot.x, slot.y, model.transform.position.z)
-      )));
+      const spacing = Math.max(0, duplicateSpacingMm);
+
+      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const maxX = minX + scene.view3dSettings.widthMm;
+      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const maxY = minY + scene.view3dSettings.depthMm;
+
+      const plateWidth = Math.max(1, maxX - minX);
+      const plateDepth = Math.max(1, maxY - minY);
+
+      const maxCols = Math.max(1, Math.floor((plateWidth + spacing) / (width + spacing)));
+      const maxRows = Math.max(1, Math.floor((plateDepth + spacing) / (depth + spacing)));
+      const inPlateCapacity = Math.max(1, maxCols * maxRows);
+      const inPlateCount = Math.min(totalCount, inPlateCapacity);
+
+      const usedCols = Math.min(maxCols, Math.max(1, inPlateCount));
+      const usedRows = Math.max(1, Math.ceil(inPlateCount / maxCols));
+
+      const totalUsedWidth = (usedCols * width) + Math.max(0, usedCols - 1) * spacing;
+      const totalUsedDepth = (usedRows * depth) + Math.max(0, usedRows - 1) * spacing;
+
+      const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
+      const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
+
+      for (let i = 0; i < inPlateCount; i += 1) {
+        const col = i % maxCols;
+        const row = Math.floor(i / maxCols);
+        slots.push(new THREE.Vector3(
+          startX + col * (width + spacing),
+          startY + row * (depth + spacing),
+          model.transform.position.z,
+        ));
+      }
+
+      const overflowCount = totalCount - inPlateCount;
+      if (overflowCount > 0) {
+        const outsideGap = Math.max(8, spacing);
+        let outsideLeftX = maxX + outsideGap;
+        let outsideY = minY;
+        let currentColumnMaxWidth = 0;
+
+        for (let i = 0; i < overflowCount; i += 1) {
+          if (outsideY > minY && (outsideY + depth) > maxY) {
+            outsideLeftX += currentColumnMaxWidth + outsideGap;
+            currentColumnMaxWidth = 0;
+            outsideY = minY;
+          }
+
+          slots.push(new THREE.Vector3(
+            outsideLeftX + width * 0.5,
+            outsideY + depth * 0.5,
+            model.transform.position.z,
+          ));
+
+          outsideY += depth + spacing;
+          currentColumnMaxWidth = Math.max(currentColumnMaxWidth, width);
+        }
+      }
     }
 
     if (slots.length <= 1) {
