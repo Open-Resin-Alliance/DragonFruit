@@ -2,7 +2,6 @@
 
 import React from 'react';
 import { Bug, ClipboardCopy, Database, LayoutGrid, RotateCcw } from 'lucide-react';
-import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import {
   FLOATING_LAYOUT_DEBUG_REQUEST_EVENT,
   FLOATING_LAYOUT_STORAGE_KEY,
@@ -15,8 +14,6 @@ interface GeneralSettingsTabProps {
   onResetFloatingLayout: () => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (enabled: boolean) => void;
-  cameraProjectionMode: CameraProjectionMode;
-  onCameraProjectionModeChange: (mode: CameraProjectionMode) => void;
 }
 
 export function GeneralSettingsTab({
@@ -25,8 +22,6 @@ export function GeneralSettingsTab({
   onResetFloatingLayout,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
-  cameraProjectionMode,
-  onCameraProjectionModeChange,
 }: GeneralSettingsTabProps) {
   const [layoutDump, setLayoutDump] = React.useState<string>('');
   const [dumpStatus, setDumpStatus] = React.useState<string | null>(null);
@@ -157,57 +152,6 @@ export function GeneralSettingsTab({
               <RotateCcw className="h-4 w-4 shrink-0" />
               Reset
             </button>
-          </div>
-        </div>
-
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Camera projection
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Choose the default viewport camera mode.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => onCameraProjectionModeChange('orthographic')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={cameraProjectionMode === 'orthographic'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Ortho
-              </button>
-              <button
-                type="button"
-                onClick={() => onCameraProjectionModeChange('perspective')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={cameraProjectionMode === 'perspective'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Perspective
-              </button>
-            </div>
           </div>
         </div>
 

@@ -41,6 +41,8 @@ import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
+import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
+import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 
@@ -354,6 +356,26 @@ export default function Home() {
 
   React.useEffect(() => {
     if (scene.mode !== 'export') return;
+    if (scene.activeModelId) return;
+    if (scene.models.length === 0) return;
+
+    const firstVisible = scene.models.find((model) => model.visible) ?? scene.models[0];
+    if (firstVisible) {
+      scene.setActiveModelId(firstVisible.id);
+    }
+  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
+
+  React.useEffect(() => {
+    const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
+    const currentProjectionMode = getSavedCameraProjectionSettings().mode;
+
+    if (workspaceProjectionMode !== currentProjectionMode) {
+      saveCameraProjectionSettings({ mode: workspaceProjectionMode });
+    }
+  }, [scene.mode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'support') return;
     if (scene.activeModelId) return;
     if (scene.models.length === 0) return;
 

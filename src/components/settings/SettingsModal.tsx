@@ -6,6 +6,7 @@ import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
+import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
 import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, RotateCcw, Settings2, X } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
@@ -29,11 +30,11 @@ import {
   normalizeSpaceMouseSettings,
 } from '@/components/settings/spacemousePreferences';
 import {
-  DEFAULT_CAMERA_PROJECTION_SETTINGS,
-  getSavedCameraProjectionSettings,
-  saveCameraProjectionSettings,
-  type CameraProjectionMode,
-} from '@/components/settings/cameraProjectionPreferences';
+  DEFAULT_WORKSPACE_CAMERA_SETTINGS,
+  getSavedWorkspaceCameraSettings,
+  saveWorkspaceCameraSettings,
+  type WorkspaceCameraDefaults,
+} from '@/components/settings/workspaceCameraPreferences';
 import {
   clearSavedFloatingLayout,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -86,7 +87,7 @@ type SettingsModalProps = {
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
 };
 
-type SettingsTabKey = 'general' | 'mesh' | 'spacemouse' | 'ui' | 'hotkeys' | 'about';
+type SettingsTabKey = 'general' | 'workspaces' | 'mesh' | 'spacemouse' | 'ui' | 'hotkeys' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -136,7 +137,7 @@ export function SettingsModal({
   const [draftFloatingLayoutPersistence, setDraftFloatingLayoutPersistence] = useState<boolean>(() => isFloatingLayoutPersistenceEnabled());
   const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
-  const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
+  const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
 
   const resetDraftFromProps = React.useCallback(() => {
     setDraftMeshColor(meshColor);
@@ -156,7 +157,7 @@ export function SettingsModal({
     setDraftFloatingLayoutPersistence(isFloatingLayoutPersistenceEnabled());
     setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
-    setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
+    setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
   }, [
     ambientIntensity,
     directionalIntensity,
@@ -207,7 +208,7 @@ export function SettingsModal({
     setDraftFloatingLayoutPersistence(true);
     setDraftDebugPrimitivesPanelVisible(true);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
-    setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
+    setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
   }, []);
 
   const handleApply = React.useCallback(() => {
@@ -228,7 +229,7 @@ export function SettingsModal({
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
     setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
-    saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
+    saveWorkspaceCameraSettings({ defaults: draftWorkspaceCameraDefaults });
     onDebugPrimitivesPanelVisibleChange(draftDebugPrimitivesPanelVisible);
 
     if (typeof window !== 'undefined') {
@@ -255,7 +256,7 @@ export function SettingsModal({
     draftFloatingLayoutPersistence,
     draftDebugPrimitivesPanelVisible,
     draftSpaceMouseSettings,
-    draftCameraProjectionMode,
+    draftWorkspaceCameraDefaults,
     draftXrayOpacity,
     onAmbientIntensityChange,
     onClose,
@@ -312,6 +313,12 @@ export function SettingsModal({
       icon: MonitorCog,
       tone: 'primary',
     },
+    workspaces: {
+      label: 'Workspaces',
+      description: 'Per-workspace camera defaults',
+      icon: Settings2,
+      tone: 'primary',
+    },
     ui: {
       label: 'UI & Theme',
       description: 'Theme mode and custom color tokens',
@@ -338,11 +345,18 @@ export function SettingsModal({
     },
   };
 
-  const sidebarTopTabs: SettingsTabKey[] = ['general', 'mesh', 'spacemouse', 'ui', 'hotkeys'];
+  const sidebarTopTabs: SettingsTabKey[] = ['general', 'workspaces', 'mesh', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['about'];
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
     setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
+  }, []);
+
+  const handleWorkspaceCameraModeChange = React.useCallback((workspace: keyof WorkspaceCameraDefaults, mode: 'orthographic' | 'perspective') => {
+    setDraftWorkspaceCameraDefaults((prev) => ({
+      ...prev,
+      [workspace]: mode,
+    }));
   }, []);
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
@@ -523,8 +537,12 @@ export function SettingsModal({
                   onResetFloatingLayout={handleResetFloatingLayout}
                   debugPrimitivesPanelVisible={draftDebugPrimitivesPanelVisible}
                   onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}
-                  cameraProjectionMode={draftCameraProjectionMode}
-                  onCameraProjectionModeChange={setDraftCameraProjectionMode}
+                />
+              )}
+              {activeTab === 'workspaces' && (
+                <WorkspacesSettingsTab
+                  workspaceCameraDefaults={draftWorkspaceCameraDefaults}
+                  onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
                 />
               )}
               {activeTab === 'mesh' && (
