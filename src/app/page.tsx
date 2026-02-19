@@ -104,6 +104,12 @@ export default function Home() {
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   } | null>(null);
+  const [duplicateApplySourceModel, setDuplicateApplySourceModel] = React.useState<(typeof scene.models)[number] | null>(null);
+  const [duplicateApplySourceTransform, setDuplicateApplySourceTransform] = React.useState<{
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  } | null>(null);
   const dragDepthRef = React.useRef(0);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
@@ -1333,6 +1339,20 @@ export default function Home() {
     if (!scene.activeModelId) return;
     if (duplicatePreviewTransforms.length === 0) return;
 
+    const sourceModelAtApplyStart = scene.activeModel;
+    const sourcePreviewTransformAtApplyStart = duplicateSourcePreviewTransform;
+    if (sourceModelAtApplyStart && sourcePreviewTransformAtApplyStart) {
+      setDuplicateApplySourceModel(sourceModelAtApplyStart);
+      setDuplicateApplySourceTransform({
+        position: sourcePreviewTransformAtApplyStart.position.clone(),
+        rotation: sourcePreviewTransformAtApplyStart.rotation.clone(),
+        scale: sourcePreviewTransformAtApplyStart.scale.clone(),
+      });
+    } else {
+      setDuplicateApplySourceModel(null);
+      setDuplicateApplySourceTransform(null);
+    }
+
     const minSpinnerMs = 220;
     const startedAt = performance.now();
     setIsDuplicating(true);
@@ -1358,6 +1378,8 @@ export default function Home() {
         await sleep(minSpinnerMs - elapsed);
       }
       setIsDuplicating(false);
+      setDuplicateApplySourceModel(null);
+      setDuplicateApplySourceTransform(null);
     }
   }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr]);
 
@@ -1816,9 +1838,18 @@ export default function Home() {
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
             ghostData={ghostData}
-            duplicatePreviewModel={transformMgr.transformMode === 'duplicate' ? scene.activeModel : null}
+            duplicatePreviewModel={
+              isDuplicating
+                ? duplicateApplySourceModel
+                : (transformMgr.transformMode === 'duplicate' ? scene.activeModel : null)
+            }
             duplicatePreviewTransforms={duplicatePreviewTransforms}
-            duplicateActivePreviewTransform={duplicateSourcePreviewTransform}
+            duplicateActivePreviewTransform={
+              isDuplicating
+                ? duplicateApplySourceTransform
+                : duplicateSourcePreviewTransform
+            }
+            hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (

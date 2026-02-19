@@ -205,6 +205,7 @@ export function SceneCanvas({
   duplicatePreviewModel,
   duplicatePreviewTransforms,
   duplicateActivePreviewTransform,
+  hideDuplicateSourceDuringApply,
   isBranchPlacementActive,
   isLeafPlacementActive,
   isBracePlacementActive,
@@ -292,6 +293,7 @@ export function SceneCanvas({
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   } | null;
+  hideDuplicateSourceDuringApply?: boolean;
   isBranchPlacementActive?: boolean;
   isLeafPlacementActive?: boolean;
   isBracePlacementActive?: boolean;
@@ -1001,6 +1003,11 @@ export function SceneCanvas({
               {models.map((model) => {
                 const isActive = model.id === activeModelId;
                 const isSelectedModel = selectedModelIdSet.has(model.id);
+                const shouldHideDuplicateSourceModel = Boolean(
+                  hideDuplicateSourceDuringApply
+                  && duplicatePreviewModel
+                  && model.id === duplicatePreviewModel.id,
+                );
                 // Use props.transform if active (for smooth drag), else model.transform
                 const transformToUse = isActive
                   ? (duplicateActivePreviewTransform ?? (transform ?? model.transform))
@@ -1016,6 +1023,7 @@ export function SceneCanvas({
                 const showOutOfBoundsOverlay = !!activeBuildVolumeSettings?.enabled;
                 // Use per-model visibility
                 if (!model.visible) return null;
+                if (shouldHideDuplicateSourceModel) return null;
 
                 return (
                   <React.Fragment key={model.id}>
@@ -1124,6 +1132,37 @@ export function SceneCanvas({
                       </mesh>
                     </group>
                   ))
+                : null}
+
+              {hideDuplicateSourceDuringApply
+                && duplicatePreviewModel
+                && duplicatePreviewMeshOffset
+                && duplicateActivePreviewTransform
+                ? (
+                    <group
+                      key="duplicate-source-preview"
+                      position={duplicateActivePreviewTransform.position}
+                      rotation={duplicateActivePreviewTransform.rotation}
+                      scale={duplicateActivePreviewTransform.scale}
+                      raycast={() => null}
+                    >
+                      <mesh
+                        geometry={duplicatePreviewModel.geometry.geometry}
+                        position={duplicatePreviewMeshOffset}
+                        raycast={() => null}
+                        renderOrder={2}
+                      >
+                        <meshStandardMaterial
+                          color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                          transparent
+                          opacity={0.22}
+                          roughness={0.5}
+                          metalness={0.02}
+                          depthWrite={false}
+                        />
+                      </mesh>
+                    </group>
+                  )
                 : null}
 
               {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
