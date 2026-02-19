@@ -28,23 +28,26 @@ export function ModelStatsCard({
 
   return (
     <div className="absolute bottom-4 left-2 pointer-events-none select-none w-fit">
-      <div className="space-y-1">
-        <div className="font-semibold text-[11px] text-neutral-200/70 truncate">
+      <div
+        className="ui-panel rounded-md px-2.5 py-2 shadow-md space-y-1"
+        style={{ background: 'color-mix(in srgb, var(--surface-0), transparent 8%)' }}
+      >
+        <div className="font-semibold text-[11px] truncate" style={{ color: 'var(--text-strong)' }}>
           {model ? model.name : 'No model selected'}
         </div>
 
-        <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[10px] text-neutral-200/50">
+        <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>
           <span>STL Size:</span>
-          <span className="text-neutral-200/70">{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
+          <span style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
           <span>Polygons:</span>
-          <span className="text-neutral-200/70">{model ? model.polygonCount.toLocaleString() : '-'}</span>
+          <span style={{ color: 'var(--text-strong)' }}>{model ? model.polygonCount.toLocaleString() : '-'}</span>
 
           <span>Height:</span>
-          <span className="text-neutral-200/70">{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
+          <span style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
 
           <span>Layers:</span>
-          <span className="text-neutral-200/70">{model ? numLayers : '-'}</span>
+          <span style={{ color: 'var(--text-strong)' }}>{model ? numLayers : '-'}</span>
         </div>
       </div>
     </div>

@@ -54,7 +54,7 @@ export const GIZMO_SIZES: GizmoSizes = {
   ringMajorRadius: 4.8,    // Increased 50% (was 3.2)
   ringMinorRadius: 0.12,   // 4x bigger
   ringDiamondRadius: 0.48, // Increased 50% (was 0.32)
-  scaleLineLength: 1.6,    // Moved closer to center (was 2.4)
+  scaleLineLength: 2.3,    // Moved further from center for easier targeting
   scaleHexagonRadius: 0.5, // Increased 50% (was 0.33)
   scaleHexagonDepth: 0.3,  // Increased 50% (was 0.2)
 };

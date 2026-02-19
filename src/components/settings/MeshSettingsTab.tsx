@@ -4,6 +4,7 @@ import React from 'react';
 import { MATCAP_OPTIONS, MESH_SHADER_OPTIONS, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import { HexColorPicker } from 'react-colorful';
 import { MeshShaderPreviewSlot } from '@/components/settings/meshSettings/MeshShaderPreviewSlot';
+import { Input, Select } from '@/components/ui/primitives';
 
 type PreviewModelConfig = {
   label: string;
@@ -33,6 +34,10 @@ type MeshSettingsTabProps = {
   onMaterialRoughnessChange: (value: number) => void;
   xrayOpacity: number;
   onXrayOpacityChange: (value: number) => void;
+  hoverTintStrength: number;
+  onHoverTintStrengthChange: (value: number) => void;
+  selectedTintStrength: number;
+  onSelectedTintStrengthChange: (value: number) => void;
 };
 
 export function MeshSettingsTab({
@@ -54,6 +59,10 @@ export function MeshSettingsTab({
   onMaterialRoughnessChange,
   xrayOpacity,
   onXrayOpacityChange,
+  hoverTintStrength,
+  onHoverTintStrengthChange,
+  selectedTintStrength,
+  onSelectedTintStrengthChange,
 }: MeshSettingsTabProps) {
   const [previewModel, setPreviewModel] = React.useState<string>('knot');
   const [stlPreviewModels, setStlPreviewModels] = React.useState<PreviewModelConfig[]>([]);
@@ -103,26 +112,26 @@ export function MeshSettingsTab({
       <div className="space-y-2">
         <div className="grid grid-cols-2 gap-2">
           <div className="space-y-1 min-w-0">
-            <label className="text-xs font-medium text-neutral-300">Shader Type</label>
-            <select
+            <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Shader Type</label>
+            <Select
               value={shaderType}
               onChange={(e) => onShaderTypeChange(e.target.value as MeshShaderType)}
-              className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
+              className="w-full !h-8"
             >
               {MESH_SHADER_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div className="space-y-1 min-w-0">
-            <label className="text-xs font-medium text-neutral-300">Preview Model</label>
-            <select
+            <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Preview Model</label>
+            <Select
               value={previewModel}
               onChange={(e) => setPreviewModel(e.target.value)}
-              className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
+              className="w-full !h-8"
             >
               <option value="cube">Cube</option>
               <option value="sphere">Sphere</option>
@@ -132,7 +141,7 @@ export function MeshSettingsTab({
                   {m.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
 
@@ -157,12 +166,12 @@ export function MeshSettingsTab({
             style={{ aspectRatio: '1 / 1' }}
           >
             <div className="flex items-center gap-2">
-              <label className="text-xs font-medium text-neutral-300 whitespace-nowrap">Mesh Color</label>
-              <input
+              <label className="text-xs font-medium whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>Mesh Color</label>
+              <Input
                 type="text"
                 value={meshColor}
                 onChange={(e) => onMeshColorChange(e.target.value)}
-                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-sm text-neutral-100"
+                className="flex-1 !h-8"
                 placeholder="#a3a3a3"
               />
             </div>
@@ -182,18 +191,18 @@ export function MeshSettingsTab({
         <div className="grid grid-cols-2 gap-2">
           {shaderType === 'matcap' && (
             <div className="space-y-1 min-w-0">
-              <label className="text-xs font-medium text-neutral-300">Matcap</label>
-              <select
+              <label className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Matcap</label>
+              <Select
                 value={matcapVariant}
                 onChange={(e) => onMatcapVariantChange(e.target.value as MatcapVariant)}
-                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-sm text-neutral-100 focus:border-neutral-500 focus:outline-none"
+                className="w-full !h-8"
               >
                 {MATCAP_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
 
@@ -301,6 +310,38 @@ export function MeshSettingsTab({
               />
             </div>
           )}
+
+          <div className="space-y-0.5">
+            <label className="text-xs text-neutral-400 flex justify-between">
+              <span>Hover Tint Strength</span>
+              <span className="text-neutral-300">{hoverTintStrength.toFixed(2)}</span>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={hoverTintStrength}
+              onChange={(e) => onHoverTintStrengthChange(parseFloat(e.target.value))}
+              className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+          </div>
+
+          <div className="space-y-0.5">
+            <label className="text-xs text-neutral-400 flex justify-between">
+              <span>Selected Tint Strength</span>
+              <span className="text-neutral-300">{selectedTintStrength.toFixed(2)}</span>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={selectedTintStrength}
+              onChange={(e) => onSelectedTintStrengthChange(parseFloat(e.target.value))}
+              className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            />
+          </div>
         </div>
       </div>
     </div>

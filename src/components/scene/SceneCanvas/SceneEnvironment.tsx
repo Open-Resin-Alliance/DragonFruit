@@ -92,29 +92,78 @@ export function Lights({
   return (
     <>
       <ambientLight intensity={ambientIntensity} />
-      <directionalLight position={[0, 0, 12]} intensity={directionalIntensity} />
-      <directionalLight position={[0, 0, -12]} intensity={directionalIntensity * 0.15} />
-      <hemisphereLight args={['#ffffff', '#444444', ambientIntensity * 0.6]} />
+      <directionalLight position={[0, 0, 12]} intensity={directionalIntensity} color="#ffd8ef" />
+      <directionalLight position={[0, 0, -12]} intensity={directionalIntensity * 0.15} color="#90a7ff" />
+      <hemisphereLight args={['#f6e8ff', '#3e415c', ambientIntensity * 0.6]} />
       <CameraHeadlight intensity={clampedHeadlightIntensity} />
+    </>
+  );
+}
+
+export function SceneMoodOverlay() {
+  return (
+    <>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: 'radial-gradient(120% 95% at 50% 46%, rgba(0,0,0,0) 56%, rgba(255, 55, 170, 0.18) 100%)',
+          mixBlendMode: 'screen',
+          opacity: 0.75,
+        }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: 'linear-gradient(180deg, rgba(255, 55, 170, 0.08) 0%, rgba(111, 51, 255, 0.05) 40%, rgba(0,0,0,0) 100%)',
+          mixBlendMode: 'screen',
+          opacity: 0.8,
+        }}
+      />
     </>
   );
 }
 
 export function Helpers() {
   const nullRaycast = () => null;
+  const axesRef = React.useRef<THREE.AxesHelper | null>(null);
+
+  React.useEffect(() => {
+    if (!axesRef.current) return;
+
+    axesRef.current.renderOrder = 3;
+    axesRef.current.traverse((obj) => {
+      const material = (obj as THREE.LineSegments).material;
+      if (!material) return;
+
+      if (Array.isArray(material)) {
+        material.forEach((m) => {
+          m.depthTest = true;
+          m.depthWrite = false;
+        });
+        return;
+      }
+
+      material.depthTest = true;
+      material.depthWrite = false;
+    });
+  }, []);
 
   return (
     <>
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
       <gridHelper
         args={[200, 40, '#333333', '#333333']}
-        position={[0, 0, 0]}
+        position={[0, 0, -0.01]}
         rotation={[Math.PI / 2, 0, 0]}
         raycast={nullRaycast}
       />
       {/* Axes: X=red, Y=green, Z=blue(up) */}
       <axesHelper
+        ref={axesRef}
         args={[100]}
+        position={[0, 0, 0.01]}
         raycast={nullRaycast}
       />
       <AxisLabels size={100} />

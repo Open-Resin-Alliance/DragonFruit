@@ -38,9 +38,9 @@ export function GizmoCenter({
   onPointerLeave,
 }: GizmoCenterProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const startPoint = useRef<THREE.Vector3 | null>(null);
-  const rafId = useRef<number | null>(null);
+  const lastPointRef = useRef<THREE.Vector3 | null>(null);
   const dragPlane = useRef<THREE.Plane | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -83,24 +83,16 @@ export function GizmoCenter({
     
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
-    
-    // Create XY plane (horizontal) at gizmo's Z position
-    // Normal points up (0,0,1), plane passes through gizmo position
+
+    // Keep center drag strictly on world XY plane at the current gizmo Z.
     dragPlane.current = new THREE.Plane(new THREE.Vector3(0, 0, 1), -gizmoPosition.z);
     
     // Calculate initial point on drag plane from mouse position
-    const rect = gl.domElement.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    const mouse = new THREE.Vector2(x, y);
-    const ray = new THREE.Ray();
-    ray.origin.setFromMatrixPosition(camera.matrixWorld);
-    ray.direction.set(mouse.x, mouse.y, 0.5).unproject(camera).sub(ray.origin).normalize();
-    const initialPoint = new THREE.Vector3();
-    ray.intersectPlane(dragPlane.current, initialPoint);
+    const initialPoint = getWorldPointFromMouse(e.clientX, e.clientY);
+    if (!initialPoint) return;
     
     setIsDragging(true);
-    startPoint.current = initialPoint;
+    lastPointRef.current = initialPoint;
     onDragStart();
   };
 
@@ -108,27 +100,36 @@ export function GizmoCenter({
     if (!dragPlane.current) return null;
     
     const rect = gl.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
     const x = ((clientX - rect.left) / rect.width) * 2 - 1;
     const y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
-    // Create ray from camera through mouse position (no raycaster needed)
-    const mouse = new THREE.Vector2(x, y);
-    const ray = new THREE.Ray();
-    ray.origin.setFromMatrixPosition(camera.matrixWorld);
-    ray.direction.set(mouse.x, mouse.y, 0.5).unproject(camera).sub(ray.origin).normalize();
+    const raycaster = raycasterRef.current;
+    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
     
-    // Intersect with XY plane
+    // Intersect with drag plane
     const intersection = new THREE.Vector3();
-    ray.intersectPlane(dragPlane.current, intersection);
+    const hit = raycaster.ray.intersectPlane(dragPlane.current, intersection);
+    if (!hit) return null;
     
     return intersection;
   }, [camera, gl]);
+
+  const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    onPointerEnter();
+  };
+
+  const handlePointerLeaveLocal = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    onPointerLeave();
+  };
 
   const handlePointerUp = () => {
     if (!isDragging) return;
     
     setIsDragging(false);
-    startPoint.current = null;
+    lastPointRef.current = null;
     dragPlane.current = null;
     onDragEnd();
   };
@@ -138,30 +139,23 @@ export function GizmoCenter({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      if (!startPoint.current) return;
-      
-      // Cancel any pending animation frame
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
-      
-      // Schedule update on next frame
-      rafId.current = requestAnimationFrame(() => {
-        const worldPoint = getWorldPointFromMouse(e.clientX, e.clientY);
-        if (!worldPoint || !startPoint.current) return;
+      if (!lastPointRef.current) return;
 
-        const delta = worldPoint.clone().sub(startPoint.current);
-        // Restrict movement to XY plane only (zero out Z component)
-        delta.z = 0;
-        onDrag(delta);
-        startPoint.current = worldPoint;
-        rafId.current = null;
-      });
+      const worldPoint = getWorldPointFromMouse(e.clientX, e.clientY);
+      if (!worldPoint || !lastPointRef.current) return;
+
+      const delta = worldPoint.clone().sub(lastPointRef.current);
+      // Restrict movement to XY plane only (zero out Z component)
+      delta.z = 0;
+      if (delta.lengthSq() < 1e-12) return;
+
+      onDrag(delta);
+      lastPointRef.current = worldPoint;
     };
 
     const handleGlobalPointerUp = () => {
       setIsDragging(false);
-      startPoint.current = null;
+      lastPointRef.current = null;
       onDragEnd();
     };
 
@@ -171,19 +165,23 @@ export function GizmoCenter({
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
     };
   }, [isDragging, onDrag, onDragEnd, getWorldPointFromMouse]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = isPickingHovered || isHovered;
+  const isHighlighted = !!(effectiveHovered || isActive);
 
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
-  const centerColor = isDimmed ? dimmedColor : GIZMO_COLORS.center;
+  const centerColor = isDimmed
+    ? dimmedColor
+    : isActive
+      ? GIZMO_COLORS.active
+      : effectiveHovered
+        ? GIZMO_COLORS.hover
+        : GIZMO_COLORS.center;
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isActive || effectiveHovered ? 1.0 : 0.5;
+  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.55;
 
   // Emissive intensity - disabled for center disc (no glow)
   const emissiveIntensity = 0;
@@ -196,12 +194,15 @@ export function GizmoCenter({
     : GIZMO_LIGHTING.pointLightIntensity.idle;
 
   return (
-    <group
-      onPointerDown={handlePointerDown}
-    >
+    <group>
       {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
-      <mesh ref={pickMeshRef}>
-        <circleGeometry args={[GIZMO_SIZES.centerRadius * 1.8, 32]} />
+      <mesh
+        ref={pickMeshRef}
+        onPointerDown={handlePointerDown}
+        onPointerEnter={handlePointerEnterLocal}
+        onPointerLeave={handlePointerLeaveLocal}
+      >
+        <circleGeometry args={[GIZMO_SIZES.centerRadius * 3.1, 48]} />
         <meshBasicMaterial
           visible={false}
           depthTest={false}
@@ -210,7 +211,7 @@ export function GizmoCenter({
       </mesh>
       
       {/* Filled disc */}
-      <mesh>
+      <mesh onPointerDown={handlePointerDown} onPointerEnter={handlePointerEnterLocal} onPointerLeave={handlePointerLeaveLocal}>
         <circleGeometry args={[GIZMO_SIZES.centerRadius * 1.05, 32]} />
         <meshBasicMaterial
           color={centerColor}
@@ -222,7 +223,7 @@ export function GizmoCenter({
       </mesh>
       
       {/* White border ring */}
-      <mesh>
+      <mesh onPointerDown={handlePointerDown} onPointerEnter={handlePointerEnterLocal} onPointerLeave={handlePointerLeaveLocal}>
         <ringGeometry args={[GIZMO_SIZES.centerRadius * 1.0, GIZMO_SIZES.centerRadius * 1.05, 32]} />
         <meshBasicMaterial
           color={isDimmed ? dimmedColor : "#ffffff"}
@@ -232,6 +233,20 @@ export function GizmoCenter({
           side={THREE.DoubleSide}
         />
       </mesh>
+
+      {/* Hover/active halo */}
+      {isHighlighted && !isDimmed && !isHidden && (
+        <mesh>
+          <ringGeometry args={[GIZMO_SIZES.centerRadius * 1.1, GIZMO_SIZES.centerRadius * 1.32, 32]} />
+          <meshBasicMaterial
+            color={isActive ? GIZMO_COLORS.active : GIZMO_COLORS.hover}
+            transparent
+            opacity={isActive ? 0.5 : 0.38}
+            depthTest={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      )}
 
       {/* Point light disabled for center disc */}
     </group>

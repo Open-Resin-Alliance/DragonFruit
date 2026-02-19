@@ -385,9 +385,18 @@ export function GizmoScale({
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = isPickingHovered || isHovered;
+  const isHighlighted = !!(effectiveHovered || isActive);
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : 1.0;
+  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const highlightScale = isActive ? 1.14 : effectiveHovered ? 1.08 : 1.0;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
+  const handleColor = isDimmed
+    ? dimmedColor
+    : isActive
+      ? GIZMO_COLORS.active
+      : effectiveHovered
+        ? GIZMO_COLORS.hover
+        : axisColors.end;
 
   // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
   const emissiveIntensity = isActive
@@ -411,12 +420,14 @@ export function GizmoScale({
         position={position}
         renderOrder={1000}
         onPointerDown={handlePointerDown}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
         onContextMenu={handleContextMenu}
       >
         <boxGeometry args={[
-          GIZMO_SIZES.scaleHexagonRadius * 3,
-          GIZMO_SIZES.scaleHexagonRadius * 3,
-          GIZMO_SIZES.scaleHexagonRadius * 3
+          GIZMO_SIZES.scaleHexagonRadius * 1.8,
+          GIZMO_SIZES.scaleHexagonRadius * 1.8,
+          GIZMO_SIZES.scaleHexagonRadius * 1.8
         ]} />
         <meshBasicMaterial visible={false} depthTest={false} />
       </mesh>
@@ -436,8 +447,8 @@ export function GizmoScale({
       {/* Cube handle with camera-facing edges only */}
       <CubeWithFrontEdges 
         position={position}
-        size={GIZMO_SIZES.scaleHexagonRadius}
-        color={isDimmed ? dimmedColor : axisColors.end}
+        size={GIZMO_SIZES.scaleHexagonRadius * highlightScale}
+        color={handleColor}
         opacity={opacity}
         edgeOpacity={opacity}
         camera={camera}
@@ -448,7 +459,7 @@ export function GizmoScale({
       {!isDimmed && (
         <pointLight
           position={position}
-          color={axisColors.end}
+          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
           intensity={lightIntensity}
           distance={GIZMO_LIGHTING.pointLightDistance}
           decay={GIZMO_LIGHTING.pointLightDecay}

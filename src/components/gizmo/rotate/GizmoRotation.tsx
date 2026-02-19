@@ -43,11 +43,30 @@ export function GizmoRotation({
 }: GizmoRotationProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [handleAngle, setHandleAngle] = useState(0);
-  const [shouldFlip, setShouldFlip] = useState(false);
   const startAngle = useRef<number>(0);
   const lastMouseAngle = useRef<number>(0);
+  const shouldFlipRef = useRef(false);
   const rafId = useRef<number | null>(null);
   const { camera, gl } = useThree();
+
+  const computeShouldFlip = useCallback(() => {
+    if (axis === 'x') {
+      return camera.position.x - gizmoPosition.x > 0;
+    }
+    if (axis === 'y') {
+      return camera.position.y - gizmoPosition.y > 0;
+    }
+    return camera.position.z - gizmoPosition.z > 0;
+  }, [axis, camera.position, gizmoPosition.x, gizmoPosition.y, gizmoPosition.z]);
+
+  const getGizmoScreenCenter = useCallback(() => {
+    const rect = gl.domElement.getBoundingClientRect();
+    const projected = gizmoPosition.clone().project(camera);
+    return {
+      x: rect.left + ((projected.x + 1) * 0.5) * rect.width,
+      y: rect.top + ((1 - projected.y) * 0.5) * rect.height,
+    };
+  }, [camera, gl, gizmoPosition]);
   
   // GPU Picking registration
   const pickMeshRef = useRef<THREE.Mesh>(null);
@@ -88,15 +107,8 @@ export function GizmoRotation({
   // Update flip state and handle angle every frame based on camera position
   useFrame(() => {
     // Detect if camera has crossed the axis plane
-    if (axis === 'x') {
-      const cameraRelativeX = camera.position.x - gizmoPosition.x;
-      setShouldFlip(cameraRelativeX > 0);
-    } else if (axis === 'y') {
-      const cameraRelativeY = camera.position.y - gizmoPosition.y;
-      setShouldFlip(cameraRelativeY > 0);
-    } else if (axis === 'z') {
-      const cameraRelativeZ = camera.position.z - gizmoPosition.z;
-      setShouldFlip(cameraRelativeZ > 0);
+    if (!isDragging) {
+      shouldFlipRef.current = computeShouldFlip();
     }
     
     // Update handle angle to follow camera
@@ -156,24 +168,31 @@ export function GizmoRotation({
     
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
+
+    shouldFlipRef.current = computeShouldFlip();
     
     // Calculate initial mouse angle
-    const rect = gl.domElement.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    lastMouseAngle.current = Math.atan2(e.clientY - centerY, e.clientX - centerX);
+    lastMouseAngle.current = getMouseAngle(e.clientX, e.clientY);
     
     setIsDragging(true);
     startAngle.current = handleAngle;
     onDragStart();
   };
 
+  const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    onPointerEnter();
+  };
+
+  const handlePointerLeaveLocal = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    onPointerLeave();
+  };
+
   const getMouseAngle = useCallback((clientX: number, clientY: number): number => {
-    const rect = gl.domElement.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    return Math.atan2(clientY - centerY, clientX - centerX);
-  }, [gl]);
+    const center = getGizmoScreenCenter();
+    return Math.atan2(clientY - center.y, clientX - center.x);
+  }, [getGizmoScreenCenter]);
 
   const handlePointerUp = () => {
     if (!isDragging) return;
@@ -206,7 +225,7 @@ export function GizmoRotation({
         let objectDelta = deltaAngle;
         
         // If camera has flipped to the other side, invert both visual and object rotation
-        if (shouldFlip) {
+        if (shouldFlipRef.current) {
           visualDelta = -visualDelta;
           objectDelta = -objectDelta;
         }
@@ -241,15 +260,28 @@ export function GizmoRotation({
         cancelAnimationFrame(rafId.current);
       }
     };
-  }, [isDragging, onDrag, onDragEnd, getMouseAngle]);
+  }, [isDragging, onDrag, onDragEnd, getMouseAngle, axis]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = isPickingHovered || isHovered;
+  const isHighlighted = !!(effectiveHovered || isActive);
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : 0.6;
+  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 0.95 : 0.65;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
-  const diamondColor = isDimmed ? dimmedColor : ringColors.diamond;
-  const ringColor = isDimmed ? dimmedColor : ringColors.ring;
+  const diamondColor = isDimmed
+    ? dimmedColor
+    : isActive
+      ? GIZMO_COLORS.active
+      : effectiveHovered
+        ? GIZMO_COLORS.hover
+        : ringColors.diamond;
+  const ringColor = isDimmed
+    ? dimmedColor
+    : isActive
+      ? GIZMO_COLORS.active
+      : effectiveHovered
+        ? GIZMO_COLORS.hover
+        : ringColors.ring;
 
   // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
   const emissiveIntensity = isActive
@@ -356,18 +388,23 @@ export function GizmoRotation({
       onPointerDown={handlePointerDown}
     >
       {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
-      <mesh ref={pickMeshRef} position={handlePosition}>
-        <sphereGeometry args={[GIZMO_SIZES.ringDiamondRadius * 2, 16, 16]} />
+      <mesh
+        ref={pickMeshRef}
+        onPointerDown={handlePointerDown}
+        onPointerEnter={handlePointerEnterLocal}
+        onPointerLeave={handlePointerLeaveLocal}
+      >
+        <torusGeometry args={[GIZMO_SIZES.ringMajorRadius, Math.max(0.04, GIZMO_SIZES.ringDiamondRadius * 0.55), 8, 64]} />
         <meshBasicMaterial visible={false} />
       </mesh>
       
       {/* Rotating group to keep colored arc facing camera - uses same angle as handle */}
       <group rotation={[0, 0, handleAngle]}>
         {/* Front arc with gradient - pure color at center, lighter at ends */}
-        <mesh geometry={arcGeometry}>
+        <mesh geometry={arcGeometry} scale={isHighlighted ? 1.03 : 1.0}>
           <meshBasicMaterial 
             vertexColors={!isDimmed}
-            color={isDimmed ? dimmedColor : '#ffffff'}
+            color={isDimmed ? dimmedColor : ringColor}
             opacity={opacity}
             transparent
             depthTest={false} 
@@ -377,7 +414,7 @@ export function GizmoRotation({
       </group>
 
       {/* Double-pointed arrow handle (two cones) */}
-      <group position={handlePosition} rotation={[0, 0, tangentAngle]}>
+      <group position={handlePosition} rotation={[0, 0, tangentAngle]} scale={isHighlighted ? 1.08 : 1.0}>
         {/* Billboard group to face camera */}
         <group rotation={[billboardRotation, 0, 0]}>
           {/* Clockwise-pointing cone along tangent */}
@@ -434,7 +471,7 @@ export function GizmoRotation({
       {enableLighting && !isDimmed && (
         <pointLight
           position={handlePosition}
-          color={ringColors.diamond}
+          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : ringColors.diamond}
           intensity={lightIntensity}
           distance={GIZMO_LIGHTING.pointLightDistance}
           decay={GIZMO_LIGHTING.pointLightDecay}

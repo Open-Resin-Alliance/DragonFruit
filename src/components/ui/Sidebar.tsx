@@ -20,11 +20,11 @@ export function Sidebar({
   const positionClass = fixed ? 'fixed' : 'relative';
   const heightClass = fixed ? '' : 'h-full';
   const sideClass = side === 'left' ? 'left-0 border-r' : 'right-0 border-l';
-  const style = fixed ? ({ top: '56px', bottom: 0 } as React.CSSProperties) : undefined;
+  const style = fixed ? ({ top: 'var(--topbar-height)', bottom: 0 } as React.CSSProperties) : undefined;
 
   return (
-    <div className={`${positionClass} ${heightClass} ${sideClass} ${widthClass} border-neutral-800 bg-neutral-900 z-20 ${className}`} style={style}>
-      <div className={`h-full overflow-y-auto px-0 py-0 space-y-2 ${contentClassName}`}>
+    <div className={`${positionClass} ${heightClass} ${sideClass} ${widthClass} ui-panel z-20 ${className}`} style={style}>
+      <div className={`h-full overflow-y-auto px-0 py-0 space-y-3 ${contentClassName}`}>
         {children}
       </div>
     </div>

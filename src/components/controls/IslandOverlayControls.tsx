@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
 
 type IslandOverlayControlsProps = {
   enabled: boolean;
@@ -41,16 +42,18 @@ export function IslandOverlayControls({
   }, [color]);
 
   return (
-    <div className="bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl">
-      <div className="flex items-center justify-between py-1 border-b border-neutral-700 mb-1">
-        <div className="flex items-center gap-1.5">
-          <button
+    <Card>
+      <CardHeader
+        left={(
+          <>
+            <IconButton
             onClick={() => setExpanded(!expanded)}
-            className="p-0.5 hover:bg-neutral-700 rounded transition-colors"
+            className="!p-0.5"
             title={expanded ? 'Collapse card' : 'Expand card'}
           >
             <svg
-              className={`w-3 h-3 transform transition-transform ${expanded ? 'text-blue-500' : 'text-neutral-500'}`}
+              className="w-3 h-3 transform transition-transform"
+              style={{ color: expanded ? 'var(--accent)' : 'var(--text-muted)' }}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -61,30 +64,44 @@ export function IslandOverlayControls({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               )}
             </svg>
+            </IconButton>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island Overlay</h3>
+          </>
+        )}
+        right={(
+          <button
+            type="button"
+            onClick={() => onEnabledChange(!enabled)}
+            className="h-8 min-w-[74px] rounded-md border px-2.5 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+            style={enabled
+              ? {
+                  borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                  color: 'var(--accent-contrast)',
+                }
+              : {
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+            title="Toggle Island Overlay"
+          >
+            {enabled ? 'ON' : 'OFF'}
           </button>
-          <h3 className="text-xs font-semibold text-neutral-200">Island Overlay</h3>
-        </div>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => onEnabledChange(e.target.checked)}
-            className="w-3 h-3 rounded border-neutral-600 bg-neutral-700 text-blue-500 focus:ring-1 focus:ring-blue-500 focus:ring-offset-0"
-          />
-          <span className="text-[9px] text-neutral-400 uppercase tracking-wide">{enabled ? 'On' : 'Off'}</span>
-        </label>
-      </div>
-
-      {expanded && islandCount > 0 && (
-        <div className="text-[9px] text-neutral-400 mb-1 px-1">
-          {islandCount} island{islandCount !== 1 ? 's' : ''} detected
-        </div>
-      )}
+        )}
+        hideDivider={!expanded}
+      />
 
       {expanded && (
-        <div className="space-y-1">
-          <div className="space-y-0.5">
-            <label className="text-[9px] text-neutral-400 flex justify-between">
+        <div className="px-2.5 pt-2 pb-3 space-y-2.5">
+          {islandCount > 0 && (
+            <div className="ui-meta">
+              {islandCount} island{islandCount !== 1 ? 's' : ''} detected
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label className="ui-meta flex justify-between">
               <span>Brush Size</span>
               <div className="flex items-center gap-1">
                 <NumberInput
@@ -94,9 +111,9 @@ export function IslandOverlayControls({
                       onBrushRadiusChange(val);
                     }
                   }}
-                  className="w-12 px-1 py-0.5 text-[10px] bg-neutral-700 border border-neutral-600 rounded text-neutral-200 focus:outline-none focus:border-blue-500 text-right no-spinners"
+                  className="ui-input w-14 !h-8 px-1.5 py-0 text-[11px] text-right no-spinners"
                 />
-                <span className="text-neutral-500 text-[9px]">mm</span>
+                <span className="ui-meta">mm</span>
               </div>
             </label>
             <input
@@ -106,12 +123,12 @@ export function IslandOverlayControls({
               step="0.1"
               value={brushRadiusMm}
               onChange={(e) => onBrushRadiusChange(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              className="ui-range"
             />
           </div>
 
-          <div className="space-y-0.5">
-            <label className="text-[9px] text-neutral-400">Color</label>
+          <div className="space-y-1">
+            <label className="ui-meta">Color</label>
             <div className="flex gap-1.5 items-center">
               <input
                 type="color"
@@ -121,9 +138,10 @@ export function IslandOverlayControls({
                   setEditingColor(newColor);
                   onColorChange(newColor);
                 }}
-                className="w-8 h-6 rounded border border-neutral-600 bg-neutral-700 cursor-pointer p-0"
+                className="w-10 h-8 rounded border cursor-pointer p-0"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
               />
-              <input
+              <Input
                 type="text"
                 value={editingColor}
                 onChange={(e) => setEditingColor(e.target.value)}
@@ -140,16 +158,16 @@ export function IslandOverlayControls({
                     e.currentTarget.blur();
                   }
                 }}
-                className="flex-1 px-1.5 py-0.5 text-xs bg-neutral-700 border border-neutral-600 rounded text-neutral-200 focus:outline-none focus:border-blue-500 uppercase"
+                className="flex-1 !h-8 px-2 py-0 text-sm uppercase"
                 placeholder="#FF0000"
               />
             </div>
           </div>
 
-          <div className="space-y-0.5">
-            <label className="text-[9px] text-neutral-400 flex justify-between">
+          <div className="space-y-1">
+            <label className="ui-meta flex justify-between">
               <span>Opacity</span>
-              <span className="text-neutral-300">{Math.round(opacity * 100)}%</span>
+              <span style={{ color: 'var(--text-strong)' }}>{Math.round(opacity * 100)}%</span>
             </label>
             <input
               type="range"
@@ -158,14 +176,14 @@ export function IslandOverlayControls({
               step="0.05"
               value={opacity}
               onChange={(e) => onOpacityChange(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              className="ui-range"
             />
           </div>
 
-          <div className="space-y-0.5">
-            <label className="text-[9px] text-neutral-400 flex justify-between">
+          <div className="space-y-1">
+            <label className="ui-meta flex justify-between">
               <span>Taper</span>
-              <span className="text-neutral-300">{Math.round((1 - taper) * 100)}%</span>
+              <span style={{ color: 'var(--text-strong)' }}>{Math.round((1 - taper) * 100)}%</span>
             </label>
             <input
               type="range"
@@ -174,11 +192,11 @@ export function IslandOverlayControls({
               step="0.05"
               value={taper}
               onChange={(e) => onTaperChange(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+              className="ui-range"
             />
           </div>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
