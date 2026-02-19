@@ -746,12 +746,12 @@ export function SceneCanvas({
   const handleOrbitStart = React.useCallback(() => {
     orbitInteractionActiveRef.current = true;
     orbitInteractionMovedRef.current = false;
+    setMouseOrbitDragRunId((id) => id + 1);
   }, []);
 
   const handleOrbitEnd = React.useCallback(() => {
     if (orbitInteractionActiveRef.current && orbitInteractionMovedRef.current) {
       suppressNextCanvasClickRef.current = true;
-      setMouseOrbitDragRunId((id) => id + 1);
     }
     orbitInteractionActiveRef.current = false;
     orbitInteractionMovedRef.current = false;
