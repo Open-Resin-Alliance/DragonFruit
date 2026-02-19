@@ -1207,35 +1207,138 @@ export function useSceneCollectionManager() {
     return id;
   }, [cloneGeometryWithBounds, deferAccelerateGeometry, generateId, modelClipboard]);
 
-  const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 12) => {
+  const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
 
     const entries = modelClipboard;
 
-    const maxWidth = Math.max(...entries.map((entry) => Math.max(2, Math.abs(entry.geometry.size.x * entry.transform.scale.x))));
-    const maxDepth = Math.max(...entries.map((entry) => Math.max(2, Math.abs(entry.geometry.size.y * entry.transform.scale.y))));
-    const stepX = maxWidth + spacingMm;
-    const stepY = maxDepth + spacingMm;
-
-    const count = entries.length;
-    const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
-    const rows = Math.ceil(count / columns);
-
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
-    const startX = centerX - ((columns - 1) * stepX) * 0.5;
-    const startY = centerY - ((rows - 1) * stepY) * 0.5;
+
+    type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
+
+    const intersectsRect = (a: Rect2D, b: Rect2D) => {
+      return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+    };
+
+    const footprintFor = (size: THREE.Vector3, transform: ModelTransform) => {
+      const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
+      const baseD = Math.max(2, Math.abs(size.y * transform.scale.y));
+      const rz = transform.rotation.z;
+      const c = Math.abs(Math.cos(rz));
+      const s = Math.abs(Math.sin(rz));
+      return {
+        width: (baseW * c) + (baseD * s),
+        depth: (baseW * s) + (baseD * c),
+      };
+    };
+
+    const maxWidth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).width));
+    const maxDepth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).depth));
+    const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
+    const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
+
+    const blockedRects: Rect2D[] = models
+      .filter((model) => model.visible)
+      .map((model) => {
+        const { width, depth } = footprintFor(model.geometry.size, model.transform);
+        return {
+          minX: model.transform.position.x - (width * 0.5),
+          maxX: model.transform.position.x + (width * 0.5),
+          minY: model.transform.position.y - (depth * 0.5),
+          maxY: model.transform.position.y + (depth * 0.5),
+        };
+      });
+
+    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+    const maxRing = 36;
+
+    for (let ring = 0; ring <= maxRing; ring += 1) {
+      if (ring === 0) {
+        candidateCenters.push({ x: centerX, y: centerY, distSq: 0 });
+        continue;
+      }
+
+      for (let gx = -ring; gx <= ring; gx += 1) {
+        const gyTop = ring;
+        const gyBottom = -ring;
+        const x = centerX + gx * stepX;
+
+        const yTop = centerY + gyTop * stepY;
+        const dxTop = x - centerX;
+        const dyTop = yTop - centerY;
+        candidateCenters.push({ x, y: yTop, distSq: (dxTop * dxTop) + (dyTop * dyTop) });
+
+        if (gyBottom !== gyTop) {
+          const yBottom = centerY + gyBottom * stepY;
+          const dxBottom = x - centerX;
+          const dyBottom = yBottom - centerY;
+          candidateCenters.push({ x, y: yBottom, distSq: (dxBottom * dxBottom) + (dyBottom * dyBottom) });
+        }
+      }
+
+      for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
+        const gxRight = ring;
+        const gxLeft = -ring;
+        const y = centerY + gy * stepY;
+
+        const xRight = centerX + gxRight * stepX;
+        const dxRight = xRight - centerX;
+        const dyRight = y - centerY;
+        candidateCenters.push({ x: xRight, y, distSq: (dxRight * dxRight) + (dyRight * dyRight) });
+
+        if (gxLeft !== gxRight) {
+          const xLeft = centerX + gxLeft * stepX;
+          const dxLeft = xLeft - centerX;
+          const dyLeft = y - centerY;
+          candidateCenters.push({ x: xLeft, y, distSq: (dxLeft * dxLeft) + (dyLeft * dyLeft) });
+        }
+      }
+    }
+
+    candidateCenters.sort((a, b) => a.distSq - b.distSq);
+
+    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry) => {
+      const { width, depth } = footprintFor(entry.geometry.size, entry.transform);
+
+      for (const candidate of candidateCenters) {
+        const rect: Rect2D = {
+          minX: candidate.x - (width * 0.5),
+          maxX: candidate.x + (width * 0.5),
+          minY: candidate.y - (depth * 0.5),
+          maxY: candidate.y + (depth * 0.5),
+        };
+
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+          continue;
+        }
+
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      // Fallback: if exhaustive candidates are blocked, place further to the right of center.
+      const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
+      const fallbackY = centerY;
+      blockedRects.push({
+        minX: fallbackX - (width * 0.5),
+        maxX: fallbackX + (width * 0.5),
+        minY: fallbackY - (depth * 0.5),
+        maxY: fallbackY + (depth * 0.5),
+      });
+      return { x: fallbackX, y: fallbackY };
+    });
 
     const createdIds: string[] = [];
     const pastedGeometries: GeometryWithBounds[] = [];
     const pastedModels: LoadedModel[] = entries.map((entry, index) => {
-      const col = index % columns;
-      const row = Math.floor(index / columns);
       const id = generateId();
       createdIds.push(id);
 
       const geometry = cloneGeometryWithBounds(entry.geometry, { accelerate: false });
       pastedGeometries.push(geometry);
+
+      const center = assignedCenters[index] ?? { x: centerX, y: centerY };
 
       return {
         id,
@@ -1244,7 +1347,7 @@ export function useSceneCollectionManager() {
         fileSizeBytes: entry.fileSizeBytes,
         geometry,
         transform: {
-          position: new THREE.Vector3(startX + col * stepX, startY + row * stepY, entry.transform.position.z),
+          position: new THREE.Vector3(center.x, center.y, entry.transform.position.z),
           rotation: entry.transform.rotation.clone(),
           scale: entry.transform.scale.clone(),
         },
@@ -1263,7 +1366,7 @@ export function useSceneCollectionManager() {
     deferAccelerateGeometry(pastedGeometries);
 
     return createdIds;
-  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard]);
+  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models]);
 
   const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[]) => {
     if (transforms.length === 0) return [] as string[];
