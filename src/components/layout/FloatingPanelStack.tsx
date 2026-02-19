@@ -714,7 +714,10 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       if (panelWidthScale <= 1) {
         return baseWidth;
       }
-      return Math.max(72, Math.round(baseWidth * panelWidthScale));
+      const supportUltrawideBoost = panelId === 'support-settings'
+        ? (panelWidthScale >= 1.14 ? 1.1 : panelWidthScale >= 1.08 ? 1.06 : 1)
+        : 1;
+      return Math.max(72, Math.round(baseWidth * panelWidthScale * supportUltrawideBoost));
     }
     const analysisCompactFactor = panelId.startsWith('analysis-')
       ? (panelWidthScale < 1 ? 0.88 : 1)
