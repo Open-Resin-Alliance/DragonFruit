@@ -3,13 +3,19 @@
 import React from 'react';
 import type { SupportMode } from '@/supports/types';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
-import type { WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
+import type { SelectionHighlightMode } from '@/components/selection';
+import type {
+  WorkspaceCameraDefaults,
+  WorkspaceSelectionHighlightDefaults,
+} from '@/components/settings/workspaceCameraPreferences';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import { Layers3 } from 'lucide-react';
 
 interface WorkspacesSettingsTabProps {
   workspaceCameraDefaults: WorkspaceCameraDefaults;
   onWorkspaceCameraModeChange: (workspace: SupportMode, mode: CameraProjectionMode) => void;
+  workspaceSelectionHighlightDefaults: WorkspaceSelectionHighlightDefaults;
+  onWorkspaceSelectionHighlightModeChange: (workspace: SupportMode, mode: SelectionHighlightMode) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
 }
@@ -24,6 +30,8 @@ const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = 
 export function WorkspacesSettingsTab({
   workspaceCameraDefaults,
   onWorkspaceCameraModeChange,
+  workspaceSelectionHighlightDefaults,
+  onWorkspaceSelectionHighlightModeChange,
   view3dSettings,
   onView3dSettingsChange,
 }: WorkspacesSettingsTabProps) {
@@ -344,6 +352,45 @@ export function WorkspacesSettingsTab({
               >
                 Perspective
               </button>
+            </div>
+
+            <div className="mt-3 text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              {workspaceMeta.find((w) => w.key === activeWorkspace)?.label} selection highlight
+            </div>
+            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Controls default selection emphasis when entering this workspace.
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {([
+                { key: 'tint', label: 'Mesh Tint' },
+                { key: 'spotlight', label: 'Spotlight' },
+                { key: 'fresnel', label: 'Fresnel' },
+                { key: 'none', label: 'None' },
+              ] as Array<{ key: SelectionHighlightMode; label: string }>).map((option) => {
+                const active = workspaceSelectionHighlightDefaults[activeWorkspace] === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => onWorkspaceSelectionHighlightModeChange(activeWorkspace, option.key)}
+                    className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                    style={active
+                      ? {
+                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                          color: 'var(--accent-contrast)',
+                        }
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                          color: 'var(--text-muted)',
+                        }}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

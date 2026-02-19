@@ -893,6 +893,13 @@ export default function Home() {
   }, [scene.mode]);
 
   React.useEffect(() => {
+    const workspaceSelectionHighlightMode = getSavedWorkspaceCameraSettings().selectionHighlightDefaults[scene.mode];
+    if (workspaceSelectionHighlightMode !== scene.selectionHighlightMode) {
+      scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
+    }
+  }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
+
+  React.useEffect(() => {
     if (scene.mode !== 'support') return;
     if (scene.activeModelId) return;
     if (scene.models.length === 0) return;
