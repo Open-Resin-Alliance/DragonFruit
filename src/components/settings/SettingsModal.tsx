@@ -63,7 +63,7 @@ const DEFAULT_TOON_STEPS = 5;
 const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
 const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
 const DRAGONFRUIT_VERSION = '0.1.0';
-const ORA_LOGO_DARK_URL = 'https://github.com/Open-Resin-Alliance/Orion/blob/athena_public_beta/assets/images/ora/open_resin_alliance_logo_darkmode.png?raw=true';
+const ORA_LOGO_DARK_URL = 'https://raw.githubusercontent.com/Open-Resin-Alliance/Orion/athena_public_beta/assets/images/ora/open_resin_alliance_logo_darkmode.png';
 const DRAGONFRUIT_REPO_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
 type SettingsModalProps = {
@@ -808,7 +808,12 @@ export function SettingsModal({
           <button
             type="button"
             onClick={handleRestoreDefaults}
-            className="ui-button ui-button-secondary !h-10 !px-3.5 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+            className="ui-button !h-10 !px-3.5 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 64%)',
+              background: 'color-mix(in srgb, var(--surface-1), var(--accent-secondary) 7%)',
+              color: 'var(--text-strong)',
+            }}
           >
             <RotateCcw className="h-4 w-4 shrink-0" />
             Restore Defaults
@@ -818,7 +823,10 @@ export function SettingsModal({
             <button
               type="button"
               onClick={handleCancel}
-              className="ui-button ui-button-danger !h-10 !px-4 !py-0 text-sm"
+              className="ui-button ui-button-secondary !h-10 !px-4 !py-0 text-sm"
+              style={{
+                color: 'var(--text-muted)',
+              }}
             >
               Cancel
             </button>
@@ -826,6 +834,10 @@ export function SettingsModal({
               type="button"
               onClick={handleApply}
               className="ui-button ui-button-primary !h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 whitespace-nowrap"
+              style={{
+                background: 'color-mix(in srgb, var(--accent), var(--surface-0) 16%)',
+                borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+              }}
             >
               <Check className="h-4 w-4 shrink-0" />
               Apply
