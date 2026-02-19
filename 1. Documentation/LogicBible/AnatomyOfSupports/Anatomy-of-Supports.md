@@ -9,6 +9,9 @@
 - **Brace** [[Brace]]
   - A support-to-support stabilizer: a `shaft` with a `[[Knot]]` at both ends that snaps to any support `[[Shaft]]` (including a Brace). Never touches the model.
 
+- **Support brace** [[Support brace]]
+  - A grounded support-to-support element: starts at `[[Roots]]`, builds upward through `[[Shaft]]`/`[[Joint]]` segments, and ends in a `[[Knot]]` that snaps to a `[[Trunk]]` or `[[Branch]]` shaft (no `[[Contact cone]]`).
+
 - **Roots** [[Roots]]
   - The bottom element of a trunk that forms the footprint on the plate or raft and provides a strong, continuous connection to the trunk.
 

@@ -19,6 +19,10 @@ export class LysConverter {
     for (const twig of data.twigs || []) twig.modelId = modelId;
     for (const stick of data.sticks || []) stick.modelId = modelId;
     for (const brace of data.braces) brace.modelId = modelId;
+    for (const supportBraceBuild of data.supportBraces || []) {
+      supportBraceBuild.root.modelId = modelId;
+      supportBraceBuild.supportBrace.modelId = modelId;
+    }
   }
 
   static applyWorldXYPlacement(data: DragonfruitImportFormat, offsetX: number, offsetY: number): void {
@@ -101,6 +105,19 @@ export class LysConverter {
 
     for (const knot of data.knots) {
       shiftPos(knot.pos);
+    }
+
+    for (const supportBraceBuild of data.supportBraces || []) {
+      shiftPos(supportBraceBuild.root.transform?.pos);
+      shiftPos(supportBraceBuild.hostKnot.pos);
+      for (const seg of supportBraceBuild.supportBrace.segments) {
+        shiftJoint(seg.bottomJoint);
+        shiftJoint(seg.topJoint);
+        if (seg.type === 'bezier') {
+          shiftPos(seg.controlPoint1 as { x: number; y: number } | undefined);
+          shiftPos(seg.controlPoint2 as { x: number; y: number } | undefined);
+        }
+      }
     }
   }
 

@@ -139,7 +139,7 @@ export function ContactConeRenderer({
                     {/* CylinderGeometry: radiusTop, radiusBottom, height, radialSegments */}
                     {/* Top = contact (small), Bottom = socket (large) in Y-up space */}
                     {/* After rotation, "top" faces the model */}
-                    <cylinderGeometry args={[contactRadius, bodyRadius, length, 16]} />
+                    <cylinderGeometry args={[contactRadius, bodyRadius, length, 32]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
                         emissive={emissive}
@@ -155,7 +155,7 @@ export function ContactConeRenderer({
             {/* Renders at coneStartPos, size = contactRadius */}
             <group position={[coneStartPos.x, coneStartPos.y, coneStartPos.z]}>
                 <mesh raycast={raycast}>
-                    <sphereGeometry args={[contactRadius, 16, 16]} />
+                    <sphereGeometry args={[contactRadius, 32, 32]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
                         emissive={emissive}

@@ -259,8 +259,6 @@ export function StlMesh({
         userData={{ modelId }}
         geometry={geometry}
         position={meshLocalOffset}
-        castShadow
-        receiveShadow
         onClick={(e) => {
           console.log('[SceneCanvas] Mesh clicked, mode:', mode, 'id:', modelId);
 

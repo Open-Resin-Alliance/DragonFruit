@@ -132,55 +132,114 @@ export class LysParser {
     }
 
     private static findJsonHeader(data: Uint8Array): { start: number, end: number } {
-        // Look for '{"version"'
-        // char codes: {=123, "=34, v=118, e=101, r=114...
-        // simple string search
-        const searchStr = '{"version"';
-        const searchBytes = new TextEncoder().encode(searchStr);
+        // Some LYS variants no longer start with '{"version"'.
+        // Robustly scan for the first valid top-level JSON object that looks like
+        // a manifest (contains mangoFiles) or at least version metadata.
+        const decoder = new TextDecoder('utf-8');
+        const maxScan = Math.min(data.length, 2_000_000);
 
-        let start = -1;
+        const tryExtractObjectBounds = (start: number): { start: number, end: number } | null => {
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
 
-        // Naive search
-        for (let i = 0; i < Math.min(data.length, 1000); i++) { // Optimization: Header usually at start
-            if (data[i] === searchBytes[0]) {
-                let match = true;
-                for (let j = 1; j < searchBytes.length; j++) {
-                    if (data[i + j] !== searchBytes[j]) {
-                        match = false;
-                        break;
+            for (let i = start; i < maxScan; i++) {
+                const c = data[i];
+
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                        continue;
+                    }
+                    if (c === 92) { // '\\'
+                        escaped = true;
+                        continue;
+                    }
+                    if (c === 34) { // '"'
+                        inString = false;
+                    }
+                    continue;
+                }
+
+                if (c === 34) { // '"'
+                    inString = true;
+                    continue;
+                }
+                if (c === 123) { // '{'
+                    depth++;
+                    continue;
+                }
+                if (c === 125) { // '}'
+                    depth--;
+                    if (depth === 0) {
+                        return { start, end: i + 1 };
+                    }
+                    if (depth < 0) return null;
+                }
+            }
+
+            return null;
+        };
+
+        // Prefer objects near where "mangoFiles" appears.
+        const marker = new TextEncoder().encode('"mangoFiles"');
+        const markerStarts: number[] = [];
+        for (let i = 0; i <= maxScan - marker.length; i++) {
+            let ok = true;
+            for (let j = 0; j < marker.length; j++) {
+                if (data[i + j] !== marker[j]) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) markerStarts.push(i);
+        }
+
+        const candidateStarts: number[] = [];
+
+        // Backtrack from each marker to likely object start.
+        for (const m of markerStarts) {
+            for (let i = m; i >= Math.max(0, m - 200_000); i--) {
+                if (data[i] === 123) { // '{'
+                    candidateStarts.push(i);
+                    break;
+                }
+            }
+        }
+
+        // Fallback: scan for top-level object starts from file head.
+        for (let i = 0; i < maxScan; i++) {
+            if (data[i] === 123) candidateStarts.push(i);
+            if (candidateStarts.length > 2000) break;
+        }
+
+        const seen = new Set<number>();
+        for (const start of candidateStarts) {
+            if (seen.has(start)) continue;
+            seen.add(start);
+
+            const bounds = tryExtractObjectBounds(start);
+            if (!bounds) continue;
+
+            try {
+                const raw = decoder.decode(data.subarray(bounds.start, bounds.end));
+                const parsed = JSON.parse(raw) as any;
+                if (parsed && typeof parsed === 'object') {
+                    if (parsed.mangoFiles || parsed.version || parsed.scene) {
+                        return bounds;
                     }
                 }
-                if (match) {
-                    start = i;
-                    break;
-                }
+            } catch {
+                // continue scanning
             }
         }
 
-        if (start === -1) {
-            throw new Error("LYS Header not found (missing '{\"version\"')");
+        // Helpful diagnostic if file is ZIP-like (PK\x03\x04)
+        if (data.length >= 4 && data[0] === 0x50 && data[1] === 0x4b) {
+            throw new Error('Unsupported .lys container variant (ZIP-like). Manifest JSON header not found.');
         }
 
-        // Count braces to find end
-        let braceCount = 0;
-        let end = start;
-        for (let i = start; i < data.length; i++) {
-            if (data[i] === 123) { // '{'
-                braceCount++;
-            } else if (data[i] === 125) { // '}'
-                braceCount--;
-                if (braceCount === 0) {
-                    end = i + 1;
-                    break;
-                }
-            }
-        }
-
-        if (end <= start) {
-            throw new Error("LYS Header end not found (brace mismatch)");
-        }
-
-        return { start, end };
+        throw new Error('LYS manifest JSON header not found');
     }
 
     private static decryptBytes(data: Uint8Array, key: string): Uint8Array {

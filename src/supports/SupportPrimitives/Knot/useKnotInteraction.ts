@@ -2,8 +2,10 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateBranch, getBranchById } from '../../state';
+import { getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateBranch, getBranchById, subscribe } from '../../state';
 import { Branch, Brace, Knot, Roots, Trunk, Twig, Stick, Vec3 } from '../../types';
+import { getSupportBraceSnapshot } from '../../SupportTypes/SupportBrace/supportBraceStore';
+import type { SupportBrace } from '../../SupportTypes/SupportBrace/types';
 import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, projectOntoSegment } from './knotUtils';
 import { getSettings } from '../../Settings';
 import { solveKnotConstraint } from '../../PlacementLogic/JointConstraintSolver';
@@ -14,7 +16,7 @@ import { getBezierPointAtT } from '../../Curves/BezierUtils';
 
 interface ActiveHost {
     segmentId: string;
-    containerType: 'trunk' | 'branch' | 'twig' | 'stick' | 'leafCone' | 'brace';
+    containerType: 'trunk' | 'branch' | 'twig' | 'stick' | 'leafCone' | 'brace' | 'supportBrace';
     trunk?: Trunk;
     branch?: Branch;
     twig?: Twig;
@@ -23,6 +25,9 @@ interface ActiveHost {
     parentKnot?: Knot;
     leafId?: string;
     brace?: Brace;
+    supportBrace?: SupportBrace;
+    supportBraceRoot?: Roots;
+    supportBraceHostKnot?: Knot;
     start: THREE.Vector3;
     end: THREE.Vector3;
     // Topology Map: BranchID -> 'UP' (Knot Z < Joint Z) or 'DOWN' (Knot Z > Joint Z)
@@ -40,6 +45,34 @@ export function useKnotInteraction(enabled: boolean = true) {
 
     // Store initial state of all attached branches for elastic drag
     const elasticState = useRef<Record<string, ElasticChainInitialState>>({});
+
+    // Segment→host lookup cache: rebuilt whenever support state changes
+    type SegmentHostEntry = { containerType: 'trunk'; entityId: string } | { containerType: 'branch'; entityId: string } | { containerType: 'supportBrace'; entityId: string } | { containerType: 'twig'; entityId: string } | { containerType: 'stick'; entityId: string };
+    const segmentHostMapRef = useRef<Map<string, SegmentHostEntry>>(new Map());
+
+    useEffect(() => {
+        const buildMap = () => {
+            const map = new Map<string, SegmentHostEntry>();
+            for (const trunk of getTrunks()) {
+                for (const seg of trunk.segments) map.set(seg.id, { containerType: 'trunk', entityId: trunk.id });
+            }
+            for (const branch of getBranches()) {
+                for (const seg of branch.segments) map.set(seg.id, { containerType: 'branch', entityId: branch.id });
+            }
+            for (const supportBrace of Object.values(getSupportBraceSnapshot().supportBraces)) {
+                for (const seg of supportBrace.segments) map.set(seg.id, { containerType: 'supportBrace', entityId: supportBrace.id });
+            }
+            for (const twig of getTwigs()) {
+                for (const seg of twig.segments) map.set(seg.id, { containerType: 'twig', entityId: twig.id });
+            }
+            for (const stick of getSticks()) {
+                for (const seg of stick.segments) map.set(seg.id, { containerType: 'stick', entityId: stick.id });
+            }
+            segmentHostMapRef.current = map;
+        };
+        buildMap();
+        return subscribe(buildMap);
+    }, []);
 
     const showLeafClampWarning = () => {
         setInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
@@ -237,63 +270,45 @@ export function useKnotInteraction(enabled: boolean = true) {
                 return host;
             }
         }
-        const trunks = getTrunks();
-        for (const trunk of trunks) {
-            const idx = trunk.segments.findIndex((s) => s.id === knot.parentShaftId);
-            if (idx !== -1) {
-                const root = getRootById(trunk.rootId) || undefined;
-                host = {
-                    segmentId: knot.parentShaftId,
-                    containerType: 'trunk',
-                    trunk,
-                    root,
-                    start: new THREE.Vector3(),
-                    end: new THREE.Vector3(),
-                    initialTopology: {}
-                };
-                break;
-            }
-        }
-
-        if (!host) {
-            const branches = getBranches();
-            for (const branch of branches) {
-                const idx = branch.segments.findIndex((s) => s.id === knot.parentShaftId);
-                if (idx !== -1) {
+        const cacheEntry = segmentHostMapRef.current.get(knot.parentShaftId);
+        if (cacheEntry) {
+            if (cacheEntry.containerType === 'trunk') {
+                const trunk = getTrunks().find(t => t.id === cacheEntry.entityId);
+                if (trunk) {
+                    const root = getRootById(trunk.rootId) || undefined;
+                    host = { segmentId: knot.parentShaftId, containerType: 'trunk', trunk, root, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
+                }
+            } else if (cacheEntry.containerType === 'branch') {
+                const branch = getBranches().find(b => b.id === cacheEntry.entityId);
+                if (branch) {
                     const parentKnot = getKnotById(branch.parentKnotId) || undefined;
-                    host = {
-                        segmentId: knot.parentShaftId,
-                        containerType: 'branch',
-                        branch,
-                        parentKnot,
-                        start: new THREE.Vector3(),
-                        end: new THREE.Vector3(),
-                        initialTopology: {}
-                    };
-                    break;
+                    host = { segmentId: knot.parentShaftId, containerType: 'branch', branch, parentKnot, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
+                }
+            } else if (cacheEntry.containerType === 'supportBrace') {
+                const supportBraceState = getSupportBraceSnapshot();
+                const supportBrace = supportBraceState.supportBraces[cacheEntry.entityId];
+                if (supportBrace) {
+                    const supportBraceRoot = supportBraceState.roots[supportBrace.rootId];
+                    const supportBraceHostKnot = supportBraceState.knots[supportBrace.hostKnotId];
+                    if (supportBraceRoot && supportBraceHostKnot) {
+                        host = { segmentId: knot.parentShaftId, containerType: 'supportBrace', supportBrace, supportBraceRoot, supportBraceHostKnot, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
+                    }
+                }
+            } else if (cacheEntry.containerType === 'twig') {
+                const twig = getTwigs().find(t => t.id === cacheEntry.entityId);
+                if (twig) {
+                    host = { segmentId: knot.parentShaftId, containerType: 'twig', twig, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
+                }
+            } else if (cacheEntry.containerType === 'stick') {
+                const stick = getSticks().find(s => s.id === cacheEntry.entityId);
+                if (stick) {
+                    host = { segmentId: knot.parentShaftId, containerType: 'stick', stick, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
                 }
             }
         }
 
         if (!host) {
-            const twigs = getTwigs();
-            for (const twig of twigs) {
-                const idx = twig.segments.findIndex((s) => s.id === knot.parentShaftId);
-                if (idx !== -1) {
-                    host = {
-                        segmentId: knot.parentShaftId,
-                        containerType: 'twig',
-                        twig,
-                        start: new THREE.Vector3(),
-                        end: new THREE.Vector3(),
-                        initialTopology: {}
-                    };
-                    break;
-                }
-            }
-        }
-
-        if (!host) {
+            // Fallback: stale cache — should not happen in normal use
             const sticks = getSticks();
             for (const stick of sticks) {
                 const idx = stick.segments.findIndex((s) => s.id === knot.parentShaftId);
@@ -382,6 +397,30 @@ export function useKnotInteraction(enabled: boolean = true) {
             if (!startKnot || !endKnot) return;
             host.start.set(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z);
             host.end.set(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z);
+        } else if (host.containerType === 'supportBrace' && host.supportBrace && host.supportBraceRoot && host.supportBraceHostKnot) {
+            const segIdx = host.supportBrace.segments.findIndex((s) => s.id === host.segmentId);
+            if (segIdx === -1) return;
+
+            const rootTopZ = host.supportBraceRoot.transform.pos.z + host.supportBraceRoot.diskHeight + host.supportBraceRoot.coneHeight;
+
+            let startPos: Vec3;
+            if (segIdx === 0) {
+                startPos = {
+                    x: host.supportBraceRoot.transform.pos.x,
+                    y: host.supportBraceRoot.transform.pos.y,
+                    z: rootTopZ,
+                };
+            } else {
+                const prevSeg = host.supportBrace.segments[segIdx - 1];
+                if (!prevSeg.topJoint) return;
+                startPos = prevSeg.topJoint.pos;
+            }
+
+            const seg = host.supportBrace.segments[segIdx];
+            const endPos = seg.topJoint?.pos ?? host.supportBraceHostKnot.pos;
+
+            host.start.set(startPos.x, startPos.y, startPos.z);
+            host.end.set(endPos.x, endPos.y, endPos.z);
         }
     };
 
@@ -447,6 +486,34 @@ export function useKnotInteraction(enabled: boolean = true) {
                     start: new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
                     end: new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
                     diameter: host.brace.profile.diameter,
+                });
+            }
+        } else if (host.containerType === 'supportBrace' && host.supportBrace && host.supportBraceRoot && host.supportBraceHostKnot) {
+            const rootTopZ = host.supportBraceRoot.transform.pos.z + host.supportBraceRoot.diskHeight + host.supportBraceRoot.coneHeight;
+
+            for (let idx = 0; idx < host.supportBrace.segments.length; idx++) {
+                const seg = host.supportBrace.segments[idx];
+
+                let startPos: Vec3;
+                if (idx === 0) {
+                    startPos = {
+                        x: host.supportBraceRoot.transform.pos.x,
+                        y: host.supportBraceRoot.transform.pos.y,
+                        z: rootTopZ,
+                    };
+                } else {
+                    const prevSeg = host.supportBrace.segments[idx - 1];
+                    if (!prevSeg.topJoint) continue;
+                    startPos = prevSeg.topJoint.pos;
+                }
+
+                const endPos = seg.topJoint?.pos ?? host.supportBraceHostKnot.pos;
+                out.push({
+                    segmentId: seg.id,
+                    start: new THREE.Vector3(startPos.x, startPos.y, startPos.z),
+                    end: new THREE.Vector3(endPos.x, endPos.y, endPos.z),
+                    diameter: seg.diameter,
+                    bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
                 });
             }
         }
@@ -1003,6 +1070,23 @@ export function useKnotInteraction(enabled: boolean = true) {
                     bestDiameter = seg.diameter;
                 }
             }
+        } else if (host.containerType === 'supportBrace') {
+            if (host.supportBrace) {
+                const seg = host.supportBrace.segments.find(s => s.id === host.segmentId);
+                if (seg?.type === 'bezier') {
+                    const proj = projectOntoBezierCurve(
+                        raycaster.ray,
+                        host.start,
+                        host.end,
+                        seg.controlPoint1,
+                        seg.controlPoint2,
+                        60,
+                    );
+                    t = proj.t;
+                    finalOnLine = new THREE.Vector3(proj.point.x, proj.point.y, proj.point.z);
+                    bestDiameter = seg.diameter;
+                }
+            }
         }
 
         // Update Knot
@@ -1014,7 +1098,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         };
 
         // Update diameter when crossing into a segment with a different diameter
-        if (host.containerType === 'trunk' || host.containerType === 'branch' || host.containerType === 'twig' || host.containerType === 'stick' || host.containerType === 'brace') {
+        if (host.containerType === 'trunk' || host.containerType === 'branch' || host.containerType === 'twig' || host.containerType === 'stick' || host.containerType === 'brace' || host.containerType === 'supportBrace') {
             finalKnot.diameter = bestDiameter + 0.1;
         }
 

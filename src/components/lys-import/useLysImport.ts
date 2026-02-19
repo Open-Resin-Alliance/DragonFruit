@@ -4,6 +4,15 @@ import { LysParser } from './LysParser';
 import { LysConverter } from './LysConverter';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { loadFromLychee } from '@/supports/state';
+import { computeLowestZ } from '@/utils/geometry';
+
+function generateImportId(): string {
+    const maybeCrypto = (globalThis as any)?.crypto;
+    if (maybeCrypto && typeof maybeCrypto.randomUUID === 'function') {
+        return maybeCrypto.randomUUID();
+    }
+    return `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function normalizeLycheeRotation(rotation: { x?: number; y?: number; z?: number } | null | undefined) {
     const x = Number.isFinite(rotation?.x) ? (rotation?.x as number) : 0;
@@ -90,6 +99,131 @@ function applySupportZOffset(importData: any, deltaZ: number) {
     }
 }
 
+function applySupportXYOffset(importData: any, deltaX: number, deltaY: number) {
+    if (!importData) return;
+    if ((!Number.isFinite(deltaX) || Math.abs(deltaX) < 1e-6) && (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1e-6)) return;
+
+    const shiftedJointIds = new Set<string>();
+    const shiftJoint = (joint: any) => {
+        if (!joint || !joint.pos) return;
+        const key = typeof joint.id === 'string' ? joint.id : null;
+        if (key && shiftedJointIds.has(key)) return;
+        joint.pos.x += deltaX;
+        joint.pos.y += deltaY;
+        if (key) shiftedJointIds.add(key);
+    };
+
+    for (const trunk of importData.trunks || []) {
+        for (const seg of trunk?.segments || []) {
+            shiftJoint(seg?.bottomJoint);
+            shiftJoint(seg?.topJoint);
+            if (seg?.type === 'bezier') {
+                if (seg.controlPoint1) {
+                    seg.controlPoint1.x += deltaX;
+                    seg.controlPoint1.y += deltaY;
+                }
+                if (seg.controlPoint2) {
+                    seg.controlPoint2.x += deltaX;
+                    seg.controlPoint2.y += deltaY;
+                }
+            }
+        }
+        if (trunk?.contactCone?.pos) {
+            trunk.contactCone.pos.x += deltaX;
+            trunk.contactCone.pos.y += deltaY;
+        }
+    }
+
+    for (const branch of importData.branches || []) {
+        for (const seg of branch?.segments || []) {
+            shiftJoint(seg?.bottomJoint);
+            shiftJoint(seg?.topJoint);
+            if (seg?.type === 'bezier') {
+                if (seg.controlPoint1) {
+                    seg.controlPoint1.x += deltaX;
+                    seg.controlPoint1.y += deltaY;
+                }
+                if (seg.controlPoint2) {
+                    seg.controlPoint2.x += deltaX;
+                    seg.controlPoint2.y += deltaY;
+                }
+            }
+        }
+        if (branch?.contactCone?.pos) {
+            branch.contactCone.pos.x += deltaX;
+            branch.contactCone.pos.y += deltaY;
+        }
+    }
+
+    for (const leaf of importData.leaves || []) {
+        if (leaf?.contactCone?.pos) {
+            leaf.contactCone.pos.x += deltaX;
+            leaf.contactCone.pos.y += deltaY;
+        }
+    }
+
+    for (const twig of importData.twigs || []) {
+        for (const seg of twig?.segments || []) {
+            shiftJoint(seg?.bottomJoint);
+            shiftJoint(seg?.topJoint);
+            if (seg?.type === 'bezier') {
+                if (seg.controlPoint1) {
+                    seg.controlPoint1.x += deltaX;
+                    seg.controlPoint1.y += deltaY;
+                }
+                if (seg.controlPoint2) {
+                    seg.controlPoint2.x += deltaX;
+                    seg.controlPoint2.y += deltaY;
+                }
+            }
+        }
+        if (twig?.contactDiskA?.pos) {
+            twig.contactDiskA.pos.x += deltaX;
+            twig.contactDiskA.pos.y += deltaY;
+        }
+        if (twig?.contactDiskB?.pos) {
+            twig.contactDiskB.pos.x += deltaX;
+            twig.contactDiskB.pos.y += deltaY;
+        }
+    }
+
+    for (const stick of importData.sticks || []) {
+        for (const seg of stick?.segments || []) {
+            shiftJoint(seg?.bottomJoint);
+            shiftJoint(seg?.topJoint);
+            if (seg?.type === 'bezier') {
+                if (seg.controlPoint1) {
+                    seg.controlPoint1.x += deltaX;
+                    seg.controlPoint1.y += deltaY;
+                }
+                if (seg.controlPoint2) {
+                    seg.controlPoint2.x += deltaX;
+                    seg.controlPoint2.y += deltaY;
+                }
+            }
+        }
+        if (stick?.contactConeA?.pos) {
+            stick.contactConeA.pos.x += deltaX;
+            stick.contactConeA.pos.y += deltaY;
+        }
+        if (stick?.contactConeB?.pos) {
+            stick.contactConeB.pos.x += deltaX;
+            stick.contactConeB.pos.y += deltaY;
+        }
+    }
+
+    for (const knot of importData.knots || []) {
+        if (knot?.pos) {
+            knot.pos.x += deltaX;
+            knot.pos.y += deltaY;
+        }
+    }
+}
+
+type LysImportOptions = {
+    importCenterXY?: { x: number; y: number } | THREE.Vector2 | null;
+};
+
 export function useLysImport() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -97,9 +231,16 @@ export function useLysImport() {
     // We don't store geometry in state here long-term, 
     // we return it to the caller (useSceneManager) to handle.
 
-    const importFile = useCallback(async (file: File) => {
+    const importFile = useCallback(async (file: File, options?: LysImportOptions) => {
         setIsLoading(true);
         setError(null);
+
+        const importCenterX = Number.isFinite(options?.importCenterXY?.x)
+            ? Number((options!.importCenterXY as any).x)
+            : 0;
+        const importCenterY = Number.isFinite(options?.importCenterXY?.y)
+            ? Number((options!.importCenterXY as any).y)
+            : 0;
 
         try {
             console.log("[useLysImport] Starting LYS Import...");
@@ -110,7 +251,8 @@ export function useLysImport() {
             console.log("[useLysImport] Converting Scene Data...");
             const settings = createDefaultSettings();
             let dragonfruitData = null;
-            const importedModelId = crypto.randomUUID();
+            const importedModelId = generateImportId();
+            let resolvedModelZ: number | null = null;
             let lycheeTransform = {
                 position: new THREE.Vector3(0, 0, 0),
                 rotation: new THREE.Euler(0, 0, 0),
@@ -191,9 +333,7 @@ export function useLysImport() {
                     const bbox = data.geometry.boundingBox;
                     if (bbox) {
                         const geomCenter = bbox.getCenter(new THREE.Vector3());
-                        const centeredBounds = bbox.clone().translate(new THREE.Vector3(-geomCenter.x, -geomCenter.y, -geomCenter.z));
-
-                        const localTransform = new THREE.Matrix4().compose(
+                        const rotationScale = new THREE.Matrix4().compose(
                             new THREE.Vector3(0, 0, 0),
                             new THREE.Quaternion().setFromEuler(new THREE.Euler(
                                 (rot.x || 0) * deg2rad,
@@ -203,11 +343,13 @@ export function useLysImport() {
                             )),
                             new THREE.Vector3(scale.x || 1, scale.y || 1, scale.z || 1)
                         );
-
-                        centeredBounds.applyMatrix4(localTransform);
+                        const centerOffset = new THREE.Matrix4().makeTranslation(-geomCenter.x, -geomCenter.y, -geomCenter.z);
+                        const localTransform = rotationScale.clone().multiply(centerOffset);
 
                         const lycheeLiftZ = Number.isFinite(position.z) ? position.z : 0;
-                        const finalModelZ = lycheeLiftZ - centeredBounds.min.z;
+                        const transformedMinZ = computeLowestZ(data.geometry, localTransform);
+                        const finalModelZ = lycheeLiftZ - transformedMinZ;
+                        resolvedModelZ = finalModelZ;
                         const supportDeltaZ = finalModelZ - lycheeLiftZ;
 
                         if (Number.isFinite(supportDeltaZ) && Math.abs(supportDeltaZ) > 1e-6) {
@@ -221,6 +363,11 @@ export function useLysImport() {
 
                 if (dragonfruitData) {
                     LysConverter.reassignModelId(dragonfruitData, importedModelId);
+
+                    if (Math.abs(importCenterX) > 1e-6 || Math.abs(importCenterY) > 1e-6) {
+                        // Canonical XY shift (includes roots, braces, support braces, joints, knots, etc.)
+                        LysConverter.applyWorldXYPlacement(dragonfruitData, importCenterX, importCenterY);
+                    }
                 }
 
                 if (ghostMaterial) {
@@ -241,8 +388,12 @@ export function useLysImport() {
                     // }
 
                     if (targetObj.position) {
-                        lycheeTransform.position.set(targetObj.position.x, targetObj.position.y, targetObj.position.z);
+                        const finalModelZ = Number.isFinite(resolvedModelZ) ? (resolvedModelZ as number) : targetObj.position.z;
+                        lycheeTransform.position.set(targetObj.position.x + importCenterX, targetObj.position.y + importCenterY, finalModelZ);
                         console.log(`[useLysImport] Extracted Position: ${targetObj.position.x}, ${targetObj.position.y}, ${targetObj.position.z}`);
+                        if (Number.isFinite(resolvedModelZ)) {
+                            console.log(`[useLysImport] Resolved model Z from transformed min-z + Lychee lift: ${finalModelZ}`);
+                        }
                     }
                     if (targetObj.rotation) {
                         const normalizedRotation = normalizeLycheeRotation(targetObj.rotation);

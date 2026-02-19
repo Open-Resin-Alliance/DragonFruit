@@ -99,9 +99,12 @@ export function ShaftRenderer({
     const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
     
     const handleClick = (e: any) => {
+        const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
+        const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
+
         // If Alt is held, this click is intended for placement tools (Brace/Branch/etc.).
         // Stop propagation so it does not fall through to the canvas/model click handlers.
-        if (e?.nativeEvent?.altKey || e?.altKey) {
+        if (altDown || ctrlDown) {
             e.stopPropagation();
             if (e.nativeEvent) {
                 e.nativeEvent.stopPropagation();
@@ -117,6 +120,9 @@ export function ShaftRenderer({
                 intersection: e
             }
         }));
+
+        // Ctrl is reserved for Support Brace placement and should not re-select segments.
+        if (ctrlDown) return;
 
         if (isParentSelected && onClick) {
             e.stopPropagation();
@@ -169,7 +175,7 @@ export function ShaftRenderer({
             onPointerOut={handlePointerOut}
         >
             <mesh raycast={raycast}>
-                <cylinderGeometry args={[radiusEnd, radiusStart, 1, 8]} />
+                <cylinderGeometry args={[radiusEnd, radiusStart, 1, 32]} />
                 <meshStandardMaterial 
                     color={finalColor} 
                     emissive={finalEmissive} 

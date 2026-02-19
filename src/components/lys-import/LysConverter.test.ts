@@ -107,6 +107,145 @@ describe('LysConverter', () => {
         assert.ok(hostedByKnownSegment, 'Imported knot.parentShaftId should match a real segment ID for editability');
     });
 
+    it('should treat explicit single-parent parentBaseId hints as parent-side host preferences without flipping child endpoints', () => {
+        const BASE_SIDE_HINT_DATA = {
+            objects: {
+                present: {
+                    byId: {
+                        o1: {
+                            id: 'o1',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        s_root: {
+                            id: 's_root',
+                            type: 1,
+                            mini: false,
+                            base: { x: 0, y: 0, z: 0 },
+                            tip: { x: 0, y: 0, z: 20 },
+                            parentId: [],
+                            parentBaseId: null,
+                            parentTipId: null,
+                            objectIdTip: 'o1',
+                            objectIdBase: 'o1',
+                            settings: {
+                                base: { joinDiameter: 1.0 },
+                                tip: { diameter: 0.8, length: 2.0 },
+                            },
+                        },
+                        s_branch_flip: {
+                            id: 's_branch_flip',
+                            type: 1,
+                            mini: false,
+                            isBaseTip: true,
+                            // isBaseTip should not flip branch endpoint roles for explicit single-parent hints.
+                            // base remains the attach-side candidate; tip remains the model-contact side.
+                            base: { x: 0.2, y: 0, z: 2 },
+                            tip: { x: 6, y: 0, z: 14 },
+                            parentId: [],
+                            parentBaseId: 's_root',
+                            parentTipId: null,
+                            objectIdTip: 'o1',
+                            objectIdBase: 'o1',
+                            settings: {
+                                base: { joinDiameter: 0.7 },
+                                tip: { diameter: 0.6, length: 2.0 },
+                            },
+                        }
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(BASE_SIDE_HINT_DATA as any, createDefaultSettings());
+        assert.strictEqual(result.branches.length, 1, 'Expected one branch from single-parent support');
+
+        const branch = result.branches[0];
+        const knot = result.knots.find(k => k.id === branch.parentKnotId);
+        assert.ok(knot, 'Expected branch parent knot to exist');
+        assert.ok(branch.contactCone, 'Expected branch to include contact cone');
+
+        assert.ok((knot!.t ?? -1) <= 0.05, 'parentBaseId hint should bias knot projection near host base side (t≈0)');
+        assert.ok(Math.abs(branch.contactCone!.pos.x - 6) < 1e-6, 'Branch tip should remain sourced from Lychee tip endpoint');
+        assert.ok(Math.abs(branch.contactCone!.pos.z - 14) < 1e-6, 'Branch tip Z should remain sourced from Lychee tip endpoint');
+
+        const hostedByTrunk = result.trunks.some(t => t.segments.some(seg => seg.id === knot!.parentShaftId));
+        assert.ok(hostedByTrunk, 'Hinted knot should remain attached to a real trunk segment');
+    });
+
+    it('should convert grounded single-parent supports with explicit parent hint into support braces', () => {
+        const SUPPORT_BRACE_DATA = {
+            objects: {
+                present: {
+                    byId: {
+                        o1: {
+                            id: 'o1',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        s_root: {
+                            id: 's_root',
+                            type: 1,
+                            base: { x: 0, y: 0, z: 0 },
+                            tip: { x: 0, y: 0, z: 20 },
+                            parentId: [],
+                            objectIdTip: 'o1',
+                            objectIdBase: 'o1',
+                            settings: {
+                                base: { joinDiameter: 1.0 },
+                                tip: { diameter: 0.8, length: 2.0 },
+                            },
+                        },
+                        s_support_brace: {
+                            id: 's_support_brace',
+                            type: 1,
+                            mini: false,
+                            base: { x: 6, y: 0, z: 0 },
+                            tip: { x: 0, y: 0, z: 5 },
+                            parentId: [],
+                            parentBaseId: null,
+                            parentTipId: 's_root',
+                            objectIdTip: 'o1',
+                            objectIdBase: 'o1',
+                            settings: {
+                                base: { joinDiameter: 1.0 },
+                                tip: { diameter: 0.7, length: 2.0 },
+                            },
+                        },
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(SUPPORT_BRACE_DATA as any, createDefaultSettings());
+
+        assert.strictEqual(result.trunks.length, 1, 'Expected one root trunk host');
+        assert.strictEqual(result.branches.length, 0, 'Support brace candidate should not import as branch');
+        assert.strictEqual(result.leaves.length, 0, 'Support brace candidate should not import as leaf');
+        assert.strictEqual(result.supportBraces?.length ?? 0, 1, 'Expected one imported support brace build');
+
+        const build = result.supportBraces![0];
+        assert.ok(build.supportBrace.segments.length >= 1, 'Support brace should include generated segments');
+        assert.strictEqual(build.hostKnot.parentShaftId.length > 0, true, 'Support brace host knot should target a host segment id');
+        assert.strictEqual(Math.abs(build.root.transform.pos.z) < 1e-6, true, 'Support brace root should remain grounded on plate');
+    });
+
     it('should correctly convert Braces (Type 0)', () => {
         const result = LysConverter.convert(MOCK_LYCHEE_DATA, createDefaultSettings());
 

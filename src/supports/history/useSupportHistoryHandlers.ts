@@ -15,6 +15,8 @@ import {
   SUPPORT_REMOVE_BRACE,
   SUPPORT_UPDATE_TRUNK,
   SUPPORT_UPDATE_BRANCH,
+  SUPPORT_ADD_SUPPORT_BRACE,
+  SUPPORT_REMOVE_SUPPORT_BRACE,
   SUPPORT_REPLACE_TRUNK,
   SupportLeafPayload,
   SupportBranchPayload,
@@ -26,8 +28,10 @@ import {
   SupportTrunkUpdatePayload,
   SupportBranchUpdatePayload,
   SupportReplaceTrunkPayload,
+  SupportSupportBracePayload,
 } from './actionTypes';
-import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
+import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKnotById, removeRootById, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
+import { addSupportBrace, removeSupportBrace } from '../SupportTypes/SupportBrace/supportBraceStore';
 
 export function useSupportHistoryHandlers() {
   useEffect(() => {
@@ -118,6 +122,11 @@ export function useSupportHistoryHandlers() {
           for (const knot of payload.knots ?? []) addKnot(knot);
           for (const leaf of payload.leaves ?? []) addLeaf(leaf);
           for (const brace of payload.braces ?? []) addBrace(brace);
+          for (const supportBrace of payload.supportBraces ?? []) {
+            addSupportBrace(supportBrace);
+            addRoot(supportBrace.root);
+            addKnot(supportBrace.hostKnot);
+          }
           for (const branch of payload.branches ?? []) addBranch(branch);
         } else {
           removeTrunk(payload.trunk.id);
@@ -142,6 +151,11 @@ export function useSupportHistoryHandlers() {
           for (const knot of payload.knots ?? []) addKnot(knot);
           for (const leaf of payload.leaves ?? []) addLeaf(leaf);
           for (const brace of payload.braces ?? []) addBrace(brace);
+          for (const supportBrace of payload.supportBraces ?? []) {
+            addSupportBrace(supportBrace);
+            addRoot(supportBrace.root);
+            addKnot(supportBrace.hostKnot);
+          }
           for (const branch of payload.branches ?? []) addBranch(branch);
           for (const u of payload.knotUpdates ?? []) {
             updateKnot(u.before);
@@ -190,6 +204,34 @@ export function useSupportHistoryHandlers() {
           addBrace(payload.brace);
         } else {
           removeBrace(payload.brace.id);
+        }
+        return true;
+      }),
+      registerHistoryHandler(SUPPORT_ADD_SUPPORT_BRACE, (action, direction) => {
+        const payload = action.payload as SupportSupportBracePayload | undefined;
+        if (!payload?.build) return false;
+        if (direction === 'undo') {
+          removeSupportBrace(payload.build.supportBrace.id);
+          removeRootById(payload.build.root.id);
+          removeKnotById(payload.build.hostKnot.id);
+        } else {
+          addSupportBrace(payload.build);
+          addRoot(payload.build.root);
+          addKnot(payload.build.hostKnot);
+        }
+        return true;
+      }),
+      registerHistoryHandler(SUPPORT_REMOVE_SUPPORT_BRACE, (action, direction) => {
+        const payload = action.payload as SupportSupportBracePayload | undefined;
+        if (!payload?.build) return false;
+        if (direction === 'undo') {
+          addSupportBrace(payload.build);
+          addRoot(payload.build.root);
+          addKnot(payload.build.hostKnot);
+        } else {
+          removeSupportBrace(payload.build.supportBrace.id);
+          removeRootById(payload.build.root.id);
+          removeKnotById(payload.build.hostKnot.id);
         }
         return true;
       }),

@@ -123,9 +123,10 @@ export function KnotRenderer({
         document.body.style.cursor = '';
     };
 
-    // Only use expanded hitbox when parent is selected (editable mode)
-    // Otherwise, use the visual radius so it doesn't block support hover
-    const hitboxRadius = isParentSelected ? radius * 2.0 : radius;
+    // Hide entirely when parent is not selected — eliminates all sphere geometry from render
+    if (!isParentSelected) return null;
+
+    const hitboxRadius = radius * 2.0;
 
     return (
         <group
@@ -136,11 +137,11 @@ export function KnotRenderer({
             onPointerLeave={handlePointerLeave}
         >
             <mesh raycast={raycast}>
-                <sphereGeometry args={[hitboxRadius, 16, 16]} />
+                <sphereGeometry args={[hitboxRadius, 8, 8]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
             <mesh raycast={raycast}>
-                <sphereGeometry args={[radius, 16, 16]} />
+                <sphereGeometry args={[radius, 8, 8]} />
                 <meshStandardMaterial
                     color={displayColor}
                     emissive={displayEmissive}

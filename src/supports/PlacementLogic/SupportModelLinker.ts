@@ -1,5 +1,6 @@
 import type { SupportState } from '../types';
-import { removeTrunk } from '../state';
+import { removeBranch, removeBrace, removeLeaf, removeStick, removeTrunk, removeTwig } from '../state';
+import { getSupportBraceSnapshot, removeSupportBrace } from '../SupportTypes/SupportBrace/supportBraceStore';
 
 /**
  * SupportModelLinker
@@ -17,6 +18,9 @@ interface ModelSupportIds {
     trunks: string[];
     branches: string[];
     braces: string[];
+    leaves: string[];
+    twigs: string[];
+    sticks: string[];
 }
 
 /**
@@ -27,7 +31,10 @@ export function getSupportsForModel(state: SupportState, modelId: string): Model
         roots: [],
         trunks: [],
         branches: [],
-        braces: []
+        braces: [],
+        leaves: [],
+        twigs: [],
+        sticks: [],
     };
 
     // Scan Roots
@@ -58,6 +65,27 @@ export function getSupportsForModel(state: SupportState, modelId: string): Model
         }
     }
 
+    // Scan Leaves
+    for (const [id, leaf] of Object.entries(state.leaves)) {
+        if (leaf.modelId === modelId) {
+            result.leaves.push(id);
+        }
+    }
+
+    // Scan Twigs
+    for (const [id, twig] of Object.entries(state.twigs)) {
+        if (twig.modelId === modelId) {
+            result.twigs.push(id);
+        }
+    }
+
+    // Scan Sticks
+    for (const [id, stick] of Object.entries(state.sticks)) {
+        if (stick.modelId === modelId) {
+            result.sticks.push(id);
+        }
+    }
+
     return result;
 }
 
@@ -68,7 +96,7 @@ export function getSupportsForModel(state: SupportState, modelId: string): Model
  * Ideally, this should generate a payload for a single atomic "REMOVE_MODEL_SUPPORTS" action,
  * but for now, we will iterate and call existing remove functions to reuse their cleanup logic (like clearing selection).
  * 
- * @returns Number of top-level supports (Trunks) removed.
+ * @returns Number of support entities removed.
  */
 export function deleteSupportsForModel(state: SupportState, modelId: string): number {
     const ids = getSupportsForModel(state, modelId);
@@ -82,10 +110,41 @@ export function deleteSupportsForModel(state: SupportState, modelId: string): nu
         if (result) removedCount++;
     });
 
-    // TODO: Implement removeBranch() and removeBrace() when those features are active.
-    // For now, we just log if we found others that we can't delete yet.
-    if (ids.branches.length > 0 || ids.braces.length > 0) {
-        console.warn(`[SupportModelLinker] Found ${ids.branches.length} branches and ${ids.braces.length} braces for model ${modelId}, but deletion is not yet implemented for these types.`);
+    // Remove any branches that were not already removed by trunk/branch cascades.
+    ids.branches.forEach((branchId) => {
+        const result = removeBranch(branchId);
+        if (result) removedCount++;
+    });
+
+    // Remove any braces that remain after branch/trunk cascades.
+    ids.braces.forEach((braceId) => {
+        const result = removeBrace(braceId);
+        if (result) removedCount++;
+    });
+
+    // Remove remaining leaf-only entities.
+    ids.leaves.forEach((leafId) => {
+        const result = removeLeaf(leafId);
+        if (result) removedCount++;
+    });
+
+    // Remove mesh-to-mesh supports owned by the model.
+    ids.twigs.forEach((twigId) => {
+        const result = removeTwig(twigId);
+        if (result) removedCount++;
+    });
+
+    ids.sticks.forEach((stickId) => {
+        const result = removeStick(stickId);
+        if (result) removedCount++;
+    });
+
+    // Remove any support braces owned by this model that remain in the local support-brace store.
+    const supportBraceSnapshot = getSupportBraceSnapshot();
+    for (const supportBrace of Object.values(supportBraceSnapshot.supportBraces)) {
+        if (supportBrace.modelId !== modelId) continue;
+        const removed = removeSupportBrace(supportBrace.id);
+        if (removed) removedCount++;
     }
 
     return removedCount;
