@@ -16,7 +16,7 @@ import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
-import { ArrangePanel, type ArrangeAnchorMode } from '@/components/controls/ArrangePanel';
+import { ArrangePanel, type ArrangeAnchorMode, type ArrangeLayoutMode } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
@@ -82,7 +82,14 @@ export default function Home() {
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(5);
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
+  const [arrangeLayoutMode, setArrangeLayoutMode] = React.useState<ArrangeLayoutMode>('auto');
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
+  const [arrangeArrayCountX, setArrangeArrayCountX] = React.useState(3);
+  const [arrangeArrayCountY, setArrangeArrayCountY] = React.useState(2);
+  const [arrangeArrayCountZ, setArrangeArrayCountZ] = React.useState(1);
+  const [arrangeArrayGapX, setArrangeArrayGapX] = React.useState(5);
+  const [arrangeArrayGapY, setArrangeArrayGapY] = React.useState(5);
+  const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(5);
@@ -98,6 +105,14 @@ export default function Home() {
     position: THREE.Vector3;
     rotation: THREE.Euler;
     scale: THREE.Vector3;
+  }>>([]);
+  const [arrangeArrayPreviewItems, setArrangeArrayPreviewItems] = React.useState<Array<{
+    model: (typeof scene.models)[number];
+    transform: {
+      position: THREE.Vector3;
+      rotation: THREE.Euler;
+      scale: THREE.Vector3;
+    };
   }>>([]);
   const [duplicateSourcePreviewTransform, setDuplicateSourcePreviewTransform] = React.useState<{
     position: THREE.Vector3;
@@ -833,6 +848,191 @@ export default function Home() {
     }
   }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
 
+  const computeManualArrayArrangeUpdates = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
+    const visibleModels = scene.models.filter((m) => {
+      if (!m.visible) return false;
+      if (scope === 'selected') return selectedIdSet.has(m.id);
+      return true;
+    });
+
+    if (visibleModels.length <= 1) return { models: visibleModels, updates: [] as Array<{ id: string; transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } }> };
+
+    const countX = Math.max(1, Math.round(arrangeArrayCountX));
+    const countY = Math.max(1, Math.round(arrangeArrayCountY));
+    const countZ = Math.max(1, Math.round(arrangeArrayCountZ));
+
+    const gapX = Math.max(0, arrangeArrayGapX);
+    const gapY = Math.max(0, arrangeArrayGapY);
+    const gapZ = Math.max(0, arrangeArrayGapZ);
+
+    const baseDims = visibleModels.map((model) => {
+      const size = model.geometry.size;
+      const scaledWidth = Math.max(2, Math.abs(size.x * model.transform.scale.x));
+      const scaledDepth = Math.max(2, Math.abs(size.y * model.transform.scale.y));
+      const scaledHeight = Math.max(2, Math.abs(size.z * model.transform.scale.z));
+      const rz = model.transform.rotation.z;
+      const c = Math.abs(Math.cos(rz));
+      const s = Math.abs(Math.sin(rz));
+
+      return {
+        width: (scaledWidth * c) + (scaledDepth * s),
+        depth: (scaledWidth * s) + (scaledDepth * c),
+        height: scaledHeight,
+      };
+    });
+
+    const maxWidth = Math.max(...baseDims.map((d) => d.width));
+    const maxDepth = Math.max(...baseDims.map((d) => d.depth));
+    const maxHeight = Math.max(...baseDims.map((d) => d.height));
+
+    const stepX = maxWidth + gapX;
+    const stepY = maxDepth + gapY;
+    const stepZ = maxHeight + gapZ;
+
+    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const maxX = minX + scene.view3dSettings.widthMm;
+    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const maxY = minY + scene.view3dSettings.depthMm;
+
+    const slotsPerLayer = countX * countY;
+    const requiredLayers = Math.max(1, Math.ceil(visibleModels.length / slotsPerLayer));
+    const usedCountZ = Math.max(countZ, requiredLayers);
+
+    const totalWidth = (countX - 1) * stepX;
+    const totalDepth = (countY - 1) * stepY;
+
+    let startX = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0) - (totalWidth * 0.5);
+    let startY = (scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0) - (totalDepth * 0.5);
+
+    if (arrangeAnchorMode === 'front_left') {
+      startX = minX + (maxWidth * 0.5);
+      startY = minY + (maxDepth * 0.5);
+    } else if (arrangeAnchorMode === 'front_right') {
+      startX = maxX - (maxWidth * 0.5) - totalWidth;
+      startY = minY + (maxDepth * 0.5);
+    } else if (arrangeAnchorMode === 'back_left') {
+      startX = minX + (maxWidth * 0.5);
+      startY = maxY - (maxDepth * 0.5) - totalDepth;
+    } else if (arrangeAnchorMode === 'back_right') {
+      startX = maxX - (maxWidth * 0.5) - totalWidth;
+      startY = maxY - (maxDepth * 0.5) - totalDepth;
+    }
+
+    const baseZ = Math.min(...visibleModels.map((model) => model.transform.position.z));
+
+    const updates = visibleModels.map((model, index) => {
+      const xIndex = index % countX;
+      const yIndex = Math.floor(index / countX) % countY;
+      const zIndex = Math.floor(index / (countX * countY)) % usedCountZ;
+
+      return {
+        id: model.id,
+        transform: {
+          position: new THREE.Vector3(
+            startX + (xIndex * stepX),
+            startY + (yIndex * stepY),
+            baseZ + (zIndex * stepZ),
+          ),
+          rotation: model.transform.rotation.clone(),
+          scale: model.transform.scale.clone(),
+        },
+      };
+    });
+
+    return { models: visibleModels, updates };
+  }, [
+    arrangeAnchorMode,
+    arrangeArrayCountX,
+    arrangeArrayCountY,
+    arrangeArrayCountZ,
+    arrangeArrayGapX,
+    arrangeArrayGapY,
+    arrangeArrayGapZ,
+    scene.models,
+    scene.selectedModelIds,
+    scene.view3dSettings.depthMm,
+    scene.view3dSettings.originMode,
+    scene.view3dSettings.widthMm,
+  ]);
+
+  const handleManualArrayArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+    if (isAutoArranging) return;
+
+    const minSpinnerMs = 220;
+    const startedAt = performance.now();
+    setIsAutoArranging(true);
+    await sleep(0);
+
+    try {
+      const { updates } = computeManualArrayArrangeUpdates(scope, explicitSelectedIds);
+      if (updates.length <= 1) return;
+
+      scene.updateModelTransforms(updates);
+      transformMgr.setTransformMode('select');
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < minSpinnerMs) {
+        await sleep(minSpinnerMs - elapsed);
+      }
+      setIsAutoArranging(false);
+    }
+  }, [
+    arrangeAnchorMode,
+    arrangeArrayCountX,
+    arrangeArrayCountY,
+    arrangeArrayCountZ,
+    arrangeArrayGapX,
+    arrangeArrayGapY,
+    arrangeArrayGapZ,
+    computeManualArrayArrangeUpdates,
+    isAutoArranging,
+    scene,
+    sleep,
+    transformMgr,
+  ]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange' || arrangeLayoutMode !== 'array') {
+      setArrangeArrayPreviewItems([]);
+      return;
+    }
+
+    const selectedVisibleCount = scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length;
+    const previewScope: 'all' | 'selected' = selectedVisibleCount > 1 ? 'selected' : 'all';
+    const { models: previewModels, updates } = computeManualArrayArrangeUpdates(previewScope);
+
+    if (updates.length <= 1 || previewModels.length <= 1) {
+      setArrangeArrayPreviewItems([]);
+      return;
+    }
+
+    const updateMap = new Map(updates.map((update) => [update.id, update.transform]));
+    const previewItems = previewModels
+      .map((model) => {
+        const previewTransform = updateMap.get(model.id);
+        if (!previewTransform) return null;
+        return {
+          model,
+          transform: {
+            position: previewTransform.position.clone(),
+            rotation: previewTransform.rotation.clone(),
+            scale: previewTransform.scale.clone(),
+          },
+        };
+      })
+      .filter((item): item is { model: (typeof scene.models)[number]; transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } } => item !== null);
+
+    setArrangeArrayPreviewItems(previewItems);
+  }, [
+    arrangeLayoutMode,
+    computeManualArrayArrangeUpdates,
+    scene.mode,
+    scene.models,
+    scene.selectedModelIds,
+    transformMgr.transformMode,
+  ]);
+
   const computeArrangeSlots = React.useCallback((count: number, stepX: number, stepY: number) => {
     const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
     const rows = Math.ceil(count / columns);
@@ -857,7 +1057,9 @@ export default function Home() {
     transformMode: transformMgr.transformMode,
     setTransformMode: transformMgr.setTransformMode,
     onArrangeAll: () => {
-      void handleAutoArrangeModels('all');
+      void (arrangeLayoutMode === 'array'
+        ? handleManualArrayArrangeModels('all')
+        : handleAutoArrangeModels('all'));
     },
   });
 
@@ -1649,17 +1851,35 @@ export default function Home() {
             {scene.geom && transformMgr.transformMode === 'arrange' && (
               <ArrangePanel
                 key="prepare-arrange-panel"
+                layoutMode={arrangeLayoutMode}
+                onLayoutModeChange={setArrangeLayoutMode}
                 spacingMm={arrangeSpacingMm}
                 onSpacingMmChange={setArrangeSpacingMm}
                 allowRotateOnZ={arrangeAllowRotateOnZ}
                 onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
+                arrayCountX={arrangeArrayCountX}
+                arrayCountY={arrangeArrayCountY}
+                arrayCountZ={arrangeArrayCountZ}
+                onArrayCountXChange={setArrangeArrayCountX}
+                onArrayCountYChange={setArrangeArrayCountY}
+                onArrayCountZChange={setArrangeArrayCountZ}
+                arrayGapX={arrangeArrayGapX}
+                arrayGapY={arrangeArrayGapY}
+                arrayGapZ={arrangeArrayGapZ}
+                onArrayGapXChange={setArrangeArrayGapX}
+                onArrayGapYChange={setArrangeArrayGapY}
+                onArrayGapZChange={setArrangeArrayGapZ}
                 anchorMode={arrangeAnchorMode}
                 onAnchorModeChange={setArrangeAnchorMode}
                 onApplyAll={() => {
-                  void handleAutoArrangeModels('all');
+                  void (arrangeLayoutMode === 'array'
+                    ? handleManualArrayArrangeModels('all')
+                    : handleAutoArrangeModels('all'));
                 }}
                 onApplySelected={() => {
-                  void handleAutoArrangeModels('selected');
+                  void (arrangeLayoutMode === 'array'
+                    ? handleManualArrayArrangeModels('selected')
+                    : handleAutoArrangeModels('selected'));
                 }}
                 modelCount={scene.models.filter((m) => m.visible).length}
                 selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
@@ -1974,6 +2194,7 @@ export default function Home() {
                 ? duplicateApplySourceTransform
                 : duplicateSourcePreviewTransform
             }
+            arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
           >
