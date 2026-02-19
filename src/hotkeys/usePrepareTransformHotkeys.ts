@@ -6,7 +6,9 @@ import { matchesConfiguredHotkeyDown } from './hotkeyConfig';
 type UsePrepareTransformHotkeysParams = {
   appMode: 'prepare' | 'analysis' | 'support' | 'export';
   hasModels: boolean;
+  transformMode: TransformMode;
   setTransformMode: (mode: TransformMode) => void;
+  onArrangeAll: () => void;
 };
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -22,7 +24,9 @@ function isEditableElement(target: EventTarget | null): boolean {
 export function usePrepareTransformHotkeys({
   appMode,
   hasModels,
+  transformMode,
   setTransformMode,
+  onArrangeAll,
 }: UsePrepareTransformHotkeysParams) {
   const { getHotkey } = useHotkeyConfig();
   const selectKey = getHotkey('CANVAS', 'TOOL_SELECT');
@@ -58,7 +62,11 @@ export function usePrepareTransformHotkeys({
 
       if (matchesConfiguredHotkeyDown(event, { key: arrangeKey.key, modifier: arrangeKey.modifier })) {
         event.preventDefault();
-        setTransformMode('arrange');
+        if (transformMode === 'arrange') {
+          onArrangeAll();
+        } else {
+          setTransformMode('arrange');
+        }
         return;
       }
 
@@ -73,7 +81,9 @@ export function usePrepareTransformHotkeys({
   }, [
     appMode,
     hasModels,
+    transformMode,
     setTransformMode,
+    onArrangeAll,
     selectKey,
     modifyKey,
     smoothKey,

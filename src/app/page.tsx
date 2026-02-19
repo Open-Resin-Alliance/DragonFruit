@@ -839,7 +839,11 @@ export default function Home() {
   usePrepareTransformHotkeys({
     appMode: scene.mode,
     hasModels: scene.models.length > 0,
+    transformMode: transformMgr.transformMode,
     setTransformMode: transformMgr.setTransformMode,
+    onArrangeAll: () => {
+      void handleAutoArrangeModels('all');
+    },
   });
 
   // Auto-set cross-section mode based on app mode
