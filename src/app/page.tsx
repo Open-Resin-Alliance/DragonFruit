@@ -541,6 +541,8 @@ export default function Home() {
         onHoverTintStrengthChange={scene.setHoverTintStrength}
         selectedTintStrength={scene.selectedTintStrength}
         onSelectedTintStrengthChange={scene.setSelectedTintStrength}
+        selectionHighlightMode={scene.selectionHighlightMode}
+        onSelectionHighlightModeChange={scene.setSelectionHighlightMode}
         debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
         onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
         mode={scene.mode}
@@ -794,11 +796,6 @@ export default function Home() {
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
             crossSectionMode={slicing.crossSectionMode}
-            selectionHighlightMode={scene.selectionHighlightMode}
-            onSelectionHighlightModeChange={scene.setSelectionHighlightMode}
-            layerHeightMicron={slicing.layerHeightMicron}
-            onLayerHeightMicronChange={slicing.setLayerHeightMicron}
-            layerHeightMm={slicing.layerHeightMm}
           />
         )}
       </FloatingPanelStack>

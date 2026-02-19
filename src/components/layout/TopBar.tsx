@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { SettingsModal } from '@/components/settings/SettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
+import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
 import {
   applyThemeCustomColors,
@@ -34,6 +35,8 @@ interface TopBarProps {
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
+  selectionHighlightMode: SelectionHighlightMode;
+  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   // New: global application mode (prepare vs support)
@@ -65,6 +68,8 @@ export function TopBar({
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
+  selectionHighlightMode,
+  onSelectionHighlightModeChange,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
   mode,
@@ -215,6 +220,8 @@ export function TopBar({
         onHoverTintStrengthChange={onHoverTintStrengthChange}
         selectedTintStrength={selectedTintStrength}
         onSelectedTintStrengthChange={onSelectedTintStrengthChange}
+        selectionHighlightMode={selectionHighlightMode}
+        onSelectionHighlightModeChange={onSelectionHighlightModeChange}
         debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
       />

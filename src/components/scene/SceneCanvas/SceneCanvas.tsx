@@ -840,7 +840,7 @@ export function SceneCanvas({
                       isSelected={
                         isActive &&
                         (
-                          (isModelSelected && mode === 'prepare' && selectionHighlightMode === 'tint') ||
+                          (isModelSelected && mode === 'prepare' && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')) ||
                           mode === 'support'
                         )
                       }

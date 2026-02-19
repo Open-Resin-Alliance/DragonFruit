@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { GeneralSettingsTab } from '@/components/settings/GeneralSettingsTab';
+import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
@@ -30,11 +31,18 @@ import {
   normalizeSpaceMouseSettings,
 } from '@/components/settings/spacemousePreferences';
 import {
+  DEFAULT_CAMERA_PROJECTION_SETTINGS,
+  getSavedCameraProjectionSettings,
+  saveCameraProjectionSettings,
+  type CameraProjectionMode,
+} from '@/components/settings/cameraProjectionPreferences';
+import {
   DEFAULT_WORKSPACE_CAMERA_SETTINGS,
   getSavedWorkspaceCameraSettings,
   saveWorkspaceCameraSettings,
   type WorkspaceCameraDefaults,
 } from '@/components/settings/workspaceCameraPreferences';
+import type { SelectionHighlightMode } from '@/components/selection';
 import {
   clearSavedFloatingLayout,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -83,11 +91,13 @@ type SettingsModalProps = {
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
+  selectionHighlightMode: SelectionHighlightMode;
+  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
 };
 
-type SettingsTabKey = 'general' | 'workspaces' | 'mesh' | 'spacemouse' | 'ui' | 'hotkeys' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'spacemouse' | 'ui' | 'hotkeys' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -115,6 +125,8 @@ export function SettingsModal({
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
+  selectionHighlightMode,
+  onSelectionHighlightModeChange,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
 }: SettingsModalProps) {
@@ -131,6 +143,8 @@ export function SettingsModal({
   const [draftXrayOpacity, setDraftXrayOpacity] = useState(xrayOpacity);
   const [draftHoverTintStrength, setDraftHoverTintStrength] = useState(hoverTintStrength);
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
+  const [draftSelectionHighlightMode, setDraftSelectionHighlightMode] = useState(selectionHighlightMode);
+  const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
   const [draftThemeColors, setDraftThemeColors] = useState<ThemeCustomColors>(getSavedThemeCustomColors());
@@ -151,6 +165,8 @@ export function SettingsModal({
     setDraftXrayOpacity(xrayOpacity);
     setDraftHoverTintStrength(hoverTintStrength);
     setDraftSelectedTintStrength(selectedTintStrength);
+    setDraftSelectionHighlightMode(selectionHighlightMode);
+    setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftThemePreference(getSavedThemePreference());
     setDraftThemePreset(getSavedThemePreset());
     setDraftThemeColors(getSavedThemeCustomColors());
@@ -168,6 +184,7 @@ export function SettingsModal({
     meshColor,
     hoverTintStrength,
     selectedTintStrength,
+    selectionHighlightMode,
     debugPrimitivesPanelVisible,
     shaderType,
     xrayOpacity,
@@ -202,6 +219,8 @@ export function SettingsModal({
     setDraftXrayOpacity(DEFAULT_XRAY_OPACITY);
     setDraftHoverTintStrength(DEFAULT_HOVER_TINT_STRENGTH);
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
+    setDraftSelectionHighlightMode('tint');
+    setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftThemePreference('system');
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
@@ -223,12 +242,14 @@ export function SettingsModal({
     onXrayOpacityChange(draftXrayOpacity);
     onHoverTintStrengthChange(draftHoverTintStrength);
     onSelectedTintStrengthChange(draftSelectedTintStrength);
+    onSelectionHighlightModeChange(draftSelectionHighlightMode);
 
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
     setFloatingLayoutPersistenceEnabled(draftFloatingLayoutPersistence);
     setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
+    saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
     saveWorkspaceCameraSettings({ defaults: draftWorkspaceCameraDefaults });
     onDebugPrimitivesPanelVisibleChange(draftDebugPrimitivesPanelVisible);
 
@@ -248,6 +269,7 @@ export function SettingsModal({
     draftMeshColor,
     draftHoverTintStrength,
     draftSelectedTintStrength,
+    draftSelectionHighlightMode,
     draftThemePreset,
     draftShaderType,
     draftToonSteps,
@@ -256,6 +278,7 @@ export function SettingsModal({
     draftFloatingLayoutPersistence,
     draftDebugPrimitivesPanelVisible,
     draftSpaceMouseSettings,
+    draftCameraProjectionMode,
     draftWorkspaceCameraDefaults,
     draftXrayOpacity,
     onAmbientIntensityChange,
@@ -267,6 +290,7 @@ export function SettingsModal({
     onMeshColorChange,
     onHoverTintStrengthChange,
     onSelectedTintStrengthChange,
+    onSelectionHighlightModeChange,
     onDebugPrimitivesPanelVisibleChange,
     onShaderTypeChange,
     onToonStepsChange,
@@ -304,6 +328,12 @@ export function SettingsModal({
     general: {
       label: 'General',
       description: 'Workspace behavior and panel layout',
+      icon: Settings2,
+      tone: 'primary',
+    },
+    camera: {
+      label: 'Camera',
+      description: 'Projection and highlight behavior',
       icon: Settings2,
       tone: 'primary',
     },
@@ -345,7 +375,7 @@ export function SettingsModal({
     },
   };
 
-  const sidebarTopTabs: SettingsTabKey[] = ['general', 'workspaces', 'mesh', 'spacemouse', 'ui', 'hotkeys'];
+  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['about'];
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
@@ -537,6 +567,14 @@ export function SettingsModal({
                   onResetFloatingLayout={handleResetFloatingLayout}
                   debugPrimitivesPanelVisible={draftDebugPrimitivesPanelVisible}
                   onDebugPrimitivesPanelVisibleChange={setDraftDebugPrimitivesPanelVisible}
+                />
+              )}
+              {activeTab === 'camera' && (
+                <CameraSettingsTab
+                  cameraProjectionMode={draftCameraProjectionMode}
+                  onCameraProjectionModeChange={setDraftCameraProjectionMode}
+                  selectionHighlightMode={draftSelectionHighlightMode}
+                  onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                 />
               )}
               {activeTab === 'workspaces' && (

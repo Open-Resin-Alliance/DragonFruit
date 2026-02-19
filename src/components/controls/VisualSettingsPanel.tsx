@@ -1,12 +1,10 @@
 "use client";
 
 import React from 'react';
-import { Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
+import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
-import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighlightDropdown';
 import { LayerSlider } from '@/components/controls/LayerSlider';
 import type { MeshShaderType } from '@/features/shaders/mesh';
-import type { SelectionHighlightMode } from '@/components/selection';
 
 type VisualSettingsPanelProps = {
   shaderOverride: MeshShaderType | null;
@@ -17,11 +15,6 @@ type VisualSettingsPanelProps = {
   currentHeightMm?: number;
   maxHeightMm?: number;
   crossSectionMode: 'smooth' | 'rasterized';
-  selectionHighlightMode: SelectionHighlightMode;
-  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
-  layerHeightMicron: number;
-  onLayerHeightMicronChange: (value: number) => void;
-  layerHeightMm: number;
 };
 
 export function VisualSettingsPanel({
@@ -33,11 +26,6 @@ export function VisualSettingsPanel({
   currentHeightMm,
   maxHeightMm,
   crossSectionMode,
-  selectionHighlightMode,
-  onSelectionHighlightModeChange,
-  layerHeightMicron,
-  onLayerHeightMicronChange,
-  layerHeightMm,
 }: VisualSettingsPanelProps) {
   const [expanded, setExpanded] = React.useState(true);
 
@@ -73,35 +61,9 @@ export function VisualSettingsPanel({
 
       {expanded && (
         <div className="px-2.5 pt-1 pb-2.5 space-y-2 min-h-0 flex-1 flex flex-col">
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Layer Height
-            </div>
-            <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                className="w-[5.5rem]"
-                min={1}
-                step={1}
-                value={layerHeightMicron}
-                onChange={(e) => onLayerHeightMicronChange(parseInt(e.target.value || '0', 10))}
-              />
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>µm</span>
-              <span className="text-xs tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                ({layerHeightMm.toFixed(3)} mm)
-              </span>
-            </div>
-          </div>
-
           <ViewTypeDropdown
             value={shaderOverride}
             onChange={onShaderOverrideChange}
-            fullWidth
-          />
-
-          <SelectionHighlightDropdown
-            value={selectionHighlightMode}
-            onChange={onSelectionHighlightModeChange}
             fullWidth
           />
 
