@@ -367,21 +367,32 @@ function CameraModeEntryFramingController({
 }
 
 function SupportModeCameraRestoreController({
-  captureRunId,
-  restoreRunId,
+  capturePreSupportRunId,
+  restorePreSupportRunId,
+  captureSupportRunId,
+  restoreSupportRunId,
 }: {
-  captureRunId: number;
-  restoreRunId: number;
+  capturePreSupportRunId: number;
+  restorePreSupportRunId: number;
+  captureSupportRunId: number;
+  restoreSupportRunId: number;
 }) {
   const { camera, controls } = useThree();
 
-  const snapshotRef = React.useRef<{
+  const preSupportSnapshotRef = React.useRef<{
     position: THREE.Vector3;
     target: THREE.Vector3;
     zoom: number | null;
   } | null>(null);
-  const capturedRunIdRef = React.useRef(0);
-  const restoredRunIdRef = React.useRef(0);
+  const supportSnapshotRef = React.useRef<{
+    position: THREE.Vector3;
+    target: THREE.Vector3;
+    zoom: number | null;
+  } | null>(null);
+  const capturedPreSupportRunIdRef = React.useRef(0);
+  const restoredPreSupportRunIdRef = React.useRef(0);
+  const capturedSupportRunIdRef = React.useRef(0);
+  const restoredSupportRunIdRef = React.useRef(0);
   const activeRunIdRef = React.useRef<number | null>(null);
   const animatingRef = React.useRef(false);
   const rafRef = React.useRef<number | null>(null);
@@ -395,29 +406,44 @@ function SupportModeCameraRestoreController({
   }, []);
 
   React.useLayoutEffect(() => {
-    if (!captureRunId) return;
-    if (capturedRunIdRef.current === captureRunId) return;
+    if (!capturePreSupportRunId) return;
+    if (capturedPreSupportRunIdRef.current === capturePreSupportRunId) return;
     if (!controls || typeof controls !== 'object' || !('target' in controls)) return;
 
     const orbit = controls as unknown as { target: THREE.Vector3 };
-    snapshotRef.current = {
+    preSupportSnapshotRef.current = {
       position: camera.position.clone(),
       target: orbit.target.clone(),
       zoom: camera instanceof THREE.OrthographicCamera ? camera.zoom : null,
     };
 
-    capturedRunIdRef.current = captureRunId;
-  }, [camera, controls, captureRunId]);
+    capturedPreSupportRunIdRef.current = capturePreSupportRunId;
+  }, [camera, controls, capturePreSupportRunId]);
 
   React.useLayoutEffect(() => {
-    if (!restoreRunId) return;
-    if (restoredRunIdRef.current === restoreRunId) return;
-    if (activeRunIdRef.current === restoreRunId) return;
+    if (!captureSupportRunId) return;
+    if (capturedSupportRunIdRef.current === captureSupportRunId) return;
+    if (!controls || typeof controls !== 'object' || !('target' in controls)) return;
+
+    const orbit = controls as unknown as { target: THREE.Vector3 };
+    supportSnapshotRef.current = {
+      position: camera.position.clone(),
+      target: orbit.target.clone(),
+      zoom: camera instanceof THREE.OrthographicCamera ? camera.zoom : null,
+    };
+
+    capturedSupportRunIdRef.current = captureSupportRunId;
+  }, [camera, controls, captureSupportRunId]);
+
+  React.useLayoutEffect(() => {
+    if (!restorePreSupportRunId) return;
+    if (restoredPreSupportRunIdRef.current === restorePreSupportRunId) return;
+    if (activeRunIdRef.current === restorePreSupportRunId) return;
     if (!controls || typeof controls !== 'object' || !('target' in controls) || !('update' in controls)) return;
 
-    const snapshot = snapshotRef.current;
+    const snapshot = preSupportSnapshotRef.current;
     if (!snapshot) {
-      restoredRunIdRef.current = restoreRunId;
+      restoredPreSupportRunIdRef.current = restorePreSupportRunId;
       return;
     }
 
@@ -426,7 +452,7 @@ function SupportModeCameraRestoreController({
       update: () => void;
     };
 
-    activeRunIdRef.current = restoreRunId;
+    activeRunIdRef.current = restorePreSupportRunId;
     cancelAnimation();
     animatingRef.current = true;
 
@@ -465,19 +491,91 @@ function SupportModeCameraRestoreController({
         animatingRef.current = false;
         rafRef.current = null;
         activeRunIdRef.current = null;
-        restoredRunIdRef.current = restoreRunId;
-        snapshotRef.current = null;
+        restoredPreSupportRunIdRef.current = restorePreSupportRunId;
+        preSupportSnapshotRef.current = null;
       }
     };
 
     rafRef.current = requestAnimationFrame(tick);
 
     return () => {
-      if (activeRunIdRef.current === restoreRunId && restoredRunIdRef.current !== restoreRunId) {
+      if (
+        activeRunIdRef.current === restorePreSupportRunId
+        && restoredPreSupportRunIdRef.current !== restorePreSupportRunId
+      ) {
         activeRunIdRef.current = null;
       }
     };
-  }, [camera, cancelAnimation, controls, restoreRunId]);
+  }, [camera, cancelAnimation, controls, restorePreSupportRunId]);
+
+  React.useLayoutEffect(() => {
+    if (!restoreSupportRunId) return;
+    if (restoredSupportRunIdRef.current === restoreSupportRunId) return;
+    if (activeRunIdRef.current === restoreSupportRunId) return;
+    if (!controls || typeof controls !== 'object' || !('target' in controls) || !('update' in controls)) return;
+
+    const snapshot = supportSnapshotRef.current;
+    if (!snapshot) {
+      restoredSupportRunIdRef.current = restoreSupportRunId;
+      return;
+    }
+
+    const orbit = controls as unknown as {
+      target: THREE.Vector3;
+      update: () => void;
+    };
+
+    activeRunIdRef.current = restoreSupportRunId;
+    cancelAnimation();
+    animatingRef.current = true;
+
+    const isOrthographic = camera instanceof THREE.OrthographicCamera;
+    const startPos = camera.position.clone();
+    const endPos = snapshot.position.clone();
+    const startTarget = orbit.target.clone();
+    const endTarget = snapshot.target.clone();
+    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
+    const endZoom = (isOrthographic && snapshot.zoom != null) ? snapshot.zoom : startZoom;
+
+    const duration = 560;
+    let startTime: number | null = null;
+
+    const tick = (now: number) => {
+      if (!animatingRef.current) return;
+      if (startTime == null) startTime = now;
+
+      const t = Math.min(1, (now - startTime) / duration);
+      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+      camera.position.lerpVectors(startPos, endPos, eased);
+      orbit.target.lerpVectors(startTarget, endTarget, eased);
+
+      if (isOrthographic) {
+        const ortho = camera as THREE.OrthographicCamera;
+        ortho.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
+        ortho.updateProjectionMatrix();
+      }
+
+      orbit.update();
+
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        animatingRef.current = false;
+        rafRef.current = null;
+        activeRunIdRef.current = null;
+        restoredSupportRunIdRef.current = restoreSupportRunId;
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (activeRunIdRef.current === restoreSupportRunId && restoredSupportRunIdRef.current !== restoreSupportRunId) {
+        activeRunIdRef.current = null;
+      }
+    };
+  }, [camera, cancelAnimation, controls, restoreSupportRunId]);
 
   React.useEffect(() => {
     return () => {
@@ -765,7 +863,10 @@ export function SceneCanvas({
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
   const [supportEntryIntroRunId, setSupportEntryIntroRunId] = React.useState(0);
   const [supportEntryCaptureRunId, setSupportEntryCaptureRunId] = React.useState(0);
+  const [supportCameraCaptureRunId, setSupportCameraCaptureRunId] = React.useState(0);
+  const [supportCameraRestoreRunId, setSupportCameraRestoreRunId] = React.useState(0);
   const [supportExitRestoreRunId, setSupportExitRestoreRunId] = React.useState(0);
+  const hasSavedSupportCameraRef = React.useRef(false);
   const prevModeRef = React.useRef<SupportMode | undefined>(mode);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
@@ -1062,10 +1163,16 @@ export function SceneCanvas({
 
     if (enteringSupport && models.length > 0) {
       setSupportEntryCaptureRunId((id) => id + 1);
-      setSupportEntryIntroRunId((id) => id + 1);
+      if (hasSavedSupportCameraRef.current) {
+        setSupportCameraRestoreRunId((id) => id + 1);
+      } else {
+        setSupportEntryIntroRunId((id) => id + 1);
+      }
     }
 
     if (leavingSupport) {
+      setSupportCameraCaptureRunId((id) => id + 1);
+      hasSavedSupportCameraRef.current = true;
       setSupportExitRestoreRunId((id) => id + 1);
     }
 
@@ -1400,6 +1507,7 @@ export function SceneCanvas({
               {models.map((model) => {
                 const isActive = model.id === activeModelId;
                 const isSelectedModel = selectedModelIdSet.has(model.id);
+                const supportNonSelectedOpacity = mode === 'support' && !isSelectedModel ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
                   hideDuplicateSourceDuringApply
                   && duplicatePreviewModel
@@ -1466,6 +1574,7 @@ export function SceneCanvas({
                       hoverTintColor={hoverTintColor}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
+                      supportNonSelectedOpacity={supportNonSelectedOpacity}
                       showOutOfBoundsOverlay={showOutOfBoundsOverlay}
                       outOfBoundsMin={buildVolumeBounds?.min ?? null}
                       outOfBoundsMax={buildVolumeBounds?.max ?? null}
@@ -1898,8 +2007,10 @@ export function SceneCanvas({
           plateDepthMm={activeBuildVolumeSettings.depthMm}
         />
         <SupportModeCameraRestoreController
-          captureRunId={supportEntryCaptureRunId}
-          restoreRunId={supportExitRestoreRunId}
+          capturePreSupportRunId={supportEntryCaptureRunId}
+          restorePreSupportRunId={supportExitRestoreRunId}
+          captureSupportRunId={supportCameraCaptureRunId}
+          restoreSupportRunId={supportCameraRestoreRunId}
         />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
