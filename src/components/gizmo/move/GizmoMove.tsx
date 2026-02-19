@@ -47,9 +47,9 @@ export function GizmoMove({
   const [shouldFlipX, setShouldFlipX] = useState(false);
   const [shouldFlipY, setShouldFlipY] = useState(false);
   const [shouldFlipZ, setShouldFlipZ] = useState(false);
-  const startPoint = useRef<THREE.Vector3 | null>(null);
-  const rafId = useRef<number | null>(null);
-  const dragPlane = useRef<THREE.Plane | null>(null);
+  const dragPlaneRef = useRef<THREE.Plane | null>(null);
+  const lastPointRef = useRef<THREE.Vector3 | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -123,46 +123,50 @@ export function GizmoMove({
     
     e.stopPropagation();
     (e as any).stopped = true; // Mark event as handled for OrbitControls
-    
-    // Create drag plane perpendicular to camera at gizmo position (only once)
-    const cameraDirection = new THREE.Vector3();
-    camera.getWorldDirection(cameraDirection);
-    dragPlane.current = new THREE.Plane();
-    dragPlane.current.setFromNormalAndCoplanarPoint(cameraDirection, gizmoPosition);
-    
-    // Calculate initial point on drag plane from mouse position
-    const rect = gl.domElement.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    const mouse = new THREE.Vector2(x, y);
-    const ray = new THREE.Ray();
-    ray.origin.setFromMatrixPosition(camera.matrixWorld);
-    ray.direction.set(mouse.x, mouse.y, 0.5).unproject(camera).sub(ray.origin).normalize();
-    const initialPoint = new THREE.Vector3();
-    ray.intersectPlane(dragPlane.current, initialPoint);
+
+    const cameraDir = new THREE.Vector3();
+    camera.getWorldDirection(cameraDir);
+    dragPlaneRef.current = new THREE.Plane().setFromNormalAndCoplanarPoint(cameraDir, gizmoPosition);
+
+    const initialPoint = getWorldPointFromMouse(e.clientX, e.clientY);
+    if (!initialPoint) return;
     
     setIsDragging(true);
-    startPoint.current = initialPoint;
+    lastPointRef.current = initialPoint;
     onDragStart();
   };
 
+  const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    onPointerEnter();
+  };
+
+  const handlePointerLeaveLocal = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    onPointerLeave();
+  };
+
+  const getAxisDirection = useCallback((): THREE.Vector3 => {
+    if (axis === 'x') return new THREE.Vector3(1, 0, 0);
+    if (axis === 'y') return new THREE.Vector3(0, 1, 0);
+    return new THREE.Vector3(0, 0, 1);
+  }, [axis]);
+
   const getWorldPointFromMouse = useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
-    if (!dragPlane.current) return null;
-    
+    if (!dragPlaneRef.current) return null;
+
     const rect = gl.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
     const x = ((clientX - rect.left) / rect.width) * 2 - 1;
     const y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
-    // Create ray from camera through mouse position (no raycaster needed)
-    const mouse = new THREE.Vector2(x, y);
-    const ray = new THREE.Ray();
-    ray.origin.setFromMatrixPosition(camera.matrixWorld);
-    ray.direction.set(mouse.x, mouse.y, 0.5).unproject(camera).sub(ray.origin).normalize();
-    
-    // Intersect with drag plane
+    const raycaster = raycasterRef.current;
+    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+
     const intersection = new THREE.Vector3();
-    ray.intersectPlane(dragPlane.current, intersection);
-    
+    const hitPoint = raycaster.ray.intersectPlane(dragPlaneRef.current, intersection);
+    if (!hitPoint) return null;
     return intersection;
   }, [camera, gl]);
 
@@ -170,8 +174,8 @@ export function GizmoMove({
     if (!isDragging) return;
 
     setIsDragging(false);
-    startPoint.current = null;
-    dragPlane.current = null;
+    lastPointRef.current = null;
+    dragPlaneRef.current = null;
     onDragEnd();
   };
 
@@ -180,28 +184,25 @@ export function GizmoMove({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      if (!startPoint.current) return;
-      
-      // Cancel any pending animation frame
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
-      
-      // Schedule update on next frame
-      rafId.current = requestAnimationFrame(() => {
-        const worldPoint = getWorldPointFromMouse(e.clientX, e.clientY);
-        if (!worldPoint || !startPoint.current) return;
+      if (!lastPointRef.current) return;
 
-        const delta = worldPoint.clone().sub(startPoint.current);
-        onDrag(delta);
-        startPoint.current = worldPoint;
-        rafId.current = null;
-      });
+      const nextPoint = getWorldPointFromMouse(e.clientX, e.clientY);
+      if (!nextPoint || !lastPointRef.current) return;
+
+      const worldDelta = nextPoint.clone().sub(lastPointRef.current);
+      const axisDir = getAxisDirection().normalize();
+      const axisMagnitude = worldDelta.dot(axisDir);
+      if (Math.abs(axisMagnitude) < 1e-8) return;
+
+      const delta = axisDir.multiplyScalar(axisMagnitude);
+      onDrag(delta);
+      lastPointRef.current = nextPoint;
     };
 
     const handleGlobalPointerUp = () => {
       setIsDragging(false);
-      startPoint.current = null;
+      lastPointRef.current = null;
+      dragPlaneRef.current = null;
       onDragEnd();
     };
 
@@ -211,16 +212,15 @@ export function GizmoMove({
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
     };
-  }, [isDragging, onDrag, onDragEnd, getWorldPointFromMouse]);
+  }, [getAxisDirection, getWorldPointFromMouse, isDragging, onDrag, onDragEnd]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = isPickingHovered || isHovered;
+  const isHighlighted = !!(effectiveHovered || isActive);
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : 1.0;
+  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const hoverScale = isActive ? 1.18 : effectiveHovered ? 1.1 : 1.0;
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
   
   // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
@@ -267,7 +267,11 @@ export function GizmoMove({
   }, [axis]);
 
   // Arrow tip color - keep axis color always
-  const endColorHex = axisColors.end;
+  const endColorHex = isActive
+    ? GIZMO_COLORS.active
+    : effectiveHovered
+      ? GIZMO_COLORS.hover
+      : axisColors.end;
 
   // Arrow tip position in local Y direction (will be rotated with group)
   const arrowTipPosition: [number, number, number] = [
@@ -283,9 +287,11 @@ export function GizmoMove({
         ref={pickMeshRef}
         position={arrowTipPosition}
         onPointerDown={handlePointerDown}
+        onPointerEnter={handlePointerEnterLocal}
+        onPointerLeave={handlePointerLeaveLocal}
         scale={handleScale}
       >
-        <coneGeometry args={[GIZMO_SIZES.arrowHeadRadius * 3, GIZMO_SIZES.arrowHeadLength * 3, 8]} />
+        <sphereGeometry args={[Math.max(0.1, GIZMO_SIZES.arrowHeadRadius * 1.6), 12, 12]} />
         <meshBasicMaterial 
           visible={false}
           depthTest={false} 
@@ -296,7 +302,7 @@ export function GizmoMove({
       <mesh position={[0, GIZMO_SIZES.arrowShaftLength / 2, 0]} geometry={gradientGeometry} renderOrder={-10}>
         <meshBasicMaterial 
           vertexColors={!isDimmed}
-          color={isDimmed ? dimmedColor : '#ffffff'}
+          color={isDimmed ? dimmedColor : isHighlighted ? '#ffffff' : '#f2f2f2'}
           opacity={opacity}
           transparent
           depthTest={false}
@@ -305,7 +311,7 @@ export function GizmoMove({
       </mesh>
       
       {/* Arrow head (cone) with outline - SCALED */}
-      <group position={arrowTipPosition} scale={handleScale}>
+      <group position={arrowTipPosition} scale={handleScale * hoverScale}>
         {/* Outline - slightly larger with darker color */}
         <mesh scale={1.15}>
           <coneGeometry args={[GIZMO_SIZES.arrowHeadRadius, GIZMO_SIZES.arrowHeadLength, 8]} />
@@ -333,7 +339,7 @@ export function GizmoMove({
       {enableLighting && !isDimmed && (
         <pointLight
           position={arrowTipPosition}
-          color={axisColors.end}
+          color={isActive ? GIZMO_COLORS.active : effectiveHovered ? GIZMO_COLORS.hover : axisColors.end}
           intensity={lightIntensity}
           distance={GIZMO_LIGHTING.pointLightDistance}
           decay={GIZMO_LIGHTING.pointLightDecay}

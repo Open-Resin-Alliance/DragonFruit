@@ -1,6 +1,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import type { MatcapVariant } from './types';
+import { blendTintColor, clampTintStrength } from './tint';
 
 function createMatcapTexture(variant: MatcapVariant): THREE.Texture {
   const size = 64;
@@ -53,10 +54,18 @@ function createMatcapTexture(variant: MatcapVariant): THREE.Texture {
 
 export function MatcapMaterial({
   isSelected,
+  isHovered,
+  hoverTintColor,
+  hoverTintStrength,
+  selectedTintStrength,
   variant,
   clippingPlanes,
 }: {
   isSelected: boolean;
+  isHovered: boolean;
+  hoverTintColor?: string;
+  hoverTintStrength?: number;
+  selectedTintStrength?: number;
   variant?: MatcapVariant;
   clippingPlanes: THREE.Plane[];
 }) {
@@ -68,10 +77,18 @@ export function MatcapMaterial({
     };
   }, [matcap]);
 
+  const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
+  const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
+  const tintColor = isSelected
+    ? blendTintColor('#ffffff', hoverTintColor, selectedStrength)
+    : isHovered
+      ? blendTintColor('#ffffff', hoverTintColor, hoverStrength)
+      : '#ffffff';
+
   return (
     <meshMatcapMaterial
       vertexColors
-      color={isSelected ? '#cfe6ff' : '#ffffff'}
+      color={tintColor}
       matcap={matcap}
       clippingPlanes={clippingPlanes}
       clipIntersection

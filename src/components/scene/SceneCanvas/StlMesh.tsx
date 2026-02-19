@@ -49,6 +49,14 @@ export function StlMesh({
   isLeafPlacementActive,
   isBracePlacementActive,
   onModelHoverPointChange,
+  revealGhostOpacity,
+  hoverTintColor,
+  hoverTintStrength,
+  selectedTintStrength,
+  showOutOfBoundsOverlay,
+  outOfBoundsMin,
+  outOfBoundsMax,
+  outOfBoundsStripeColor,
 }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
@@ -85,10 +93,19 @@ export function StlMesh({
   isLeafPlacementActive?: boolean;
   isBracePlacementActive?: boolean;
   onModelHoverPointChange?: (point: THREE.Vector3 | null) => void;
+  revealGhostOpacity?: number;
+  hoverTintColor?: string;
+  hoverTintStrength?: number;
+  selectedTintStrength?: number;
+  showOutOfBoundsOverlay?: boolean;
+  outOfBoundsMin?: THREE.Vector3 | null;
+  outOfBoundsMax?: THREE.Vector3 | null;
+  outOfBoundsStripeColor?: string;
 }) {
   // Access GPU picking state to detect gizmo hover
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
+  const [isPointerHovered, setIsPointerHovered] = React.useState(false);
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
 
@@ -162,6 +179,68 @@ export function StlMesh({
   // Group has the transform, mesh inside is offset to center the geometry
   const baseShaderType: MeshShaderType = shaderType === 'opaque_wire_mesh' ? 'soft_clay' : shaderType;
   const showOpaqueWireOverlay = shaderType === 'opaque_wire_mesh';
+  const isHoveredModel = isPointerHovered || (hit.category === 'model' && hit.objectId === modelId);
+
+  const outOfBoundsMaterial = React.useMemo(() => {
+    if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
+
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      uniforms: {
+        boundsMin: { value: outOfBoundsMin.clone() },
+        boundsMax: { value: outOfBoundsMax.clone() },
+        stripeFreq: { value: 0.22 },
+        stripeAlpha: { value: 0.42 },
+        stripeColor: { value: new THREE.Color(outOfBoundsStripeColor ?? '#b6ff2e') },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldPos;
+        uniform vec3 boundsMin;
+        uniform vec3 boundsMax;
+        uniform float stripeFreq;
+        uniform float stripeAlpha;
+        uniform vec3 stripeColor;
+
+        void main() {
+          bool outside =
+            vWorldPos.x < boundsMin.x || vWorldPos.x > boundsMax.x ||
+            vWorldPos.y < boundsMin.y || vWorldPos.y > boundsMax.y ||
+            vWorldPos.z < boundsMin.z || vWorldPos.z > boundsMax.z;
+
+          if (!outside) discard;
+
+          float stripeSeed = (vWorldPos.x + vWorldPos.y + vWorldPos.z) * stripeFreq;
+          float band = step(0.5, fract(stripeSeed));
+          vec3 colorA = stripeColor;
+          vec3 colorB = vec3(1.0, 1.0, 1.0);
+          vec3 color = mix(colorA, colorB, band);
+
+          gl_FragColor = vec4(color, stripeAlpha);
+        }
+      `,
+    });
+
+    return material;
+  }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
+
+  React.useEffect(() => {
+    return () => {
+      outOfBoundsMaterial?.dispose();
+    };
+  }, [outOfBoundsMaterial]);
 
   return (
     <group
@@ -199,13 +278,25 @@ export function StlMesh({
             }
           }
 
+          if (mode === 'support' && onActiveModelChange && !isActiveModel) {
+            e.stopPropagation();
+            onActiveModelChange(modelId);
+
+            // In support mode, first click should select the model only.
+            // Placement is allowed only after a model is actively selected.
+            return;
+          }
+
           // Support placement in support mode
           if (mode === 'support' && onSupportClick) {
+            if (blockSupportPlacement) return;
             e.stopPropagation();
             onSupportClick(e as unknown as THREE.Intersection);
           }
         }}
         onPointerMove={(e) => {
+          setIsPointerHovered(true);
+
           if (hit.category === 'gizmo' || hit.category === 'support') {
             onModelHoverPointChange?.(null);
           } else {
@@ -239,6 +330,12 @@ export function StlMesh({
             // Mute hover when placement is blocked
             if (blockSupportPlacement) return;
 
+            // Preview should only appear on the actively selected model.
+            if (!isActiveModel) {
+              onSupportHover(null);
+              return;
+            }
+
             // Mute hover if hovering a gizmo OR support (using GPU picking for accuracy)
             if (hit.category === 'gizmo' || hit.category === 'support') {
               onSupportHover(null);
@@ -250,6 +347,7 @@ export function StlMesh({
           }
         }}
         onPointerOut={() => {
+          setIsPointerHovered(false);
           onModelHoverPointChange?.(null);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
@@ -275,22 +373,44 @@ export function StlMesh({
           }
         }}
       >
-        <MeshShaderMaterial
-          shaderType={baseShaderType}
-          isSelected={!!isSelected}
-          meshColor={meshColor}
-          matcapVariant={matcapVariant}
-          flatUseVertexColors={flatUseVertexColors}
-          toonSteps={toonSteps}
-          materialRoughness={materialRoughness}
-          clippingPlanes={planes}
-          xrayOpacity={xrayOpacity}
-        />
+        {typeof revealGhostOpacity === 'number' ? (
+          <meshStandardMaterial
+            color={meshColor ?? '#c8c8ce'}
+            transparent
+            opacity={Math.min(0.95, Math.max(0.04, revealGhostOpacity))}
+            roughness={0.55}
+            metalness={0.02}
+            clippingPlanes={planes}
+            depthWrite={false}
+          />
+        ) : (
+          <MeshShaderMaterial
+            shaderType={baseShaderType}
+            isSelected={!!isSelected}
+            isHovered={isHoveredModel}
+            hoverTintColor={hoverTintColor}
+            hoverTintStrength={hoverTintStrength}
+            selectedTintStrength={selectedTintStrength}
+            meshColor={meshColor}
+            matcapVariant={matcapVariant}
+            flatUseVertexColors={flatUseVertexColors}
+            toonSteps={toonSteps}
+            materialRoughness={materialRoughness}
+            clippingPlanes={planes}
+            xrayOpacity={xrayOpacity}
+          />
+        )}
       </mesh>
 
       {showOpaqueWireOverlay && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
           <OpaqueWireOverlayMaterial clippingPlanes={planes} />
+        </mesh>
+      )}
+
+      {outOfBoundsMaterial && (
+        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={3} raycast={() => null}>
+          <primitive object={outOfBoundsMaterial} attach="material" />
         </mesh>
       )}
     </group>

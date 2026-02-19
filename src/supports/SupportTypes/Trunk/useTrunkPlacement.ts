@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { addBranch, addKnot, addRoot, addTrunk, getSnapshot, setSnapshot, updateKnot, updateTrunk } from '../../state';
 import { pushHistory } from '@/history/historyStore';
@@ -17,28 +17,39 @@ export function useTrunkPlacementV2() {
     const [previewError, setPreviewError] = useState<LimitationCode | null>(null);
     const [previewWarning, setPreviewWarning] = useState<WarningCode | null>(null);
     const { isPlacementDisabled } = useInteractionStatus();
+    const hoverFrameRef = useRef<number | null>(null);
+    const latestHoverRef = useRef<THREE.Intersection | null>(null);
+
+    const clearPreview = useCallback(() => {
+        setPreviewData((prev) => (prev === null ? prev : null));
+        setPreviewError((prev) => (prev === null ? prev : null));
+        setPreviewWarning((prev) => (prev === null ? prev : null));
+    }, []);
 
     // Auto-clear preview when placement is disabled (e.g. hovering another object)
     useEffect(() => {
         if (isPlacementDisabled) {
-            setPreviewData(null);
-            setPreviewError(null);
-            setPreviewWarning(null);
+            clearPreview();
         }
-    }, [isPlacementDisabled]);
+    }, [clearPreview, isPlacementDisabled]);
 
-    const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
+    useEffect(() => {
+        return () => {
+            if (hoverFrameRef.current !== null) {
+                cancelAnimationFrame(hoverFrameRef.current);
+                hoverFrameRef.current = null;
+            }
+        };
+    }, []);
+
+    const processSupportHover = useCallback((hit: THREE.Intersection | null) => {
         if (isPlacementDisabled) {
-            setPreviewData(null);
-            setPreviewError(null);
-            setPreviewWarning(null);
+            clearPreview();
             return;
         }
 
         if (!hit) {
-            setPreviewData(null);
-            setPreviewError(null);
-            setPreviewWarning(null);
+            clearPreview();
             return;
         }
         
@@ -82,7 +93,7 @@ export function useTrunkPlacementV2() {
         }
 
         // reject
-        setPreviewData(null);
+        setPreviewData((prev) => (prev === null ? prev : null));
         setPreviewError(
             decision.reason === 'KNOT_ABOVE_TIP'
                 ? 'KNOT_ABOVE_TIP'
@@ -90,8 +101,19 @@ export function useTrunkPlacementV2() {
                     ? 'COLLISION_WITH_MODEL'
                     : null
         );
-        setPreviewWarning(null);
-    }, [isPlacementDisabled]);
+        setPreviewWarning((prev) => (prev === null ? prev : null));
+    }, [clearPreview, isPlacementDisabled]);
+
+    const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
+        latestHoverRef.current = hit;
+
+        if (hoverFrameRef.current !== null) return;
+
+        hoverFrameRef.current = requestAnimationFrame(() => {
+            hoverFrameRef.current = null;
+            processSupportHover(latestHoverRef.current);
+        });
+    }, [processSupportHover]);
 
     const onSupportClick = useCallback((hit: THREE.Intersection) => {
         if (isPlacementDisabled || !hit) return;

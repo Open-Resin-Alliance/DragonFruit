@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "prepare",
+      "matchPanelIds": ["prepare-models", "prepare-debug-primitives"],
+      "order": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "visual-settings",
+        "prepare-transform-controls"
+      ],
+      "anchors": {
+        "prepare-debug-primitives": {
+          "to": "prepare-models",
+          "side": "below"
+        },
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-transform-controls": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "prepare-no-debug",
+      "matchPanelIds": ["prepare-models"],
+      "order": [
+        "prepare-models",
+        "visual-settings",
+        "prepare-transform-controls"
+      ],
+      "anchors": {
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-transform-controls": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "prepare-smoothing",
+      "matchPanelIds": ["prepare-models", "prepare-debug-primitives", "prepare-smoothing-settings"],
+      "order": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "visual-settings",
+        "prepare-smoothing-settings"
+      ],
+      "anchors": {
+        "prepare-debug-primitives": {
+          "to": "prepare-models",
+          "side": "below"
+        },
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-smoothing-settings": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "prepare-smoothing-no-debug",
+      "matchPanelIds": ["prepare-models", "prepare-smoothing-settings"],
+      "order": [
+        "prepare-models",
+        "visual-settings",
+        "prepare-smoothing-settings"
+      ],
+      "anchors": {
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-smoothing-settings": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "analysis",
+      "matchPanelIds": ["analysis-scan-card", "analysis-workflow"],
+      "order": [
+        "analysis-scan-card",
+        "analysis-island-list",
+        "analysis-workflow",
+        "visual-settings",
+        "analysis-overlay-controls",
+        "analysis-territory-voxel",
+        "analysis-island-voxel",
+        "analysis-volumes"
+      ],
+      "anchors": {
+        "analysis-island-list": {
+          "to": "analysis-scan-card",
+          "side": "below"
+        },
+        "analysis-workflow": {
+          "to": "analysis-island-list",
+          "side": "below"
+        },
+        "visual-settings": {
+          "to": "analysis-scan-card",
+          "side": "right-edge"
+        },
+        "analysis-overlay-controls": {
+          "to": "visual-settings",
+          "side": "left"
+        },
+        "analysis-territory-voxel": {
+          "to": "analysis-overlay-controls",
+          "side": "below"
+        },
+        "analysis-island-voxel": {
+          "to": "analysis-territory-voxel",
+          "side": "below"
+        },
+        "analysis-volumes": {
+          "to": "analysis-island-voxel",
+          "side": "below"
+        }
+      }
+    },
+    {
+      "id": "support",
+      "matchPanelIds": ["curve-settings", "support-settings"],
+      "order": ["curve-settings", "visual-settings", "support-settings"],
+      "anchors": {
+        "visual-settings": {
+          "to": "curve-settings",
+          "side": "right-edge"
+        },
+        "support-settings": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "export",
+      "matchPanelIds": ["export-main"],
+      "order": ["export-main", "visual-settings"],
+      "anchors": {
+        "visual-settings": {
+          "to": "export-main",
+          "side": "right-edge"
+        }
+      }
+    },
+    {
+      "id": "curve",
+      "matchPanelIds": ["curve-settings"],
+      "order": ["curve-settings", "visual-settings"],
+      "anchors": {
+        "visual-settings": {
+          "to": "curve-settings",
+          "side": "right-edge"
+        }
+      }
+    }
+  ]
+}

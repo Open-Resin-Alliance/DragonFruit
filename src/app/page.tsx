@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
-import { LayerSlider } from '@/components/controls/LayerSlider';
+import { EmptySceneState } from '@/components/layout/EmptySceneState';
 import { IslandScanCard } from '@/components/controls/IslandScanCard';
 import { IslandOverlayControls } from '@/components/controls/IslandOverlayControls';
 import { IslandVoxelControls } from '@/components/controls/IslandVoxelControls';
@@ -16,12 +16,18 @@ import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
-import { Sidebar } from '@/components/ui/Sidebar';
+import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
+import { IconButton } from '@/components/ui/primitives';
+import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import {
+  DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
+  isDebugPrimitivesPanelVisibleEnabled,
+} from '@/components/layout/floatingLayoutPreferences';
 
 import { initializeBVH } from '@/utils/bvh';
 
@@ -33,8 +39,12 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useSupportInteractionManager } from '@/features/supports/useSupportInteractionManager';
 import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
+import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
+import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
+import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
+import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 
-import { MESH_SHADER_OPTIONS, type MeshShaderType } from '@/features/shaders/mesh';
+import { type MeshShaderType } from '@/features/shaders/mesh';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -61,6 +71,183 @@ export default function Home() {
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
+  const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
+  const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
+  const [supportSettingsExpanded, setSupportSettingsExpanded] = React.useState(true);
+  const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
+  const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
+  const dragDepthRef = React.useRef(0);
+  const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
+
+  const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
+    if (scene.mode !== 'prepare') return;
+
+    const meshFiles = files.filter((file) => file.name.toLowerCase().endsWith('.stl'));
+    if (meshFiles.length === 0) {
+      console.warn('[DragDrop] No supported mesh files dropped. STL is supported for now.');
+      return;
+    }
+
+    const dt = new DataTransfer();
+    meshFiles.forEach((file) => dt.items.add(file));
+    void scene.loadFiles(dt.files);
+  }, [scene]);
+
+  const handlePrepareDragEnter = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (scene.mode !== 'prepare') return;
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current += 1;
+    setIsPrepareDragActive(true);
+  }, [scene.mode]);
+
+  const handlePrepareDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (scene.mode !== 'prepare') return;
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setIsPrepareDragActive(true);
+  }, [scene.mode]);
+
+  const handlePrepareDragLeave = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (scene.mode !== 'prepare') return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsPrepareDragActive(false);
+    }
+  }, [scene.mode]);
+
+  const handlePrepareDrop = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (scene.mode !== 'prepare') return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsPrepareDragActive(false);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    handleDroppedMeshFiles(files);
+  }, [handleDroppedMeshFiles, scene.mode]);
+
+  const closeEditorContextMenu = React.useCallback(() => {
+    setEditorContextMenuPos(null);
+  }, []);
+
+  const handleEditorContextMenu = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const gesture = rightClickGestureRef.current;
+    if (gesture && gesture.moved) {
+      return;
+    }
+
+    setEditorContextMenuPos({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  const handleModelListContextMenu = React.useCallback((modelId: string, position: { x: number; y: number }) => {
+    // Right-clicking a model row should target that model first.
+    scene.setActiveModelId(modelId);
+    setEditorContextMenuPos(position);
+  }, [scene]);
+
+  const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 2) return;
+    rightClickGestureRef.current = { x: e.clientX, y: e.clientY, moved: false };
+  }, []);
+
+  const handleEditorPointerMoveCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = rightClickGestureRef.current;
+    if (!gesture) return;
+    const dx = e.clientX - gesture.x;
+    const dy = e.clientY - gesture.y;
+    if ((dx * dx + dy * dy) > 36) {
+      gesture.moved = true;
+    }
+  }, []);
+
+  const handleEditorPointerUpCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 2) return;
+    // keep gesture state until contextmenu fires, clear shortly after
+    window.setTimeout(() => {
+      rightClickGestureRef.current = null;
+    }, 0);
+  }, []);
+
+  const handleEditorMenuAction = React.useCallback((action: EditorMenuAction) => {
+    switch (action) {
+      case 'delete':
+        if (scene.activeModelId) {
+          scene.deleteModel(scene.activeModelId);
+        }
+        break;
+      case 'copy':
+        if (scene.activeModelId) {
+          scene.copyModel(scene.activeModelId);
+        }
+        break;
+      case 'cut':
+        if (scene.activeModelId) {
+          scene.cutModel(scene.activeModelId);
+        }
+        break;
+      case 'paste':
+        scene.pasteModel();
+        break;
+      case 'duplicate':
+      case 'arrange':
+      case 'repair':
+      default:
+        // intentionally disabled in the menu for now
+        break;
+    }
+    closeEditorContextMenu();
+  }, [closeEditorContextMenu, scene]);
+
+  React.useEffect(() => {
+    if (!editorContextMenuPos) return;
+
+    const handlePointerDown = () => closeEditorContextMenu();
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeEditorContextMenu();
+    };
+    const handleScrollOrResize = () => closeEditorContextMenu();
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    window.addEventListener('resize', handleScrollOrResize);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('resize', handleScrollOrResize);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+    };
+  }, [editorContextMenuPos, closeEditorContextMenu]);
+
+  React.useEffect(() => {
+    setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
+
+    const handleDebugPanelVisibilityChanged = (event: Event) => {
+      const customEvent = event as CustomEvent<{ enabled?: boolean }>;
+      const nextEnabled = customEvent.detail?.enabled;
+      if (typeof nextEnabled === 'boolean') {
+        setDebugPrimitivesPanelVisible(nextEnabled);
+      } else {
+        setDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
+      }
+    };
+
+    window.addEventListener(DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT, handleDebugPanelVisibilityChanged as EventListener);
+    return () => {
+      window.removeEventListener(DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT, handleDebugPanelVisibilityChanged as EventListener);
+    };
+  }, []);
 
   // Sync transform manager when active model changes
   useEffect(() => {
@@ -141,11 +328,102 @@ export default function Home() {
   // 5. Supports
   const supports = useSupportInteractionManager({ mode: scene.mode });
 
+  const handleModeChange = React.useCallback((nextMode: typeof scene.mode) => {
+    if (scene.models.length === 0 && nextMode !== 'prepare') {
+      scene.setMode('prepare');
+      return;
+    }
+    scene.setMode(nextMode);
+  }, [scene]);
+
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
   useUndoRedoHotkeys();
   useDeleteHotkey();
+  useCameraProjectionHotkey();
+
+  // Auto-set cross-section mode based on app mode
+  React.useEffect(() => {
+    slicing.setCrossSectionMode(scene.mode === 'export' ? 'rasterized' : 'smooth');
+  }, [scene.mode, slicing.setCrossSectionMode]);
+
+  React.useEffect(() => {
+    if (scene.models.length > 0) return;
+    if (scene.mode === 'prepare') return;
+    scene.setMode('prepare');
+  }, [scene.mode, scene.models.length, scene.setMode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'export') return;
+    if (scene.activeModelId) return;
+    if (scene.models.length === 0) return;
+
+    const firstVisible = scene.models.find((model) => model.visible) ?? scene.models[0];
+    if (firstVisible) {
+      scene.setActiveModelId(firstVisible.id);
+    }
+  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
+
+  React.useEffect(() => {
+    const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
+    const currentProjectionMode = getSavedCameraProjectionSettings().mode;
+
+    if (workspaceProjectionMode !== currentProjectionMode) {
+      saveCameraProjectionSettings({ mode: workspaceProjectionMode });
+    }
+  }, [scene.mode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'support') return;
+    if (scene.activeModelId) return;
+    if (scene.models.length === 0) return;
+
+    const firstVisible = scene.models.find((model) => model.visible) ?? scene.models[0];
+    if (firstVisible) {
+      scene.setActiveModelId(firstVisible.id);
+    }
+  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
+
+  const importOverlayState = React.useMemo(() => {
+    if (scene.importProgress.active) {
+      return {
+        active: true,
+        label: scene.importProgress.label || (scene.importProgress.type === 'scene' ? 'Importing scene…' : 'Loading mesh…'),
+        detail: scene.importProgress.detail,
+        progress: scene.importProgress.progress,
+      };
+    }
+
+    if (scene.isLysLoading) {
+      return {
+        active: true,
+        label: 'Importing scene…',
+        detail: 'Parsing and applying scene transforms',
+        progress: null as number | null,
+      };
+    }
+
+    if (scene.lycheeImportPhase === 'processing') {
+      return {
+        active: true,
+        label: 'Importing Lychee scene…',
+        detail: 'Converting support data and model metadata',
+        progress: null as number | null,
+      };
+    }
+
+    return {
+      active: false,
+      label: '',
+      detail: '',
+      progress: null as number | null,
+    };
+  }, [scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
+
+  const showInlineEmptyLoading = scene.models.length === 0 && importOverlayState.active;
+  const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active;
+  const showEmptySceneDialog = scene.models.length === 0;
 
   const renderId = useRef(0);
   renderId.current++;
@@ -178,37 +456,69 @@ export default function Home() {
   const handleCameraChange = React.useCallback(() => { }, []);
   const handleCameraEnd = React.useCallback(() => { }, []);
 
-  const sidebarContent = React.useMemo(() => {
-    if (scene.mode === 'support') {
-      return <SupportSidebar />;
-    }
+  React.useEffect(() => {
+    if (scene.mode === 'prepare') return;
+    if (!isSelectAllModelsActive) return;
+    setIsSelectAllModelsActive(false);
+  }, [isSelectAllModelsActive, scene.mode]);
 
-    if (scene.mode === 'analysis') {
-      return <div />;
-    }
+  React.useEffect(() => {
+    const unregister = registerDeleteHandler(
+      () => scene.mode === 'prepare' && isSelectAllModelsActive && scene.models.length > 0,
+      () => {
+        const ids = scene.models.map((model) => model.id);
+        ids.forEach((id) => scene.deleteModel(id));
+        setIsSelectAllModelsActive(false);
+      },
+      20,
+    );
 
-    if (scene.mode === 'prepare') {
-      if (transformMgr.transformMode === 'smoothing') {
-        return <MeshSmoothingSettingsPanel />;
-      }
+    return () => {
+      unregister();
+    };
+  }, [isSelectAllModelsActive, scene]);
 
-      return <div />;
-    }
+  React.useEffect(() => {
+    if (!isSelectAllModelsActive) return;
 
-    if (scene.mode === 'export') {
-      return <div />;
-    }
+    const clearSelectAll = () => setIsSelectAllModelsActive(false);
+    window.addEventListener('model-clicked', clearSelectAll as EventListener);
+    window.addEventListener('model-deselected', clearSelectAll as EventListener);
 
-    return <div />;
-  }, [scene.mode, transformMgr.transformMode]);
+    return () => {
+      window.removeEventListener('model-clicked', clearSelectAll as EventListener);
+      window.removeEventListener('model-deselected', clearSelectAll as EventListener);
+    };
+  }, [isSelectAllModelsActive]);
+
+  React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handleGlobalSelectAll = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key.toLowerCase() !== 'a') return;
+      if (isEditableTarget(event.target)) return;
+      if (scene.mode !== 'prepare') return;
+      if (scene.models.length === 0) return;
+
+      // Prevent browser-level "select all text in the app" behavior and arm model select-all.
+      event.preventDefault();
+      event.stopPropagation();
+      setIsSelectAllModelsActive(true);
+    };
+
+    window.addEventListener('keydown', handleGlobalSelectAll, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalSelectAll, true);
+    };
+  }, [scene.mode, scene.models.length]);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100">
+    <div className="ui-shell relative h-screen w-screen overflow-hidden">
       <TopBar
-        onFileChange={scene.onFileChange}
-        layerHeightMicron={slicing.layerHeightMicron}
-        onLayerHeightChange={slicing.setLayerHeightMicron}
-        layerHeightMm={slicing.layerHeightMm}
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
         shaderType={scene.shaderType}
@@ -227,32 +537,121 @@ export default function Home() {
         onMaterialRoughnessChange={scene.setMaterialRoughness}
         xrayOpacity={scene.xrayOpacity}
         onXrayOpacityChange={scene.setXrayOpacity}
-        mode={scene.mode}
-        onModeChange={scene.setMode}
+        hoverTintStrength={scene.hoverTintStrength}
+        onHoverTintStrengthChange={scene.setHoverTintStrength}
+        selectedTintStrength={scene.selectedTintStrength}
+        onSelectedTintStrengthChange={scene.setSelectedTintStrength}
         selectionHighlightMode={scene.selectionHighlightMode}
         onSelectionHighlightModeChange={scene.setSelectionHighlightMode}
-        onImportLysChange={scene.onImportLysChange}
+        debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
+        onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
+        view3dSettings={scene.view3dSettings}
+        onView3dSettingsChange={scene.setView3dSettings}
+        mode={scene.mode}
+        onModeChange={handleModeChange}
+        hasModels={scene.models.length > 0}
+        viewTypeOverride={sessionShaderOverride}
+        onViewTypeOverrideChange={setSessionShaderOverride}
       />
 
       <FloatingPanelStack>
         {scene.mode === 'prepare' ? (
           <>
             <ModelManagerPanel
+              key="prepare-models"
               models={scene.models}
               activeModelId={scene.activeModelId}
               onSelect={scene.setActiveModelId}
+              onModelContextMenu={handleModelListContextMenu}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
+              onLoadMeshChange={scene.onFileChange}
+              onImportSceneChange={scene.onImportLysChange}
+              dimmed={showEmptySceneDialog || importOverlayState.active}
             />
 
-            <DebugPrimitivesPanel
-              onAdd={scene.addDebugPrimitive}
-              onClear={scene.clearDebugModels}
-            />
+            {debugPrimitivesPanelVisible && (
+              <DebugPrimitivesPanel
+                key="prepare-debug-primitives"
+                onAdd={scene.addDebugPrimitive}
+                onClear={scene.clearDebugModels}
+              />
+            )}
+
+            {scene.geom && transformMgr.transformMode === 'transform' && (
+              <TransformControls
+                key="prepare-transform-controls"
+                position={transformMgr.transform.position}
+                onPositionChange={transformMgr.transformHook.setPosition}
+                onCenter={transformMgr.transformHook.centerXY}
+                onPlatform={transformMgr.transformHook.setPlatformZ}
+                rotation={transformMgr.transform.rotation}
+                onRotationChange={transformMgr.transformHook.setRotation}
+                onResetRotation={transformMgr.transformHook.resetRotation}
+                onRotationComplete={handleRotationComplete}
+                scale={transformMgr.transform.scale}
+                onScaleChange={transformMgr.transformHook.setScale}
+                onResetScale={transformMgr.transformHook.resetScale}
+                modelBBox={scene.geom.bbox}
+                autoLift={transformMgr.autoLift}
+                onAutoLiftChange={transformMgr.setAutoLift}
+                liftDistance={transformMgr.liftDistance}
+                onLiftDistanceChange={transformMgr.setLiftDistance}
+                onLift={() => {
+                  const lowestWorldZ = transformMgr.getLowestWorldZ();
+                  if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
+                }}
+                onDrop={() => {
+                  const lowestWorldZ = transformMgr.getLowestWorldZ();
+                  if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
+                }}
+              />
+            )}
+
+            {scene.geom && transformMgr.transformMode === 'smoothing' && (
+              <div
+                key="prepare-smoothing-settings"
+                className="ui-panel rounded-lg border shadow-lg overflow-hidden"
+                style={{ borderColor: 'var(--border-subtle)' }}
+              >
+                <div
+                  className="px-2.5 py-2.5 flex items-center gap-2.5"
+                >
+                  <IconButton
+                    onClick={() => setPrepareSmoothingSettingsExpanded((prev) => !prev)}
+                    className="!p-0.5"
+                    title={prepareSmoothingSettingsExpanded ? 'Collapse card' : 'Expand card'}
+                  >
+                    <svg
+                      className="w-3 h-3 transform transition-transform"
+                      style={{ color: prepareSmoothingSettingsExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      {prepareSmoothingSettingsExpanded ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      )}
+                    </svg>
+                  </IconButton>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Mesh Smoothing Settings
+                  </h3>
+                </div>
+                {prepareSmoothingSettingsExpanded && (
+                  <div className="max-h-[calc(100vh-var(--topbar-height)-88px)] overflow-hidden">
+                    <MeshSmoothingSettingsPanel />
+                  </div>
+                )}
+              </div>
+            )}
           </>
         ) : scene.mode === 'analysis' ? (
           <>
             <IslandScanCard
+              key="analysis-scan-card"
               islands={islands}
               hasGeometry={!!scene.geom}
               onLoadLychee={scene.handleLoadLychee}
@@ -264,11 +663,12 @@ export default function Home() {
               onCancelLycheeImport={scene.cancelLycheeImport}
             />
 
-            <IslandScanWorkflowCard islands={islands} hasGeometry={!!scene.geom} />
+            <IslandScanWorkflowCard key="analysis-workflow" islands={islands} hasGeometry={!!scene.geom} />
 
-            <IslandVolumesHierarchyCard islands={islands} layerHeightMm={slicing.layerHeightMm} />
+            <IslandVolumesHierarchyCard key="analysis-volumes" islands={islands} layerHeightMm={slicing.layerHeightMm} />
 
             <IslandListCard
+              key="analysis-island-list"
               islands={islands.scanData?.islands ?? []}
               selectedIslandId={islands.selectedIslandId}
               onSelectIsland={islands.setSelectedIslandId}
@@ -279,6 +679,7 @@ export default function Home() {
             />
 
             <IslandOverlayControls
+              key="analysis-overlay-controls"
               enabled={islands.overlayEnabled}
               onEnabledChange={islands.setOverlayEnabled}
               brushRadiusMm={islands.overlayBrushRadius}
@@ -293,6 +694,7 @@ export default function Home() {
             />
 
             <IslandVoxelControls
+              key="analysis-island-voxel"
               enabled={islands.voxelEnabled && !islands.voxelShowTerritory}
               onEnabledChange={(e) => {
                 if (e) {
@@ -312,6 +714,7 @@ export default function Home() {
             />
 
             <TerritoryVoxelControls
+              key="analysis-territory-voxel"
               enabled={islands.voxelEnabled && islands.voxelShowTerritory}
               onEnabledChange={(e) => {
                 if (e) {
@@ -330,17 +733,121 @@ export default function Home() {
             />
           </>
         ) : scene.mode === 'export' ? (
-          <ExportPanel activeModel={scene.activeModel} supportsRef={supportsRef} />
+          <ExportPanel
+            key="export-main"
+            models={scene.models}
+            activeModel={scene.activeModel}
+            activeModelId={scene.activeModelId}
+            onActiveModelChange={scene.setActiveModelId}
+            supportsRef={supportsRef}
+          />
 
+        ) : scene.mode === 'support' ? (
+          <>
+            <CurveSettingsCard key="curve-settings" />
+
+            <div
+              key="support-settings"
+              className={`ui-panel rounded-lg border shadow-lg overflow-hidden ${supportSettingsExpanded ? 'h-[calc(100vh-var(--topbar-height)-24px)] flex flex-col' : ''}`}
+              style={{ borderColor: 'var(--border-subtle)' }}
+            >
+              <div
+                className="px-2.5 py-2.5 flex items-center gap-2.5"
+              >
+                <IconButton
+                  onClick={() => setSupportSettingsExpanded((prev) => !prev)}
+                  className="!p-0.5"
+                  title={supportSettingsExpanded ? 'Collapse card' : 'Expand card'}
+                >
+                  <svg
+                    className="w-3 h-3 transform transition-transform"
+                    style={{ color: supportSettingsExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    {supportSettingsExpanded ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    )}
+                  </svg>
+                </IconButton>
+                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Support Settings
+                </h3>
+              </div>
+              {supportSettingsExpanded && (
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <SupportSidebar />
+                </div>
+              )}
+            </div>
+          </>
         ) : (
           <>
-            <CurveSettingsCard />
           </>
+        )}
+
+        {scene.models.length > 0 && (
+          <VisualSettingsPanel
+            key="visual-settings"
+            layerIndex={slicing.layerIndex}
+            maxLayers={slicing.numLayers}
+            onLayerIndexChange={slicing.setLayerIndex}
+            onCrossSectionModeChange={slicing.setCrossSectionMode}
+            currentHeightMm={slicing.currentHeightMm}
+            maxHeightMm={slicing.heightMm}
+            crossSectionMode={slicing.crossSectionMode}
+          />
         )}
       </FloatingPanelStack>
 
-      <div className="absolute inset-0 top-14 z-0 flex">
-        <div id="scene-root" className="relative flex-1">
+      <div className="absolute inset-0 top-14 z-0">
+        <div
+          id="scene-root"
+          className="relative h-full w-full"
+          onPointerDownCapture={handleEditorPointerDownCapture}
+          onPointerMoveCapture={handleEditorPointerMoveCapture}
+          onPointerUpCapture={handleEditorPointerUpCapture}
+          onContextMenuCapture={handleEditorContextMenu}
+          onDragEnter={handlePrepareDragEnter}
+          onDragOver={handlePrepareDragOver}
+          onDragLeave={handlePrepareDragLeave}
+          onDrop={handlePrepareDrop}
+        >
+          {scene.models.length === 0 && (
+            <EmptySceneState
+              onFileChange={scene.onFileChange}
+              onImportSceneChange={scene.onImportLysChange}
+              onDropMeshFiles={handleDroppedMeshFiles}
+              recentOpenedFiles={scene.recentOpenedFiles}
+              onReopenRecentFile={scene.reopenRecentOpenedFile}
+              isLoading={showInlineEmptyLoading}
+              loadingLabel={importOverlayState.label}
+              loadingDetail={importOverlayState.detail}
+            />
+          )}
+
+          {scene.mode === 'prepare' && isPrepareDragActive && (
+            <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center">
+              <div
+                className="rounded-lg border border-dashed px-6 py-4 text-center"
+                style={{
+                  borderColor: 'var(--accent)',
+                  background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+                }}
+              >
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Drop mesh files to import
+                </div>
+                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  STL supported now • 3MF coming soon
+                </div>
+              </div>
+            </div>
+          )}
+
           <SceneCanvas
             models={scene.models}
             activeModelId={displayActiveModelId}
@@ -401,32 +908,18 @@ export default function Home() {
             leafHoverPosition={supports.leafPlacement.hoverPosition}
             gpuPickingTest={false}
             selectionHighlightMode={scene.selectionHighlightMode}
+            hoverTintStrength={scene.hoverTintStrength}
+            selectedTintStrength={scene.selectedTintStrength}
             crossSectionMode={slicing.crossSectionMode}
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
             ghostData={ghostData}
+            view3dSettings={scene.view3dSettings}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
             )}
           </SceneCanvas>
-
-          <div className="absolute top-2 right-2 z-20">
-            <select
-              value={sessionShaderOverride ?? ''}
-              onChange={(e) => setSessionShaderOverride((e.target.value || null) as MeshShaderType | null)}
-              className="rounded border border-neutral-700 bg-neutral-900/80 text-neutral-200 focus:outline-none focus:ring-0"
-              style={{ fontSize: 10, padding: '1px 4px', height: 18 }}
-              title="Session shader (does not change defaults)"
-            >
-              <option value="">Default</option>
-              {MESH_SHADER_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
 
           {/* Transform Toolbar */}
           {scene.geom && scene.mode === 'prepare' && (
@@ -435,36 +928,6 @@ export default function Home() {
                 mode={transformMgr.transformMode}
                 onModeChange={transformMgr.setTransformMode}
               />
-
-              {/* Transform Controls Panel */}
-              {transformMgr.transformMode === 'transform' && (
-                <TransformControls
-                  position={transformMgr.transform.position}
-                  onPositionChange={transformMgr.transformHook.setPosition}
-                  onCenter={transformMgr.transformHook.centerXY}
-                  onPlatform={transformMgr.transformHook.setPlatformZ}
-                  rotation={transformMgr.transform.rotation}
-                  onRotationChange={transformMgr.transformHook.setRotation}
-                  onResetRotation={transformMgr.transformHook.resetRotation}
-                  onRotationComplete={handleRotationComplete}
-                  scale={transformMgr.transform.scale}
-                  onScaleChange={transformMgr.transformHook.setScale}
-                  onResetScale={transformMgr.transformHook.resetScale}
-                  modelBBox={scene.geom.bbox}
-                  autoLift={transformMgr.autoLift}
-                  onAutoLiftChange={transformMgr.setAutoLift}
-                  liftDistance={transformMgr.liftDistance}
-                  onLiftDistanceChange={transformMgr.setLiftDistance}
-                  onLift={() => {
-                    const lowestWorldZ = transformMgr.getLowestWorldZ();
-                    if (lowestWorldZ !== null) transformMgr.transformHook.snapToLift(lowestWorldZ, transformMgr.liftDistance);
-                  }}
-                  onDrop={() => {
-                    const lowestWorldZ = transformMgr.getLowestWorldZ();
-                    if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
-                  }}
-                />
-              )}
             </>
           )}
 
@@ -475,25 +938,51 @@ export default function Home() {
             heightMm={slicing.heightMm}
           />
 
-          <LayerSlider
-            min={0}
-            max={slicing.numLayers}
-            step={1}
-            value={slicing.layerIndex}
-            onChange={(v) => slicing.setLayerIndex(Math.round(v))}
-            currentHeightMm={slicing.currentHeightMm}
-            maxHeightMm={slicing.heightMm}
-            showValue={true}
-            onToggleMode={() => slicing.setCrossSectionMode(prev => prev === 'smooth' ? 'rasterized' : 'smooth')}
-            crossSectionMode={slicing.crossSectionMode}
-            className="right-0"
-          />
-        </div>
+          {showSceneImportOverlay && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-[1px]">
+              <div
+                className="w-[min(460px,90vw)] rounded-xl border px-5 py-4 shadow-xl"
+                style={{
+                  background: 'color-mix(in srgb, var(--surface-0), black 8%)',
+                  borderColor: 'var(--border-subtle)',
+                }}
+              >
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {importOverlayState.label}
+                </div>
+                {importOverlayState.detail && (
+                  <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {importOverlayState.detail}
+                  </div>
+                )}
 
-        <Sidebar side="right" fixed={false} widthClass="w-80" className="border-l border-neutral-800" contentClassName="space-y-0">
-          {sidebarContent}
-        </Sidebar>
+                <div
+                  className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
+                  style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+                >
+                  <div
+                    className="ui-loading-indicator"
+                    style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+
+        </div>
       </div>
+
+      <EditorContextMenu
+        position={editorContextMenuPos}
+        onAction={handleEditorMenuAction}
+        disabledActions={[
+          ...(!scene.activeModelId ? (['delete', 'cut', 'copy'] as const) : []),
+          'duplicate',
+          'arrange',
+          'repair',
+        ]}
+      />
 
     </div>
   );

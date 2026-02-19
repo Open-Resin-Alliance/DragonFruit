@@ -16,19 +16,87 @@ type StlLoadCameraIntroState = {
   setOrbitTargetFromPoint: (point: THREE.Vector3) => void;
   introBoundsSnapshot: THREE.Box3 | null;
   cameraIntroRunId: number;
+  cameraHomeResetRunId: number;
 };
 
-export function useStlLoadCameraIntro(models: LoadedModel[]): StlLoadCameraIntroState {
+export function useStlLoadCameraIntro(models: LoadedModel[], fallbackOrbitTarget?: THREE.Vector3): StlLoadCameraIntroState {
   const [cameraIntroRunId, setCameraIntroRunId] = React.useState(0);
+  const [cameraHomeResetRunId, setCameraHomeResetRunId] = React.useState(0);
   const prevModelCountRef = React.useRef(0);
+  const lastAppliedIntroRunIdRef = React.useRef(0);
+  const lastFallbackTargetRef = React.useRef<THREE.Vector3 | null>(null);
+
+  const defaultCamera = React.useMemo<DefaultCameraConfig>(() => ({
+    position: [
+      (fallbackOrbitTarget?.x ?? 0) - 220,
+      (fallbackOrbitTarget?.y ?? 0) - 220,
+      (fallbackOrbitTarget?.z ?? 0) + 260,
+    ],
+    fov: 50,
+    up: [0, 0, 1],
+  }), [fallbackOrbitTarget?.x, fallbackOrbitTarget?.y, fallbackOrbitTarget?.z]);
+
+  const defaultOrbitTarget = React.useMemo(
+    () => fallbackOrbitTarget?.clone() ?? new THREE.Vector3(0, 0, 0),
+    [fallbackOrbitTarget?.x, fallbackOrbitTarget?.y, fallbackOrbitTarget?.z],
+  );
+
+  const [introBoundsSnapshot, setIntroBoundsSnapshot] = React.useState<THREE.Box3 | null>(null);
+  const [orbitTarget, setOrbitTarget] = React.useState<[number, number, number]>(() => [defaultOrbitTarget.x, defaultOrbitTarget.y, defaultOrbitTarget.z]);
+  const orbitTargetRef = React.useRef(new THREE.Vector3(defaultOrbitTarget.x, defaultOrbitTarget.y, defaultOrbitTarget.z));
+  const orbitTargetAnimFrameRef = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    orbitTargetRef.current.set(orbitTarget[0], orbitTarget[1], orbitTarget[2]);
+  }, [orbitTarget]);
+
+  React.useEffect(() => {
+    if (models.length > 0) return;
+
+    const target = defaultOrbitTarget;
+    if (orbitTargetRef.current.distanceToSquared(target) < 1e-8) return;
+
+    setOrbitTarget([target.x, target.y, target.z]);
+  }, [defaultOrbitTarget, models.length]);
+
+  React.useEffect(() => {
+    if (models.length > 0) {
+      lastFallbackTargetRef.current = defaultOrbitTarget.clone();
+      return;
+    }
+
+    const previous = lastFallbackTargetRef.current;
+    if (previous && previous.distanceToSquared(defaultOrbitTarget) < 1e-8) return;
+
+    lastFallbackTargetRef.current = defaultOrbitTarget.clone();
+    setCameraHomeResetRunId((id) => id + 1);
+  }, [defaultOrbitTarget, models.length]);
+
+  React.useEffect(() => {
+    return () => {
+      if (orbitTargetAnimFrameRef.current !== null) {
+        cancelAnimationFrame(orbitTargetAnimFrameRef.current);
+        orbitTargetAnimFrameRef.current = null;
+      }
+    };
+  }, []);
+
   React.useLayoutEffect(() => {
     const prev = prevModelCountRef.current;
     const next = models.length;
     prevModelCountRef.current = next;
+
     if (prev === 0 && next > 0) {
       setCameraIntroRunId((id) => id + 1);
+      return;
     }
-  }, [models.length]);
+
+    if (prev > 0 && next === 0) {
+      setCameraHomeResetRunId((id) => id + 1);
+      setOrbitTarget([defaultOrbitTarget.x, defaultOrbitTarget.y, defaultOrbitTarget.z]);
+      setIntroBoundsSnapshot(null);
+    }
+  }, [defaultOrbitTarget.x, defaultOrbitTarget.y, defaultOrbitTarget.z, models.length]);
 
   const sceneWorldBounds = React.useMemo(() => {
     if (models.length === 0) return null;
@@ -61,48 +129,53 @@ export function useStlLoadCameraIntro(models: LoadedModel[]): StlLoadCameraIntro
     return hasVisible ? unionBox : null;
   }, [models]);
 
-  const defaultCamera = React.useMemo<DefaultCameraConfig>(() => ({
-    position: [-220, -220, 260],
-    fov: 50,
-    up: [0, 0, 1],
-  }), []);
-
-  const [introBoundsSnapshot, setIntroBoundsSnapshot] = React.useState<THREE.Box3 | null>(null);
-  const [orbitTarget, setOrbitTarget] = React.useState<[number, number, number]>([0, 0, 0]);
-
   const setOrbitTargetFromPoint = React.useCallback((point: THREE.Vector3) => {
-    setOrbitTarget([point.x, point.y, point.z]);
+    const start = orbitTargetRef.current.clone();
+    const end = point.clone();
+
+    if (start.distanceToSquared(end) < 1e-8) return;
+
+    if (orbitTargetAnimFrameRef.current !== null) {
+      cancelAnimationFrame(orbitTargetAnimFrameRef.current);
+      orbitTargetAnimFrameRef.current = null;
+    }
+
+    const durationMs = 220;
+    let startTime: number | null = null;
+
+    const animate = (now: number) => {
+      if (startTime == null) startTime = now;
+      const t = Math.min(1, (now - startTime) / durationMs);
+      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+      const next = start.clone().lerp(end, eased);
+      orbitTargetRef.current.copy(next);
+      setOrbitTarget([next.x, next.y, next.z]);
+
+      if (t < 1) {
+        orbitTargetAnimFrameRef.current = requestAnimationFrame(animate);
+      } else {
+        orbitTargetAnimFrameRef.current = null;
+      }
+    };
+
+    orbitTargetAnimFrameRef.current = requestAnimationFrame(animate);
   }, []);
 
   React.useLayoutEffect(() => {
     if (!cameraIntroRunId) return;
     if (!sceneWorldBounds) return;
+    if (lastAppliedIntroRunIdRef.current === cameraIntroRunId) return;
 
     const snap = sceneWorldBounds.clone();
 
-    // Only update if bounds actually changed (prevent infinite loop on ref change)
-    if (!introBoundsSnapshot || !introBoundsSnapshot.equals(snap) || cameraIntroRunId) {
-      // Note: checking cameraIntroRunId here just to ensure we run on new ID, 
-      // but we should ideally track 'lastRunId' to avoid re-running.
-      // Actually, if runId changes, we definitely run.
-      // If runId same, we check bounds.
+    // Apply focus target once per intro run to avoid camera following during transform/move.
+    setIntroBoundsSnapshot(snap);
 
-      // Simpler: Just rely on React state bail-out? No, Box3 is new object.
-      // So we must manually check equality.
-      setIntroBoundsSnapshot(prev => {
-        if (prev && prev.equals(snap)) return prev;
-        return snap;
-      });
-
-      const center = snap.getCenter(new THREE.Vector3());
-      setOrbitTarget(prev => {
-        if (Math.abs(prev[0] - center.x) < 0.001 &&
-          Math.abs(prev[1] - center.y) < 0.001 &&
-          Math.abs(prev[2] - center.z) < 0.001) return prev;
-        return [center.x, center.y, center.z];
-      });
-    }
-  }, [cameraIntroRunId, sceneWorldBounds]);
+    const center = snap.getCenter(new THREE.Vector3());
+    setOrbitTarget([center.x, center.y, center.z]);
+    lastAppliedIntroRunIdRef.current = cameraIntroRunId;
+  }, [cameraIntroRunId, introBoundsSnapshot, sceneWorldBounds]);
 
   return {
     defaultCamera,
@@ -110,5 +183,6 @@ export function useStlLoadCameraIntro(models: LoadedModel[]): StlLoadCameraIntro
     setOrbitTargetFromPoint,
     introBoundsSnapshot,
     cameraIntroRunId,
+    cameraHomeResetRunId,
   };
 }

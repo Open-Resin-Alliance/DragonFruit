@@ -8,21 +8,25 @@ type LayerSliderProps = {
   step: number;
   value: number;
   onChange: (next: number) => void;
+  onCrossSectionModeChange?: (mode: 'smooth' | 'rasterized') => void;
   currentHeightMm?: number;
   maxHeightMm?: number;
   className?: string;
   showValue?: boolean;
-  onToggleMode?: () => void;
   crossSectionMode?: 'smooth' | 'rasterized';
   docked?: boolean;
+  embedded?: boolean;
+  expandToContainer?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, maxHeightMm, className, showValue = false, onToggleMode, crossSectionMode = 'smooth', docked = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false }: LayerSliderProps) {
+  const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const [inputValue, setInputValue] = React.useState(String(Math.round(value)));
   const [showError, setShowError] = React.useState(false);
   const [isShiftHeld, setIsShiftHeld] = React.useState(false);
+  const [isDraggingThumb, setIsDraggingThumb] = React.useState(false);
   const dragShiftModeRef = React.useRef<boolean>(false); // Lock shift mode for entire drag
 
   const formatMm = React.useCallback((mm: number) => {
@@ -77,7 +81,9 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
 
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     // Start with current shift state
+    setIsDraggingThumb(true);
     dragShiftModeRef.current = e.shiftKey;
     setIsShiftHeld(e.shiftKey);
     setByClientY(e.clientY, e.shiftKey);
@@ -92,6 +98,7 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
     };
     const onUp = () => {
       // Only reset on mouse up
+      setIsDraggingThumb(false);
       dragShiftModeRef.current = false;
       setIsShiftHeld(false);
       window.removeEventListener('mousemove', onMove);
@@ -191,110 +198,178 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
   }, []);
 
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
+  const railBadgeClass = 'inline-flex items-center rounded-md border px-1 py-0.5 text-[9px] font-semibold tabular-nums';
+  const railBadgeStyle: React.CSSProperties = {
+    color: 'var(--text-muted)',
+    borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 15%)',
+    background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
+  };
+  const railCurrentBadgeStyle: React.CSSProperties = {
+    color: 'var(--text-strong)',
+    borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 10%)',
+    background: 'color-mix(in srgb, var(--surface-1), transparent 4%)',
+  };
+  const shouldPlaceCurrentBadgeBelowThumb = isMinimalRail && percent >= 96;
 
   return (
     <div
+      data-no-drag="true"
       className={
         docked
           ? `relative z-10 select-none ${className ?? ''}`
           : `absolute right-3 top-1/2 -translate-y-1/2 z-10 select-none ${className ?? ''}`
       }
     >
-      {/* Max layer label above slider */}
-      {showValue && (
-        <div className="absolute left-1/2 -translate-x-1/2 top-0 -mt-12 min-w-16 rounded border border-neutral-600 bg-neutral-800/90 px-1.5 py-0.5 text-center text-xs text-neutral-400 shadow tabular-nums">
-          <div>{max}</div>
-          {typeof maxHeightMm === 'number' && (
-            <div className="text-[10px] text-neutral-300">{formatMm(maxHeightMm)} mm</div>
-          )}
-        </div>
-      )}
-      
       <div
-        ref={containerRef}
-        className="relative h-[70vh] w-8 cursor-pointer"
-        onMouseDown={onPointerDown}
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-      >
-        {/* Track */}
-        <div className="absolute left-1/2 top-0 h-full w-2 -translate-x-1/2 rounded-full bg-neutral-500" />
-        {/* Thumb */}
-        <div
-          className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
-          style={{ top: `${100 - percent}%` }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (onToggleMode) {
-              onToggleMode();
+        className={embedded
+          ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} w-full rounded-lg ${isMinimalRail ? 'px-0 py-1.5' : 'px-1 py-1'}`
+          : 'ui-panel w-44 rounded-lg px-2.5 py-2.5 shadow-lg'}
+        style={embedded
+          ? undefined
+          : {
+              background: 'color-mix(in srgb, var(--surface-0), transparent 10%)',
+              borderColor: 'var(--border-subtle)',
             }
-          }}
-        >
-          <div className="relative">
-            {showValue && typeof currentHeightMm === 'number' && (
-              <div className="absolute right-full mr-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-neutral-600 bg-neutral-800/90 px-1.5 py-0.5 text-[10px] text-neutral-200 shadow tabular-nums pointer-events-none">
-                {formatMm(currentHeightMm)} mm
+        }
+      >
+        {!isMinimalRail && (
+          <div className={embedded ? 'mb-1.5' : 'mb-2'}>
+            <div className="flex items-center justify-between">
+              <div className={`${embedded ? 'text-[10px]' : 'text-[11px]'} font-semibold uppercase tracking-wide`} style={{ color: 'var(--text-muted)' }}>
+                Layer
+              </div>
+              <div className="text-xs font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
+                {value}
+              </div>
+            </div>
+
+            <div className="mt-0.5 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] tabular-nums"
+              style={{
+                color: 'var(--text-muted)',
+                borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 25%)',
+                background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
+              }}
+            >
+              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'}
+            </div>
+            {typeof maxHeightMm === 'number' && !embedded && (
+              <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                Max {formatMm(maxHeightMm)} mm
               </div>
             )}
+          </div>
+        )}
+
+        {isMinimalRail && (
+          <div className="flex items-center justify-center mb-1">
+            <div className={railBadgeClass} style={railBadgeStyle}>
+              {max}
+            </div>
+          </div>
+        )}
+
+        <div
+          data-no-drag="true"
+          className={`relative mx-auto ${embedded ? (expandToContainer ? (isMinimalRail ? 'flex-1 h-full min-h-[300px]' : 'flex-1 h-full min-h-[300px]') : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? 'w-5' : 'w-7') : 'w-10'} cursor-pointer`}
+          onMouseDown={onPointerDown}
+          onContextMenu={(e) => {
+            if (!onCrossSectionModeChange) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onCrossSectionModeChange(crossSectionMode === 'smooth' ? 'rasterized' : 'smooth');
+          }}
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          title={isMinimalRail
+            ? `Layer ${value} • ${typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'} • Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
+            : undefined}
+        >
+          {!isMinimalRail && (
+            <div
+              className="absolute left-1/2 -translate-x-1/2 -top-5 text-[10px] tabular-nums"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              {max}
+            </div>
+          )}
+
+          <div
+            ref={containerRef}
+            data-no-drag="true"
+            className={isMinimalRail
+              ? 'absolute left-0 right-0 top-0 bottom-0'
+              : 'absolute left-0 right-0 top-0 bottom-0'}
+          >
+
+            {/* Track */}
+            <div
+              className="absolute left-1/2 top-0 h-full w-1.5 -translate-x-1/2 rounded-full"
+              style={{
+                background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+                border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 40%)',
+              }}
+            />
+
+            {/* Progress fill */}
+            <div
+              className="absolute left-1/2 -translate-x-1/2 bottom-0 w-1.5 rounded-full"
+              style={{
+                height: `${percent}%`,
+                background: 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))',
+                boxShadow: '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)',
+              }}
+            />
+
+            {/* Thumb */}
+            <div
+              className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
+              style={{
+                top: `${100 - percent}%`,
+                transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+              }}
+            >
+              <div className="relative">
+                {showValue && typeof currentHeightMm === 'number' && (
+                  <div
+                    className={isMinimalRail
+                      ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${railBadgeClass} pointer-events-none ${shouldPlaceCurrentBadgeBelowThumb ? 'top-3' : '-top-5'}`
+                      : 'absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] shadow tabular-nums pointer-events-none'}
+                    style={isMinimalRail
+                      ? railCurrentBadgeStyle
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-0), transparent 12%)',
+                          color: 'var(--text-strong)',
+                        }}
+                  >
+                    {isMinimalRail
+                      ? `${value}`
+                      : `${formatMm(currentHeightMm)} mm`}
+                  </div>
+                )}
 
             {crossSectionMode === 'rasterized' ? (
-              // Pixelated thumb for raster mode - bigger with chunkier pixels
-              <svg width="28" height="28" viewBox="0 0 28 28" className="cursor-context-menu drop-shadow-lg">
-                {/* Top row */}
-                <rect x="9" y="3" width="3" height="3" fill="white" />
-                <rect x="12" y="3" width="3" height="3" fill="white" />
-                <rect x="15" y="3" width="3" height="3" fill="white" />
-                
-                {/* Second row */}
-                <rect x="6" y="6" width="3" height="3" fill="white" />
-                <rect x="9" y="6" width="3" height="3" fill="#d4d4d4" />
-                <rect x="12" y="6" width="3" height="3" fill="#d4d4d4" />
-                <rect x="15" y="6" width="3" height="3" fill="#d4d4d4" />
-                <rect x="18" y="6" width="3" height="3" fill="white" />
-                
-                {/* Third row */}
-                <rect x="3" y="9" width="3" height="3" fill="white" />
-                <rect x="6" y="9" width="3" height="3" fill="#d4d4d4" />
-                <rect x="9" y="9" width="3" height="3" fill="#d4d4d4" />
-                <rect x="12" y="9" width="3" height="3" fill="#d4d4d4" />
-                <rect x="15" y="9" width="3" height="3" fill="#d4d4d4" />
-                <rect x="18" y="9" width="3" height="3" fill="#d4d4d4" />
-                <rect x="21" y="9" width="3" height="3" fill="white" />
-                
-                {/* Middle row */}
-                <rect x="3" y="12" width="3" height="3" fill="white" />
-                <rect x="6" y="12" width="3" height="3" fill="#d4d4d4" />
-                <rect x="9" y="12" width="3" height="3" fill="#d4d4d4" />
-                <rect x="12" y="12" width="3" height="3" fill="#d4d4d4" />
-                <rect x="15" y="12" width="3" height="3" fill="#d4d4d4" />
-                <rect x="18" y="12" width="3" height="3" fill="#d4d4d4" />
-                <rect x="21" y="12" width="3" height="3" fill="white" />
-                
-                {/* Fifth row */}
-                <rect x="3" y="15" width="3" height="3" fill="white" />
-                <rect x="6" y="15" width="3" height="3" fill="#d4d4d4" />
-                <rect x="9" y="15" width="3" height="3" fill="#d4d4d4" />
-                <rect x="12" y="15" width="3" height="3" fill="#d4d4d4" />
-                <rect x="15" y="15" width="3" height="3" fill="#d4d4d4" />
-                <rect x="18" y="15" width="3" height="3" fill="#d4d4d4" />
-                <rect x="21" y="15" width="3" height="3" fill="white" />
-                
-                {/* Sixth row */}
-                <rect x="6" y="18" width="3" height="3" fill="white" />
-                <rect x="9" y="18" width="3" height="3" fill="#d4d4d4" />
-                <rect x="12" y="18" width="3" height="3" fill="#d4d4d4" />
-                <rect x="15" y="18" width="3" height="3" fill="#d4d4d4" />
-                <rect x="18" y="18" width="3" height="3" fill="white" />
-                
-                {/* Bottom row */}
-                <rect x="9" y="21" width="3" height="3" fill="white" />
-                <rect x="12" y="21" width="3" height="3" fill="white" />
-                <rect x="15" y="21" width="3" height="3" fill="white" />
-              </svg>
+              <div
+                className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                style={{
+                  borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
+                  background: 'repeating-linear-gradient(90deg, color-mix(in srgb, var(--accent), white 8%) 0 4px, color-mix(in srgb, var(--accent), black 8%) 4px 8px)',
+                  boxShadow: isDraggingThumb
+                    ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
+                    : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                }}
+              />
             ) : (
-              // Smooth thumb for normal mode
-              <div className="h-5 w-5 rounded-full border-2 border-white bg-neutral-200 shadow cursor-context-menu" />
+              <div
+                className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-transform duration-150`}
+                style={{
+                  borderColor: 'color-mix(in srgb, white, var(--accent) 20%)',
+                  background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent), white 20%), var(--accent), color-mix(in srgb, var(--accent), white 20%))',
+                  boxShadow: isDraggingThumb
+                    ? '0 0 0 2px color-mix(in srgb, var(--accent), transparent 65%), 0 6px 14px rgba(0,0,0,0.38)'
+                    : '0 0 0 2px color-mix(in srgb, var(--accent), transparent 80%), 0 4px 10px rgba(0,0,0,0.35)',
+                }}
+              />
             )}
             
             {/* Shift indicator - wifi-style precision arcs centered on thumb */}
@@ -369,24 +444,51 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
                 )}
               </div>
             )}
+              </div>
+            </div>
           </div>
         </div>
+
+        {!isMinimalRail && (
+          <div className="mt-1 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+            {min}
+          </div>
+        )}
+
+        {isMinimalRail && (
+          <div className="mt-1 flex items-center justify-center gap-1.5">
+            <div
+              className={railBadgeClass}
+              style={railBadgeStyle}
+            >
+              {min}
+            </div>
+            <div
+              className={railBadgeClass}
+              style={railBadgeStyle}
+              title={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}
+            >
+              {crossSectionMode === 'smooth' ? 'S' : 'R'}
+            </div>
+          </div>
+        )}
+
+        {/* Static input field below slider */}
+        {showValue && !isMinimalRail && (
+          <input
+            type="text"
+            value={inputValue}
+            onChange={handleInputChange}
+            onBlur={handleInputBlur}
+            onKeyDown={handleInputKeyDown}
+            className="mt-2 w-full rounded border px-1.5 py-1 text-center text-xs shadow tabular-nums focus:outline-none transition-colors"
+            style={showError
+              ? { borderColor: '#ef4444', background: 'rgba(127, 29, 29, 0.5)', color: '#fecaca' }
+              : { borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-0), transparent 10%)', color: 'var(--text-strong)' }
+            }
+          />
+        )}
       </div>
-      {/* Static input field below slider */}
-      {showValue && (
-        <input
-          type="text"
-          value={inputValue}
-          onChange={handleInputChange}
-          onBlur={handleInputBlur}
-          onKeyDown={handleInputKeyDown}
-          className={`absolute left-1/2 -translate-x-1/2 bottom-0 -mb-10 w-12 rounded border px-1 py-0.5 text-center text-xs shadow tabular-nums focus:outline-none transition-colors ${
-            showError 
-              ? 'border-red-500 bg-red-900/50 text-red-200' 
-              : 'border-neutral-400 bg-neutral-900/90 text-neutral-200 focus:border-blue-500'
-          }`}
-        />
-      )}
     </div>
   );
 }

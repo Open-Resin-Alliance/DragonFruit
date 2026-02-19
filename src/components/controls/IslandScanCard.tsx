@@ -1,14 +1,15 @@
 import React from 'react';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
-import { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { NumberInput } from '@/components/ui/NumberInput';
 import type { ImportPhase } from '@/features/lys-conversion/useLycheeImport';
+import { Search, ScanLine } from 'lucide-react';
+import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 
 interface IslandScanCardProps {
     islands: ReturnType<typeof useIslandManager>;
     hasGeometry: boolean;
     onLoadLychee: () => void;
-    onGhostDataLoaded?: (data: any) => void;
+    onGhostDataLoaded?: (data: unknown) => void;
     onImportLycheeFile?: (file: File) => void;
     // Two-step Lychee import
     lycheeImportPhase?: ImportPhase;
@@ -31,8 +32,10 @@ export function IslandScanCard({
     onLycheeStlFile,
     onCancelLycheeImport
 }: IslandScanCardProps) {
+    const cardRef = React.useRef<HTMLDivElement | null>(null);
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const stlInputRef = React.useRef<HTMLInputElement>(null);
+    const [compactActions, setCompactActions] = React.useState(false);
 
     // Determine if we're using the new two-step flow
     const useTwoStepFlow = !!onLycheeJsonFile && !!onLycheeStlFile;
@@ -78,8 +81,24 @@ export function IslandScanCard({
         }
     };
 
+    React.useLayoutEffect(() => {
+        const element = cardRef.current;
+        if (!element) return;
+
+        const updateCompactState = () => {
+            setCompactActions(element.clientWidth <= 276);
+        };
+
+        updateCompactState();
+        const observer = new ResizeObserver(updateCompactState);
+        observer.observe(element);
+
+        return () => observer.disconnect();
+    }, []);
+
     return (
-        <div className="bg-neutral-800/95 backdrop-blur-sm rounded-lg px-3 pb-2 pt-1 shadow-xl space-y-1">
+        <div ref={cardRef}>
+        <Card>
             <input
                 type="file"
                 ref={fileInputRef}
@@ -94,15 +113,17 @@ export function IslandScanCard({
                 accept=".stl"
                 onChange={handleStlFileChange}
             />
-            <div className="flex items-center justify-between py-1 border-b border-neutral-700">
-                <div className="flex items-center gap-1.5">
-                    <button
+            <CardHeader
+                left={(
+                    <>
+                        <IconButton
                         onClick={() => islands.setScanCardExpanded(!islands.scanCardExpanded)}
-                        className="p-0.5 hover:bg-neutral-700 rounded transition-colors"
+                        className="!p-0.5"
                         title={islands.scanCardExpanded ? 'Collapse card' : 'Expand card'}
                     >
                         <svg
-                            className={`w-3 h-3 transform transition-transform ${islands.scanCardExpanded ? 'text-blue-500 rotate-0' : 'text-neutral-500 rotate-0'}`}
+                            className="w-3 h-3 transform transition-transform"
+                            style={{ color: islands.scanCardExpanded ? 'var(--accent)' : 'var(--text-muted)' }}
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -113,59 +134,74 @@ export function IslandScanCard({
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             )}
                         </svg>
-                    </button>
-                    <h3 className="text-xs font-semibold text-neutral-200">Island Scan</h3>
-                </div>
+                        </IconButton>
+                        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Island Scan</h3>
+                    </>
+                )}
+                right={(
+                    <div className="flex gap-1.5">
+                        <Button
+                            onClick={islands.onRunIslandScan}
+                            disabled={!hasGeometry || islands.scanning}
+                            variant="secondary"
+                            size="sm"
+                            className={compactActions ? '!h-8 !w-8 !min-w-8 !px-0 !py-0 !inline-flex !items-center !justify-center !leading-none text-[11px]' : '!h-8 !px-2.5 !py-0 text-[11px]'}
+                            title="Run classic island scan"
+                        >
+                            {compactActions
+                                ? (islands.scanning ? '…' : <Search className="h-3.5 w-3.5" />)
+                                : (islands.scanning ? 'Scanning…' : 'Scan')}
+                        </Button>
+                        <Button
+                            onClick={islands.onRunScanlineScan}
+                            disabled={!hasGeometry || islands.scanning}
+                            variant="accent"
+                            size="sm"
+                            className={compactActions ? '!h-8 !w-8 !min-w-8 !px-0 !py-0 !inline-flex !items-center !justify-center !leading-none text-[11px]' : '!h-8 !px-2.5 !py-0 text-[11px]'}
+                            title="Run optimized scanline rasterization"
+                        >
+                            {compactActions
+                                ? (islands.scanning ? '…' : <ScanLine className="h-3.5 w-3.5" />)
+                                : (islands.scanning ? '...' : 'Scanline')}
+                        </Button>
+                    </div>
+                )}
+                hideDivider={!islands.scanCardExpanded}
+            />
 
-                <div className="flex gap-1.5">
-                    <button
-                        type="button"
-                        onClick={islands.onRunIslandScan}
-                        disabled={!hasGeometry || islands.scanning}
-                        className="px-1.5 py-0.5 text-[10px] rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 disabled:opacity-50 transition-colors"
-                    >
-                        {islands.scanning ? 'Scanning…' : 'Scan'}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={islands.onRunScanlineScan}
-                        disabled={!hasGeometry || islands.scanning}
-                        className="px-1.5 py-0.5 text-[10px] rounded bg-purple-600 hover:bg-purple-500 disabled:bg-neutral-700 disabled:opacity-50 text-white transition-colors"
-                        title="Run optimized scanline rasterization"
-                    >
-                        {islands.scanning ? '...' : 'Scanline'}
-                    </button>
-                </div>
-            </div>
-
-            <div className="pt-1">
+            <div className="px-2.5 pt-1 pb-2.5 space-y-1.5">
+            <div>
                 {/* Two-step import: Awaiting STL phase */}
                 {useTwoStepFlow && lycheeImportPhase === 'awaiting_stl' ? (
                     <div className="space-y-1">
-                        <div className="text-[10px] text-yellow-400 px-1">
+                        <div className="text-[11px] px-1" style={{ color: 'var(--text-strong)' }}>
                             JSON loaded. Now select the original STL file.
                         </div>
                         <div className="flex gap-1">
-                            <button
+                            <Button
                                 onClick={() => stlInputRef.current?.click()}
-                                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-[10px] font-medium transition-colors"
+                                variant="primary"
+                                size="sm"
+                                className="flex-1 !h-8 text-[11px]"
                             >
                                 Select STL File
-                            </button>
-                            <button
+                            </Button>
+                            <Button
                                 onClick={onCancelLycheeImport}
-                                className="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 text-neutral-300 rounded text-[10px] transition-colors"
+                                variant="secondary"
+                                size="sm"
+                                className="!h-8 text-[11px]"
                             >
                                 Cancel
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 ) : lycheeImportPhase === 'processing' ? (
-                    <div className="text-[10px] text-blue-400 px-1 py-1">
+                    <div className="text-[11px] px-1 py-1" style={{ color: 'var(--text-muted)' }}>
                         Processing import...
                     </div>
                 ) : (
-                    <button
+                    <Button
                         onClick={() => {
                             if (useTwoStepFlow || onImportLycheeFile || onGhostDataLoaded) {
                                 fileInputRef.current?.click();
@@ -173,34 +209,35 @@ export function IslandScanCard({
                                 onLoadLychee();
                             }
                         }}
-                        className="w-full bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded text-[10px] font-medium transition-colors mb-1"
+                        variant="primary"
+                        className="w-full mb-1 !h-8 text-[11px]"
                     >
                         Load Support Data (V2)
-                    </button>
+                    </Button>
                 )}
 
                 {/* Error display */}
                 {lycheeImportError && (
-                    <div className="text-[10px] text-red-400 px-1 mt-1">
+                    <div className="text-[11px] px-1 mt-1" style={{ color: 'var(--danger)' }}>
                         {lycheeImportError}
                     </div>
                 )}
             </div>
 
             {islands.scanProgress && (
-                <div className="text-[10px] text-neutral-400 px-1">
+                <div className="text-[11px] px-1" style={{ color: 'var(--text-muted)' }}>
                     {islands.scanProgress.done} / {islands.scanProgress.total} layers
                     {islands.scanData && islands.scanData.islands.length > 0 && (
-                        <span className="text-neutral-300 ml-1">({islands.scanData.islands.length} islands)</span>
+                        <span className="ml-1" style={{ color: 'var(--text-strong)' }}>({islands.scanData.islands.length} islands)</span>
                     )}
                 </div>
             )}
 
             {islands.scanCardExpanded && (
-                <div className="bg-neutral-750 rounded p-1 mt-1">
+                <div className="rounded p-1 mt-1 border" style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}>
                     <div className="grid grid-cols-2 gap-1.5">
                         <div className="flex flex-col gap-0.5">
-                            <label className="text-[9px] text-neutral-400">Pixel (mm)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Pixel (mm)</label>
                             <NumberInput
                                 value={islands.pxMm}
                                 onChange={(val) => {
@@ -208,11 +245,11 @@ export function IslandScanCard({
                                         islands.setPxMm(val);
                                     }
                                 }}
-                                className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                className="ui-input w-full !h-8 px-2 text-sm no-spinners"
                             />
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <label className="text-[9px] text-neutral-400">Buffer (mm)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Buffer (mm)</label>
                             <NumberInput
                                 value={islands.supportBufMm}
                                 onChange={(val) => {
@@ -220,28 +257,32 @@ export function IslandScanCard({
                                         islands.setSupportBufMm(val);
                                     }
                                 }}
-                                className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                className="ui-input w-full !h-8 px-2 text-sm no-spinners"
                             />
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <label className="text-[9px] text-neutral-400">Connectivity</label>
-                            <div className="flex rounded bg-neutral-700 p-0.5">
-                                <button
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Connectivity</label>
+                            <div className="flex rounded p-0.5 gap-0.5" style={{ background: 'var(--surface-2)' }}>
+                                <Button
                                     onClick={() => islands.setConnectivity(4)}
-                                    className={`flex-1 text-[9px] rounded py-0.5 ${islands.connectivity === 4 ? 'bg-blue-500 text-white' : 'text-neutral-400 hover:text-neutral-200'}`}
+                                    variant={islands.connectivity === 4 ? 'primary' : 'secondary'}
+                                    size="sm"
+                                    className="flex-1 !h-8 !py-0 text-[11px]"
                                 >
                                     4
-                                </button>
-                                <button
+                                </Button>
+                                <Button
                                     onClick={() => islands.setConnectivity(8)}
-                                    className={`flex-1 text-[9px] rounded py-0.5 ${islands.connectivity === 8 ? 'bg-blue-500 text-white' : 'text-neutral-400 hover:text-neutral-200'}`}
+                                    variant={islands.connectivity === 8 ? 'primary' : 'secondary'}
+                                    size="sm"
+                                    className="flex-1 !h-8 !py-0 text-[11px]"
                                 >
                                     8
-                                </button>
+                                </Button>
                             </div>
                         </div>
                         <div className="flex flex-col gap-0.5">
-                            <label className="text-[9px] text-neutral-400">Min Area (mm²)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Min Area (mm²)</label>
                             <NumberInput
                                 value={islands.minIslandAreaMm2}
                                 onChange={(val) => {
@@ -249,12 +290,12 @@ export function IslandScanCard({
                                         islands.setMinIslandAreaMm2(val);
                                     }
                                 }}
-                                className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                className="ui-input w-full !h-8 px-2 text-sm no-spinners"
                             />
                         </div>
 
                         <div className="flex flex-col gap-0.5">
-                            <label className="text-[9px] text-neutral-400">Min Overlap (px)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Min Overlap (px)</label>
                             <NumberInput
                                 value={islands.minOverlapPx}
                                 onChange={(val) => {
@@ -262,12 +303,12 @@ export function IslandScanCard({
                                         islands.setMinOverlapPx(val);
                                     }
                                 }}
-                                className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                className="ui-input w-full !h-8 px-2 text-sm no-spinners"
                             />
                         </div>
 
                         <div className="flex flex-col gap-0.5">
-                            <label className="text-[9px] text-neutral-400">Overlap Radius (px)</label>
+                            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Overlap Radius (px)</label>
                             <NumberInput
                                 value={islands.overlapNeighborhoodPx}
                                 onChange={(val) => {
@@ -275,28 +316,32 @@ export function IslandScanCard({
                                         islands.setOverlapNeighborhoodPx(val);
                                     }
                                 }}
-                                className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                className="ui-input w-full !h-8 px-2 text-sm no-spinners"
                             />
                         </div>
                     </div>
 
                     {/* Debug options */}
-                    <div className="mt-1 pt-1 border-t border-neutral-700 flex items-center justify-between">
-                        <label className="text-[9px] text-neutral-400">Show Island IDs (debug)</label>
+                    <div className="mt-1 pt-1 border-t flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
+                        <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Show Island IDs (debug)</label>
                         <button
                             type="button"
                             onClick={() => islands.setShowIslandIdLabels(!islands.showIslandIdLabels)}
-                            className={`w-7 h-4 rounded-full flex items-center px-0.5 transition-colors ${islands.showIslandIdLabels ? 'bg-blue-500' : 'bg-neutral-600'
-                                }`}
+                            className="w-9 h-5 rounded-full flex items-center px-0.5 transition-colors"
+                            style={{
+                                background: islands.showIslandIdLabels ? 'var(--accent)' : 'var(--surface-2)',
+                            }}
                         >
                             <span
-                                className={`w-3 h-3 rounded-full bg-white shadow transform transition-transform ${islands.showIslandIdLabels ? 'translate-x-3' : 'translate-x-0'
+                                className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${islands.showIslandIdLabels ? 'translate-x-4' : 'translate-x-0'
                                     }`}
                             />
                         </button>
                     </div>
                 </div>
             )}
+            </div>
+        </Card>
         </div>
     );
 }

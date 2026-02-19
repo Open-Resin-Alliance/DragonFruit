@@ -1,5 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
+import { blendTintColor, clampTintStrength } from './tint';
 
 function clampInt(input: unknown, min: number, max: number, fallback: number): number {
   const n = typeof input === 'number' ? input : Number(input);
@@ -29,13 +30,29 @@ function buildGradientMap(steps: number): THREE.DataTexture {
 
 export function ToonMaterial({
   isSelected,
+  isHovered,
+  hoverTintColor,
+  hoverTintStrength,
+  selectedTintStrength,
   toonSteps,
   clippingPlanes,
 }: {
   isSelected: boolean;
+  isHovered: boolean;
+  hoverTintColor?: string;
+  hoverTintStrength?: number;
+  selectedTintStrength?: number;
   toonSteps?: number;
   clippingPlanes: THREE.Plane[];
 }) {
+  const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
+  const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
+  const tintColor = isSelected
+    ? blendTintColor('#ffffff', hoverTintColor, selectedStrength)
+    : isHovered
+      ? blendTintColor('#ffffff', hoverTintColor, hoverStrength)
+      : '#ffffff';
+
   const gradientMap = React.useMemo(() => buildGradientMap(toonSteps ?? 5), [toonSteps]);
 
   React.useEffect(() => {
@@ -47,10 +64,10 @@ export function ToonMaterial({
   return (
     <meshToonMaterial
       vertexColors
-      color="#ffffff"
+      color={tintColor}
       gradientMap={gradientMap}
-      emissive={isSelected ? '#1a75ff' : '#000000'}
-      emissiveIntensity={isSelected ? 0.25 : 0}
+      emissive="#000000"
+      emissiveIntensity={0}
       clippingPlanes={clippingPlanes}
       clipIntersection
       side={THREE.DoubleSide}

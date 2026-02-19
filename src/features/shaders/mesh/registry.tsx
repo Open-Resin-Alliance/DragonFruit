@@ -11,6 +11,10 @@ import { XrayMaterial } from './xray';
 export function MeshShaderMaterial({
   shaderType,
   isSelected,
+  isHovered = false,
+  hoverTintColor,
+  hoverTintStrength,
+  selectedTintStrength,
   meshColor,
   materialRoughness,
   clippingPlanes,
@@ -21,6 +25,10 @@ export function MeshShaderMaterial({
 }: {
   shaderType: MeshShaderType;
   isSelected: boolean;
+  isHovered?: boolean;
+  hoverTintColor?: string;
+  hoverTintStrength?: number;
+  selectedTintStrength?: number;
   meshColor?: string;
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
@@ -33,6 +41,11 @@ export function MeshShaderMaterial({
     case 'flat_unlit':
       return (
         <FlatUnlitMaterial
+          isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
           useVertexColors={flatUseVertexColors}
           meshColor={meshColor}
           clippingPlanes={clippingPlanes}
@@ -43,24 +56,51 @@ export function MeshShaderMaterial({
       return (
         <MatcapMaterial
           isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
           variant={matcapVariant}
           clippingPlanes={clippingPlanes}
         />
       );
 
     case 'toon':
-      return <ToonMaterial isSelected={isSelected} toonSteps={toonSteps} clippingPlanes={clippingPlanes} />;
+      return (
+        <ToonMaterial
+          isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
+          toonSteps={toonSteps}
+          clippingPlanes={clippingPlanes}
+        />
+      );
 
     case 'normal_debug':
       return <NormalDebugMaterial clippingPlanes={clippingPlanes} />;
 
     case 'wireframe':
-      return <WireframeMaterial clippingPlanes={clippingPlanes} />;
+      return (
+        <WireframeMaterial
+          isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
+          clippingPlanes={clippingPlanes}
+        />
+      );
 
     case 'xray':
       return (
         <XrayMaterial
           isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
           opacity={xrayOpacity}
@@ -72,6 +112,10 @@ export function MeshShaderMaterial({
       return (
         <SoftClayMaterial
           isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
         />

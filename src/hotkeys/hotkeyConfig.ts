@@ -64,6 +64,10 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         FOCUS_PICK: {
             key: 'f',
             description: 'Press to refocus the camera at the mouse cursor (over model)'
+        },
+        TOGGLE_PROJECTION: {
+            key: 'o',
+            description: 'Toggle camera projection (Orthographic / Perspective)'
         }
     },
     PRESETS: {

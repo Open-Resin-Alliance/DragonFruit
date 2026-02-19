@@ -13,6 +13,12 @@ import { useLycheeImport, type LycheeImportResult } from '@/components/lys-impor
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry } from '@/utils/bvh';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
+import {
+  getSavedView3DSettings,
+  normalizeView3DSettings,
+  saveView3DSettings,
+  type View3DSettings,
+} from '@/components/settings/view3dPreferences';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -26,6 +32,8 @@ type PersistedMeshAppearance = {
   wireframeThicknessPx: number;
   xrayOpacity: number;
   meshColor: string;
+  hoverTintStrength: number;
+  selectedTintStrength: number;
 };
 
 const MESH_APPEARANCE_STORAGE_KEY = 'mesh-appearance-settings';
@@ -40,6 +48,34 @@ const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
 const DEFAULT_TOON_STEPS = 5;
+const DEFAULT_HOVER_TINT_STRENGTH = 0.5;
+const DEFAULT_SELECTED_TINT_STRENGTH = 0.75;
+const RECENT_OPENED_FILES_STORAGE_KEY = 'app-recent-opened-files';
+const RECENT_OPENED_FILES_LIMIT = 10;
+const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
+const RECENT_FILES_DB_VERSION = 1;
+const RECENT_FILES_STORE_NAME = 'files';
+
+export type RecentOpenedFileKind = 'mesh' | 'scene';
+
+export type RecentOpenedFileEntry = {
+  id: string;
+  name: string;
+  kind: RecentOpenedFileKind;
+  sizeBytes?: number;
+  openedAt: number;
+};
+
+type RecentOpenedFileBlobRecord = {
+  id: string;
+  name: string;
+  kind: RecentOpenedFileKind;
+  sizeBytes?: number;
+  openedAt: number;
+  type: string;
+  lastModified: number;
+  data: ArrayBuffer;
+};
 
 function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
   const n = typeof input === 'number' ? input : Number(input);
@@ -100,6 +136,8 @@ function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
       wireframeThicknessPx: clampNumber(parsed.wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(parsed.xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
       meshColor: clampHexColor(parsed.meshColor, DEFAULT_MESH_COLOR),
+      hoverTintStrength: clampNumber(parsed.hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
+      selectedTintStrength: clampNumber(parsed.selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
     };
   } catch {
     return null;
@@ -114,6 +152,173 @@ function writeMeshAppearanceToLocalStorage(next: PersistedMeshAppearance): void 
   } catch {
     // ignore
   }
+}
+
+function openRecentFilesDb(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || typeof window.indexedDB === 'undefined') {
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const request = window.indexedDB.open(RECENT_FILES_DB_NAME, RECENT_FILES_DB_VERSION);
+
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(RECENT_FILES_STORE_NAME)) {
+          db.createObjectStore(RECENT_FILES_STORE_NAME, { keyPath: 'id' });
+        }
+      };
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+      request.onblocked = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function putRecentOpenedFileBlob(entry: RecentOpenedFileEntry, file: File): Promise<void> {
+  const db = await openRecentFilesDb();
+  if (!db) return;
+
+  try {
+    const data = await file.arrayBuffer();
+
+    const record: RecentOpenedFileBlobRecord = {
+      id: entry.id,
+      name: entry.name,
+      kind: entry.kind,
+      sizeBytes: entry.sizeBytes,
+      openedAt: entry.openedAt,
+      type: file.type,
+      lastModified: file.lastModified,
+      data,
+    };
+
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(RECENT_FILES_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(RECENT_FILES_STORE_NAME);
+      store.put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } catch {
+    // ignore
+  } finally {
+    db.close();
+  }
+}
+
+async function deleteRecentOpenedFileBlobs(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+
+  const db = await openRecentFilesDb();
+  if (!db) return;
+
+  try {
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(RECENT_FILES_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(RECENT_FILES_STORE_NAME);
+      ids.forEach((id) => store.delete(id));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function readRecentOpenedFileBlob(entry: RecentOpenedFileEntry): Promise<File | null> {
+  const db = await openRecentFilesDb();
+  if (!db) return null;
+
+  try {
+    return await new Promise<File | null>((resolve) => {
+      const tx = db.transaction(RECENT_FILES_STORE_NAME, 'readonly');
+      const store = tx.objectStore(RECENT_FILES_STORE_NAME);
+      const request = store.get(entry.id);
+
+      request.onsuccess = () => {
+        const result = request.result as RecentOpenedFileBlobRecord | undefined;
+        if (!result || !(result.data instanceof ArrayBuffer)) {
+          resolve(null);
+          return;
+        }
+
+        const blob = new Blob([result.data], { type: result.type || '' });
+        resolve(new File([blob], result.name || entry.name, {
+          type: result.type || '',
+          lastModified: Number.isFinite(result.lastModified) ? result.lastModified : Date.now(),
+        }));
+      };
+
+      request.onerror = () => resolve(null);
+      tx.onerror = () => resolve(null);
+      tx.onabort = () => resolve(null);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function readRecentOpenedFilesFromLocalStorage(): RecentOpenedFileEntry[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(RECENT_OPENED_FILES_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((item): RecentOpenedFileEntry | null => {
+        if (!item || typeof item !== 'object') return null;
+
+        const id = typeof item.id === 'string' ? item.id.trim() : '';
+        const name = typeof item.name === 'string' ? item.name : '';
+        const kind = item.kind === 'mesh' || item.kind === 'scene' ? item.kind : null;
+        const openedAt = Number(item.openedAt);
+        const sizeBytes = typeof item.sizeBytes === 'number' && Number.isFinite(item.sizeBytes) && item.sizeBytes >= 0
+          ? item.sizeBytes
+          : undefined;
+
+        if (!id || !name || !kind || !Number.isFinite(openedAt)) return null;
+
+        return {
+          id,
+          name,
+          kind,
+          sizeBytes,
+          openedAt,
+        };
+      })
+      .filter((item): item is RecentOpenedFileEntry => item !== null)
+      .slice(0, RECENT_OPENED_FILES_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(RECENT_OPENED_FILES_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // ignore
+  }
+}
+
+function generateRecentEntryId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export interface LoadedModel {
@@ -143,11 +348,44 @@ import { getSnapshot } from '@/supports/state';
 import { deleteSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
 
+type ImportProgressState = {
+  active: boolean;
+  type: 'mesh' | 'scene' | null;
+  label: string;
+  detail: string;
+  progress: number | null;
+};
+
+type ModelClipboardEntry = {
+  name: string;
+  fileSizeBytes?: number;
+  geometry: GeometryWithBounds;
+  transform: ModelTransform;
+  color: string;
+  polygonCount: number;
+};
+
 export function useSceneCollectionManager() {
+  const waitForUiYield = useCallback(
+    () => new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    }),
+    [],
+  );
+
   const persistedAppearance = useMemo(() => readMeshAppearanceFromLocalStorage(), []);
 
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry | null>(null);
+  const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>(() => readRecentOpenedFilesFromLocalStorage());
+  const [importProgress, setImportProgress] = useState<ImportProgressState>({
+    active: false,
+    type: null,
+    label: '',
+    detail: '',
+    progress: null,
+  });
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
 
@@ -349,6 +587,23 @@ export function useSceneCollectionManager() {
   const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(persistedAppearance?.matcapVariant ?? DEFAULT_MATCAP_VARIANT);
   const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(persistedAppearance?.flatUseVertexColors ?? DEFAULT_FLAT_USE_VERTEX_COLORS);
   const [toonSteps, setToonSteps] = useState<number>(persistedAppearance?.toonSteps ?? DEFAULT_TOON_STEPS);
+  const [preferredMeshColor, setPreferredMeshColor] = useState<string>(persistedAppearance?.meshColor ?? DEFAULT_MESH_COLOR);
+  const [hoverTintStrength, setHoverTintStrength] = useState<number>(persistedAppearance?.hoverTintStrength ?? DEFAULT_HOVER_TINT_STRENGTH);
+  const [selectedTintStrength, setSelectedTintStrength] = useState<number>(persistedAppearance?.selectedTintStrength ?? DEFAULT_SELECTED_TINT_STRENGTH);
+  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => getSavedView3DSettings());
+
+  const setView3dSettings = useCallback((next: View3DSettings) => {
+    const normalized = normalizeView3DSettings(next);
+    setView3dSettingsState(normalized);
+    saveView3DSettings(normalized);
+  }, []);
+
+  const defaultImportCenterXY = useMemo(() => {
+    if (view3dSettings.originMode === 'front_left') {
+      return new THREE.Vector2(view3dSettings.widthMm * 0.5, view3dSettings.depthMm * 0.5);
+    }
+    return new THREE.Vector2(0, 0);
+  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   useEffect(() => {
     const prev = readMeshAppearanceFromLocalStorage();
@@ -367,8 +622,10 @@ export function useSceneCollectionManager() {
       wireframeThicknessPx: clampNumber(wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
       meshColor: prev?.meshColor ?? DEFAULT_MESH_COLOR,
+      hoverTintStrength: clampNumber(hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
+      selectedTintStrength: clampNumber(selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
     });
-  }, [ambientIntensity, directionalIntensity, materialRoughness, shaderType, matcapVariant, flatUseVertexColors, toonSteps, wireframeThicknessPx, xrayOpacity]);
+  }, [ambientIntensity, directionalIntensity, flatUseVertexColors, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
 
   // Global application mode
   const [mode, setMode] = useState<SupportMode>('prepare');
@@ -376,6 +633,82 @@ export function useSceneCollectionManager() {
 
   // Helper to generate IDs
   const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+
+  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds): GeometryWithBounds => {
+    const clonedGeometry = source.geometry.clone();
+    accelerateGeometry(clonedGeometry);
+
+    return {
+      geometry: clonedGeometry,
+      bbox: source.bbox.clone(),
+      center: source.center.clone(),
+      size: source.size.clone(),
+    };
+  }, []);
+
+  const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
+    if (files.length === 0) return;
+
+    setRecentOpenedFiles((prev) => {
+      const next = [...prev];
+      const removedBlobIds: string[] = [];
+      const now = Date.now();
+
+      files.forEach((file, index) => {
+        const name = file.name?.trim();
+        if (!name) return;
+
+        const sizeBytes = Number.isFinite(file.size) ? file.size : undefined;
+
+        const matches = next.filter(
+          (entry) => entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes,
+        );
+
+        const existingId = matches.length > 0 ? matches[matches.length - 1].id : generateRecentEntryId();
+        const duplicateIds = matches.slice(0, -1).map((entry) => entry.id);
+
+        if (matches.length > 0) {
+          for (let i = next.length - 1; i >= 0; i -= 1) {
+            const entry = next[i];
+            if (entry.kind === kind && entry.name === name && entry.sizeBytes === sizeBytes) {
+              next.splice(i, 1);
+            }
+          }
+        }
+
+        if (duplicateIds.length > 0) {
+          removedBlobIds.push(...duplicateIds);
+        }
+
+        const entry: RecentOpenedFileEntry = {
+          id: existingId,
+          name,
+          kind,
+          sizeBytes,
+          openedAt: now + index,
+        };
+
+        next.push(entry);
+        void putRecentOpenedFileBlob(entry, file);
+      });
+
+      const overflowCount = Math.max(0, next.length - RECENT_OPENED_FILES_LIMIT);
+      const overflow = overflowCount > 0
+        ? next.slice(0, overflowCount).map((entry) => entry.id)
+        : [];
+      const trimmed = overflowCount > 0
+        ? next.slice(overflowCount)
+        : next;
+
+      writeRecentOpenedFilesToLocalStorage(trimmed);
+
+      if (overflow.length > 0 || removedBlobIds.length > 0) {
+        void deleteRecentOpenedFileBlobs([...removedBlobIds, ...overflow]);
+      }
+
+      return trimmed;
+    });
+  }, []);
 
   // Active model derived state
   const activeModel = useMemo(() =>
@@ -390,7 +723,15 @@ export function useSceneCollectionManager() {
   }, [mode]);
 
   // File handling - support multiple files
-  const loadFiles = useCallback(async (files: FileList) => {
+  const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
+    const files = Array.from(filesInput);
+
+    if (files.length === 0) {
+      return;
+    }
+
+    trackRecentOpenedFiles(files, 'mesh');
+
     // Read auto-lift settings from storage (mirroring useTransformManager logic)
     let autoLift = false;
     let liftDistance = 5;
@@ -409,14 +750,35 @@ export function useSceneCollectionManager() {
 
     const newModels: LoadedModel[] = [];
 
-    // Process sequentially to avoid freezing UI too much
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const url = URL.createObjectURL(file);
+    setImportProgress({
+      active: true,
+      type: 'mesh',
+      label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+      detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing geometry…',
+      progress: null,
+    });
 
-      try {
-        console.log(`[SceneCollection] Loading ${file.name}...`);
-        const geom = await loadStlGeometry(url);
+    await waitForUiYield();
+
+    try {
+      // Process sequentially to avoid freezing UI too much
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const url = URL.createObjectURL(file);
+
+        setImportProgress({
+          active: true,
+          type: 'mesh',
+          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          detail: files.length > 1
+            ? `${i + 1}/${files.length}: ${file.name}`
+            : `Loading ${file.name}`,
+          progress: null,
+        });
+
+        try {
+          console.log(`[SceneCollection] Loading ${file.name}...`);
+          const geom = await loadStlGeometry(url);
 
         // Initialize paint
         const color = preferredMeshColor;
@@ -477,7 +839,7 @@ export function useSceneCollectionManager() {
           fileSizeBytes: file.size,
           geometry: geom,
           transform: {
-            position: new THREE.Vector3(0, 0, initialZ),
+            position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
             rotation: new THREE.Euler(0, 0, 0),
             scale: new THREE.Vector3(1, 1, 1)
           },
@@ -486,25 +848,45 @@ export function useSceneCollectionManager() {
           polygonCount: geom.geometry.getAttribute('position').count / 3
         };
 
-        newModels.push(model);
-      } catch (err) {
-        console.error(`Failed to load ${file.name}`, err);
-        URL.revokeObjectURL(url); // Cleanup if failed
-      }
-    }
+          newModels.push(model);
+        } catch (err) {
+          console.error(`Failed to load ${file.name}`, err);
+          URL.revokeObjectURL(url); // Cleanup if failed
+        }
 
-    if (newModels.length > 0) {
-      setModels(prev => [...prev, ...newModels]);
-      // If no active model, select the first new one
-      if (!activeModelId) {
-        setActiveModelId(newModels[0].id);
+        setImportProgress({
+          active: true,
+          type: 'mesh',
+          label: files.length > 1 ? 'Loading mesh files…' : 'Loading mesh…',
+          detail: files.length > 1
+            ? `${Math.min(i + 1, files.length)}/${files.length} processed`
+            : 'Finalizing model…',
+          progress: null,
+        });
       }
+
+      if (newModels.length > 0) {
+        setModels(prev => [...prev, ...newModels]);
+        // If no active model, select the first new one
+        if (!activeModelId) {
+          setActiveModelId(newModels[0].id);
+        }
+      }
+    } finally {
+      setImportProgress({
+        active: false,
+        type: null,
+        label: '',
+        detail: '',
+        progress: null,
+      });
     }
-  }, [activeModelId]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      loadFiles(e.target.files);
+      const files = Array.from(e.target.files);
+      void loadFiles(files);
       e.target.value = ''; // Reset input
     }
   }, [loadFiles]);
@@ -549,13 +931,77 @@ export function useSceneCollectionManager() {
 
   }, [activeModelId]);
 
+  const copyModel = useCallback((id: string) => {
+    const source = models.find((m) => m.id === id);
+    if (!source) return false;
+
+    setModelClipboard({
+      name: source.name,
+      fileSizeBytes: source.fileSizeBytes,
+      geometry: cloneGeometryWithBounds(source.geometry),
+      transform: {
+        position: source.transform.position.clone(),
+        rotation: source.transform.rotation.clone(),
+        scale: source.transform.scale.clone(),
+      },
+      color: source.color,
+      polygonCount: source.polygonCount,
+    });
+
+    return true;
+  }, [cloneGeometryWithBounds, models]);
+
+  const cutModel = useCallback((id: string) => {
+    const copied = copyModel(id);
+    if (!copied) return false;
+    deleteModel(id);
+    return true;
+  }, [copyModel, deleteModel]);
+
+  const pasteModel = useCallback(() => {
+    if (!modelClipboard) return null;
+
+    const id = generateId();
+    const pastedModel: LoadedModel = {
+      id,
+      name: `${modelClipboard.name} Copy`,
+      fileUrl: '',
+      fileSizeBytes: modelClipboard.fileSizeBytes,
+      geometry: cloneGeometryWithBounds(modelClipboard.geometry),
+      transform: {
+        position: modelClipboard.transform.position.clone().add(new THREE.Vector3(6, 6, 0)),
+        rotation: modelClipboard.transform.rotation.clone(),
+        scale: modelClipboard.transform.scale.clone(),
+      },
+      visible: true,
+      color: modelClipboard.color,
+      polygonCount: modelClipboard.polygonCount,
+    };
+
+    setModels((prev) => [...prev, pastedModel]);
+    setActiveModelId(id);
+    return id;
+  }, [cloneGeometryWithBounds, generateId, modelClipboard]);
+
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
 
   const handleImportLysFile = useCallback(async (file: File) => {
-    const result = await lysImport.importFile(file);
-    if (result && result.geometry) {
-      try {
+    trackRecentOpenedFiles([file], 'scene');
+
+    setImportProgress({
+      active: true,
+      type: 'scene',
+      label: 'Importing scene…',
+      detail: file.name,
+      progress: null,
+    });
+
+    await waitForUiYield();
+
+    try {
+      const result = await lysImport.importFile(file);
+      if (result && result.geometry) {
         const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId } = result;
 
         // Process geometry (bounds, center, normals, BVH)
@@ -591,11 +1037,19 @@ export function useSceneCollectionManager() {
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
-      } catch (err) {
-        console.error("[SceneCollection] Failed to process LYS geometry:", err);
       }
+    } catch (err) {
+      console.error("[SceneCollection] Failed to process LYS geometry:", err);
+    } finally {
+      setImportProgress({
+        active: false,
+        type: null,
+        label: '',
+        detail: '',
+        progress: null,
+      });
     }
-  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase]);
+  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -603,6 +1057,25 @@ export function useSceneCollectionManager() {
       e.target.value = '';
     }
   }, [handleImportLysFile]);
+
+  const reopenRecentOpenedFile = useCallback(async (entryId: string) => {
+    const entry = recentOpenedFiles.find((item) => item.id === entryId);
+    if (!entry) return false;
+
+    const file = await readRecentOpenedFileBlob(entry);
+    if (!file) {
+      console.warn('[SceneCollection] Unable to restore recent file from local cache.');
+      return false;
+    }
+
+    if (entry.kind === 'scene') {
+      await handleImportLysFile(file);
+      return true;
+    }
+
+    await loadFiles([file]);
+    return true;
+  }, [handleImportLysFile, loadFiles, recentOpenedFiles]);
 
   // Legacy Lychee loader wrapper
   const handleLoadLychee = async () => {
@@ -690,42 +1163,47 @@ export function useSceneCollectionManager() {
   }, [activeModelId, deleteModel, mode]);
 
   // Helper accessors for active model (compatibility)
-  const activeMeshColor = activeModel?.color ?? '#a3a3a3';
+  const activeMeshColor = activeModel?.color ?? preferredMeshColor;
   const activeMeshVisible = activeModel?.visible ?? true;
   const activeFileName = activeModel?.name ?? null;
 
   const setMeshColor = useCallback((color: string) => {
+    const normalizedColor = clampHexColor(color, DEFAULT_MESH_COLOR);
+    setPreferredMeshColor(normalizedColor);
+
     if (activeModelId) {
       setModels(prev => prev.map(m => {
         if (m.id !== activeModelId) return m;
 
         try {
-          clearPaintToBase(m.geometry.geometry, new THREE.Color(color));
+          clearPaintToBase(m.geometry.geometry, new THREE.Color(normalizedColor));
         } catch (err) {
           console.error('[SceneCollection] Failed to apply mesh color to geometry:', err);
         }
 
-        return { ...m, color };
+        return { ...m, color: normalizedColor };
       }));
-
-      const prev = readMeshAppearanceFromLocalStorage();
-
-      const persistedShaderType = clampPersistedMeshShaderType(prev?.shaderType ?? shaderType, DEFAULT_SHADER_TYPE);
-      writeMeshAppearanceToLocalStorage({
-        v: 1,
-        shaderType: persistedShaderType,
-        matcapVariant: prev?.matcapVariant ?? matcapVariant,
-        flatUseVertexColors: prev?.flatUseVertexColors ?? flatUseVertexColors,
-        toonSteps: prev?.toonSteps ?? toonSteps,
-        ambientIntensity: prev?.ambientIntensity ?? ambientIntensity,
-        directionalIntensity: prev?.directionalIntensity ?? directionalIntensity,
-        materialRoughness: prev?.materialRoughness ?? materialRoughness,
-        wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
-        xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
-        meshColor: clampHexColor(color, DEFAULT_MESH_COLOR),
-      });
     }
-  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, materialRoughness, shaderType, matcapVariant, toonSteps, wireframeThicknessPx, xrayOpacity]);
+
+    const prev = readMeshAppearanceFromLocalStorage();
+
+    const persistedShaderType = clampPersistedMeshShaderType(prev?.shaderType ?? shaderType, DEFAULT_SHADER_TYPE);
+    writeMeshAppearanceToLocalStorage({
+      v: 1,
+      shaderType: persistedShaderType,
+      matcapVariant: prev?.matcapVariant ?? matcapVariant,
+      flatUseVertexColors: prev?.flatUseVertexColors ?? flatUseVertexColors,
+      toonSteps: prev?.toonSteps ?? toonSteps,
+      ambientIntensity: prev?.ambientIntensity ?? ambientIntensity,
+      directionalIntensity: prev?.directionalIntensity ?? directionalIntensity,
+      materialRoughness: prev?.materialRoughness ?? materialRoughness,
+      wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
+      xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
+      meshColor: normalizedColor,
+      hoverTintStrength: prev?.hoverTintStrength ?? hoverTintStrength,
+      selectedTintStrength: prev?.selectedTintStrength ?? selectedTintStrength,
+    });
+  }, [activeModelId, ambientIntensity, directionalIntensity, flatUseVertexColors, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
 
   const setMeshVisible = useCallback((visible: boolean) => {
     if (activeModelId) {
@@ -797,6 +1275,11 @@ export function useSceneCollectionManager() {
 
     // Scene context
     sceneBounds,
+    importProgress,
+    recentOpenedFiles,
+    reopenRecentOpenedFile,
+    view3dSettings,
+    setView3dSettings,
 
     // Actions
     loadFiles,
@@ -805,6 +1288,10 @@ export function useSceneCollectionManager() {
     setModelVisibility,
     renameModel,
     deleteModel,
+    copyModel,
+    cutModel,
+    pasteModel,
+    canPasteModel: modelClipboard !== null,
 
     // Scene settings
     ambientIntensity,
@@ -825,6 +1312,10 @@ export function useSceneCollectionManager() {
     setFlatUseVertexColors,
     toonSteps,
     setToonSteps,
+    hoverTintStrength,
+    setHoverTintStrength,
+    selectedTintStrength,
+    setSelectedTintStrength,
     mode,
     setMode,
     selectionHighlightMode,

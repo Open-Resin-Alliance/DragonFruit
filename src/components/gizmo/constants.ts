@@ -54,7 +54,7 @@ export const GIZMO_SIZES: GizmoSizes = {
   ringMajorRadius: 4.8,    // Increased 50% (was 3.2)
   ringMinorRadius: 0.12,   // 4x bigger
   ringDiamondRadius: 0.48, // Increased 50% (was 0.32)
-  scaleLineLength: 1.6,    // Moved closer to center (was 2.4)
+  scaleLineLength: 2.3,    // Moved further from center for easier targeting
   scaleHexagonRadius: 0.5, // Increased 50% (was 0.33)
   scaleHexagonDepth: 0.3,  // Increased 50% (was 0.2)
 };
@@ -62,23 +62,23 @@ export const GIZMO_SIZES: GizmoSizes = {
 export const GIZMO_LIGHTING = {
   // Emissive intensity for materials
   emissiveIntensity: {
-    idle: 2,      // Normal state (increased from 0.3)
-    hovered: 10,   // Hovered state (increased from 0.6)
-    active: 20,    // Active/dragging state (increased from 1.0)
+    idle: 1.2,
+    hovered: 3.2,
+    active: 5.2,
   },
   
   // Point light intensity for casting light on model
   pointLightIntensity: {
-    idle: 2,      // Increased from 0.5
-    hovered: 10,   // Increased from 1.0
-    active: 20,    // Increased from 1.5
+    idle: 0.9,
+    hovered: 2.2,
+    active: 3.2,
   },
   
   // Point light distance (how far the light reaches)
-  pointLightDistance: 8.0,  // Increased from 3.0
+  pointLightDistance: 6.2,
   
   // Point light decay (how quickly light fades)
-  pointLightDecay: 1,
+  pointLightDecay: 1.15,
 };
 
 export const DEFAULT_GIZMO_CONFIG = {

@@ -26,15 +26,17 @@ export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) 
         };
     }, []);
 
+    const compactInputClass = 'ui-input w-full h-[36px] px-3 py-2 text-base no-spinners';
+
     return (
-        <div className="bg-neutral-750 rounded p-1 mb-1">
-            <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-neutral-300">Raft</span>
-                <div className="flex items-center gap-1">
+        <div className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Raft</span>
+                <div className="flex items-center gap-2">
                     <select
                         value={settings.bottomMode}
                         onChange={(e) => onChange({ bottomMode: e.target.value as any })}
-                        className="h-[18px] px-1 text-[10px] bg-neutral-900 text-neutral-200 rounded border border-neutral-700 focus:ring-1 focus:ring-blue-500"
+                        className="ui-input h-[36px] px-3 py-2 text-base"
                     >
                         <option value="off">Off</option>
                         <option value="solid">Solid</option>
@@ -42,36 +44,36 @@ export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) 
                     </select>
 
                     <label className="flex items-center gap-2 cursor-pointer">
-                        <span className="text-[9px] text-neutral-500 uppercase tracking-wide">wall</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Wall</span>
                         <input
                             type="checkbox"
                             checked={settings.bottomMode === 'off' ? false : settings.wallEnabled}
                             disabled={settings.bottomMode === 'off'}
                             onChange={(e) => onChange({ wallEnabled: e.target.checked })}
-                            className="w-3 h-3 rounded border-neutral-700 bg-neutral-900 text-blue-600 focus:ring-1 focus:ring-blue-500 disabled:opacity-40"
+                            className="ui-checkbox disabled:opacity-40"
                         />
                     </label>
                 </div>
             </div>
 
             {settings.bottomMode !== 'off' && (
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 gap-2 items-start">
                     {settings.bottomMode === 'solid' && (
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.thickness')}>
-                                <span className="text-[9px] text-neutral-400">Thickness</span>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Thickness</span>
                                 <NumberInput
                                     value={settings.thickness}
                                     onChange={(val) => onChange({ thickness: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.chamferAngle')}>
-                                <span className="text-[9px] text-neutral-400">Chamfer</span>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Chamfer angle</span>
                                 <NumberInput
                                     value={settings.chamferAngle}
                                     onChange={(val) => onChange({ chamferAngle: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
                         </>
@@ -80,19 +82,19 @@ export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) 
                     {settings.bottomMode === 'line' && (
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.lineWidthMm')}>
-                                <span className="text-[9px] text-neutral-400">Line W</span>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Line width</span>
                                 <NumberInput
                                     value={settings.lineWidthMm}
                                     onChange={(val) => onChange({ lineWidthMm: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.lineHeightMm')}>
-                                <span className="text-[9px] text-neutral-400">Line H</span>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Line height</span>
                                 <NumberInput
                                     value={settings.lineHeightMm}
                                     onChange={(val) => onChange({ lineHeightMm: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
                         </>
@@ -101,35 +103,35 @@ export function RaftSettingsCard({ settings, onChange }: RaftSettingsCardProps) 
                     {settings.wallEnabled && (
                         <>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.wallHeight')}>
-                                <span className="text-[9px] text-neutral-400">Wall H</span>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Wall height</span>
                                 <NumberInput
                                     value={settings.wallHeight}
                                     onChange={(val) => onChange({ wallHeight: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.wallThickness')}>
-                                <span className="text-[9px] text-neutral-400">Wall T</span>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Wall thickness</span>
                                 <NumberInput
                                     value={settings.wallThickness}
                                     onChange={(val) => onChange({ wallThickness: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
                             <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.crenulationGapWidth')}>
-                                <span className="text-[9px] text-neutral-400">Gap W</span>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Gap width</span>
                                 <NumberInput
                                     value={settings.crenulationGapWidth}
                                     onChange={(val) => onChange({ crenulationGapWidth: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
-                            <label className="flex flex-col gap-0.5">
-                                <span className="text-[9px] text-neutral-400">Gap Space</span>
+                            <label className="flex flex-col gap-0.5" {...makeFocusHandlers('raft.crenulationSpacing')}>
+                                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Gap spacing</span>
                                 <NumberInput
                                     value={settings.crenulationSpacing}
                                     onChange={(val) => onChange({ crenulationSpacing: val })}
-                                    className="w-full px-1.5 py-0.5 text-xs bg-neutral-700 text-neutral-200 rounded border border-neutral-600 focus:border-blue-500 focus:outline-none no-spinners"
+                                    className={compactInputClass}
                                 />
                             </label>
                         </>

@@ -40,26 +40,28 @@ export function PresetSelector() {
     };
 
     return (
-        <div className="space-y-2">
+        <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-                <h4 className="text-[10px] font-semibold text-neutral-400 uppercase tracking-wide">
+                <h4 className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                     Presets
                 </h4>
             </div>
 
-            <div className="grid grid-cols-2 gap-1 relative">
+            <div className="grid grid-cols-2 gap-2 relative">
                 {presets.map((preset) => (
                     <div key={preset.id} className="relative">
                         {confirmId === preset.id ? (
-                            <div className="absolute inset-0 z-20 bg-neutral-800 border-2 border-yellow-600/50 rounded flex flex-col items-center justify-center animate-in fade-in zoom-in-95 duration-100">
-                                <div className="text-[9px] text-yellow-500 font-medium mb-1">Overwrite?</div>
+                            <div className="absolute inset-0 z-20 rounded-md border-2 flex flex-col items-center justify-center animate-in fade-in zoom-in-95 duration-100"
+                                style={{ background: 'color-mix(in srgb, var(--surface-1), black 16%)', borderColor: 'color-mix(in srgb, var(--accent), transparent 46%)' }}>
+                                <div className="text-[9px] font-medium mb-1" style={{ color: 'var(--text-strong)' }}>Overwrite?</div>
                                 <div className="flex gap-2">
                                     <button
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             handleConfirmSave(preset.id);
                                         }}
-                                        className="text-[9px] bg-neutral-700 px-1.5 py-0.5 rounded text-neutral-200 hover:text-white hover:bg-green-600/50 transition-colors"
+                                        className="text-[9px] px-1.5 py-0.5 rounded border transition-colors"
+                                        style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
                                     >
                                         Yes
                                     </button>
@@ -68,7 +70,8 @@ export function PresetSelector() {
                                             e.stopPropagation();
                                             setConfirmId(null);
                                         }}
-                                        className="text-[9px] bg-neutral-700 px-1.5 py-0.5 rounded text-neutral-200 hover:text-white hover:bg-red-600/50 transition-colors"
+                                        className="text-[9px] px-1.5 py-0.5 rounded border transition-colors"
+                                        style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
                                     >
                                         No
                                     </button>
