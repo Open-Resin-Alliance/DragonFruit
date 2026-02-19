@@ -12,8 +12,10 @@ interface ArrangePanelProps {
   onAllowRotateOnZChange: (value: boolean) => void;
   anchorMode: ArrangeAnchorMode;
   onAnchorModeChange: (value: ArrangeAnchorMode) => void;
-  onApply: () => void;
+  onApplyAll: () => void;
+  onApplySelected: () => void;
   modelCount: number;
+  selectedModelCount: number;
   isApplying?: boolean;
 }
 
@@ -24,8 +26,10 @@ export function ArrangePanel({
   onAllowRotateOnZChange,
   anchorMode,
   onAnchorModeChange,
-  onApply,
+  onApplyAll,
+  onApplySelected,
   modelCount,
+  selectedModelCount,
   isApplying = false,
 }: ArrangePanelProps) {
   const [expanded, setExpanded] = React.useState(true);
@@ -123,23 +127,43 @@ export function ArrangePanel({
             </div>
           </button>
 
-          <Button
-            onClick={onApply}
-            variant="accent"
-            size="sm"
-            className="w-full !h-8 text-[11px]"
-            disabled={modelCount <= 1 || isApplying}
-            title={modelCount <= 1 ? 'Need at least 2 models to arrange' : 'Arrange visible models in grid'}
-          >
-            {isApplying ? (
-              <span className="inline-flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Arranging…
-              </span>
-            ) : (
-              'Auto Arrange Models'
-            )}
-          </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              onClick={onApplyAll}
+              variant="accent"
+              size="sm"
+              className="w-full !h-8 text-[11px]"
+              disabled={modelCount <= 1 || isApplying}
+              title={modelCount <= 1 ? 'Need at least 2 visible models to arrange' : 'Arrange all visible models'}
+            >
+              {isApplying ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Arranging…
+                </span>
+              ) : (
+                'Arrange All'
+              )}
+            </Button>
+
+            <Button
+              onClick={onApplySelected}
+              variant="secondary"
+              size="sm"
+              className="w-full !h-8 text-[11px]"
+              disabled={selectedModelCount <= 1 || isApplying}
+              title={selectedModelCount <= 1 ? 'Select at least 2 visible models to arrange' : 'Arrange selected models only'}
+            >
+              {isApplying ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Arranging…
+                </span>
+              ) : (
+                'Arrange Selected'
+              )}
+            </Button>
+          </div>
         </div>
       )}
     </Card>

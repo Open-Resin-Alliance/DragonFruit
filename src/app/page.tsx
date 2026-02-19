@@ -404,10 +404,16 @@ export default function Home() {
     window.setTimeout(resolve, ms);
   }), []);
 
-  const handleAutoArrangeModels = React.useCallback(async () => {
+  const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected') => {
     if (isAutoArranging) return;
 
-    const visibleModels = scene.models.filter((m) => m.visible);
+    const selectedIdSet = new Set(scene.selectedModelIds);
+    const visibleModels = scene.models.filter((m) => {
+      if (!m.visible) return false;
+      if (scope === 'selected') return selectedIdSet.has(m.id);
+      return true;
+    });
+
     if (visibleModels.length <= 1) return;
 
     const minSpinnerMs = 220;
@@ -1243,8 +1249,14 @@ export default function Home() {
                 onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
                 anchorMode={arrangeAnchorMode}
                 onAnchorModeChange={setArrangeAnchorMode}
-                onApply={handleAutoArrangeModels}
+                onApplyAll={() => {
+                  void handleAutoArrangeModels('all');
+                }}
+                onApplySelected={() => {
+                  void handleAutoArrangeModels('selected');
+                }}
                 modelCount={scene.models.filter((m) => m.visible).length}
+                selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
                 isApplying={isAutoArranging}
               />
             )}
