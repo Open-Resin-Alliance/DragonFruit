@@ -570,7 +570,7 @@ export function SettingsModal({
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto p-4">
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4">
             <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
               <div className="flex items-center gap-2">
                 <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
