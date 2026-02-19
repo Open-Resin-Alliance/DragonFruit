@@ -167,6 +167,13 @@ type ModelClipboardEntry = {
 };
 
 export function useSceneCollectionManager() {
+  const waitForUiYield = useCallback(
+    () => new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    }),
+    [],
+  );
+
   const persistedAppearance = useMemo(() => readMeshAppearanceFromLocalStorage(), []);
 
   const [models, setModels] = useState<LoadedModel[]>([]);
@@ -438,7 +445,13 @@ export function useSceneCollectionManager() {
   }, [mode]);
 
   // File handling - support multiple files
-  const loadFiles = useCallback(async (files: FileList) => {
+  const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
+    const files = Array.from(filesInput);
+
+    if (files.length === 0) {
+      return;
+    }
+
     // Read auto-lift settings from storage (mirroring useTransformManager logic)
     let autoLift = false;
     let liftDistance = 5;
@@ -464,6 +477,8 @@ export function useSceneCollectionManager() {
       detail: files.length > 1 ? `Preparing 0/${files.length}` : 'Preparing geometry…',
       progress: null,
     });
+
+    await waitForUiYield();
 
     try {
       // Process sequentially to avoid freezing UI too much
@@ -586,11 +601,12 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId]);
+  }, [activeModelId, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      loadFiles(e.target.files);
+      const files = Array.from(e.target.files);
+      void loadFiles(files);
       e.target.value = ''; // Reset input
     }
   }, [loadFiles]);
@@ -699,6 +715,8 @@ export function useSceneCollectionManager() {
       progress: null,
     });
 
+    await waitForUiYield();
+
     try {
       const result = await lysImport.importFile(file);
       if (result && result.geometry) {
@@ -764,7 +782,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase]);
+  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
