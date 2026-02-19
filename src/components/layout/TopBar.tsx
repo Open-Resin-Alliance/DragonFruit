@@ -140,9 +140,7 @@ export function TopBar({
   const isUnderRecommendedViewport =
     windowMetrics.innerWidth > 0 &&
     (windowMetrics.innerWidth < MIN_GOOD_WIDTH || windowMetrics.innerHeight < MIN_GOOD_HEIGHT);
-  const showLayoutWarning =
-    isUnderRecommendedViewport ||
-    (windowMetrics.innerWidth >= MIN_GOOD_WIDTH && windowMetrics.innerHeight >= MIN_GOOD_HEIGHT && !windowMetrics.isLikelyMaximized);
+  const showLayoutWarning = isUnderRecommendedViewport;
 
   const metricsLabel =
     windowMetrics.innerWidth > 0
