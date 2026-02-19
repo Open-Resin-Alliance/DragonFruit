@@ -197,7 +197,7 @@ export function PickingRenderer({
     // Render to the pick target
     const currentRenderTarget = gl.getRenderTarget();
     gl.setRenderTarget(renderTargetRef.current);
-    gl.clear();
+    gl.clear(true, true, false); // clear color, clear depth, don't clear stencil
     gl.render(pickScene, pickCamera);
     
     // Read back pixels
