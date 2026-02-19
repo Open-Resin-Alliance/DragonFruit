@@ -366,6 +366,128 @@ function CameraModeEntryFramingController({
   return null;
 }
 
+function SupportModeCameraRestoreController({
+  captureRunId,
+  restoreRunId,
+}: {
+  captureRunId: number;
+  restoreRunId: number;
+}) {
+  const { camera, controls } = useThree();
+
+  const snapshotRef = React.useRef<{
+    position: THREE.Vector3;
+    target: THREE.Vector3;
+    zoom: number | null;
+  } | null>(null);
+  const capturedRunIdRef = React.useRef(0);
+  const restoredRunIdRef = React.useRef(0);
+  const activeRunIdRef = React.useRef<number | null>(null);
+  const animatingRef = React.useRef(false);
+  const rafRef = React.useRef<number | null>(null);
+
+  const cancelAnimation = React.useCallback(() => {
+    animatingRef.current = false;
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (!captureRunId) return;
+    if (capturedRunIdRef.current === captureRunId) return;
+    if (!controls || typeof controls !== 'object' || !('target' in controls)) return;
+
+    const orbit = controls as unknown as { target: THREE.Vector3 };
+    snapshotRef.current = {
+      position: camera.position.clone(),
+      target: orbit.target.clone(),
+      zoom: camera instanceof THREE.OrthographicCamera ? camera.zoom : null,
+    };
+
+    capturedRunIdRef.current = captureRunId;
+  }, [camera, controls, captureRunId]);
+
+  React.useLayoutEffect(() => {
+    if (!restoreRunId) return;
+    if (restoredRunIdRef.current === restoreRunId) return;
+    if (activeRunIdRef.current === restoreRunId) return;
+    if (!controls || typeof controls !== 'object' || !('target' in controls) || !('update' in controls)) return;
+
+    const snapshot = snapshotRef.current;
+    if (!snapshot) {
+      restoredRunIdRef.current = restoreRunId;
+      return;
+    }
+
+    const orbit = controls as unknown as {
+      target: THREE.Vector3;
+      update: () => void;
+    };
+
+    activeRunIdRef.current = restoreRunId;
+    cancelAnimation();
+    animatingRef.current = true;
+
+    const isOrthographic = camera instanceof THREE.OrthographicCamera;
+    const startPos = camera.position.clone();
+    const endPos = snapshot.position.clone();
+    const startTarget = orbit.target.clone();
+    const endTarget = snapshot.target.clone();
+    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
+    const endZoom = (isOrthographic && snapshot.zoom != null) ? snapshot.zoom : startZoom;
+
+    const duration = 560;
+    let startTime: number | null = null;
+
+    const tick = (now: number) => {
+      if (!animatingRef.current) return;
+      if (startTime == null) startTime = now;
+
+      const t = Math.min(1, (now - startTime) / duration);
+      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+      camera.position.lerpVectors(startPos, endPos, eased);
+      orbit.target.lerpVectors(startTarget, endTarget, eased);
+
+      if (isOrthographic) {
+        const ortho = camera as THREE.OrthographicCamera;
+        ortho.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
+        ortho.updateProjectionMatrix();
+      }
+
+      orbit.update();
+
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        animatingRef.current = false;
+        rafRef.current = null;
+        activeRunIdRef.current = null;
+        restoredRunIdRef.current = restoreRunId;
+        snapshotRef.current = null;
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (activeRunIdRef.current === restoreRunId && restoredRunIdRef.current !== restoreRunId) {
+        activeRunIdRef.current = null;
+      }
+    };
+  }, [camera, cancelAnimation, controls, restoreRunId]);
+
+  React.useEffect(() => {
+    return () => {
+      cancelAnimation();
+    };
+  }, [cancelAnimation]);
+
+  return null;
+}
+
 export function SceneCanvas({
   models: modelsProp = [],
   activeModelId: activeModelIdProp,
@@ -641,6 +763,10 @@ export function SceneCanvas({
   const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId } =
     useStlLoadCameraIntro(models, buildVolumeCenterTarget);
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
+  const [supportEntryIntroRunId, setSupportEntryIntroRunId] = React.useState(0);
+  const [supportEntryCaptureRunId, setSupportEntryCaptureRunId] = React.useState(0);
+  const [supportExitRestoreRunId, setSupportExitRestoreRunId] = React.useState(0);
+  const prevModeRef = React.useRef<SupportMode | undefined>(mode);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
   const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
@@ -919,6 +1045,32 @@ export function SceneCanvas({
     if (transform && activeModelId === activeModel.id) return transform;
     return activeModel.transform;
   }, [activeModel, transform, activeModelId]);
+
+  const introControllerBounds = React.useMemo(() => {
+    if (mode === 'support' && activeModel) {
+      return computeModelWorldBounds(activeModel);
+    }
+    return introBoundsSnapshot;
+  }, [activeModel, computeModelWorldBounds, introBoundsSnapshot, mode]);
+
+  const introControllerRunId = cameraIntroRunId + supportEntryIntroRunId;
+
+  React.useEffect(() => {
+    const prevMode = prevModeRef.current;
+    const enteringSupport = mode === 'support' && prevMode !== 'support';
+    const leavingSupport = mode !== 'support' && prevMode === 'support';
+
+    if (enteringSupport && models.length > 0) {
+      setSupportEntryCaptureRunId((id) => id + 1);
+      setSupportEntryIntroRunId((id) => id + 1);
+    }
+
+    if (leavingSupport) {
+      setSupportExitRestoreRunId((id) => id + 1);
+    }
+
+    prevModeRef.current = mode;
+  }, [mode, models.length]);
 
   const selectedSpaceMousePivotPoint = React.useMemo(() => {
     if (!activeModel?.visible) return null;
@@ -1724,7 +1876,14 @@ export function SceneCanvas({
           onNavigationActiveChange={setSpaceMouseNavigationActive}
         />
         <CameraFocusHotkeyController hoverPointRef={lastHoveredModelPointRef} setOrbitTargetFromPoint={setOrbitTargetFromPoint} />
-        <CameraIntroController bounds={introBoundsSnapshot} runId={cameraIntroRunId} onComplete={setCameraIntroCompletedRunId} />
+        <CameraIntroController
+          bounds={introControllerBounds}
+          runId={introControllerRunId}
+          onComplete={setCameraIntroCompletedRunId}
+          mode={mode}
+          plateWidthMm={activeBuildVolumeSettings.widthMm}
+          plateDepthMm={activeBuildVolumeSettings.depthMm}
+        />
         <CameraHomeResetController
           runId={cameraHomeResetRunId}
           homePosition={defaultCamera.position}
@@ -1737,6 +1896,10 @@ export function SceneCanvas({
           target={buildVolumeCenterTarget}
           plateWidthMm={activeBuildVolumeSettings.widthMm}
           plateDepthMm={activeBuildVolumeSettings.depthMm}
+        />
+        <SupportModeCameraRestoreController
+          captureRunId={supportEntryCaptureRunId}
+          restoreRunId={supportExitRestoreRunId}
         />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
