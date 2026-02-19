@@ -513,8 +513,15 @@ export function SceneCanvas({
     const cameraZ = cameraRef.current?.position?.z;
     if (typeof cameraZ !== 'number') return;
 
-    const next = cameraZ < -0.01;
-    setIsCameraBelowBuildPlate((prev) => (prev === next ? prev : next));
+    // Activate culling a little before crossing the exact grid plane to feel responsive.
+    // Use hysteresis to avoid flicker when orbiting near the threshold.
+    const ENTER_BELOW_Z = 2.5;
+    const EXIT_BELOW_Z = 4.5;
+
+    setIsCameraBelowBuildPlate((prev) => {
+      const next = prev ? cameraZ < EXIT_BELOW_Z : cameraZ < ENTER_BELOW_Z;
+      return prev === next ? prev : next;
+    });
   }, []);
 
   React.useEffect(() => {
@@ -855,6 +862,7 @@ export function SceneCanvas({
         <Helpers
           gridWidthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.widthMm : undefined}
           gridDepthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.depthMm : undefined}
+          cameraBelowGrid={isCameraBelowBuildPlate}
         />
         <EnableLocalClipping />
         <CameraProvider cameraRef={cameraRef} />

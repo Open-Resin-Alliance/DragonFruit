@@ -128,9 +128,11 @@ export function SceneMoodOverlay() {
 export function Helpers({
   gridWidthMm,
   gridDepthMm,
+  cameraBelowGrid,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
+  cameraBelowGrid?: boolean;
 }) {
   const nullRaycast = () => null;
   const axesRef = React.useRef<THREE.AxesHelper | null>(null);
@@ -141,6 +143,12 @@ export function Helpers({
   const divisions = Math.max(20, Math.min(240, Math.round(baseSize / 5)));
   const scaleX = width / baseSize;
   const scaleZ = depth / baseSize;
+  const buildPlateOversizeEachSideMm = 4;
+  const buildPlateThicknessMm = 4;
+  const buildPlateCornerRadiusMm = 3;
+  const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
+  const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
+  const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
   const frontMarkerWidth = 24;
   const frontMarkerDepth = 6.8;
   const frontYOffset = depth * 0.5 + frontMarkerDepth * 0.46;
@@ -184,6 +192,41 @@ export function Helpers({
     };
   }, [frontTexture]);
 
+  const buildPlateGeometry = React.useMemo(() => {
+    const halfW = buildPlateWidth * 0.5;
+    const halfD = buildPlateDepth * 0.5;
+    const r = Math.max(0.2, Math.min(buildPlateCornerRadiusMm, halfW - 0.2, halfD - 0.2));
+
+    const shape = new THREE.Shape();
+    shape.moveTo(-halfW + r, -halfD);
+    shape.lineTo(halfW - r, -halfD);
+    shape.quadraticCurveTo(halfW, -halfD, halfW, -halfD + r);
+    shape.lineTo(halfW, halfD - r);
+    shape.quadraticCurveTo(halfW, halfD, halfW - r, halfD);
+    shape.lineTo(-halfW + r, halfD);
+    shape.quadraticCurveTo(-halfW, halfD, -halfW, halfD - r);
+    shape.lineTo(-halfW, -halfD + r);
+    shape.quadraticCurveTo(-halfW, -halfD, -halfW + r, -halfD);
+
+    const geom = new THREE.ExtrudeGeometry(shape, {
+      depth: buildPlateThicknessMm,
+      bevelEnabled: false,
+      curveSegments: 18,
+      steps: 1,
+    });
+
+    // Center thickness around local Z=0 so top sits at +thickness/2 and bottom at -thickness/2.
+    geom.translate(0, 0, -buildPlateThicknessMm * 0.5);
+    geom.computeVertexNormals();
+    return geom;
+  }, [buildPlateCornerRadiusMm, buildPlateDepth, buildPlateThicknessMm, buildPlateWidth]);
+
+  React.useEffect(() => {
+    return () => {
+      buildPlateGeometry.dispose();
+    };
+  }, [buildPlateGeometry]);
+
   React.useEffect(() => {
     if (!axesRef.current) return;
 
@@ -207,6 +250,24 @@ export function Helpers({
 
   return (
     <>
+      {/* Primitive mock build plate under grid */}
+      <mesh
+        position={[0, 0, buildPlateCenterZ]}
+        raycast={nullRaycast}
+        visible={!cameraBelowGrid}
+      >
+        <primitive object={buildPlateGeometry} attach="geometry" />
+        <meshStandardMaterial
+          color="#3a4048"
+          roughness={0.9}
+          metalness={0.03}
+          transparent
+          opacity={0.94}
+          side={THREE.FrontSide}
+          depthWrite
+        />
+      </mesh>
+
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
       <gridHelper
         args={[baseSize, divisions, '#333333', '#333333']}
