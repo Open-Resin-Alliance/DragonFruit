@@ -512,6 +512,7 @@ export function SceneCanvas({
   }, [activeModel, computeModelWorldBounds]);
 
   React.useEffect(() => {
+    if (mode !== 'support') return;
     if (spaceMouseNavigationActive) return;
 
     if (selectedSpaceMousePivotPoint) {
@@ -522,7 +523,7 @@ export function SceneCanvas({
     if (activeModelId == null) {
       setOrbitTargetFromPoint(new THREE.Vector3(0, 0, 0));
     }
-  }, [activeModelId, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
+  }, [activeModelId, mode, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
 
   const spaceMousePivotCandidates = React.useMemo(() => {
     const centers: THREE.Vector3[] = [];
@@ -1138,13 +1139,13 @@ export function SceneCanvas({
         <OrbitControls
           makeDefault
           enableDamping={false}
-          enablePan={false}
+          enablePan
           enabled={models.length > 0 && !(mode === 'prepare' && transformMode === 'smoothing' && smoothingBrushState.isStrokeActive) && !isGizmoDragging}
           onStart={handleOrbitStart}
           onChange={handleOrbitChange}
           onEnd={handleOrbitEnd}
           target={orbitTarget}
-          mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.ROTATE }}
+          mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }}
         />
         <SpaceMouseController
           pivotPoint={selectedSpaceMousePivotPoint}
@@ -1154,7 +1155,7 @@ export function SceneCanvas({
         />
         <CameraFocusHotkeyController hoverPointRef={lastHoveredModelPointRef} setOrbitTargetFromPoint={setOrbitTargetFromPoint} />
         <CameraIntroController bounds={introBoundsSnapshot} runId={cameraIntroRunId} onComplete={setCameraIntroCompletedRunId} />
-        <CameraHomeResetController runId={cameraHomeResetRunId} homePosition={defaultCamera.position} homeTarget={[0, 0, 0]} />
+        <CameraHomeResetController runId={cameraHomeResetRunId} homePosition={defaultCamera.position} homeTarget={[0, 0, 0]} homeFovDeg={defaultCamera.fov} />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
         {children}
