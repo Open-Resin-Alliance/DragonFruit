@@ -1192,11 +1192,8 @@ export default function Home() {
 
       const maxCols = Math.max(1, Math.floor((plateWidth + spacing) / (width + spacing)));
       const maxRows = Math.max(1, Math.floor((plateDepth + spacing) / (depth + spacing)));
-      const inPlateCapacity = Math.max(1, maxCols * maxRows);
-      const inPlateCount = Math.min(totalCount, inPlateCapacity);
-
-      const usedCols = Math.min(maxCols, Math.max(1, inPlateCount));
-      const usedRows = Math.max(1, Math.ceil(inPlateCount / maxCols));
+      const usedCols = maxCols;
+      const usedRows = maxRows;
 
       const totalUsedWidth = (usedCols * width) + Math.max(0, usedCols - 1) * spacing;
       const totalUsedDepth = (usedRows * depth) + Math.max(0, usedRows - 1) * spacing;
@@ -1204,17 +1201,69 @@ export default function Home() {
       const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
       const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
 
-      for (let i = 0; i < inPlateCount; i += 1) {
-        const col = i % maxCols;
-        const row = Math.floor(i / maxCols);
-        slots.push(new THREE.Vector3(
-          startX + col * (width + spacing),
-          startY + row * (depth + spacing),
-          model.transform.position.z,
-        ));
+      type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
+
+      const intersectsRect = (a: Rect2D, b: Rect2D) => {
+        return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+      };
+
+      const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
+        const mBaseW = Math.max(2, Math.abs(m.geometry.size.x * m.transform.scale.x));
+        const mBaseD = Math.max(2, Math.abs(m.geometry.size.y * m.transform.scale.y));
+        const rz = m.transform.rotation.z;
+        const rc = Math.abs(Math.cos(rz));
+        const rs = Math.abs(Math.sin(rz));
+        const mW = (mBaseW * rc) + (mBaseD * rs);
+        const mD = (mBaseW * rs) + (mBaseD * rc);
+        return {
+          minX: m.transform.position.x - (mW * 0.5),
+          maxX: m.transform.position.x + (mW * 0.5),
+          minY: m.transform.position.y - (mD * 0.5),
+          maxY: m.transform.position.y + (mD * 0.5),
+        };
+      };
+
+      const blockedRects = scene.models
+        .filter((m) => m.visible && m.id !== model.id)
+        .map(modelToRect);
+
+      const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+      for (let row = 0; row < maxRows; row += 1) {
+        for (let col = 0; col < maxCols; col += 1) {
+          const x = startX + col * (width + spacing);
+          const y = startY + row * (depth + spacing);
+          const dx = x - model.transform.position.x;
+          const dy = y - model.transform.position.y;
+          candidateCenters.push({ x, y, distSq: dx * dx + dy * dy });
+        }
       }
 
-      const overflowCount = totalCount - inPlateCount;
+      candidateCenters.sort((a, b) => a.distSq - b.distSq);
+
+      const chosenCenters: Array<{ x: number; y: number }> = [];
+      for (const candidate of candidateCenters) {
+        if (chosenCenters.length >= totalCount) break;
+
+        const rect: Rect2D = {
+          minX: candidate.x - (width * 0.5),
+          maxX: candidate.x + (width * 0.5),
+          minY: candidate.y - (depth * 0.5),
+          maxY: candidate.y + (depth * 0.5),
+        };
+
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+          continue;
+        }
+
+        chosenCenters.push({ x: candidate.x, y: candidate.y });
+        blockedRects.push(rect);
+      }
+
+      for (const center of chosenCenters) {
+        slots.push(new THREE.Vector3(center.x, center.y, model.transform.position.z));
+      }
+
+      const overflowCount = totalCount - chosenCenters.length;
       if (overflowCount > 0) {
         const outsideGap = Math.max(8, spacing);
         let outsideLeftX = maxX + outsideGap;
@@ -1278,7 +1327,6 @@ export default function Home() {
 
     setDuplicatePreviewTransforms(previews);
   }, [
-    computeArrangeSlots,
     duplicateArrayCountX,
     duplicateArrayCountY,
     duplicateArrayCountZ,
@@ -1290,6 +1338,7 @@ export default function Home() {
     duplicateTotalCopies,
     getModelFootprintMm,
     scene.activeModel,
+    scene.models,
     scene.mode,
     transformMgr.transformMode,
   ]);
