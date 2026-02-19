@@ -145,6 +145,7 @@ function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
 export function SceneCanvas({
   models: modelsProp = [],
   activeModelId: activeModelIdProp,
+  selectedModelIds,
   // Legacy props kept for compatibility if needed
   geom,
   clipLower,
@@ -224,6 +225,7 @@ export function SceneCanvas({
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
+  selectedModelIds?: string[];
   geom?: any;
   clipLower?: number | null;
   clipUpper?: number | null;
@@ -267,7 +269,7 @@ export function SceneCanvas({
   mode?: SupportMode;
   onSupportClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
-  onActiveModelChange?: (id: string | null) => void;
+  onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   trunkPlacementPreview?: SupportData | null;
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
@@ -673,6 +675,10 @@ export function SceneCanvas({
     return models.find((m) => m.id === activeModelId) ?? null;
   }, [models, activeModelId]);
 
+  const selectedModelIdSet = React.useMemo(() => {
+    return new Set(selectedModelIds ?? []);
+  }, [selectedModelIds]);
+
   const duplicatePreviewMeshOffset = React.useMemo(() => {
     if (!duplicatePreviewModel) return null;
     return new THREE.Vector3(
@@ -994,6 +1000,7 @@ export function SceneCanvas({
             <React.Suspense fallback={null}>
               {models.map((model) => {
                 const isActive = model.id === activeModelId;
+                const isSelectedModel = selectedModelIdSet.has(model.id);
                 // Use props.transform if active (for smooth drag), else model.transform
                 const transformToUse = isActive
                   ? (duplicateActivePreviewTransform ?? (transform ?? model.transform))
@@ -1042,7 +1049,7 @@ export function SceneCanvas({
                       blockSupportPlacement={isGizmoDragging || blockSupportPlacement}
                       suppressNextClickRef={suppressNextCanvasClickRef}
                       isSelected={
-                        isActive &&
+                        isSelectedModel &&
                         (
                           effectiveModelSelected && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')
                         )
