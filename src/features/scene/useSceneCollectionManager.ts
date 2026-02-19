@@ -1000,7 +1000,12 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
-      const result = await lysImport.importFile(file);
+      const result = await lysImport.importFile(file, {
+        importCenterXY: {
+          x: defaultImportCenterXY.x,
+          y: defaultImportCenterXY.y,
+        },
+      });
       if (result && result.geometry) {
         const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId } = result;
 
@@ -1037,9 +1042,19 @@ export function useSceneCollectionManager() {
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
+      } else {
+        const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
+        console.error('[SceneCollection] LYS import failed:', errorMessage);
+        if (typeof window !== 'undefined') {
+          window.alert(`Import Scene failed:\n${errorMessage}`);
+        }
       }
     } catch (err) {
       console.error("[SceneCollection] Failed to process LYS geometry:", err);
+      if (typeof window !== 'undefined') {
+        const msg = err instanceof Error ? err.message : String(err);
+        window.alert(`Import Scene failed:\n${msg}`);
+      }
     } finally {
       setImportProgress({
         active: false,
@@ -1049,7 +1064,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
