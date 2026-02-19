@@ -47,19 +47,38 @@ export function SelectionSpotlight({
   debug = false,
 }: SelectionSpotlightProps) {
   const lightRef = React.useRef<THREE.SpotLight>(null);
-  const boostRef = React.useRef<THREE.PointLight>(null);
   const targetRef = React.useRef<THREE.Object3D>(null);
   const helperRef = React.useRef<THREE.SpotLightHelper | null>(null);
+  const hasValidPlacementRef = React.useRef(false);
+  const lastMeshIdRef = React.useRef<string | null>(null);
   const { camera } = useThree();
+
+  React.useEffect(() => {
+    hasValidPlacementRef.current = false;
+    lastMeshIdRef.current = null;
+    const light = lightRef.current;
+    if (light) {
+      light.visible = false;
+      light.intensity = 0;
+      light.distance = 0;
+    }
+  }, [enabled]);
 
   useFrame(() => {
     if (!enabled) return;
 
     const mesh = meshRef.current;
     const light = lightRef.current;
-    const boost = boostRef.current;
     const target = targetRef.current;
-    if (!mesh || !light || !boost || !target) return;
+    if (!mesh || !light || !target) return;
+
+    if (lastMeshIdRef.current !== mesh.uuid) {
+      lastMeshIdRef.current = mesh.uuid;
+      hasValidPlacementRef.current = false;
+      light.visible = false;
+      light.intensity = 0;
+      light.distance = 0;
+    }
 
     // ---- geometry centre in world space ----
     const geom = mesh.geometry as THREE.BufferGeometry | null;
@@ -73,25 +92,28 @@ export function SelectionSpotlight({
     // ---- target ----
     target.position.copy(worldCenter);
 
-    // ---- light position (camera-side, elevated) ----
-    const dir = new THREE.Vector3().subVectors(worldCenter, camera.position).normalize();
-    const lightPos = worldCenter.clone()
-      .addScaledVector(dir.clone().negate(), radius)
-      .add(new THREE.Vector3(0, 0, elevation));
-
-    light.position.copy(lightPos);
-    boost.position.copy(lightPos);
-    light.target = target as any;
-
     // ---- cone angle fitted to model bounding box ----
     const worldBox = bbox.clone().applyMatrix4(mesh.matrixWorld);
     const worldSize = worldBox.getSize(new THREE.Vector3());
     const fitRadius = 0.5 * Math.max(worldSize.x, worldSize.y, worldSize.z);
-    const distToModel = lightPos.distanceTo(worldCenter);
-    const minHalfAngle = THREE.MathUtils.degToRad(5);
-    const maxHalfAngle = THREE.MathUtils.degToRad(65);
+    const camToModel = worldCenter.clone().sub(camera.position);
+    const camToModelDist = Math.max(1e-3, camToModel.length());
+    const viewDir = camToModel.normalize();
+
+    // Keep minimum source distance from model center so close zooms do not
+    // collapse the lit footprint into a tiny hotspot.
+    const maxHalfAngle = THREE.MathUtils.degToRad(50);
+    const minDistForCoverage = fitRadius / Math.tan(maxHalfAngle * 0.92);
+    const effectiveDist = Math.max(camToModelDist, minDistForCoverage);
+
+    const lightPos = worldCenter.clone().addScaledVector(viewDir, -effectiveDist);
+    light.position.copy(lightPos);
+    light.target = target as any;
+
+    const distToModel = effectiveDist;
+    const minHalfAngle = THREE.MathUtils.degToRad(8);
     const halfAngle = Math.atan(fitRadius / Math.max(distToModel, 1e-3));
-    light.angle = THREE.MathUtils.clamp(halfAngle * 1.15, minHalfAngle, maxHalfAngle);
+    light.angle = THREE.MathUtils.clamp(halfAngle * 1.36, minHalfAngle, maxHalfAngle);
     light.penumbra = THREE.MathUtils.clamp(penumbra, 0.2, 0.6);
 
     // ---- bounded distance: keep model lit, limit floor spill ----
@@ -100,20 +122,21 @@ export function SelectionSpotlight({
     const floorBeneath = new THREE.Vector3(worldCenter.x, worldCenter.y, 0);
     const distToFloor = lightPos.distanceTo(floorBeneath);
 
-    // Ensure we always light the model centre and most silhouette extents.
-    const minReach = distToModel + Math.min(fitRadius * 0.35, 8);
-    const desiredCoverage = distToModel + fitRadius * 1.2;
+    // Ensure we always light model center + silhouette, but keep reach tight.
+    const minReach = distToModel + Math.min(fitRadius * 0.25, 5);
+    const desiredCoverage = distToModel + fitRadius * 0.95;
 
-    // Keep distance short enough that illumination dies off before floor haloing.
-    const floorSafe = Math.max(distToModel * 1.03, distToFloor * 0.82);
+    // Keep distance short so floor illumination is strongly suppressed.
+    const floorSafe = Math.max(distToModel * 1.015, distToFloor * 0.78);
 
     light.distance = Math.max(minReach, Math.min(desiredCoverage, floorSafe));
     light.decay = 0;
 
-    // Small omni boost to make spotlight mode perceptibly brighter even under
-    // high ambient/hemisphere lighting. Kept bounded to the same reach.
-    boost.distance = light.distance;
-    boost.decay = 0;
+    if (!hasValidPlacementRef.current) {
+      hasValidPlacementRef.current = true;
+      light.visible = true;
+    }
+    light.intensity = intensity;
 
     light.updateMatrixWorld();
 
@@ -133,19 +156,14 @@ export function SelectionSpotlight({
       <spotLight
         ref={lightRef}
         color={color}
-        intensity={intensity}
+        intensity={0}
         angle={angle}
-        distance={220}
+        distance={0}
+        position={[camera.position.x, camera.position.y, camera.position.z]}
         penumbra={penumbra}
         decay={0}
+        visible={false}
         castShadow={false}
-      />
-      <pointLight
-        ref={boostRef}
-        color={color}
-        intensity={intensity * 0.65}
-        distance={220}
-        decay={0}
       />
       <object3D ref={targetRef} />
       {debug && helperRef.current && <primitive object={helperRef.current} />}

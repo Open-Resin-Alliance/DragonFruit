@@ -1334,7 +1334,7 @@ export function SceneCanvas({
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
           enabled={(mode === 'prepare' || mode === 'support') && effectiveModelSelected && selectionHighlightMode === 'spotlight'}
           color="#ffeacc"
-          intensity={6.4}
+          intensity={7.6}
           angle={Math.PI / 3}
           penumbra={0.3}
           elevation={60}
