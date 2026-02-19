@@ -37,11 +37,11 @@ export function JointRenderer({
     enablePicking = true
 }: JointRendererProps) {
     const resolvedDiameter = joint.diameter ?? 0;
-    const blendedDiameter = Math.max(0.001, resolvedDiameter - JOINT_DIAMETER_OFFSET_MM);
+    const blendedDiameter = Math.max(0.001, resolvedDiameter - JOINT_DIAMETER_OFFSET_MM * 0.75);
     const displayDiameter = isParentSelected ? resolvedDiameter : blendedDiameter;
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
-    
+
     // State Subscription
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const isSelected = state.selectedId === joint.id;
@@ -132,7 +132,6 @@ export function JointRenderer({
     };
     
     // Only use expanded hitbox when parent is selected (editable mode)
-    // Otherwise, use the visual radius so it doesn't block support hover
     const hitboxRadius = isParentSelected ? radius * 2.5 : radius;
 
     return (
@@ -145,19 +144,19 @@ export function JointRenderer({
         >
             {/* Hitbox Mesh - Only expanded when parent is selected */}
             <mesh raycast={raycast}>
-                <sphereGeometry args={[hitboxRadius, 16, 16]} />
+                <sphereGeometry args={[hitboxRadius, 32, 32]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
 
             {/* Visual Mesh - Purely display */}
             <mesh raycast={raycast}>
-                <sphereGeometry args={[radius, 16, 16]} />
+                <sphereGeometry args={[radius, 32, 32]} />
                 <meshStandardMaterial 
                     color={displayColor} 
                     emissive={displayEmissive} 
                     emissiveIntensity={displayEmissiveIntensity}
-                    metalness={0.3}
-                    roughness={0.6}
+                    roughness={1}
+                    metalness={0}
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}

@@ -4,10 +4,15 @@ import {
   Branch,
   Joint,
   Knot,
+  Segment,
   Vec3,
 } from '../../../supports/types';
+import type { SupportBraceBuildResult } from '../../../supports/SupportTypes/SupportBrace/types';
 import { getFinalSocketPosition } from '../../../supports/SupportPrimitives/ContactCone';
 import { findClosestSegment } from '../../../supports/SupportPrimitives/Joint/jointUtils';
+import {
+  calculateKnotPositionOnSegmentFromT,
+} from '../../../supports/SupportPrimitives/Knot/knotUtils';
 import {
   HostEntry,
   LycheeObject,
@@ -242,8 +247,8 @@ export function resolveSupportOwnerId(
 }
 
 export function applyWorldXYPlacementToSlice(
-  data: DragonfruitImportFormat,
-  start: { roots: number; trunks: number; branches: number; leaves: number; twigs: number; sticks: number; knots: number },
+  data: DragonfruitImportFormat & { supportBraces?: SupportBraceBuildResult[] },
+  start: { roots: number; trunks: number; branches: number; leaves: number; twigs: number; sticks: number; knots: number; supportBraces: number },
   offsetX: number,
   offsetY: number,
 ): void {
@@ -331,6 +336,22 @@ export function applyWorldXYPlacementToSlice(
   for (let i = start.knots; i < data.knots.length; i++) {
     shiftPos(data.knots[i].pos);
   }
+
+  for (let i = start.supportBraces; i < (data.supportBraces?.length || 0); i++) {
+    const build = data.supportBraces![i];
+
+    shiftPos(build.root?.transform?.pos);
+    shiftPos(build.hostKnot?.pos);
+
+    for (const seg of build.supportBrace?.segments || []) {
+      shiftJoint(seg.bottomJoint);
+      shiftJoint(seg.topJoint);
+      if (seg.type === 'bezier') {
+        shiftPos(seg.controlPoint1 as { x: number; y: number } | undefined);
+        shiftPos(seg.controlPoint2 as { x: number; y: number } | undefined);
+      }
+    }
+  }
 }
 
 export function projectPointToBranch(
@@ -384,6 +405,52 @@ export function projectPointToBranch(
   };
 }
 
+function projectPointToSupportBraceHost(
+  host: Extract<HostEntry, { kind: 'supportBrace' }>,
+  point: THREE.Vector3
+): { t: number; pointOnLine: Vec3; segmentId: string } | null {
+  const rootTopZ = host.root.transform.pos.z + host.root.diskHeight + host.root.coneHeight;
+  let currentStart = new THREE.Vector3(host.root.transform.pos.x, host.root.transform.pos.y, rootTopZ);
+
+  let minDist = Infinity;
+  let bestT = 0;
+  const bestPoint = new THREE.Vector3();
+  let bestSegmentId: string | null = null;
+
+  const hostKnotPos = new THREE.Vector3(host.hostKnot.pos.x, host.hostKnot.pos.y, host.hostKnot.pos.z);
+
+  for (const seg of host.supportBrace.segments) {
+    const endPoint = seg.topJoint
+      ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
+      : hostKnotPos;
+
+    const line = new THREE.Line3(currentStart, endPoint);
+    const closest = new THREE.Vector3();
+    line.closestPointToPoint(point, true, closest);
+
+    const dist = point.distanceTo(closest);
+    const segLen = currentStart.distanceTo(endPoint);
+    const t = segLen > 0.000001 ? currentStart.distanceTo(closest) / segLen : 0;
+
+    if (dist < minDist) {
+      minDist = dist;
+      bestT = t;
+      bestPoint.copy(closest);
+      bestSegmentId = seg.id;
+    }
+
+    currentStart = endPoint;
+  }
+
+  if (!Number.isFinite(minDist) || !bestSegmentId) return null;
+
+  return {
+    t: bestT,
+    pointOnLine: { x: bestPoint.x, y: bestPoint.y, z: bestPoint.z },
+    segmentId: bestSegmentId,
+  };
+}
+
 export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: number; pointOnLine: Vec3; parentShaftId: string } | null {
   if (host.kind === 'trunk') {
     const projection = findClosestSegment(host.trunk, host.root, { x: point.x, y: point.y, z: point.z });
@@ -395,7 +462,18 @@ export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: 
     };
   }
 
-  const projection = projectPointToBranch(host.branch, host.parentKnot, point);
+  if (host.kind === 'branch') {
+    const projection = projectPointToBranch(host.branch, host.parentKnot, point);
+    if (!projection) return null;
+
+    return {
+      t: projection.t,
+      pointOnLine: projection.pointOnLine,
+      parentShaftId: projection.segmentId,
+    };
+  }
+
+  const projection = projectPointToSupportBraceHost(host, point);
   if (!projection) return null;
 
   return {
@@ -403,6 +481,129 @@ export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: 
     pointOnLine: projection.pointOnLine,
     parentShaftId: projection.segmentId,
   };
+}
+
+function projectPointToSegment(
+  segment: Segment,
+  start: Vec3,
+  end: Vec3,
+  point: THREE.Vector3,
+): { t: number; pointOnLine: Vec3 } {
+  const pointVec = new THREE.Vector3(point.x, point.y, point.z);
+
+  let t = 0;
+  if (segment.type !== 'bezier') {
+    const startVec = new THREE.Vector3(start.x, start.y, start.z);
+    const endVec = new THREE.Vector3(end.x, end.y, end.z);
+    const segVec = endVec.clone().sub(startVec);
+    const segLenSq = segVec.lengthSq();
+    if (segLenSq > 1e-8) {
+      t = THREE.MathUtils.clamp(pointVec.clone().sub(startVec).dot(segVec) / segLenSq, 0, 1);
+    }
+  } else {
+    let bestT = 0;
+    let bestDistSq = Number.POSITIVE_INFINITY;
+    const samples = 64;
+    for (let i = 0; i <= samples; i++) {
+      const sampleT = i / samples;
+      const samplePos = calculateKnotPositionOnSegmentFromT(start, end, segment, sampleT);
+      const dx = samplePos.x - pointVec.x;
+      const dy = samplePos.y - pointVec.y;
+      const dz = samplePos.z - pointVec.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestT = sampleT;
+      }
+    }
+    t = bestT;
+  }
+
+  const pointOnLine = calculateKnotPositionOnSegmentFromT(start, end, segment, t);
+  return { t, pointOnLine };
+}
+
+function projectPointToHostPreferredSide(
+  host: HostEntry,
+  point: THREE.Vector3,
+  preferredSide: 'base' | 'tip',
+): { t: number; pointOnLine: Vec3; parentShaftId: string } | null {
+  if (host.kind === 'trunk') {
+    const segments = host.trunk.segments;
+    if (segments.length === 0) return null;
+
+    const targetIndex = preferredSide === 'base' ? 0 : segments.length - 1;
+    const segment = segments[targetIndex];
+    if (!segment) return null;
+
+    const rootTop: Vec3 = {
+      x: host.root.transform.pos.x,
+      y: host.root.transform.pos.y,
+      z: host.root.transform.pos.z + host.root.diskHeight + host.root.coneHeight,
+    };
+
+    const prevSegment = targetIndex > 0 ? segments[targetIndex - 1] : null;
+    const prevEnd = prevSegment?.topJoint?.pos
+      ?? (host.trunk.contactCone ? getFinalSocketPosition(host.trunk.contactCone) : rootTop);
+
+    const start: Vec3 = targetIndex === 0 ? rootTop : { x: prevEnd.x, y: prevEnd.y, z: prevEnd.z };
+    const endPos = segment.topJoint?.pos
+      ?? (host.trunk.contactCone ? getFinalSocketPosition(host.trunk.contactCone) : start);
+    const end: Vec3 = { x: endPos.x, y: endPos.y, z: endPos.z };
+
+    const projected = projectPointToSegment(segment, start, end, point);
+    return { ...projected, parentShaftId: segment.id };
+  }
+
+  if (host.kind === 'branch') {
+    const segments = host.branch.segments;
+    if (segments.length === 0) return null;
+
+    const targetIndex = preferredSide === 'base' ? 0 : segments.length - 1;
+    const segment = segments[targetIndex];
+    if (!segment) return null;
+
+    const prevSegment = targetIndex > 0 ? segments[targetIndex - 1] : null;
+    const prevEnd = prevSegment?.topJoint?.pos
+      ?? (host.branch.contactCone ? getFinalSocketPosition(host.branch.contactCone) : host.parentKnot.pos);
+
+    const start: Vec3 = targetIndex === 0
+      ? { x: host.parentKnot.pos.x, y: host.parentKnot.pos.y, z: host.parentKnot.pos.z }
+      : { x: prevEnd.x, y: prevEnd.y, z: prevEnd.z };
+
+    const endPos = segment.topJoint?.pos
+      ?? (host.branch.contactCone ? getFinalSocketPosition(host.branch.contactCone) : start);
+    const end: Vec3 = { x: endPos.x, y: endPos.y, z: endPos.z };
+
+    const projected = projectPointToSegment(segment, start, end, point);
+    return { ...projected, parentShaftId: segment.id };
+  }
+
+  const segments = host.supportBrace.segments;
+  if (segments.length === 0) return null;
+
+  const targetIndex = preferredSide === 'base' ? 0 : segments.length - 1;
+  const segment = segments[targetIndex];
+  if (!segment) return null;
+
+  const rootTop: Vec3 = {
+    x: host.root.transform.pos.x,
+    y: host.root.transform.pos.y,
+    z: host.root.transform.pos.z + host.root.diskHeight + host.root.coneHeight,
+  };
+
+  const prevSegment = targetIndex > 0 ? segments[targetIndex - 1] : null;
+  const prevEnd = prevSegment?.topJoint?.pos ?? host.hostKnot.pos;
+
+  const start: Vec3 = targetIndex === 0
+    ? rootTop
+    : { x: prevEnd.x, y: prevEnd.y, z: prevEnd.z };
+
+  const endPos = segment.topJoint?.pos ?? host.hostKnot.pos;
+  const end: Vec3 = { x: endPos.x, y: endPos.y, z: endPos.z };
+
+  const projected = projectPointToSegment(segment, start, end, point);
+  return { ...projected, parentShaftId: segment.id };
 }
 
 export function pickAttachAndTipForSingleParent(
@@ -454,12 +655,12 @@ export function pickAttachAndTipFromParentHints(
   const parentTipId = typeof s.parentTipId === 'string' ? s.parentTipId : null;
 
   if (parentBaseId === parentId && parentTipId !== parentId) {
-    const proj = projectPointToHost(host, pA);
+    const proj = projectPointToHostPreferredSide(host, pA, 'base') ?? projectPointToHost(host, pA);
     if (proj) return { attachProjection: proj, attachPoint: pA, tipPoint: pB, usedExplicitParentHint: true };
   }
 
   if (parentTipId === parentId && parentBaseId !== parentId) {
-    const proj = projectPointToHost(host, pB);
+    const proj = projectPointToHostPreferredSide(host, pB, 'tip') ?? projectPointToHost(host, pB);
     if (proj) return { attachProjection: proj, attachPoint: pB, tipPoint: pA, usedExplicitParentHint: true };
   }
 

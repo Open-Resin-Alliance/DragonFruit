@@ -54,6 +54,10 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             key: 'Alt',
             modifier: 'ctrl',
             description: 'Hold to enter Leaf Placement Mode'
+        },
+        SUPPORT_BRACE_PLACEMENT: {
+            key: 'Control',
+            description: 'Hold to enter Support Brace Placement Mode'
         }
     },
     CAMERA: {

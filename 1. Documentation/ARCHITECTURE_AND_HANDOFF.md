@@ -115,6 +115,7 @@ src/supports/
 | Twig | ContactCone + Shaft + ContactCone (both ends touch model) |
 | Stick | Shafts + Joints + ContactCone (no roots, vertical) |
 | Brace | Knot + Shaft + Knot (horizontal stabilizer; two knots, one on each host) |
+| Support Brace | Root + Shafts/Joints + Host Knot (rooted auxiliary support attached to trunk/branch shaft) |
 
 Each support type has a `*Builder.ts` that defines what primitives it uses. The `SupportBuilder.tsx` renders any combination.
 
@@ -192,6 +193,38 @@ Trunks now support an **adaptive stepwise diameter profile** driven only by **br
 
 ---
 
+## Support Brace: History + Cascade Delete + Raft Sync (V2)
+
+Authoritative files:
+
+- `src/supports/SupportTypes/SupportBrace/`
+- `src/supports/history/actionTypes.ts`
+- `src/supports/history/useSupportHistoryHandlers.ts`
+- `src/supports/state.ts`
+- `src/supports/SupportRenderer.tsx`
+
+Current contract:
+
+1. **Placement history parity**
+   - Support Brace placement pushes a dedicated history action (`support:add-support-brace`).
+   - Undo/redo removes/restores Support Brace + root + host knot atomically.
+
+2. **Recursive host delete behavior**
+   - If a host support (trunk/branch path) is deleted, attached Support Braces are deleted recursively.
+   - Removal snapshots include Support Brace build payloads so undo can restore dependents in the same action.
+
+3. **Raft synchronization rule (critical)**
+   - Raft footprint derives from global `supportState.roots`.
+   - Any Support Brace root no longer referenced by an active trunk or active Support Brace must be pruned from global roots to prevent persistent raft islands.
+   - `SupportRenderer` performs this orphan-root pruning as part of the Support Brace root/knot backfill effect.
+
+4. **Interaction parity with core support hosts**
+   - Support Brace segment IDs are now valid host IDs for knot drag and manual brace snapping paths.
+   - Knot interaction resolves Support Brace segment endpoints using Support Brace root top + segment joints + host knot fallback.
+   - Brace placement target collection includes Support Brace segments so braces can be authored/edited against Support Brace shafts directly.
+
+---
+
 ## 🎯 Current Status: TRUNK STRUCTURE & JOINT GIZMO COMPLETE
 
 **Build Status**: ✅ **Fixed**  
@@ -235,13 +268,16 @@ Import Lychee Slicer (`.lys`) scenes directly without external Python dependenci
    - **Crucial**: Converts geometry to **Non-Indexed** (`toNonIndexed()`) to ensure **Flat Shading** (sharp edges), matching STL behavior and avoiding smoothing artifacts.
 
 2. **`useLysImport.ts`**:
-   - React hook that manages the file reading and parsing status.
+   - React hook that manages file parsing, support reconstruction handoff, and model transform extraction.
+   - **Canonical model lift solve** for LYS import now happens here:
+     - Build local transform as `rotationScale * centerOffset(-geometryCenter)`.
+     - Compute transformed lowest point using `computeLowestZ(...)` (vertex-accurate, not rotated AABB).
+     - Solve model group Z as `finalModelZ = lycheeLiftZ - transformedMinZ`.
+   - Applies matching support Z offset so support geometry remains vertically aligned with the solved model placement.
 
 3. **`useSceneCollectionManager.ts` (Integration)**:
-   - Handles the "Load then Position" strategy.
-   - **Floor + Delta**: Models are initially loaded at the "Floor" (Bottom = Z0). The LYS position is then applied as a *delta* offset.
-     - *Critical*: The floor calculation must account for `transform.scale.z` (e.g. 0.25x scaling).
-   - Stores original LYS transform data in `model.lysMetadata`.
+   - Consumes import-provided transform directly for LYS models (no second Z re-solve in scene layer).
+   - This keeps model lift deterministic and avoids model/support desync from duplicate placement calculations.
 
 ### LYS Support Reconstruction Contract (Current)
 
@@ -260,6 +296,7 @@ Current behavioral contract:
 2. **Transform staging**
    - Stage A (reconstruction): apply object scale + rotation + `position.z` to support points.
    - Stage B (placement): after reconstruction, apply only object `position.x/y` to generated entities.
+   - Model lift parity rule: after transform staging, model placement uses transformed-geometry lowest point (vertex-based) to honor Lychee lift exactly.
 
 3. **Root/base transform special case**
    - Root base uses floor policy and explicit XY handling.
@@ -280,6 +317,28 @@ Current behavioral contract:
    - Tip cone joint (socket) is solved from fixed tip length and cone axis.
    - With Lychee normal present, solver evaluates both `+n` and `-n` and chooses the socket candidate closer to the shaft start anchor.
    - Root/branch import paths use strict Lychee coordinate mode (no raycast-based tip re-snapping for parity path).
+
+7. **Load-time knot normalization safeguard (brace endpoints)**
+   - During `loadFromLychee`, host-knot reprojection is normally used to keep knots aligned to shaft geometry.
+   - For brace host knots, if reprojection clamps to an endpoint (`t≈0` or `t≈1`) with a large move (>2mm), authored knot position is preserved to avoid pathological brace clustering in edge-case scenes.
+   - Host-derived diameter updates are still applied.
+   - Trunk host endpoint reconstruction used by normalization now derives root top from imported root geometry (`root.diskHeight` + `root.coneHeight`) rather than live global root settings, preventing import-time knot drift when current presets differ.
+
+8. **Support Brace source classification + host graph integration**
+   - Grounded single-parent supports with explicit parent endpoint hints are classified as Support Brace candidates for Lychee `type:1` and `type:0` variants.
+   - Imported Support Braces are registered into the host projection graph so later regular braces can resolve to Support Brace segments.
+
+9. **Support Brace shape parity policy (Lychee join-length driven)**
+   - Support Brace import computes host attach using join-length-biased probing and applies layout overrides derived from Lychee join-length semantics for closer top-angle parity.
+
+10. **Brace diameter parity policy**
+   - Imported brace body diameter priority: `settings.tip.diameter` -> `settings.baseTip.diameter` -> `settings.base.joinDiameter` -> fallback.
+   - Brace rendering is uniform-diameter from `brace.profile.diameter` (no endpoint host taper) for one-to-one Lychee parity when authored diameter is constant.
+
+11. **Explicit single-parent branch hint side-order safeguard**
+   - For branch candidates with explicit parent hints, importer validates knot/tip vertical side ordering against source Lychee endpoint ordering (`tip.z - base.z`).
+   - If projected host placement would invert that ordering, importer preserves authored attach endpoint for the knot position.
+   - This prevents upside-down/misplaced branch origins in common explicit-hint scenes while keeping branch tips sourced from Lychee tip payloads.
 
 ---
 
@@ -1107,6 +1166,7 @@ Located at `src/supports/PlacementLogic/SupportModelLinker.ts`.
 This module isolates the logic for:
 *   Querying all supports owned by a specific model (`getSupportsForModel`).
 *   Orchestrating the deletion of those supports (`deleteSupportsForModel`).
+    - Current delete sweep covers trunks, branches, braces, leaves, twigs, sticks, and any remaining support-brace store entities for the model.
 
 ### 3. Lifecycle Integration
 *   **Creation**: `useTrunkPlacement` extracts `modelId` from the raycast hit (`hit.object.userData.modelId`) and passes it to the builder.

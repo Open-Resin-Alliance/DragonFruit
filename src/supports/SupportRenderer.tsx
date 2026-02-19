@@ -2,21 +2,23 @@
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { subscribe, getSnapshot } from './state';
+import { addKnot, addRoot, removeRootById, subscribe, getSnapshot } from './state';
 import { TrunkRenderer } from './SupportTypes/Trunk/TrunkRenderer';
 import { BranchRenderer } from './SupportTypes/Branch/BranchRenderer';
 import { LeafRenderer } from './SupportTypes/Leaf/LeafRenderer';
 import { BraceRenderer } from './SupportTypes/Brace/BraceRenderer';
 import { TwigRenderer } from './SupportTypes/Twig/TwigRenderer';
 import { StickRenderer } from './SupportTypes/Stick/StickRenderer';
+import { SupportBraceRenderer } from './SupportTypes/SupportBrace/SupportBraceRenderer';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
+import { useSupportBraceStoreState } from './SupportTypes/SupportBrace/supportBraceStore';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { Vec3, SupportMode } from './types';
+import { SupportMode } from './types';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 
@@ -29,6 +31,7 @@ interface SupportRendererProps {
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const supportBraceState = useSupportBraceStoreState();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
 
@@ -39,6 +42,29 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const suppressHover = isJointCreationActive || !isInteractable || braceAltActive;
 
     useSupportHistoryHandlers();
+
+    // Backfill Support Brace root/knot into global support state so raft + knot tools include them.
+    useEffect(() => {
+        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+            const root = supportBraceState.roots[supportBrace.rootId];
+            if (root && !state.roots[root.id]) {
+                addRoot(root);
+            }
+
+            const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
+            if (hostKnot && !state.knots[hostKnot.id]) {
+                addKnot(hostKnot);
+            }
+        }
+
+        const trunkRootIds = new Set(Object.values(state.trunks).map((trunk) => trunk.rootId));
+        const supportBraceRootIds = new Set(Object.values(supportBraceState.supportBraces).map((supportBrace) => supportBrace.rootId));
+        for (const rootId of Object.keys(state.roots)) {
+            if (trunkRootIds.has(rootId)) continue;
+            if (supportBraceRootIds.has(rootId)) continue;
+            removeRootById(rootId);
+        }
+    }, [supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, state.trunks]);
 
     // Enable joint dragging
     useJointInteraction(isInteractable);
@@ -86,7 +112,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 applyMaterialClipping(mesh.material);
             }
         });
-    }, [clippingPlanes, state]);
+    }, [clippingPlanes]);
 
     return (
         <group ref={groupRef}>
@@ -250,6 +276,40 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         showKnots={showKnots}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
+                    />
+                );
+            })}
+
+            {/* Render Support Braces */}
+            {Object.values(supportBraceState.supportBraces).map((supportBrace) => {
+                const root = state.roots[supportBrace.rootId];
+                const hostKnot = state.knots[supportBrace.hostKnotId];
+                if (!root || !hostKnot) return null;
+
+                const isSupportBraceSelected = state.selectedId === supportBrace.id;
+                const isHostKnotSelected = state.selectedId === hostKnot.id;
+                const isChildSelected = supportBrace.segments.some(
+                    (segment) =>
+                        segment.id === state.selectedId
+                        || segment.bottomJoint?.id === state.selectedId
+                        || segment.topJoint?.id === state.selectedId,
+                );
+                const effectiveSelected = isSupportBraceSelected || isHostKnotSelected || isChildSelected;
+                const showKnot = !hideUnselectedKnots || effectiveSelected;
+
+                return (
+                    <SupportBraceRenderer
+                        key={supportBrace.id}
+                        supportBrace={supportBrace}
+                        root={root}
+                        hostKnot={hostKnot}
+                        isSelected={effectiveSelected}
+                        selectedId={state.selectedId}
+                        dimNonSelected={dimNonSelected}
+                        showKnot={showKnot}
+                        suppressHover={suppressHover}
+                        isInteractable={isInteractable}
+                        hidePlateContactPrimitives={hidePlateContactPrimitives}
                     />
                 );
             })}

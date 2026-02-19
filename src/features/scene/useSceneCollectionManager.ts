@@ -1000,7 +1000,12 @@ export function useSceneCollectionManager() {
     await waitForUiYield();
 
     try {
-      const result = await lysImport.importFile(file);
+      const result = await lysImport.importFile(file, {
+        importCenterXY: {
+          x: defaultImportCenterXY.x,
+          y: defaultImportCenterXY.y,
+        },
+      });
       if (result && result.geometry) {
         const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId } = result;
 
@@ -1011,25 +1016,10 @@ export function useSceneCollectionManager() {
         const color = '#a3a3a3';
         clearPaintToBase(processed.geometry, new THREE.Color(color));
 
-        // Compute transformed local bounds exactly like StlMesh uses geometry:
-        // geometry is rendered with a local offset (-center), then group transform is applied.
-        // We transform centered bounds by imported rotation+scale (no translation), then place
-        // translation so world min Z lands at the Lychee lift value.
-        const centeredBounds = processed.bbox.clone();
-        centeredBounds.translate(new THREE.Vector3(-processed.center.x, -processed.center.y, -processed.center.z));
-
-        const localTransform = new THREE.Matrix4().compose(
-          new THREE.Vector3(0, 0, 0),
-          new THREE.Quaternion().setFromEuler(importedTransform.rotation),
-          importedTransform.scale
-        );
-        centeredBounds.applyMatrix4(localTransform);
-
-        const lycheeLiftZ = Number.isFinite(importedTransform.position.z) ? importedTransform.position.z : 0;
         const finalPosition = new THREE.Vector3(
           importedTransform.position.x,
           importedTransform.position.y,
-          lycheeLiftZ - centeredBounds.min.z
+          importedTransform.position.z
         );
 
         const model: LoadedModel = {
@@ -1052,9 +1042,19 @@ export function useSceneCollectionManager() {
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
+      } else {
+        const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
+        console.error('[SceneCollection] LYS import failed:', errorMessage);
+        if (typeof window !== 'undefined') {
+          window.alert(`Import Scene failed:\n${errorMessage}`);
+        }
       }
     } catch (err) {
       console.error("[SceneCollection] Failed to process LYS geometry:", err);
+      if (typeof window !== 'undefined') {
+        const msg = err instanceof Error ? err.message : String(err);
+        window.alert(`Import Scene failed:\n${msg}`);
+      }
     } finally {
       setImportProgress({
         active: false,
@@ -1064,7 +1064,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {

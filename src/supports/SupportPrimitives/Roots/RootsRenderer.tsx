@@ -99,7 +99,7 @@ export function RootsRenderer({
             {/* Bottom disk - footprint on plate */}
             <group position={[diskCenter.x, diskCenter.y, diskCenter.z]} quaternion={coneQuaternion}>
                 <mesh raycast={raycast}>
-                    <cylinderGeometry args={[bottomRadius, bottomRadius, effectiveDiskHeight, 16]} />
+                    <cylinderGeometry args={[bottomRadius, bottomRadius, effectiveDiskHeight, 32]} />
                     <meshStandardMaterial
                         color={finalDiskColor}
                         emissive={emissive}
@@ -115,7 +115,7 @@ export function RootsRenderer({
             {coneHeight > 0 && (
                 <group position={[coneCenter.x, coneCenter.y, coneCenter.z]} quaternion={coneQuaternion}>
                     <mesh raycast={raycast}>
-                        <cylinderGeometry args={[topRadius, bottomRadius, coneHeight, 16]} />
+                        <cylinderGeometry args={[topRadius, bottomRadius, coneHeight, 32]} />
                         <meshStandardMaterial
                             color={finalConeColor}
                             emissive={emissive}
@@ -131,7 +131,7 @@ export function RootsRenderer({
             {/* Spherical top - trunk shaft embeds into this */}
             {coneHeight > 0 && (
                 <mesh position={[sphereCenter.x, sphereCenter.y, sphereCenter.z]} raycast={raycast}>
-                    <sphereGeometry args={[sphereRadius, 16, 12]} />
+                    <sphereGeometry args={[sphereRadius, 32, 24]} />
                     <meshStandardMaterial
                         color={finalConeColor}
                         emissive={emissive}

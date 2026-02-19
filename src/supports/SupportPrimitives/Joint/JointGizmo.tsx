@@ -8,9 +8,12 @@ import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { Trunk, Branch, Twig, Stick, Joint } from '../../types';
+import { useSupportBraceStoreState, updateSupportBrace } from '../../SupportTypes/SupportBrace/supportBraceStore';
+import type { SupportBrace } from '../../SupportTypes/SupportBrace/types';
 
 export function JointGizmo() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const supportBraceState = useSupportBraceStoreState();
     const selectedId = state.selectedId;
     const initialTrunkRef = useRef<Trunk | null>(null);
     const initialBranchRef = useRef<Branch | null>(null);
@@ -84,7 +87,7 @@ export function JointGizmo() {
      }, []);
 
     // Helper to find joint and parent
-    const findJointAndParent = useCallback((): { joint: Joint, trunk?: Trunk, branch?: Branch, twig?: Twig, stick?: Stick } | null => {
+    const findJointAndParent = useCallback((): { joint: Joint, trunk?: Trunk, branch?: Branch, twig?: Twig, stick?: Stick, supportBrace?: SupportBrace } | null => {
         if (!selectedId) return null;
         
         // Search trunks first
@@ -138,13 +141,26 @@ export function JointGizmo() {
                 }
             }
         }
+
+        // Search support braces
+        const supportBraces = Object.values(supportBraceState.supportBraces);
+        for (const supportBrace of supportBraces) {
+            for (const seg of supportBrace.segments) {
+                if (seg.topJoint?.id === selectedId) {
+                    return { joint: seg.topJoint, supportBrace };
+                }
+                if (seg.bottomJoint?.id === selectedId) {
+                    return { joint: seg.bottomJoint, supportBrace };
+                }
+            }
+        }
         
         return null;
-    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks]);
+    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, supportBraceState.supportBraces]);
 
     const result = findJointAndParent();
     if (!result) return null;
-    const { joint, trunk, branch, twig, stick } = result;
+    const { joint, trunk, branch, twig, stick, supportBrace } = result;
 
     const handleMoveStart = () => {
         if (joint) {
@@ -202,6 +218,26 @@ export function JointGizmo() {
                 contactConeB: nextConeB,
             };
             updateStick(newStick);
+        } else if (supportBrace) {
+            const root = state.roots[supportBrace.rootId];
+            const contextStart = root
+                ? {
+                    x: root.transform.pos.x,
+                    y: root.transform.pos.y,
+                    z: root.transform.pos.z + root.diskHeight + root.coneHeight,
+                }
+                : undefined;
+
+            const newSupportBrace = moveJoint(
+                supportBrace as unknown as Trunk,
+                joint.id,
+                newPos,
+                undefined,
+                isCurveMode,
+                root,
+                contextStart,
+            ) as unknown as SupportBrace;
+            updateSupportBrace(newSupportBrace);
         }
     };
 

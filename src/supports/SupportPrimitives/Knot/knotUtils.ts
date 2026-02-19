@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { Branch, Knot, Roots, Segment, Trunk, Vec3 } from '../../types';
 import { getFinalSocketPosition } from '../ContactCone';
-import { getSettingsSnapshot } from '../../Settings';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
 
 export function projectOntoSegment(
@@ -30,30 +29,30 @@ export function getTrunkSegmentEndpoints(
 ): { start: Vec3; end: Vec3 } | null {
     if (!root) return null;
 
-    const settings = getSettingsSnapshot();
-    const baseFlare = settings.baseFlare;
-    const rootsSettings = settings.roots;
-
     const basePos = new THREE.Vector3(
         root.transform.pos.x,
         root.transform.pos.y,
         root.transform.pos.z
     );
 
-    const diskHeight = rootsSettings.diskHeightMm;
-    const coneHeight = baseFlare.enabled ? baseFlare.heightMm : (root.height || 1.5);
-    const effectiveConeHeight = baseFlare.enabled ? coneHeight : 0;
+    const diskHeight = Number.isFinite(root.diskHeight as number) ? (root.diskHeight as number) : 0;
+    const coneHeight = Number.isFinite(root.coneHeight as number)
+        ? (root.coneHeight as number)
+        : Number.isFinite((root as any).height as number)
+            ? ((root as any).height as number)
+            : 0;
+    const rootTopZ = diskHeight + coneHeight;
 
     let startVec: THREE.Vector3;
     if (segmentIndex === 0) {
-        startVec = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
+        startVec = basePos.clone().add(new THREE.Vector3(0, 0, rootTopZ));
     } else {
         const prev = trunk.segments[segmentIndex - 1];
         if (prev.topJoint) {
             startVec = new THREE.Vector3(prev.topJoint.pos.x, prev.topJoint.pos.y, prev.topJoint.pos.z);
         } else {
             // fallback to base if missing joint
-            startVec = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
+            startVec = basePos.clone().add(new THREE.Vector3(0, 0, rootTopZ));
         }
     }
 
