@@ -179,11 +179,18 @@ export function PickingRenderer({
       // Copy world transform - need to set both matrix and matrixWorld
       registration.object.updateMatrixWorld(true);
       pickObject.matrixAutoUpdate = false;
-      pickObject.matrix.copy(registration.object.matrixWorld);
-      pickObject.matrixWorld.copy(registration.object.matrixWorld);
-      // Decompose to position/rotation/scale for proper rendering
-      pickObject.matrix.decompose(pickObject.position, pickObject.quaternion, pickObject.scale);
-      
+
+      // Decompose world matrix to get position/rotation/scale in world space
+      registration.object.matrixWorld.decompose(
+        pickObject.position,
+        pickObject.quaternion,
+        pickObject.scale
+      );
+
+      // Update matrices after setting position/rotation/scale
+      pickObject.updateMatrix();
+      pickObject.updateMatrixWorld(true);
+
       pickScene.add(pickObject);
     }
     
