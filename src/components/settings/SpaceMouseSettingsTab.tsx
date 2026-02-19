@@ -109,6 +109,9 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
               <div className="text-[11px] break-words" style={{ color: 'var(--text-muted)' }}>
                 {connectedDevice ?? 'No 3D mouse detected yet. Ensure driver is installed and browser input is permitted.'}
               </div>
+              <div className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                Note: some Bluetooth 3D mouse models may still work even if they do not appear in detected device status.
+              </div>
             </div>
           </div>
         </div>
