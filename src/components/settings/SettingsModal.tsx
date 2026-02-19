@@ -362,7 +362,7 @@ export function SettingsModal({
       tone: 'secondary',
     },
     spacemouse: {
-      label: 'SpaceMouse',
+      label: '3D Mouse',
       description: '3D mouse navigation controls',
       icon: Gamepad2,
       tone: 'primary',

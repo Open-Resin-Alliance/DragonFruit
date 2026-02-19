@@ -60,10 +60,10 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           </span>
           <div className="flex-1">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              SpaceMouse Input
+              3D Mouse Input
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              6-DoF navigation for pan, orbit, zoom, and roll using compatible SpaceMouse devices.
+              6-DoF navigation for pan, orbit, zoom, and roll using compatible 3D mouse devices.
             </p>
           </div>
         </div>
@@ -72,10 +72,10 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Enable SpaceMouse
+                Enable 3D Mouse
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Uses browser gamepad input from supported 3Dconnexion devices.
+                Uses browser gamepad input from supported 3D mouse devices.
               </div>
             </div>
             <button
@@ -107,7 +107,7 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
                 Device status
               </div>
               <div className="text-[11px] break-words" style={{ color: 'var(--text-muted)' }}>
-                {connectedDevice ?? 'No SpaceMouse detected yet. Ensure driver is installed and browser input is permitted.'}
+                {connectedDevice ?? 'No 3D mouse detected yet. Ensure driver is installed and browser input is permitted.'}
               </div>
             </div>
           </div>
@@ -273,6 +273,18 @@ export function SpaceMouseSettingsTab({ settings, onChange }: SpaceMouseSettings
           ))}
         </div>
       </section>
+
+      <div
+        className="rounded-md border px-3 py-2"
+        style={{
+          borderColor: 'color-mix(in srgb, var(--border-subtle), var(--accent) 20%)',
+          background: 'color-mix(in srgb, var(--surface-1), var(--accent) 4%)',
+        }}
+      >
+        <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+          Supports 3Dconnexion SpaceMouse devices. “SpaceMouse” is a trademark of 3Dconnexion.
+        </p>
+      </div>
     </div>
   );
 }
