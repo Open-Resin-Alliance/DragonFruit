@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import * as THREE from 'three';
 
-export type TransformMode = 'select' | 'transform' | 'smoothing';
+export type TransformMode = 'select' | 'transform' | 'smoothing' | 'arrange' | 'duplicate';
 
 export interface ModelTransform {
   position: THREE.Vector3;
