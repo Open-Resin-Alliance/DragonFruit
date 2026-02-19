@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
@@ -392,6 +392,9 @@ export function useSceneCollectionManager() {
   });
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
+  const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
+  const deferredAccelerationProcessingRef = useRef(false);
+  const deferredAccelerationPausedRef = useRef(false);
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
     if (!url) return;
@@ -638,9 +641,11 @@ export function useSceneCollectionManager() {
   // Helper to generate IDs
   const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
 
-  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds): GeometryWithBounds => {
+  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean }): GeometryWithBounds => {
     const clonedGeometry = source.geometry.clone();
-    accelerateGeometry(clonedGeometry);
+    if (options?.accelerate ?? true) {
+      accelerateGeometry(clonedGeometry);
+    }
 
     return {
       geometry: clonedGeometry,
@@ -649,6 +654,60 @@ export function useSceneCollectionManager() {
       size: source.size.clone(),
     };
   }, []);
+
+  const processDeferredAccelerationQueue = useCallback(() => {
+    if (deferredAccelerationProcessingRef.current) return;
+    if (deferredAccelerationPausedRef.current) return;
+    if (deferredAccelerationQueueRef.current.length === 0) return;
+
+    deferredAccelerationProcessingRef.current = true;
+
+    const scheduleNext = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(cb, { timeout: 120 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+
+    const step = () => {
+      if (deferredAccelerationPausedRef.current) {
+        deferredAccelerationProcessingRef.current = false;
+        return;
+      }
+
+      const geometry = deferredAccelerationQueueRef.current.shift();
+      if (!geometry) {
+        deferredAccelerationProcessingRef.current = false;
+        return;
+      }
+
+      accelerateGeometry(geometry);
+
+      if (deferredAccelerationQueueRef.current.length === 0) {
+        deferredAccelerationProcessingRef.current = false;
+        return;
+      }
+
+      scheduleNext(step);
+    };
+
+    scheduleNext(step);
+  }, []);
+
+  const deferAccelerateGeometry = useCallback((entries: GeometryWithBounds[]) => {
+    if (entries.length === 0) return;
+
+    deferredAccelerationQueueRef.current.push(...entries.map((entry) => entry.geometry));
+    processDeferredAccelerationQueue();
+  }, [processDeferredAccelerationQueue]);
+
+  const setBackgroundGeometryWorkPaused = useCallback((paused: boolean) => {
+    deferredAccelerationPausedRef.current = paused;
+    if (!paused) {
+      processDeferredAccelerationQueue();
+    }
+  }, [processDeferredAccelerationQueue]);
 
   const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
     if (files.length === 0) return;
@@ -1071,7 +1130,7 @@ export function useSceneCollectionManager() {
         sourceId: source.id,
         name: source.name,
         fileSizeBytes: source.fileSizeBytes,
-        geometry: cloneGeometryWithBounds(source.geometry),
+        geometry: source.geometry,
         transform: {
           position: source.transform.position.clone(),
           rotation: source.transform.rotation.clone(),
@@ -1083,7 +1142,7 @@ export function useSceneCollectionManager() {
     ]);
 
     return true;
-  }, [cloneGeometryWithBounds, models]);
+  }, [models]);
 
   const copySelectedModels = useCallback((ids?: string[]) => {
     const idSet = new Set((ids && ids.length > 0) ? ids : selectedModelIds);
@@ -1096,7 +1155,7 @@ export function useSceneCollectionManager() {
       sourceId: source.id,
       name: source.name,
       fileSizeBytes: source.fileSizeBytes,
-      geometry: cloneGeometryWithBounds(source.geometry),
+      geometry: source.geometry,
       transform: {
         position: source.transform.position.clone(),
         rotation: source.transform.rotation.clone(),
@@ -1107,7 +1166,7 @@ export function useSceneCollectionManager() {
     })));
 
     return true;
-  }, [cloneGeometryWithBounds, models, selectedModelIds]);
+  }, [models, selectedModelIds]);
 
   const cutModel = useCallback((id: string) => {
     const copied = copyModel(id);
@@ -1121,13 +1180,15 @@ export function useSceneCollectionManager() {
 
     const first = modelClipboard[0];
 
+    const pastedGeometry = cloneGeometryWithBounds(first.geometry, { accelerate: false });
+
     const id = generateId();
     const pastedModel: LoadedModel = {
       id,
       name: `${first.name} Copy`,
       fileUrl: '',
       fileSizeBytes: first.fileSizeBytes,
-      geometry: cloneGeometryWithBounds(first.geometry),
+      geometry: pastedGeometry,
       transform: {
         position: first.transform.position.clone().add(new THREE.Vector3(6, 6, 0)),
         rotation: first.transform.rotation.clone(),
@@ -1141,8 +1202,10 @@ export function useSceneCollectionManager() {
     setModels((prev) => [...prev, pastedModel]);
     setActiveModelId(id);
     setSelectedModelIds([id]);
+
+    deferAccelerateGeometry([pastedGeometry]);
     return id;
-  }, [cloneGeometryWithBounds, generateId, modelClipboard]);
+  }, [cloneGeometryWithBounds, deferAccelerateGeometry, generateId, modelClipboard]);
 
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 12) => {
     if (modelClipboard.length === 0) return [] as string[];
@@ -1164,18 +1227,22 @@ export function useSceneCollectionManager() {
     const startY = centerY - ((rows - 1) * stepY) * 0.5;
 
     const createdIds: string[] = [];
+    const pastedGeometries: GeometryWithBounds[] = [];
     const pastedModels: LoadedModel[] = entries.map((entry, index) => {
       const col = index % columns;
       const row = Math.floor(index / columns);
       const id = generateId();
       createdIds.push(id);
 
+      const geometry = cloneGeometryWithBounds(entry.geometry, { accelerate: false });
+      pastedGeometries.push(geometry);
+
       return {
         id,
         name: `${entry.name} Copy`,
         fileUrl: '',
         fileSizeBytes: entry.fileSizeBytes,
-        geometry: cloneGeometryWithBounds(entry.geometry),
+        geometry,
         transform: {
           position: new THREE.Vector3(startX + col * stepX, startY + row * stepY, entry.transform.position.z),
           rotation: entry.transform.rotation.clone(),
@@ -1193,8 +1260,10 @@ export function useSceneCollectionManager() {
       setSelectedModelIds(createdIds);
     }
 
+    deferAccelerateGeometry(pastedGeometries);
+
     return createdIds;
-  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, generateId, modelClipboard]);
+  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard]);
 
   const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[]) => {
     if (transforms.length === 0) return [] as string[];
@@ -1206,10 +1275,14 @@ export function useSceneCollectionManager() {
     const resolvedGroupName = source.groupName ?? source.name;
 
     const createdIds: string[] = [];
+    const duplicatedGeometries: GeometryWithBounds[] = [];
 
     const newModels: LoadedModel[] = transforms.map((nextTransform, index) => {
       const id = generateId();
       createdIds.push(id);
+
+      const geometry = cloneGeometryWithBounds(source.geometry, { accelerate: false });
+      duplicatedGeometries.push(geometry);
 
       return {
         id,
@@ -1218,7 +1291,7 @@ export function useSceneCollectionManager() {
         groupName: resolvedGroupName,
         fileUrl: '',
         fileSizeBytes: source.fileSizeBytes,
-        geometry: cloneGeometryWithBounds(source.geometry),
+        geometry,
         transform: {
           position: nextTransform.position.clone(),
           rotation: nextTransform.rotation.clone(),
@@ -1249,8 +1322,10 @@ export function useSceneCollectionManager() {
       setSelectedModelIds([sourceId, ...createdIds]);
     }
 
+    deferAccelerateGeometry(duplicatedGeometries);
+
     return createdIds;
-  }, [cloneGeometryWithBounds, generateId, models]);
+  }, [cloneGeometryWithBounds, deferAccelerateGeometry, generateId, models]);
 
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
@@ -1590,6 +1665,7 @@ export function useSceneCollectionManager() {
     pasteModel,
     pasteCopiedModelsAutoArrange,
     duplicateModelWithTransforms,
+    setBackgroundGeometryWorkPaused,
     canPasteModel: modelClipboard.length > 0,
 
     // Scene settings
