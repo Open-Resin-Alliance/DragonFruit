@@ -1349,7 +1349,7 @@ export function SceneCanvas({
           onChange={handleOrbitChange}
           onEnd={handleOrbitEnd}
           target={orbitTarget}
-          mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN }}
+          mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN }}
         />
         <SpaceMouseController
           pivotPoint={selectedSpaceMousePivotPoint}
