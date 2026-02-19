@@ -2,13 +2,9 @@
 
 import React from 'react';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
-import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
 import { LayerSlider } from '@/components/controls/LayerSlider';
-import type { MeshShaderType } from '@/features/shaders/mesh';
 
 type VisualSettingsPanelProps = {
-  shaderOverride: MeshShaderType | null;
-  onShaderOverrideChange: (value: MeshShaderType | null) => void;
   layerIndex: number;
   maxLayers: number;
   onLayerIndexChange: (value: number) => void;
@@ -18,8 +14,6 @@ type VisualSettingsPanelProps = {
 };
 
 export function VisualSettingsPanel({
-  shaderOverride,
-  onShaderOverrideChange,
   layerIndex,
   maxLayers,
   onLayerIndexChange,
@@ -61,14 +55,6 @@ export function VisualSettingsPanel({
 
       {expanded && (
         <div className="px-2.5 pt-1 pb-2.5 space-y-2 min-h-0 flex-1 flex flex-col">
-          <ViewTypeDropdown
-            value={shaderOverride}
-            onChange={onShaderOverrideChange}
-            fullWidth
-          />
-
-          <div className="h-px" style={{ background: 'var(--border-subtle)' }} />
-
           <div className="flex-1 min-h-[220px] overflow-hidden">
             <LayerSlider
               min={0}

@@ -3,6 +3,7 @@
 import React from 'react';
 import {
   AppWindow,
+  Camera,
   ChevronDown,
   Grid3X3,
   Layers3,
@@ -19,6 +20,8 @@ type ViewTypeDropdownProps = {
   onChange: (value: MeshShaderType | null) => void;
   fullWidth?: boolean;
   className?: string;
+  iconOnly?: boolean;
+  title?: string;
 };
 
 function getViewTypeIcon(type: MeshShaderType | null) {
@@ -42,7 +45,14 @@ function getViewTypeIcon(type: MeshShaderType | null) {
   }
 }
 
-export function ViewTypeDropdown({ value, onChange, fullWidth = false, className }: ViewTypeDropdownProps) {
+export function ViewTypeDropdown({
+  value,
+  onChange,
+  fullWidth = false,
+  className,
+  iconOnly = false,
+  title,
+}: ViewTypeDropdownProps) {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -68,15 +78,23 @@ export function ViewTypeDropdown({ value, onChange, fullWidth = false, className
     <div ref={containerRef} className={`relative pointer-events-auto ${className ?? ''}`}>
       <button
         type="button"
-        className={`ui-button ui-button-secondary inline-flex items-center gap-1.5 !px-2 !py-1.5 text-xs transition-all duration-150 hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)] ${fullWidth ? 'w-full justify-between' : ''}`}
+        className={`ui-button ui-button-secondary inline-flex items-center gap-1.5 text-xs transition-all duration-150 hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)] ${
+          iconOnly ? '!p-2 justify-center' : '!px-2 !py-1.5'
+        } ${fullWidth ? 'w-full justify-between' : ''}`}
         onClick={() => setOpen((prev) => !prev)}
-        title="View type"
+        title={title ?? (iconOnly ? `Camera view mode: ${currentLabel}` : 'View type')}
       >
-        <span style={{ color: 'var(--accent)' }}>{getViewTypeIcon(value)}</span>
-        <span className="max-w-[8.8rem] truncate text-left" style={{ color: 'var(--text-muted)' }}>
-          {currentLabel}
-        </span>
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+        {iconOnly ? (
+          <Camera className="h-4 w-4" style={{ color: 'var(--text-strong)' }} />
+        ) : (
+          <>
+            <span style={{ color: 'var(--accent)' }}>{getViewTypeIcon(value)}</span>
+            <span className="max-w-[8.8rem] truncate text-left" style={{ color: 'var(--text-muted)' }}>
+              {currentLabel}
+            </span>
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+          </>
+        )}
       </button>
 
       {open && (

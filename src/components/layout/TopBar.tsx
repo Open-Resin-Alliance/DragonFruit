@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
+import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
 import { SettingsModal } from '@/components/settings/SettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
@@ -43,6 +44,8 @@ interface TopBarProps {
   mode: SupportMode;
   onModeChange: (mode: SupportMode) => void;
   hasModels: boolean;
+  viewTypeOverride: MeshShaderType | null;
+  onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
 }
 
 export function TopBar({
@@ -75,6 +78,8 @@ export function TopBar({
   mode,
   onModeChange,
   hasModels,
+  viewTypeOverride,
+  onViewTypeOverrideChange,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -175,7 +180,13 @@ export function TopBar({
         </div>
       </div>
 
-      <div className="ml-auto flex w-[220px] items-center justify-end">
+      <div className="ml-auto flex w-[220px] items-center justify-end gap-2">
+        <ViewTypeDropdown
+          value={viewTypeOverride}
+          onChange={onViewTypeOverrideChange}
+          iconOnly
+          title="Camera view mode"
+        />
         <Button
           onClick={() => setIsSettingsOpen(true)}
           variant="secondary"

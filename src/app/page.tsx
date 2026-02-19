@@ -548,6 +548,8 @@ export default function Home() {
         mode={scene.mode}
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
+        viewTypeOverride={sessionShaderOverride}
+        onViewTypeOverrideChange={setSessionShaderOverride}
       />
 
       <FloatingPanelStack>
@@ -788,8 +790,6 @@ export default function Home() {
         {scene.models.length > 0 && (
           <VisualSettingsPanel
             key="visual-settings"
-            shaderOverride={sessionShaderOverride}
-            onShaderOverrideChange={setSessionShaderOverride}
             layerIndex={slicing.layerIndex}
             maxLayers={slicing.numLayers}
             onLayerIndexChange={slicing.setLayerIndex}
