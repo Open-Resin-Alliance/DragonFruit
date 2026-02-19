@@ -30,6 +30,7 @@ import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointP
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
+import { SupportBracePlacementController } from '@/supports/SupportTypes/SupportBrace/SupportBracePlacementController';
 import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
@@ -55,6 +56,7 @@ import { CameraClipPlaneStabilizer, CameraProvider, EnableLocalClipping, Helpers
 import { StlMesh } from './StlMesh';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
+
 
 export function SceneCanvas({
   models: modelsProp = [],
@@ -108,6 +110,7 @@ export function SceneCanvas({
   branchPlacementPreview,
   leafPlacementPreview,
   bracePlacementPreview,
+  supportBracePlacementPreview,
   jointPlacementPreview,
   gpuPickingTest,
   selectionHighlightMode,
@@ -117,6 +120,7 @@ export function SceneCanvas({
   isBranchPlacementActive,
   isLeafPlacementActive,
   isBracePlacementActive,
+  isSupportBracePlacementActive,
   branchTipPosition,
   branchHoverPosition,
   leafTipPosition,
@@ -178,6 +182,7 @@ export function SceneCanvas({
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
   bracePlacementPreview?: import('@/supports/SupportTypes/Brace/bracePlacementState').BracePreviewData | null;
+  supportBracePlacementPreview?: SupportData | null;
   jointPlacementPreview?: { pos: { x: number; y: number; z: number }; diameter: number } | null;
   gpuPickingTest?: boolean;
   selectionHighlightMode?: SelectionHighlightMode;
@@ -187,6 +192,7 @@ export function SceneCanvas({
   isBranchPlacementActive?: boolean;
   isLeafPlacementActive?: boolean;
   isBracePlacementActive?: boolean;
+  isSupportBracePlacementActive?: boolean;
   branchTipPosition?: { x: number; y: number; z: number } | null;
   branchHoverPosition?: { x: number; y: number; z: number } | null;
   leafTipPosition?: { x: number; y: number; z: number } | null;
@@ -418,11 +424,13 @@ export function SceneCanvas({
   const handleOrbitChange = React.useCallback(() => {
     updateCameraBelowBuildPlate();
     onCameraChange?.();
+    window.dispatchEvent(new Event('picking-orbit-change'));
   }, [onCameraChange, updateCameraBelowBuildPlate]);
 
   const handleOrbitEnd = React.useCallback(() => {
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
+    window.dispatchEvent(new Event('picking-orbit-end'));
   }, [onCameraEnd, updateCameraBelowBuildPlate]);
 
   return (
@@ -430,9 +438,8 @@ export function SceneCanvas({
       <Canvas
         style={{ width: '100%', height: '100%', backgroundColor: '#202020', display: 'block' }}
         camera={defaultCamera}
-        shadows
-        dpr={[1, 10]}
-        gl={{ stencil: true, logarithmicDepthBuffer: true }}
+        dpr={[1, 2]}
+        gl={{ stencil: true }}
       >
         <LoggingHelper mode={mode} />
         <Lights
@@ -679,6 +686,7 @@ export function SceneCanvas({
                 !isDraggingHandle &&
                 !isBranchPlacementActive &&
                 !isLeafPlacementActive &&
+                !isSupportBracePlacementActive &&
                 !branchPlacementPreview && (
                   <SupportBuilder data={trunkPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
                 )}
@@ -746,6 +754,15 @@ export function SceneCanvas({
               {/* Render Brace Placement Preview */}
               {bracePlacementPreview && !isDraggingHandle && <BracePreviewRenderer preview={bracePlacementPreview} />}
 
+              {/* Render Support Brace Placement Preview */}
+              {supportBracePlacementPreview && !isDraggingHandle && (
+                <SupportBuilder
+                  data={supportBracePlacementPreview}
+                  isPreview
+                  hidePlateContactPrimitives={hidePlateContactPrimitives}
+                />
+              )}
+
               {/* Render V2 Joint Placement Preview */}
               {jointPlacementPreview && (
                 <JointPlacementPreview position={jointPlacementPreview.pos} diameter={jointPlacementPreview.diameter} />
@@ -759,6 +776,9 @@ export function SceneCanvas({
 
               {/* Brace Placement Controller - handles snapping logic */}
               {mode === 'support' && <BracePlacementController />}
+
+              {/* Support Brace Placement Controller - handles Ctrl-hover preview and click placement */}
+              {mode === 'support' && <SupportBracePlacementController />}
 
               {/* LYS Ghost Viewer (Temporary) */}
               <GhostOverlay data={ghostData} visible={!!ghostData} />

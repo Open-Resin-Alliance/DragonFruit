@@ -5,6 +5,8 @@ import { usePicking } from '@/components/picking';
 import { getTrunks, getBranches, updateTrunk, updateBranch, getSelectedId, getTrunkById, getRootById, getBranchById, getKnotById, setInteractionWarning } from '../../state';
 import { moveJoint } from './jointUtils';
 import { Vec3, Trunk, Branch } from '../../types';
+import { getSupportBraceSnapshot, updateSupportBrace } from '../../SupportTypes/SupportBrace/supportBraceStore';
+import type { SupportBrace } from '../../SupportTypes/SupportBrace/types';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 
@@ -22,12 +24,14 @@ export function useJointInteraction(enabled: boolean = true) {
     const activeJointId = useRef<string | null>(null);
     const activeTrunkId = useRef<string | null>(null);
     const activeBranchId = useRef<string | null>(null);
+    const activeSupportBraceId = useRef<string | null>(null);
     const activeMesh = useRef<THREE.Mesh | undefined>(undefined); // Cache the mesh during drag
     const dragPlane = useRef<THREE.Plane>(new THREE.Plane());
     const dragOffset = useRef<THREE.Vector3>(new THREE.Vector3());
     const lastDragPos = useRef<Vec3 | null>(null);
     const initialTrunkSnapshot = useRef<Trunk | null>(null);
     const initialBranchSnapshot = useRef<Branch | null>(null);
+    const initialSupportBraceSnapshot = useRef<SupportBrace | null>(null);
 
     const savedControlsEnabledRef = useRef<boolean | null>(null);
 
@@ -35,6 +39,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
     const cloneTrunk = (trunk: Trunk): Trunk => JSON.parse(JSON.stringify(trunk));
     const cloneBranch = (branch: Branch): Branch => JSON.parse(JSON.stringify(branch));
+    const cloneSupportBrace = (supportBrace: SupportBrace): SupportBrace => JSON.parse(JSON.stringify(supportBrace));
 
     // Helper to find mesh by modelId
     const findMesh = (modelId: string): THREE.Mesh | undefined => {
@@ -60,6 +65,7 @@ export function useJointInteraction(enabled: boolean = true) {
             // Find trunk/branch and joint
             let foundTrunk: Trunk | null = null;
             let foundBranch: Branch | null = null;
+            let foundSupportBrace: SupportBrace | null = null;
             let foundJointPos: Vec3 | null = null;
 
             // Search trunks first
@@ -98,7 +104,27 @@ export function useJointInteraction(enabled: boolean = true) {
                 }
             }
 
-            const foundParent = foundTrunk || foundBranch;
+            // If not in trunk/branch, search support braces
+            if (!foundTrunk && !foundBranch) {
+                const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
+                for (const supportBrace of supportBraces) {
+                    for (const s of supportBrace.segments) {
+                        if (s.topJoint?.id === jointId) {
+                            foundSupportBrace = supportBrace;
+                            foundJointPos = s.topJoint.pos;
+                            break;
+                        }
+                        if (s.bottomJoint?.id === jointId) {
+                            foundSupportBrace = supportBrace;
+                            foundJointPos = s.bottomJoint.pos;
+                            break;
+                        }
+                    }
+                    if (foundSupportBrace) break;
+                }
+            }
+
+            const foundParent = foundTrunk || foundBranch || foundSupportBrace;
             if (foundParent && foundJointPos) {
                 // Check if interaction is allowed: parent or joint itself must be selected
                 const selectedId = getSelectedId();
@@ -124,6 +150,10 @@ export function useJointInteraction(enabled: boolean = true) {
                     activeBranchId.current = foundBranch.id;
                     activeMesh.current = findMesh(foundBranch.modelId);
                     initialBranchSnapshot.current = cloneBranch(foundBranch);
+                } else if (foundSupportBrace) {
+                    activeSupportBraceId.current = foundSupportBrace.id;
+                    activeMesh.current = findMesh(foundSupportBrace.modelId);
+                    initialSupportBraceSnapshot.current = cloneSupportBrace(foundSupportBrace);
                 }
 
                 const jointVec = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z);
@@ -144,12 +174,12 @@ export function useJointInteraction(enabled: boolean = true) {
                     dragOffset.current.set(0, 0, 0);
                 }
 
-                console.log(`[JointInteraction] Started dragging joint ${jointId} on ${foundTrunk ? 'trunk' : 'branch'} ${foundParent.id}`);
+                console.log(`[JointInteraction] Started dragging joint ${jointId} on ${foundParent.id}`);
             }
         }
 
         // End Drag
-        if (!isDragging && activeJointId.current && (activeTrunkId.current || activeBranchId.current)) {
+        if (!isDragging && activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeSupportBraceId.current)) {
             console.log(`[JointInteraction] Stopped dragging joint ${activeJointId.current}`);
 
             // On drag end, do one collision-aware recompute so diskLengthOverride only reflects
@@ -211,6 +241,28 @@ export function useJointInteraction(enabled: boolean = true) {
                             : resolved;
                         updateBranch(resolvedWithoutOverride);
                     }
+                } else if (activeSupportBraceId.current) {
+                    const supportBrace = getSupportBraceSnapshot().supportBraces[activeSupportBraceId.current];
+                    if (supportBrace) {
+                        const root = getRootById(supportBrace.rootId) ?? undefined;
+                        let contextStart: Vec3 | undefined;
+                        if (root) {
+                            const rPos = root.transform.pos;
+                            const startZ = rPos.z + root.diskHeight + root.coneHeight;
+                            contextStart = { x: rPos.x, y: rPos.y, z: startZ };
+                        }
+
+                        const resolved = moveJoint(
+                            supportBrace as unknown as Trunk,
+                            activeJointId.current,
+                            lastDragPos.current,
+                            undefined,
+                            false,
+                            root,
+                            contextStart,
+                        ) as unknown as SupportBrace;
+                        updateSupportBrace(resolved);
+                    }
                 }
             }
 
@@ -231,9 +283,11 @@ export function useJointInteraction(enabled: boolean = true) {
             activeJointId.current = null;
             activeTrunkId.current = null;
             activeBranchId.current = null;
+            activeSupportBraceId.current = null;
             activeMesh.current = undefined;
             initialTrunkSnapshot.current = null;
             initialBranchSnapshot.current = null;
+            initialSupportBraceSnapshot.current = null;
             setInteractionWarning(null); // Clear warning on release
             lastDragPos.current = null;
 
@@ -248,7 +302,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
     // Update loop
     useFrame(() => {
-        if (activeJointId.current && (activeTrunkId.current || activeBranchId.current)) {
+        if (activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeSupportBraceId.current)) {
             raycaster.setFromCamera(pointer, camera);
             const intersection = new THREE.Vector3();
             const intersected = raycaster.ray.intersectPlane(dragPlane.current, intersection);
@@ -326,6 +380,43 @@ export function useJointInteraction(enabled: boolean = true) {
                         // Check for Clamping Warning
                         let foundJointPos: Vec3 | null = null;
                         for (const s of newBranch.segments) {
+                            if (s.topJoint?.id === activeJointId.current) foundJointPos = s.topJoint.pos;
+                            if (s.bottomJoint?.id === activeJointId.current) foundJointPos = s.bottomJoint.pos;
+                        }
+
+                        if (foundJointPos) {
+                            const dist = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z).distanceTo(newPos);
+                            if (dist > 0.05) {
+                                setInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
+                            } else {
+                                setInteractionWarning(null);
+                            }
+                        }
+                    }
+                } else if (activeSupportBraceId.current) {
+                    const supportBrace = getSupportBraceSnapshot().supportBraces[activeSupportBraceId.current];
+                    if (supportBrace) {
+                        const root = getRootById(supportBrace.rootId) ?? undefined;
+                        let contextStart: Vec3 | undefined;
+                        if (root) {
+                            const rPos = root.transform.pos;
+                            const startZ = rPos.z + root.diskHeight + root.coneHeight;
+                            contextStart = { x: rPos.x, y: rPos.y, z: startZ };
+                        }
+
+                        const newSupportBrace = moveJoint(
+                            supportBrace as unknown as Trunk,
+                            activeJointId.current!,
+                            newPosVec3,
+                            undefined,
+                            false,
+                            root,
+                            contextStart,
+                        ) as unknown as SupportBrace;
+                        updateSupportBrace(newSupportBrace);
+
+                        let foundJointPos: Vec3 | null = null;
+                        for (const s of newSupportBrace.segments) {
                             if (s.topJoint?.id === activeJointId.current) foundJointPos = s.topJoint.pos;
                             if (s.bottomJoint?.id === activeJointId.current) foundJointPos = s.bottomJoint.pos;
                         }

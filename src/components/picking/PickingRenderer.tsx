@@ -209,11 +209,6 @@ export function PickingRenderer({
       ? (pixelBufferRef.current[0] << 16) | (pixelBufferRef.current[1] << 8) | pixelBufferRef.current[2]
       : majorityVote(pixelBufferRef.current, previousWinnerRef.current);
     
-    // Only log when result changes
-    if (winnerId !== previousWinnerRef.current) {
-      console.log('[PickingRenderer] Pick changed:', { winnerId, ndcX, ndcY });
-    }
-    
     previousWinnerRef.current = winnerId;
     
     // Report result

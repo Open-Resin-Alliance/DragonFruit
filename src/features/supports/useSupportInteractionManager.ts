@@ -5,6 +5,7 @@ import { useTrunkPlacementV2 } from '@/supports/SupportTypes/Trunk/useTrunkPlace
 import { useBranchPlacement } from '@/supports/SupportTypes/Branch/useBranchPlacement';
 import { useLeafPlacement } from '@/supports/SupportTypes/Leaf/useLeafPlacement';
 import { useBracePlacement } from '@/supports/SupportTypes/Brace/useBracePlacement';
+import { useSupportBracePlacement } from '@/supports/SupportTypes/SupportBrace/useSupportBracePlacement';
 import { useInteractionStatus } from '@/supports/interaction/useInteractionStatus';
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
@@ -47,6 +48,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const branchPlacement = useBranchPlacement();
   const leafPlacement = useLeafPlacement();
   const bracePlacement = useBracePlacement();
+  const supportBracePlacement = useSupportBracePlacement();
 
   const altDownRef = useRef(false);
 
@@ -87,6 +89,13 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    if (supportBracePlacement.isActive) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(null);
+      return;
+    }
+
     if (leafPlacement.isActive) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
@@ -99,7 +108,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       // Normal trunk placement preview
       trunkPlacementV2.onSupportHover(hit);
     }
-  }, [isPlacementDisabled, trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, jointCreationState.isActive]);
+  }, [isPlacementDisabled, trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, supportBracePlacement.isActive, jointCreationState.isActive]);
 
   // Handler for MODEL click (trunk placement, or branch tip placement)
   const onModelClick = useCallback((hit: THREE.Intersection) => {
@@ -108,6 +117,10 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     }
 
     if (bracePlacement.isActive) {
+      return;
+    }
+
+    if (supportBracePlacement.isActive) {
       return;
     }
 
@@ -123,7 +136,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       // Normal trunk placement
       trunkPlacementV2.onSupportClick(hit);
     }
-  }, [trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, jointCreationState.isActive]);
+  }, [trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, supportBracePlacement.isActive, jointCreationState.isActive]);
 
   // Handler for SUPPORT hover (branch base preview when hovering existing support shafts)
   // NOTE: We do NOT check isPlacementDisabled here because branch placement
@@ -243,6 +256,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
               root: snapshots.root ?? undefined,
               branches: snapshots.branches,
               braces: snapshots.braces,
+              supportBraces: snapshots.supportBraces,
               leaves: snapshots.leaves,
               knots: snapshots.knots,
             },
@@ -407,6 +421,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     branchPlacement,
     leafPlacement,
     bracePlacement,
+    supportBracePlacement,
     jointCreationState,
     isPlacementDisabled,
     globalSelectedId,
@@ -424,5 +439,6 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     branchPreview: branchPlacement.previewData,
     leafPreview: leafPlacement.previewData,
     bracePreview: bracePlacement.preview,
+    supportBracePreview: supportBracePlacement.previewData,
   };
 }

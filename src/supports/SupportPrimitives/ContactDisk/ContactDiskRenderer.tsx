@@ -65,7 +65,7 @@ export function ContactDiskRenderer({
                   - increasing height by penetration
                   - shifting the cylinder down by penetration/2
                 */}
-                <cylinderGeometry args={[radius, radius, thickness + effectivePenetration, 16]} />
+                <cylinderGeometry args={[radius, radius, thickness + effectivePenetration, 32]} />
                 <meshStandardMaterial
                     color={color}
                     transparent={transparent}
@@ -79,7 +79,7 @@ export function ContactDiskRenderer({
 
             {/* Round Tip: stays exactly where it was (cone side alignment) */}
             <mesh position={[0, thickness / 2, 0]} raycast={raycast}>
-                <sphereGeometry args={[radius, 16, 16]} />
+                <sphereGeometry args={[radius, 32, 32]} />
                 <meshStandardMaterial
                     color={color}
                     transparent={transparent}

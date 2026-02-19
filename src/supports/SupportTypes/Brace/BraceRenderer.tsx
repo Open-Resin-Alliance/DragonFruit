@@ -6,7 +6,6 @@ import { handleSupportClick } from '../../interaction/clickHandlers';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { usePicking } from '@/components/picking';
 import { setSelectedId } from '../../state';
 
@@ -74,8 +73,7 @@ export function BraceRenderer({
     const startVec = useMemo(() => new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z), [startKnot.pos.x, startKnot.pos.y, startKnot.pos.z]);
     const endVec = useMemo(() => new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z), [endKnot.pos.x, endKnot.pos.y, endKnot.pos.z]);
 
-    const startHostDiameter = Math.max(0.001, (startKnot.diameter ?? (brace.profile?.diameter ?? 1.0)) - JOINT_DIAMETER_OFFSET_MM);
-    const endHostDiameter = Math.max(0.001, (endKnot.diameter ?? (brace.profile?.diameter ?? 1.0)) - JOINT_DIAMETER_OFFSET_MM);
+    const uniformBraceDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
 
     const handleClick = (e: any) => {
         // Alt+click should behave like a shaft click for placement tools (Brace/Branch/etc.)
@@ -131,8 +129,8 @@ export function BraceRenderer({
                             control1={brace.curve.controlPoint1}
                             control2={brace.curve.controlPoint2}
                             diameter={brace.profile?.diameter ?? 1.0}
-                            diameterStart={startHostDiameter}
-                            diameterEnd={endHostDiameter}
+                            diameterStart={uniformBraceDiameter}
+                            diameterEnd={uniformBraceDiameter}
                             resolution={brace.curve.resolution}
                             color={shaftColor}
                             emissive={visuals.emissive}
@@ -147,8 +145,8 @@ export function BraceRenderer({
                             start={startKnot.pos}
                             end={endKnot.pos}
                             diameter={brace.profile?.diameter ?? 1.0}
-                            diameterStart={startHostDiameter}
-                            diameterEnd={endHostDiameter}
+                            diameterStart={uniformBraceDiameter}
+                            diameterEnd={uniformBraceDiameter}
                             color={shaftColor}
                             emissive={visuals.emissive}
                             emissiveIntensity={visuals.emissiveIntensity}

@@ -389,10 +389,12 @@ export default function Home() {
             branchPlacementPreview={supports.branchPlacement.previewData}
             leafPlacementPreview={supports.leafPlacement.previewData}
             bracePlacementPreview={supports.bracePreview}
+            supportBracePlacementPreview={supports.supportBracePreview}
             blockSupportPlacement={supports.isPlacementDisabled}
             isBranchPlacementActive={supports.branchPlacement.isActive}
             isLeafPlacementActive={supports.leafPlacement.isActive}
             isBracePlacementActive={supports.bracePlacement.isActive}
+            isSupportBracePlacementActive={supports.supportBracePlacement.isActive}
             branchTipPosition={supports.branchPlacement.tipPosition}
             branchHoverPosition={supports.branchPlacement.hoverPosition}
             leafTipPosition={supports.leafPlacement.tipPosition}

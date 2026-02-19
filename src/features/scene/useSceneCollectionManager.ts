@@ -565,25 +565,10 @@ export function useSceneCollectionManager() {
         const color = '#a3a3a3';
         clearPaintToBase(processed.geometry, new THREE.Color(color));
 
-        // Compute transformed local bounds exactly like StlMesh uses geometry:
-        // geometry is rendered with a local offset (-center), then group transform is applied.
-        // We transform centered bounds by imported rotation+scale (no translation), then place
-        // translation so world min Z lands at the Lychee lift value.
-        const centeredBounds = processed.bbox.clone();
-        centeredBounds.translate(new THREE.Vector3(-processed.center.x, -processed.center.y, -processed.center.z));
-
-        const localTransform = new THREE.Matrix4().compose(
-          new THREE.Vector3(0, 0, 0),
-          new THREE.Quaternion().setFromEuler(importedTransform.rotation),
-          importedTransform.scale
-        );
-        centeredBounds.applyMatrix4(localTransform);
-
-        const lycheeLiftZ = Number.isFinite(importedTransform.position.z) ? importedTransform.position.z : 0;
         const finalPosition = new THREE.Vector3(
           importedTransform.position.x,
           importedTransform.position.y,
-          lycheeLiftZ - centeredBounds.min.z
+          importedTransform.position.z
         );
 
         const model: LoadedModel = {

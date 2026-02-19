@@ -4,6 +4,7 @@ import { LysParser } from './LysParser';
 import { LysConverter } from './LysConverter';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { loadFromLychee } from '@/supports/state';
+import { computeLowestZ } from '@/utils/geometry';
 
 function normalizeLycheeRotation(rotation: { x?: number; y?: number; z?: number } | null | undefined) {
     const x = Number.isFinite(rotation?.x) ? (rotation?.x as number) : 0;
@@ -111,6 +112,7 @@ export function useLysImport() {
             const settings = createDefaultSettings();
             let dragonfruitData = null;
             const importedModelId = crypto.randomUUID();
+            let resolvedModelZ: number | null = null;
             let lycheeTransform = {
                 position: new THREE.Vector3(0, 0, 0),
                 rotation: new THREE.Euler(0, 0, 0),
@@ -191,9 +193,7 @@ export function useLysImport() {
                     const bbox = data.geometry.boundingBox;
                     if (bbox) {
                         const geomCenter = bbox.getCenter(new THREE.Vector3());
-                        const centeredBounds = bbox.clone().translate(new THREE.Vector3(-geomCenter.x, -geomCenter.y, -geomCenter.z));
-
-                        const localTransform = new THREE.Matrix4().compose(
+                        const rotationScale = new THREE.Matrix4().compose(
                             new THREE.Vector3(0, 0, 0),
                             new THREE.Quaternion().setFromEuler(new THREE.Euler(
                                 (rot.x || 0) * deg2rad,
@@ -203,11 +203,13 @@ export function useLysImport() {
                             )),
                             new THREE.Vector3(scale.x || 1, scale.y || 1, scale.z || 1)
                         );
-
-                        centeredBounds.applyMatrix4(localTransform);
+                        const centerOffset = new THREE.Matrix4().makeTranslation(-geomCenter.x, -geomCenter.y, -geomCenter.z);
+                        const localTransform = rotationScale.clone().multiply(centerOffset);
 
                         const lycheeLiftZ = Number.isFinite(position.z) ? position.z : 0;
-                        const finalModelZ = lycheeLiftZ - centeredBounds.min.z;
+                        const transformedMinZ = computeLowestZ(data.geometry, localTransform);
+                        const finalModelZ = lycheeLiftZ - transformedMinZ;
+                        resolvedModelZ = finalModelZ;
                         const supportDeltaZ = finalModelZ - lycheeLiftZ;
 
                         if (Number.isFinite(supportDeltaZ) && Math.abs(supportDeltaZ) > 1e-6) {
@@ -241,8 +243,12 @@ export function useLysImport() {
                     // }
 
                     if (targetObj.position) {
-                        lycheeTransform.position.set(targetObj.position.x, targetObj.position.y, targetObj.position.z);
+                        const finalModelZ = Number.isFinite(resolvedModelZ) ? (resolvedModelZ as number) : targetObj.position.z;
+                        lycheeTransform.position.set(targetObj.position.x, targetObj.position.y, finalModelZ);
                         console.log(`[useLysImport] Extracted Position: ${targetObj.position.x}, ${targetObj.position.y}, ${targetObj.position.z}`);
+                        if (Number.isFinite(resolvedModelZ)) {
+                            console.log(`[useLysImport] Resolved model Z from transformed min-z + Lychee lift: ${finalModelZ}`);
+                        }
                     }
                     if (targetObj.rotation) {
                         const normalizedRotation = normalizeLycheeRotation(targetObj.rotation);

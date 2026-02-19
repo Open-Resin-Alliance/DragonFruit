@@ -5,6 +5,8 @@ import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
+import { addSupportBrace, getSupportBraceSnapshot, removeSupportBrace, resetSupportBraceStore, updateSupportBrace } from './SupportTypes/SupportBrace/supportBraceStore';
+import type { SupportBrace, SupportBraceBuildResult } from './SupportTypes/SupportBrace/types';
 import * as THREE from 'three';
 
 const listeners = new Set<() => void>();
@@ -241,6 +243,191 @@ function recomputeLeafConeKnotGeometry(
     }
 
     return { knots: nextKnots, changed };
+}
+
+function computeClosestTOnSegmentFromPoint(
+    point: Vec3,
+    start: Vec3,
+    end: Vec3,
+    segment: Segment,
+): number {
+    if (segment.type === 'bezier') {
+        const samples = 100;
+        let bestT = 0;
+        let bestDistSq = Number.POSITIVE_INFINITY;
+
+        for (let i = 0; i <= samples; i++) {
+            const t = i / samples;
+            const sample = getBezierPointAtT(start, segment.controlPoint1, segment.controlPoint2, end, t);
+            const dx = sample.x - point.x;
+            const dy = sample.y - point.y;
+            const dz = sample.z - point.z;
+            const distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestT = t;
+            }
+        }
+
+        return bestT;
+    }
+
+    const a = toVector3(start);
+    const b = toVector3(end);
+    const p = toVector3(point);
+    const ab = b.clone().sub(a);
+    const abLenSq = ab.lengthSq();
+    if (abLenSq <= 1e-8) return 0;
+
+    const ap = p.sub(a);
+    return THREE.MathUtils.clamp(ap.dot(ab) / abLenSq, 0, 1);
+}
+
+function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'braces' | 'leaves' | 'knots'>): {
+    knots: Record<string, Knot>;
+    leaves: Record<string, Leaf>;
+} {
+    const trunkSegmentMap = new Map<string, { trunk: Trunk; segment: Segment; segmentIndex: number; root: Roots | undefined }>();
+    for (const trunk of Object.values(snapshot.trunks)) {
+        const root = snapshot.roots[trunk.rootId];
+        trunk.segments.forEach((segment, segmentIndex) => {
+            trunkSegmentMap.set(segment.id, { trunk, segment, segmentIndex, root });
+        });
+    }
+
+    const branchSegmentMap = new Map<string, { branch: Branch; segment: Segment; segmentIndex: number }>();
+    for (const branch of Object.values(snapshot.branches)) {
+        branch.segments.forEach((segment, segmentIndex) => {
+            branchSegmentMap.set(segment.id, { branch, segment, segmentIndex });
+        });
+    }
+
+    const targetHostKnotIds = new Set<string>();
+    const braceHostKnotIds = new Set<string>();
+    for (const brace of Object.values(snapshot.braces)) {
+        braceHostKnotIds.add(brace.startKnotId);
+        braceHostKnotIds.add(brace.endKnotId);
+        targetHostKnotIds.add(brace.startKnotId);
+        targetHostKnotIds.add(brace.endKnotId);
+    }
+    for (const leaf of Object.values(snapshot.leaves)) {
+        targetHostKnotIds.add(leaf.parentKnotId);
+    }
+    for (const branch of Object.values(snapshot.branches)) {
+        targetHostKnotIds.add(branch.parentKnotId);
+    }
+
+    const nextKnots = { ...snapshot.knots };
+    const changedHostPosById: Record<string, Vec3> = {};
+
+    const maxPasses = 4;
+    for (let pass = 0; pass < maxPasses; pass++) {
+        let changedThisPass = false;
+
+        for (const knotId of targetHostKnotIds) {
+            const knot = nextKnots[knotId];
+            if (!knot) continue;
+            if (knot.parentShaftId.startsWith('leafCone:') || knot.parentShaftId.startsWith('braceSegment:')) continue;
+
+            let segment: Segment | null = null;
+            let endpoints: { start: Vec3; end: Vec3 } | null = null;
+
+            const trunkRef = trunkSegmentMap.get(knot.parentShaftId);
+            if (trunkRef?.root) {
+                segment = trunkRef.segment;
+                endpoints = getTrunkSegmentEndpoints(
+                    trunkRef.trunk,
+                    trunkRef.segment,
+                    trunkRef.segmentIndex,
+                    trunkRef.root,
+                );
+            }
+
+            if (!segment || !endpoints) {
+                const branchRef = branchSegmentMap.get(knot.parentShaftId);
+                if (branchRef) {
+                    const parentKnot = nextKnots[branchRef.branch.parentKnotId] ?? snapshot.knots[branchRef.branch.parentKnotId];
+                    if (parentKnot) {
+                        segment = branchRef.segment;
+                        endpoints = getBranchSegmentEndpoints(
+                            branchRef.branch,
+                            branchRef.segment,
+                            branchRef.segmentIndex,
+                            parentKnot,
+                        );
+                    }
+                }
+            }
+
+            if (!segment || !endpoints) continue;
+
+            const t = computeClosestTOnSegmentFromPoint(knot.pos, endpoints.start, endpoints.end, segment);
+            const computedPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, t);
+            const computedDiameter = segment.diameter + JOINT_DIAMETER_OFFSET_MM;
+
+            const dx = computedPos.x - knot.pos.x;
+            const dy = computedPos.y - knot.pos.y;
+            const dz = computedPos.z - knot.pos.z;
+            const reprojectionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            const isEndpointProjection = t <= 1e-4 || t >= 1 - 1e-4;
+            const preserveAuthoredBracePos =
+                braceHostKnotIds.has(knot.id) &&
+                isEndpointProjection &&
+                reprojectionDistance > 2;
+
+            if (preserveAuthoredBracePos) {
+                if (knot.diameter !== computedDiameter) {
+                    nextKnots[knot.id] = {
+                        ...knot,
+                        diameter: computedDiameter,
+                    };
+                    changedThisPass = true;
+                }
+                continue;
+            }
+
+            const posChanged =
+                computedPos.x !== knot.pos.x ||
+                computedPos.y !== knot.pos.y ||
+                computedPos.z !== knot.pos.z;
+            const tChanged = knot.t !== t;
+            const diameterChanged = knot.diameter !== computedDiameter;
+            if (!posChanged && !tChanged && !diameterChanged) continue;
+
+            nextKnots[knot.id] = {
+                ...knot,
+                t,
+                pos: computedPos,
+                diameter: computedDiameter,
+            };
+            if (posChanged) {
+                changedHostPosById[knot.id] = computedPos;
+            }
+            changedThisPass = true;
+        }
+
+        if (!changedThisPass) break;
+    }
+
+    let nextLeaves = snapshot.leaves;
+    if (Object.keys(changedHostPosById).length > 0) {
+        nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedHostPosById);
+    }
+
+    const leafCone1 = recomputeLeafConeKnotGeometry(nextLeaves, nextKnots);
+    const braceSeg1 = recomputeBraceSegmentKnotGeometry(snapshot.braces, leafCone1.knots);
+
+    const changedByBrace1 = getChangedKnotPositions(leafCone1.knots, braceSeg1.knots);
+
+    let finalKnots = braceSeg1.knots;
+    if (Object.keys(changedByBrace1).length > 0) {
+        nextLeaves = recomputeKnotDependentGeometry(nextLeaves, changedByBrace1);
+        const leafCone2 = recomputeLeafConeKnotGeometry(nextLeaves, finalKnots);
+        const braceSeg2 = recomputeBraceSegmentKnotGeometry(snapshot.braces, leafCone2.knots);
+        finalKnots = braceSeg2.knots;
+    }
+
+    return { knots: finalKnots, leaves: nextLeaves };
 }
 
 function getChangedKnotPositions(prev: Record<string, Knot>, next: Record<string, Knot>): Record<string, Vec3> {
@@ -549,6 +736,30 @@ export function setSnapshot(next: SupportState) {
     notify();
 }
 
+export function removeRootById(rootId: string): Roots | null {
+    const root = state.roots[rootId];
+    if (!root) return null;
+
+    const nextRoots = { ...state.roots };
+    delete nextRoots[rootId];
+
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+    if (state.selectedId === rootId) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    }
+
+    state = {
+        ...state,
+        roots: nextRoots,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+    notify();
+    return deepClone(root);
+}
+
 // --- Actions ---
 
 export function toggleSegmentCurve(segmentId: string) {
@@ -597,8 +808,9 @@ export function toggleSegmentCurve(segmentId: string) {
     let targetBranchId: string | null = null;
     let targetTwigId: string | null = null;
     let targetStickId: string | null = null;
+    let targetSupportBraceId: string | null = null;
     let targetSegmentIndex = -1;
-    let container: Trunk | Branch | Twig | Stick | null = null;
+    let container: Trunk | Branch | Twig | Stick | SupportBrace | null = null;
 
     // Search Trunks
     for (const t of Object.values(state.trunks)) {
@@ -650,6 +862,20 @@ export function toggleSegmentCurve(segmentId: string) {
         }
     }
 
+    // Search Support Braces if not found
+    if (!container) {
+        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
+        for (const supportBrace of supportBraces) {
+            const idx = supportBrace.segments.findIndex(s => s.id === segmentId);
+            if (idx !== -1) {
+                targetSupportBraceId = supportBrace.id;
+                targetSegmentIndex = idx;
+                container = supportBrace;
+                break;
+            }
+        }
+    }
+
     if (!container || targetSegmentIndex === -1) return;
 
     // Create deep clone
@@ -680,6 +906,14 @@ export function toggleSegmentCurve(segmentId: string) {
                 } else {
                     startPos = new THREE.Vector3();
                 }
+            } else if (targetSupportBraceId) {
+                const root = state.roots[(newContainer as SupportBrace).rootId];
+                if (root) {
+                    const startZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
+                    startPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, startZ);
+                } else {
+                    startPos = new THREE.Vector3();
+                }
             } else if (targetBranchId) {
                 const knot = state.knots[(newContainer as Branch).parentKnotId];
                 startPos = knot && knot.pos ? toVector3(knot.pos) : new THREE.Vector3();
@@ -700,6 +934,9 @@ export function toggleSegmentCurve(segmentId: string) {
         let endPos: THREE.Vector3;
         if (segment.topJoint) {
             endPos = toVector3(segment.topJoint.pos);
+        } else if (targetSupportBraceId) {
+            const hostKnot = state.knots[(newContainer as SupportBrace).hostKnotId];
+            endPos = hostKnot ? toVector3(hostKnot.pos) : startPos.clone().add(new THREE.Vector3(0, 0, 10));
         } else if ((newContainer as Trunk).contactCone) {
             const cone = (newContainer as Trunk).contactCone!;
             endPos = toVector3(cone.pos);
@@ -746,11 +983,14 @@ export function toggleSegmentCurve(segmentId: string) {
         updateTwig(newContainer as Twig);
     } else if (targetStickId) {
         updateStick(newContainer as Stick);
+    } else if (targetSupportBraceId) {
+        updateSupportBrace(newContainer as SupportBrace);
     }
 }
 
 export function resetStore() {
     state = { ...initialState };
+    resetSupportBraceStore();
     notify();
 }
 
@@ -759,6 +999,8 @@ export function resetStore() {
  */
 export function loadFromLychee(data: DragonfruitImportFormat) {
     // Reset first
+    resetSupportBraceStore();
+
     const newState: SupportState = {
         roots: {},
         trunks: {},
@@ -821,6 +1063,14 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
         });
     }
 
+    for (const supportBraceBuild of data.supportBraces ?? []) {
+        addSupportBrace(supportBraceBuild);
+    }
+
+    const normalized = normalizeLoadedKnotAndLeafGeometry(newState);
+    newState.knots = normalized.knots;
+    newState.leaves = normalized.leaves;
+
     state = newState;
     console.log('[SupportStore] Loaded from Lychee:', {
         roots: Object.keys(state.roots).length,
@@ -831,6 +1081,7 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
         sticks: Object.keys(state.sticks).length,
         braces: Object.keys(state.braces).length,
         knots: Object.keys(state.knots).length,
+        supportBraces: Object.keys(getSupportBraceSnapshot().supportBraces).length,
     });
     notify();
 }
@@ -841,6 +1092,8 @@ export function setSelectedId(id: string | null) {
     let category: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | null = null;
 
     if (id) {
+        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
+
         if (id.startsWith('braceSegment:')) category = 'segment';
         if (state.roots[id]) category = 'root';
         else if (state.trunks[id]) category = 'trunk';
@@ -849,6 +1102,7 @@ export function setSelectedId(id: string | null) {
         else if (state.twigs[id]) category = 'twig';
         else if (state.sticks[id]) category = 'stick';
         else if (state.braces[id]) category = 'brace';
+        else if (supportBraces.some((supportBrace) => supportBrace.id === id)) category = 'brace';
         else if (state.knots[id]) category = 'knot';
         else {
             // Check for joints inside trunks
@@ -877,6 +1131,17 @@ export function setSelectedId(id: string | null) {
                         }
                     }
                     if (foundJoint) break;
+                }
+                if (foundJoint) category = 'joint';
+            }
+
+            if (!category) {
+                for (const supportBrace of supportBraces) {
+                    const hasJoint = supportBrace.segments.some(s => s.topJoint?.id === id || s.bottomJoint?.id === id);
+                    if (hasJoint) {
+                        foundJoint = true;
+                        break;
+                    }
                 }
                 if (foundJoint) category = 'joint';
             }
@@ -944,6 +1209,15 @@ export function setSelectedId(id: string | null) {
                 const sticks = Object.values(state.sticks);
                 for (const spt of sticks) {
                     if (spt.segments.some(s => s.id === id)) {
+                        category = 'segment';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                for (const supportBrace of supportBraces) {
+                    if (supportBrace.segments.some(s => s.id === id)) {
                         category = 'segment';
                         break;
                     }
@@ -1255,7 +1529,7 @@ export function removeBrace(braceId: string): { brace: Brace; startKnot: Knot | 
     return snapshots;
 }
 
-export function removeBranch(branchId: string): { branches: Branch[]; braces: Brace[]; leaves: Leaf[]; knots: Knot[] } | null {
+export function removeBranch(branchId: string): { branches: Branch[]; braces: Brace[]; supportBraces: SupportBraceBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
     const rootBranch = state.branches[branchId];
     if (!rootBranch) return null;
 
@@ -1308,31 +1582,86 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
         }
     }
 
+    const branchSegmentIds = new Set<string>();
+    for (const bId of branchIdsToRemove) {
+        const b = state.branches[bId];
+        if (!b) continue;
+        for (const seg of b.segments) {
+            branchSegmentIds.add(seg.id);
+        }
+    }
+
+    const supportBraceState = getSupportBraceSnapshot();
+    const supportBraceIdsToRemove = new Set<string>();
+    for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+        if (branchSegmentIds.has(supportBrace.hostSegmentId) || knotIdsToRemove.has(supportBrace.hostKnotId)) {
+            supportBraceIdsToRemove.add(supportBrace.id);
+            if (supportBrace.hostKnotId) {
+                knotIdsToRemove.add(supportBrace.hostKnotId);
+            }
+        }
+    }
+
     const snapshots = {
         branches: Array.from(branchIdsToRemove).map((id) => deepClone(state.branches[id])).filter(Boolean),
         braces: Array.from(braceIdsToRemove).map((id) => deepClone(state.braces[id])).filter(Boolean),
+        supportBraces: [] as SupportBraceBuildResult[],
         leaves: Array.from(leafIdsToRemove).map((id) => deepClone(state.leaves[id])).filter(Boolean),
         knots: Array.from(knotIdsToRemove).map((id) => deepClone(state.knots[id])).filter(Boolean),
     };
 
-    let nextBranches = { ...state.branches };
+    const supportBraceRootIdsToRemove = new Set<string>();
+    for (const supportBraceId of supportBraceIdsToRemove) {
+        const currentSupportBraceState = getSupportBraceSnapshot();
+        const supportBrace = currentSupportBraceState.supportBraces[supportBraceId];
+        if (!supportBrace) continue;
+
+        supportBraceRootIdsToRemove.add(supportBrace.rootId);
+        knotIdsToRemove.add(supportBrace.hostKnotId);
+
+        const root = currentSupportBraceState.roots[supportBrace.rootId];
+        const hostKnot = currentSupportBraceState.knots[supportBrace.hostKnotId] ?? state.knots[supportBrace.hostKnotId];
+
+        if (root && hostKnot) {
+            snapshots.supportBraces.push({
+                supportBrace: deepClone(supportBrace),
+                root: deepClone(root),
+                hostKnot: deepClone(hostKnot),
+            });
+            supportBraceRootIdsToRemove.add(root.id);
+            knotIdsToRemove.add(hostKnot.id);
+        }
+
+        removeSupportBrace(supportBraceId);
+    }
+
+    const nextBranches = { ...state.branches };
     for (const id of branchIdsToRemove) {
         delete nextBranches[id];
     }
 
-    let nextBraces = { ...state.braces };
+    const nextBraces = { ...state.braces };
     for (const id of braceIdsToRemove) {
         delete nextBraces[id];
     }
 
-    let nextLeaves = { ...state.leaves };
+    const nextLeaves = { ...state.leaves };
     for (const id of leafIdsToRemove) {
         delete nextLeaves[id];
     }
 
-    let nextKnots = { ...state.knots };
+    const nextKnots = { ...state.knots };
     for (const id of knotIdsToRemove) {
         delete nextKnots[id];
+    }
+
+    let nextRoots = state.roots;
+    if (supportBraceRootIdsToRemove.size > 0) {
+        const updatedRoots: Record<string, Roots> = { ...state.roots };
+        for (const rootId of supportBraceRootIdsToRemove) {
+            delete updatedRoots[rootId];
+        }
+        nextRoots = updatedRoots;
     }
 
     let nextSelectedId = state.selectedId;
@@ -1340,8 +1669,10 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
     if (
         (nextSelectedId && branchIdsToRemove.has(nextSelectedId)) ||
         (nextSelectedId && braceIdsToRemove.has(nextSelectedId)) ||
+        (nextSelectedId && supportBraceIdsToRemove.has(nextSelectedId)) ||
         (nextSelectedId && leafIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && knotIdsToRemove.has(nextSelectedId))
+        (nextSelectedId && knotIdsToRemove.has(nextSelectedId)) ||
+        (nextSelectedId && supportBraceRootIdsToRemove.has(nextSelectedId))
     ) {
         nextSelectedId = null;
         nextSelectedCategory = null;
@@ -1352,6 +1683,7 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
         branches: nextBranches,
         braces: nextBraces,
         leaves: nextLeaves,
+        roots: nextRoots,
         knots: nextKnots,
         selectedId: nextSelectedId,
         selectedCategory: nextSelectedCategory,
@@ -1414,6 +1746,30 @@ export function addKnot(knot: Knot) {
         knots: { ...state.knots, [knot.id]: knot }
     };
     notify();
+}
+
+export function removeKnotById(knotId: string): Knot | null {
+    const knot = state.knots[knotId];
+    if (!knot) return null;
+
+    const nextKnots = { ...state.knots };
+    delete nextKnots[knotId];
+
+    let nextSelectedId = state.selectedId;
+    let nextSelectedCategory = state.selectedCategory;
+    if (state.selectedId === knotId) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
+    }
+
+    state = {
+        ...state,
+        knots: nextKnots,
+        selectedId: nextSelectedId,
+        selectedCategory: nextSelectedCategory,
+    };
+    notify();
+    return deepClone(knot);
 }
 
 export function updateKnot(knot: Knot) {
@@ -1480,7 +1836,7 @@ export function removeLeaf(leafId: string): { leaf: Leaf; knot: Knot | null } | 
 
 export function removeTrunk(
     trunkId: string
-): { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; leaves: Leaf[]; knots: Knot[] } | null {
+): { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; supportBraces: SupportBraceBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
     const existingTrunk = state.trunks[trunkId];
     if (!existingTrunk) return null;
 
@@ -1511,19 +1867,22 @@ export function removeTrunk(
         }
     }
 
-    const snapshots: { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; leaves: Leaf[]; knots: Knot[] } = {
+    const snapshots: { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; supportBraces: SupportBraceBuildResult[]; leaves: Leaf[]; knots: Knot[] } = {
         trunk: deepClone(existingTrunk),
         root: null,
         branches: [],
         braces: [],
+        supportBraces: [],
         leaves: [],
         knots: [],
     };
 
     const seenBranchIds = new Set<string>();
     const seenBraceIds = new Set<string>();
+    const seenSupportBraceIds = new Set<string>();
     const seenLeafIds = new Set<string>();
     const seenKnotIds = new Set<string>();
+    const supportBraceRootIdsToRemove = new Set<string>();
 
     for (const branchId of branchIdsToRemove) {
         const removed = removeBranch(branchId);
@@ -1537,6 +1896,13 @@ export function removeTrunk(
             if (!br || seenBraceIds.has(br.id)) continue;
             seenBraceIds.add(br.id);
             snapshots.braces.push(br);
+        }
+        for (const supportBraceBuild of removed.supportBraces ?? []) {
+            if (!supportBraceBuild || seenSupportBraceIds.has(supportBraceBuild.supportBrace.id)) continue;
+            seenSupportBraceIds.add(supportBraceBuild.supportBrace.id);
+            snapshots.supportBraces.push(supportBraceBuild);
+            supportBraceRootIdsToRemove.add(supportBraceBuild.root.id);
+            seenKnotIds.add(supportBraceBuild.hostKnot.id);
         }
         for (const l of removed.leaves ?? []) {
             if (!l || seenLeafIds.has(l.id)) continue;
@@ -1580,6 +1946,45 @@ export function removeTrunk(
         }
     }
 
+    const supportBraceState = getSupportBraceSnapshot();
+    const supportBraceIdsToRemove = new Set<string>();
+    for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+        if (trunkSegmentIds.has(supportBrace.hostSegmentId) || trunkHostedKnotIds.has(supportBrace.hostKnotId)) {
+            supportBraceIdsToRemove.add(supportBrace.id);
+        }
+    }
+
+    for (const supportBraceId of supportBraceIdsToRemove) {
+        const currentSupportBraceState = getSupportBraceSnapshot();
+        const supportBrace = currentSupportBraceState.supportBraces[supportBraceId];
+        if (!supportBrace) continue;
+
+        supportBraceRootIdsToRemove.add(supportBrace.rootId);
+        if (!seenKnotIds.has(supportBrace.hostKnotId) && state.knots[supportBrace.hostKnotId]) {
+            seenKnotIds.add(supportBrace.hostKnotId);
+            snapshots.knots.push(deepClone(state.knots[supportBrace.hostKnotId]));
+        }
+
+        const root = currentSupportBraceState.roots[supportBrace.rootId];
+        const hostKnot = currentSupportBraceState.knots[supportBrace.hostKnotId] ?? state.knots[supportBrace.hostKnotId];
+
+        if (root && hostKnot && !seenSupportBraceIds.has(supportBrace.id)) {
+            seenSupportBraceIds.add(supportBrace.id);
+            snapshots.supportBraces.push({
+                supportBrace: deepClone(supportBrace),
+                root: deepClone(root),
+                hostKnot: deepClone(hostKnot),
+            });
+            supportBraceRootIdsToRemove.add(root.id);
+            if (!seenKnotIds.has(hostKnot.id)) {
+                seenKnotIds.add(hostKnot.id);
+                snapshots.knots.push(deepClone(hostKnot));
+            }
+        }
+
+        removeSupportBrace(supportBraceId);
+    }
+
     const remainingKnotsToRemove: string[] = [];
     for (const knotId of Array.from(trunkHostedKnotIds)) {
         if (state.knots[knotId]) remainingKnotsToRemove.push(knotId);
@@ -1602,10 +2007,18 @@ export function removeTrunk(
 
     const { [trunkId]: _, ...remainingTrunks } = state.trunks;
     let nextRoots = state.roots;
+    if (supportBraceRootIdsToRemove.size > 0) {
+        const updatedRoots: Record<string, Roots> = { ...nextRoots };
+        for (const rootId of supportBraceRootIdsToRemove) {
+            delete updatedRoots[rootId];
+        }
+        nextRoots = updatedRoots;
+    }
     if (existingTrunk.rootId && state.roots[existingTrunk.rootId]) {
         const { [existingTrunk.rootId]: removedRoot, ...restRoots } = state.roots;
         snapshots.root = deepClone(removedRoot);
-        nextRoots = restRoots;
+        nextRoots = { ...restRoots, ...nextRoots };
+        delete nextRoots[existingTrunk.rootId];
     }
 
     let nextSelectedId = state.selectedId;
@@ -1632,6 +2045,9 @@ export function removeTrunk(
             nextSelectedId = null;
             nextSelectedCategory = null;
         }
+    } else if (state.selectedId && seenSupportBraceIds.has(state.selectedId)) {
+        nextSelectedId = null;
+        nextSelectedCategory = null;
     }
 
     state = {

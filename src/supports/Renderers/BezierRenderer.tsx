@@ -140,9 +140,12 @@ export function BezierRenderer({
     const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
 
     const handleClick = (e: any) => {
+        const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
+        const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
+
         // If Alt is held, this click is intended for placement tools.
         // Stop propagation so it does not fall through to the canvas/model click handlers.
-        if (e?.nativeEvent?.altKey || e?.altKey) {
+        if (altDown || ctrlDown) {
             e.stopPropagation();
             if (e.nativeEvent) {
                 e.nativeEvent.stopPropagation();
@@ -157,6 +160,9 @@ export function BezierRenderer({
                 intersection: e
             }
         }));
+
+        // Ctrl is reserved for Support Brace placement and should not re-select segments.
+        if (ctrlDown) return;
 
         if (isParentSelected && onClick) {
             e.stopPropagation();

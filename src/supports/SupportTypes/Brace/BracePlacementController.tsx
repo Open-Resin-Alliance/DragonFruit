@@ -13,6 +13,7 @@ import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints } from '../../Suppo
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
+import { useSupportBraceStoreState } from '../SupportBrace/supportBraceStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 
@@ -23,6 +24,7 @@ function vecEq(a: Vec3, b: Vec3) {
 export function BracePlacementController() {
     const { altActive, stage, start } = useBracePlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
+    const supportBraceState = useSupportBraceStoreState();
 
     const { raycaster, camera, pointer } = useThree();
 
@@ -42,6 +44,16 @@ export function BracePlacementController() {
                 map.set(seg.id, {
                     modelId: branch.modelId,
                     supportKey: `branch:${branch.id}`,
+                    isBezier: seg.type === 'bezier',
+                });
+            }
+        }
+
+        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+            for (const seg of supportBrace.segments) {
+                map.set(seg.id, {
+                    modelId: supportBrace.modelId,
+                    supportKey: `supportBrace:${supportBrace.id}`,
                     isBezier: seg.type === 'bezier',
                 });
             }
@@ -75,7 +87,7 @@ export function BracePlacementController() {
             });
         }
         return map;
-    }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces]);
+    }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, supportBraceState.supportBraces]);
 
     const leafMeta = useMemo(() => {
         const map = new Map<
@@ -216,6 +228,47 @@ export function BracePlacementController() {
             });
         }
 
+        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+            const supportBraceRoot = supportBraceState.roots[supportBrace.rootId];
+            const supportBraceHostKnot = supportBraceState.knots[supportBrace.hostKnotId];
+            if (!supportBraceRoot || !supportBraceHostKnot) continue;
+
+            const rootTopZ = supportBraceRoot.transform.pos.z + supportBraceRoot.diskHeight + supportBraceRoot.coneHeight;
+
+            supportBrace.segments.forEach((seg, idx) => {
+                if (start?.kind === 'shaft' && start.segmentId && seg.id === start.segmentId) return;
+
+                let startPos: Vec3;
+                if (idx === 0) {
+                    startPos = {
+                        x: supportBraceRoot.transform.pos.x,
+                        y: supportBraceRoot.transform.pos.y,
+                        z: rootTopZ,
+                    };
+                } else {
+                    const prevSeg = supportBrace.segments[idx - 1];
+                    if (!prevSeg.topJoint) return;
+                    startPos = prevSeg.topJoint.pos;
+                }
+
+                const endPos = seg.topJoint?.pos ?? supportBraceHostKnot.pos;
+
+                targets.push({
+                    id: seg.id,
+                    type: 'path',
+                    pathSegment: {
+                        start: startPos,
+                        end: endPos,
+                        radius: seg.diameter / 2,
+                        bezier:
+                            seg.type === 'bezier'
+                                ? { control1: seg.controlPoint1, control2: seg.controlPoint2 }
+                                : undefined,
+                    },
+                });
+            });
+        }
+
         // Add brace shafts as path targets
         for (const brace of Object.values(supportState.braces)) {
             const id = `braceSegment:${brace.id}`;
@@ -334,7 +387,7 @@ export function BracePlacementController() {
         }
 
         return targets;
-    }, [altActive, stage, start, supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, supportState.leaves, supportState.roots, supportState.knots, leafMeta]);
+    }, [altActive, stage, start, supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, supportState.leaves, supportState.roots, supportState.knots, supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, leafMeta]);
 
     const targetById = useMemo(() => {
         const map = new Map<string, SnapTarget>();
