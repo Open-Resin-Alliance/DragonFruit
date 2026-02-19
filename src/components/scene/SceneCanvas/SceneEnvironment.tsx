@@ -140,7 +140,8 @@ export function Helpers({
   const width = Number.isFinite(gridWidthMm) && (gridWidthMm as number) > 0 ? (gridWidthMm as number) : 200;
   const depth = Number.isFinite(gridDepthMm) && (gridDepthMm as number) > 0 ? (gridDepthMm as number) : 200;
   const baseSize = Math.max(width, depth);
-  const divisions = Math.max(20, Math.min(240, Math.round(baseSize / 5)));
+  const baseDivisions = Math.max(20, Math.min(240, Math.round(baseSize / 5)));
+  const divisions = Math.max(8, Math.round(baseDivisions / 3));
   const scaleX = width / baseSize;
   const scaleZ = depth / baseSize;
   const buildPlateOversizeEachSideMm = 4;
@@ -154,9 +155,17 @@ export function Helpers({
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
-  const frontMarkerWidth = 24;
-  const frontMarkerDepth = 6.8;
-  const frontYOffset = depth * 0.5 + frontMarkerDepth * 0.46;
+  const frontTabDepth = buildPlateOversizeEachSideMm + 0.2;
+  const frontTabBackWidth = Math.min(buildPlateWidth - 12, 24);
+  const frontTabFrontWidth = Math.min(frontTabBackWidth - 3, 16);
+  const frontMarkerInsetMm = 0.5;
+  const frontMarkerAspect = 256 / 72;
+  const markerAvailableDepth = Math.max(2.8, frontTabDepth - frontMarkerInsetMm * 2);
+  const markerAvailableWidth = Math.max(12, frontTabBackWidth - frontMarkerInsetMm * 2);
+  const frontMarkerDepth = Math.min(markerAvailableDepth, markerAvailableWidth / frontMarkerAspect);
+  const frontMarkerWidth = frontMarkerDepth * frontMarkerAspect;
+  // Seat marker over the front tab so it reads as part of the build plate geometry.
+  const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.1;
 
   const frontTexture = React.useMemo(() => {
     const canvas = document.createElement('canvas');
@@ -167,19 +176,8 @@ export function Helpers({
     canvas.height = 72;
 
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.beginPath();
-    context.moveTo(20, 12);
-    context.lineTo(236, 12);
-    context.lineTo(216, 60);
-    context.lineTo(40, 60);
-    context.closePath();
-
-    context.strokeStyle = frontMarkerColor;
-    context.lineWidth = 1.6;
-    context.stroke();
-
     context.fillStyle = frontMarkerColor;
-    context.font = 'bold 34px Arial';
+    context.font = '700 70px Arial';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.fillText('FRONT', canvas.width / 2, canvas.height / 2 + 1);
@@ -199,9 +197,16 @@ export function Helpers({
     const halfW = buildPlateWidth * 0.5;
     const halfD = buildPlateDepth * 0.5;
     const r = Math.max(0.2, Math.min(buildPlateCornerRadiusMm, halfW - 0.2, halfD - 0.2));
+    const tabBackHalf = frontTabBackWidth * 0.5;
+    const tabFrontHalf = frontTabFrontWidth * 0.5;
+    const tabFrontY = -halfD - frontTabDepth;
 
     const shape = new THREE.Shape();
     shape.moveTo(-halfW + r, -halfD);
+    shape.lineTo(-tabBackHalf, -halfD);
+    shape.lineTo(-tabFrontHalf, tabFrontY);
+    shape.lineTo(tabFrontHalf, tabFrontY);
+    shape.lineTo(tabBackHalf, -halfD);
     shape.lineTo(halfW - r, -halfD);
     shape.quadraticCurveTo(halfW, -halfD, halfW, -halfD + r);
     shape.lineTo(halfW, halfD - r);
@@ -222,7 +227,15 @@ export function Helpers({
     geom.translate(0, 0, -buildPlateThicknessMm * 0.5);
     geom.computeVertexNormals();
     return geom;
-  }, [buildPlateCornerRadiusMm, buildPlateDepth, buildPlateThicknessMm, buildPlateWidth]);
+  }, [
+    buildPlateCornerRadiusMm,
+    buildPlateDepth,
+    buildPlateThicknessMm,
+    buildPlateWidth,
+    frontTabBackWidth,
+    frontTabDepth,
+    frontTabFrontWidth,
+  ]);
 
   React.useEffect(() => {
     return () => {
@@ -288,8 +301,8 @@ export function Helpers({
       />
       <AxisLabels size={100} />
 
-      {/* FRONT orientation marker locked to build plate front edge */}
-      <group position={[0, -frontYOffset, 0.001]}>
+      {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
+      <group position={[0, frontMarkerY, 0.001]}>
         {frontTexture && (
           <mesh raycast={nullRaycast}>
             <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />
