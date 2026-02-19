@@ -80,13 +80,13 @@ export default function Home() {
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
-  const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(12);
+  const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(5);
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [pasteArrangeNonce, setPasteArrangeNonce] = React.useState(0);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
-  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(12);
+  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(5);
   const [isDuplicating, setIsDuplicating] = React.useState(false);
   const [duplicatePreviewTransforms, setDuplicatePreviewTransforms] = React.useState<Array<{
     position: THREE.Vector3;
@@ -181,6 +181,17 @@ export default function Home() {
 
   const handleModelSelection = React.useCallback((modelId: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
     scene.selectModel(modelId, mode);
+  }, [scene]);
+
+  const handleModelRangeSelection = React.useCallback((ids: string[], activeId: string, mode: 'replace' | 'add' = 'replace') => {
+    if (ids.length === 0) return;
+
+    if (mode === 'add') {
+      scene.setSelectedModelIds((prev) => Array.from(new Set([...prev, ...ids])));
+    } else {
+      scene.setSelectedModelIds(ids);
+    }
+    scene.setActiveModelId(activeId);
   }, [scene]);
 
   const handleGroupSelection = React.useCallback((groupId: string, mode: 'single' | 'add' = 'single') => {
@@ -1220,6 +1231,7 @@ export default function Home() {
               activeModelId={scene.activeModelId}
               selectedModelIds={scene.selectedModelIds}
               onSelect={handleModelSelection}
+              onSelectRange={handleModelRangeSelection}
               onSelectGroup={handleGroupSelection}
               onGroupModels={handleGroupSelectedModels}
               onUngroupModels={handleUngroupSelectedModels}
