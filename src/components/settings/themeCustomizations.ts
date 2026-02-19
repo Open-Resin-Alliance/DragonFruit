@@ -15,6 +15,9 @@ export type ThemeCustomColors = {
   accentContrast: string;
   accentSecondary: string;
   accentSecondaryContrast: string;
+  sceneGradientRadial: string;
+  sceneGradientLinearStart: string;
+  sceneGradientLinearMid: string;
   topbarAccent: string;
   surface1: string;
   surface2: string;
@@ -32,6 +35,9 @@ export const DEFAULT_THEME_CUSTOM_COLORS: ThemeCustomColors = {
   accentContrast: '#fff6ff',
   accentSecondary: '#baf72e',
   accentSecondaryContrast: '#182106',
+  sceneGradientRadial: '#ff37aa',
+  sceneGradientLinearStart: '#ff37aa',
+  sceneGradientLinearMid: '#6f33ff',
   topbarAccent: NEW_DEFAULT_ACCENT,
   surface1: '#1a1b21',
   surface2: '#23252e',
@@ -107,6 +113,9 @@ export function getSavedThemeCustomColors(): ThemeCustomColors {
       accentContrast: normalizeHex(parsed.accentContrast ?? d.accentContrast, d.accentContrast),
       accentSecondary: normalizeHex(parsed.accentSecondary ?? d.accentSecondary, d.accentSecondary),
       accentSecondaryContrast: normalizeHex(parsed.accentSecondaryContrast ?? d.accentSecondaryContrast, d.accentSecondaryContrast),
+      sceneGradientRadial: normalizeHex(parsed.sceneGradientRadial ?? d.sceneGradientRadial, d.sceneGradientRadial),
+      sceneGradientLinearStart: normalizeHex(parsed.sceneGradientLinearStart ?? d.sceneGradientLinearStart, d.sceneGradientLinearStart),
+      sceneGradientLinearMid: normalizeHex(parsed.sceneGradientLinearMid ?? d.sceneGradientLinearMid, d.sceneGradientLinearMid),
       topbarAccent,
       surface1: normalizeHex(parsed.surface1 ?? d.surface1, d.surface1),
       surface2: normalizeHex(parsed.surface2 ?? d.surface2, d.surface2),
@@ -136,6 +145,9 @@ export function applyThemeCustomColors(themeColors: ThemeCustomColors) {
   const accentContrast = normalizeHex(themeColors.accentContrast, d.accentContrast);
   const accentSecondary = normalizeHex(themeColors.accentSecondary, d.accentSecondary);
   const accentSecondaryContrast = normalizeHex(themeColors.accentSecondaryContrast, d.accentSecondaryContrast);
+  const sceneGradientRadial = normalizeHex(themeColors.sceneGradientRadial, d.sceneGradientRadial);
+  const sceneGradientLinearStart = normalizeHex(themeColors.sceneGradientLinearStart, d.sceneGradientLinearStart);
+  const sceneGradientLinearMid = normalizeHex(themeColors.sceneGradientLinearMid, d.sceneGradientLinearMid);
   const topbarAccent = normalizeHex(themeColors.topbarAccent, accent);
   const surface1 = normalizeHex(themeColors.surface1, d.surface1);
   const surface2 = normalizeHex(themeColors.surface2, d.surface2);
@@ -154,6 +166,9 @@ export function applyThemeCustomColors(themeColors: ThemeCustomColors) {
   rootStyle.setProperty('--accent-secondary', accentSecondary);
   rootStyle.setProperty('--accent-secondary-hover', darkenHex(accentSecondary, 0.9));
   rootStyle.setProperty('--accent-secondary-contrast', accentSecondaryContrast);
+  rootStyle.setProperty('--scene-gradient-radial', sceneGradientRadial);
+  rootStyle.setProperty('--scene-gradient-linear-start', sceneGradientLinearStart);
+  rootStyle.setProperty('--scene-gradient-linear-mid', sceneGradientLinearMid);
   rootStyle.setProperty('--topbar-accent', topbarAccent);
   rootStyle.setProperty('--surface-1', surface1);
   rootStyle.setProperty('--surface-2', surface2);

@@ -10,6 +10,9 @@ export type ThemeColors = {
 	accentContrast: string;
 	accentSecondary: string;
 	accentSecondaryContrast: string;
+	sceneGradientRadial: string;
+	sceneGradientLinearStart: string;
+	sceneGradientLinearMid: string;
 	topbarAccent: string;
 	surface1: string;
 	surface2: string;
@@ -46,6 +49,9 @@ export function UISettingsTab({
 		{ key: 'accentContrast', label: 'Accent contrast', placeholder: '#fff6ff' },
 		{ key: 'accentSecondary', label: 'Accent secondary', placeholder: '#baf72e' },
 		{ key: 'accentSecondaryContrast', label: 'Accent secondary contrast', placeholder: '#182106' },
+		{ key: 'sceneGradientRadial', label: '3D radial glow', placeholder: '#ff37aa' },
+		{ key: 'sceneGradientLinearStart', label: '3D gradient top', placeholder: '#ff37aa' },
+		{ key: 'sceneGradientLinearMid', label: '3D gradient mid', placeholder: '#6f33ff' },
 		{ key: 'topbarAccent', label: 'Top bar accent', placeholder: '#ec2a77' },
 		{ key: 'surface1', label: 'Surface 1', placeholder: '#1a1b21' },
 		{ key: 'surface2', label: 'Surface 2', placeholder: '#23252e' },

@@ -54,6 +54,9 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
   ```json
   {
     "accent": "#4f8cff",
+    "sceneGradientRadial": "#ff37aa",
+    "sceneGradientLinearStart": "#ff37aa",
+    "sceneGradientLinearMid": "#6f33ff",
     "topbarAccent": "#4f8cff",
     "surface1": "#151c25",
     "surface2": "#1b2430",
