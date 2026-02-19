@@ -138,7 +138,7 @@ export function ModelManagerPanel({
             </div>
           </div>
 
-          <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
+          <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 max-h-[min(68vh,calc(100vh-var(--topbar-height)-220px))]">
             {models.length === 0 ? (
               <div className="text-xs text-center py-2 italic" style={{ color: 'var(--text-muted)' }}>
                 No models loaded
