@@ -70,6 +70,28 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             description: 'Toggle camera projection (Orthographic / Perspective)'
         }
     },
+    CANVAS: {
+        TOOL_SELECT: {
+            key: 'q',
+            description: 'Switch canvas tool to Select'
+        },
+        TOOL_MODIFY: {
+            key: 'm',
+            description: 'Switch canvas tool to Modify'
+        },
+        TOOL_SMOOTH: {
+            key: 's',
+            description: 'Switch canvas tool to Smooth'
+        },
+        TOOL_ARRANGE: {
+            key: 'a',
+            description: 'Switch canvas tool to Arrange'
+        },
+        TOOL_DUPLICATE: {
+            key: 'd',
+            description: 'Switch canvas tool to Duplicate'
+        }
+    },
     PRESETS: {
         APPLY_DETAIL: {
             key: '1',

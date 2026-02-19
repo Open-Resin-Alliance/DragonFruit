@@ -43,6 +43,7 @@ import { useUndoRedoHotkeys } from '@/hotkeys/useUndoRedoHotkeys';
 import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
+import { usePrepareTransformHotkeys } from '@/hotkeys/usePrepareTransformHotkeys';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 
@@ -835,6 +836,11 @@ export default function Home() {
   useUndoRedoHotkeys();
   useDeleteHotkey();
   useCameraProjectionHotkey();
+  usePrepareTransformHotkeys({
+    appMode: scene.mode,
+    hasModels: scene.models.length > 0,
+    setTransformMode: transformMgr.setTransformMode,
+  });
 
   // Auto-set cross-section mode based on app mode
   React.useEffect(() => {
