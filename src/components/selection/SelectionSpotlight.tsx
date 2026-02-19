@@ -49,7 +49,19 @@ export function SelectionSpotlight({
   const lightRef = React.useRef<THREE.SpotLight>(null);
   const targetRef = React.useRef<THREE.Object3D>(null);
   const helperRef = React.useRef<THREE.SpotLightHelper | null>(null);
+  const hasValidPlacementRef = React.useRef(false);
+  const lastMeshIdRef = React.useRef<string | null>(null);
   const { camera } = useThree();
+
+  React.useEffect(() => {
+    hasValidPlacementRef.current = false;
+    lastMeshIdRef.current = null;
+    const light = lightRef.current;
+    if (!light) return;
+    light.visible = false;
+    light.intensity = 0;
+    light.distance = 0;
+  }, [enabled]);
 
   useFrame(() => {
     if (!enabled) return;
@@ -58,6 +70,14 @@ export function SelectionSpotlight({
     const light = lightRef.current;
     const target = targetRef.current;
     if (!mesh || !light || !target) return;
+
+    if (lastMeshIdRef.current !== mesh.uuid) {
+      lastMeshIdRef.current = mesh.uuid;
+      hasValidPlacementRef.current = false;
+      light.visible = false;
+      light.intensity = 0;
+      light.distance = 0;
+    }
 
     // ---- geometry centre in world space ----
     const geom = mesh.geometry as THREE.BufferGeometry | null;
@@ -104,7 +124,11 @@ export function SelectionSpotlight({
 
     light.distance = Math.max(minReach, Math.min(desiredCoverage, floorSafe));
     light.decay = 0;
-    light.visible = true;
+
+    if (!hasValidPlacementRef.current) {
+      hasValidPlacementRef.current = true;
+      light.visible = true;
+    }
     light.intensity = intensity;
 
     light.updateMatrixWorld();
@@ -125,13 +149,13 @@ export function SelectionSpotlight({
       <spotLight
         ref={lightRef}
         color={color}
-        intensity={intensity}
+        intensity={0}
         angle={angle}
-        distance={220}
+        distance={0}
         position={[camera.position.x, camera.position.y, camera.position.z]}
         penumbra={penumbra}
         decay={0}
-        visible
+        visible={false}
         castShadow={false}
       />
       <object3D ref={targetRef} />
