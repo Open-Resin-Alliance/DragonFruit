@@ -84,6 +84,7 @@ export default function Home() {
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
+  const [pasteArrangeNonce, setPasteArrangeNonce] = React.useState(0);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(12);
   const [isDuplicating, setIsDuplicating] = React.useState(false);
@@ -99,6 +100,7 @@ export default function Home() {
   } | null>(null);
   const dragDepthRef = React.useRef(0);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const lastHandledPasteArrangeNonceRef = React.useRef(0);
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
     if (scene.mode !== 'prepare') return;
@@ -240,7 +242,9 @@ export default function Home() {
         }
         break;
       case 'copy':
-        if (scene.activeModelId) {
+        if (scene.selectedModelIds.length > 0) {
+          scene.copySelectedModels();
+        } else if (scene.activeModelId) {
           scene.copyModel(scene.activeModelId);
         }
         break;
@@ -250,7 +254,9 @@ export default function Home() {
         }
         break;
       case 'paste':
-        scene.pasteModel();
+        if (scene.pasteCopiedModelsAutoArrange().length > 0) {
+          setPasteArrangeNonce((prev) => prev + 1);
+        }
         break;
       case 'duplicate':
       case 'arrange':
@@ -404,6 +410,10 @@ export default function Home() {
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
   }), []);
+
+  const queueArrangeAfterPaste = React.useCallback(() => {
+    setPasteArrangeNonce((prev) => prev + 1);
+  }, []);
 
   const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected') => {
     if (isAutoArranging) return;
@@ -818,6 +828,15 @@ export default function Home() {
     }
   }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
 
+  React.useEffect(() => {
+    if (pasteArrangeNonce === 0) return;
+    if (pasteArrangeNonce === lastHandledPasteArrangeNonceRef.current) return;
+    if (scene.mode !== 'prepare') return;
+
+    lastHandledPasteArrangeNonceRef.current = pasteArrangeNonce;
+    void handleAutoArrangeModels('all');
+  }, [handleAutoArrangeModels, pasteArrangeNonce, scene.mode]);
+
   const computeArrangeSlots = React.useCallback((count: number, stepX: number, stepY: number) => {
     const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
     const rows = Math.ceil(count / columns);
@@ -1024,6 +1043,48 @@ export default function Home() {
       window.removeEventListener('keydown', handleGlobalSelectAll, true);
     };
   }, [scene]);
+
+  React.useEffect(() => {
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const handleClipboardHotkeys = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.altKey) return;
+      if (isEditableTarget(event.target)) return;
+      if (scene.mode !== 'prepare') return;
+
+      const key = event.key.toLowerCase();
+      if (key === 'c') {
+        if (scene.selectedModelIds.length === 0 && !scene.activeModelId) return;
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (scene.selectedModelIds.length > 0) {
+          scene.copySelectedModels();
+        } else if (scene.activeModelId) {
+          scene.copyModel(scene.activeModelId);
+        }
+        return;
+      }
+
+      if (key === 'v') {
+        if (!scene.canPasteModel) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (scene.pasteCopiedModelsAutoArrange().length > 0) {
+          queueArrangeAfterPaste();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleClipboardHotkeys, true);
+    return () => {
+      window.removeEventListener('keydown', handleClipboardHotkeys, true);
+    };
+  }, [queueArrangeAfterPaste, scene]);
 
   React.useEffect(() => {
     if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'duplicate') {

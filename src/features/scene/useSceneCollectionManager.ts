@@ -359,6 +359,7 @@ type ImportProgressState = {
 };
 
 type ModelClipboardEntry = {
+  sourceId: string;
   name: string;
   fileSizeBytes?: number;
   geometry: GeometryWithBounds;
@@ -380,7 +381,7 @@ export function useSceneCollectionManager() {
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
-  const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry | null>(null);
+  const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry[]>([]);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>(() => readRecentOpenedFilesFromLocalStorage());
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
@@ -1065,7 +1066,34 @@ export function useSceneCollectionManager() {
     const source = models.find((m) => m.id === id);
     if (!source) return false;
 
-    setModelClipboard({
+    setModelClipboard([
+      {
+        sourceId: source.id,
+        name: source.name,
+        fileSizeBytes: source.fileSizeBytes,
+        geometry: cloneGeometryWithBounds(source.geometry),
+        transform: {
+          position: source.transform.position.clone(),
+          rotation: source.transform.rotation.clone(),
+          scale: source.transform.scale.clone(),
+        },
+        color: source.color,
+        polygonCount: source.polygonCount,
+      },
+    ]);
+
+    return true;
+  }, [cloneGeometryWithBounds, models]);
+
+  const copySelectedModels = useCallback((ids?: string[]) => {
+    const idSet = new Set((ids && ids.length > 0) ? ids : selectedModelIds);
+    if (idSet.size === 0) return false;
+
+    const selected = models.filter((m) => idSet.has(m.id));
+    if (selected.length === 0) return false;
+
+    setModelClipboard(selected.map((source) => ({
+      sourceId: source.id,
       name: source.name,
       fileSizeBytes: source.fileSizeBytes,
       geometry: cloneGeometryWithBounds(source.geometry),
@@ -1076,10 +1104,10 @@ export function useSceneCollectionManager() {
       },
       color: source.color,
       polygonCount: source.polygonCount,
-    });
+    })));
 
     return true;
-  }, [cloneGeometryWithBounds, models]);
+  }, [cloneGeometryWithBounds, models, selectedModelIds]);
 
   const cutModel = useCallback((id: string) => {
     const copied = copyModel(id);
@@ -1089,23 +1117,25 @@ export function useSceneCollectionManager() {
   }, [copyModel, deleteModel]);
 
   const pasteModel = useCallback(() => {
-    if (!modelClipboard) return null;
+    if (modelClipboard.length === 0) return null;
+
+    const first = modelClipboard[0];
 
     const id = generateId();
     const pastedModel: LoadedModel = {
       id,
-      name: `${modelClipboard.name} Copy`,
+      name: `${first.name} Copy`,
       fileUrl: '',
-      fileSizeBytes: modelClipboard.fileSizeBytes,
-      geometry: cloneGeometryWithBounds(modelClipboard.geometry),
+      fileSizeBytes: first.fileSizeBytes,
+      geometry: cloneGeometryWithBounds(first.geometry),
       transform: {
-        position: modelClipboard.transform.position.clone().add(new THREE.Vector3(6, 6, 0)),
-        rotation: modelClipboard.transform.rotation.clone(),
-        scale: modelClipboard.transform.scale.clone(),
+        position: first.transform.position.clone().add(new THREE.Vector3(6, 6, 0)),
+        rotation: first.transform.rotation.clone(),
+        scale: first.transform.scale.clone(),
       },
       visible: true,
-      color: modelClipboard.color,
-      polygonCount: modelClipboard.polygonCount,
+      color: first.color,
+      polygonCount: first.polygonCount,
     };
 
     setModels((prev) => [...prev, pastedModel]);
@@ -1113,6 +1143,58 @@ export function useSceneCollectionManager() {
     setSelectedModelIds([id]);
     return id;
   }, [cloneGeometryWithBounds, generateId, modelClipboard]);
+
+  const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 12) => {
+    if (modelClipboard.length === 0) return [] as string[];
+
+    const entries = modelClipboard;
+
+    const maxWidth = Math.max(...entries.map((entry) => Math.max(2, Math.abs(entry.geometry.size.x * entry.transform.scale.x))));
+    const maxDepth = Math.max(...entries.map((entry) => Math.max(2, Math.abs(entry.geometry.size.y * entry.transform.scale.y))));
+    const stepX = maxWidth + spacingMm;
+    const stepY = maxDepth + spacingMm;
+
+    const count = entries.length;
+    const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const rows = Math.ceil(count / columns);
+
+    const centerX = defaultImportCenterXY.x;
+    const centerY = defaultImportCenterXY.y;
+    const startX = centerX - ((columns - 1) * stepX) * 0.5;
+    const startY = centerY - ((rows - 1) * stepY) * 0.5;
+
+    const createdIds: string[] = [];
+    const pastedModels: LoadedModel[] = entries.map((entry, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      const id = generateId();
+      createdIds.push(id);
+
+      return {
+        id,
+        name: `${entry.name} Copy`,
+        fileUrl: '',
+        fileSizeBytes: entry.fileSizeBytes,
+        geometry: cloneGeometryWithBounds(entry.geometry),
+        transform: {
+          position: new THREE.Vector3(startX + col * stepX, startY + row * stepY, entry.transform.position.z),
+          rotation: entry.transform.rotation.clone(),
+          scale: entry.transform.scale.clone(),
+        },
+        visible: true,
+        color: entry.color,
+        polygonCount: entry.polygonCount,
+      };
+    });
+
+    setModels((prev) => [...prev, ...pastedModels]);
+    if (createdIds.length > 0) {
+      setActiveModelId(createdIds[0]);
+      setSelectedModelIds(createdIds);
+    }
+
+    return createdIds;
+  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, generateId, modelClipboard]);
 
   const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[]) => {
     if (transforms.length === 0) return [] as string[];
@@ -1503,10 +1585,12 @@ export function useSceneCollectionManager() {
     selectGroup,
     deleteModel,
     copyModel,
+    copySelectedModels,
     cutModel,
     pasteModel,
+    pasteCopiedModelsAutoArrange,
     duplicateModelWithTransforms,
-    canPasteModel: modelClipboard !== null,
+    canPasteModel: modelClipboard.length > 0,
 
     // Scene settings
     ambientIntensity,
