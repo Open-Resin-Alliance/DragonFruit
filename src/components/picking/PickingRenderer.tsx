@@ -179,18 +179,20 @@ export function PickingRenderer({
       // Copy world transform - need to set both matrix and matrixWorld
       registration.object.updateMatrixWorld(true);
       pickObject.matrixAutoUpdate = false;
+
+      // Copy world matrix directly to preserve full transform (including shear)
       pickObject.matrix.copy(registration.object.matrixWorld);
       pickObject.matrixWorld.copy(registration.object.matrixWorld);
-      // Decompose to position/rotation/scale for proper rendering
-      pickObject.matrix.decompose(pickObject.position, pickObject.quaternion, pickObject.scale);
-      
+
+      // No need to call updateMatrix / updateMatrixWorld since we've set them explicitly
+
       pickScene.add(pickObject);
     }
     
     // Render to the pick target
     const currentRenderTarget = gl.getRenderTarget();
     gl.setRenderTarget(renderTargetRef.current);
-    gl.clear();
+    gl.clear(true, true, false); // clear color, clear depth, don't clear stencil
     gl.render(pickScene, pickCamera);
     
     // Read back pixels
