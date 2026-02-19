@@ -142,6 +142,230 @@ function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
   return null;
 }
 
+function CameraModeEntryFramingController({
+  runId,
+  restoreRunId,
+  target,
+  plateWidthMm,
+  plateDepthMm,
+}: {
+  runId: number;
+  restoreRunId: number;
+  target: THREE.Vector3;
+  plateWidthMm: number;
+  plateDepthMm: number;
+}) {
+  const { camera, controls, size } = useThree();
+
+  const activeRunIdRef = React.useRef<number | null>(null);
+  const completedFrameRunIdRef = React.useRef(0);
+  const completedRestoreRunIdRef = React.useRef(0);
+  const animatingRef = React.useRef(false);
+  const rafRef = React.useRef<number | null>(null);
+  const cameraSnapshotRef = React.useRef<{
+    position: THREE.Vector3;
+    target: THREE.Vector3;
+    zoom: number | null;
+  } | null>(null);
+
+  const cancelAnimation = React.useCallback(() => {
+    animatingRef.current = false;
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
+  const animateTo = React.useCallback((params: {
+    startPos: THREE.Vector3;
+    endPos: THREE.Vector3;
+    startTarget: THREE.Vector3;
+    endTarget: THREE.Vector3;
+    startZoom: number;
+    endZoom: number;
+    isOrthographic: boolean;
+    durationMs: number;
+    onComplete?: () => void;
+  }) => {
+    const {
+      startPos,
+      endPos,
+      startTarget,
+      endTarget,
+      startZoom,
+      endZoom,
+      isOrthographic,
+      durationMs,
+      onComplete,
+    } = params;
+
+    cancelAnimation();
+    animatingRef.current = true;
+
+    let startTime: number | null = null;
+    const orbit = controls as unknown as {
+      target: THREE.Vector3;
+      update: () => void;
+    };
+
+    const tick = (now: number) => {
+      if (!animatingRef.current) return;
+      if (startTime == null) startTime = now;
+
+      const t = Math.min(1, (now - startTime) / durationMs);
+      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+      camera.position.lerpVectors(startPos, endPos, eased);
+      orbit.target.lerpVectors(startTarget, endTarget, eased);
+
+      if (isOrthographic) {
+        const ortho = camera as THREE.OrthographicCamera;
+        ortho.zoom = THREE.MathUtils.lerp(startZoom, endZoom, eased);
+        ortho.updateProjectionMatrix();
+      }
+
+      orbit.update();
+
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        animatingRef.current = false;
+        rafRef.current = null;
+        onComplete?.();
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+  }, [camera, cancelAnimation, controls]);
+
+  React.useLayoutEffect(() => {
+    if (!runId) return;
+    if (completedFrameRunIdRef.current === runId) return;
+    if (activeRunIdRef.current === runId) return;
+    if (!controls || typeof controls !== 'object' || !('target' in controls) || !('update' in controls)) return;
+
+    const orbit = controls as unknown as {
+      target: THREE.Vector3;
+      update: () => void;
+    };
+
+    activeRunIdRef.current = runId;
+
+    const startPos = camera.position.clone();
+    const startTarget = orbit.target.clone();
+
+    cameraSnapshotRef.current = {
+      position: startPos.clone(),
+      target: startTarget.clone(),
+      zoom: camera instanceof THREE.OrthographicCamera ? camera.zoom : null,
+    };
+
+    const padding = 1.04;
+    const fov = camera instanceof THREE.PerspectiveCamera
+      ? THREE.MathUtils.degToRad(camera.fov)
+      : THREE.MathUtils.degToRad(50);
+    const aspect = size.width / Math.max(1, size.height);
+    const hFov = 2 * Math.atan(Math.tan(fov * 0.5) * aspect);
+    const minFov = Math.max(0.0001, Math.min(fov, hFov));
+
+    const halfDiagonal = 0.5 * Math.hypot(plateWidthMm, plateDepthMm) * padding;
+    const distance = Math.max(90, halfDiagonal / Math.sin(minFov * 0.5));
+  const viewDir = new THREE.Vector3(0, -0.52, 1).normalize(); // front-facing top-side birds-eye
+    const endTarget = target.clone().add(new THREE.Vector3(0, -plateDepthMm * 0.055, 0));
+    const endPos = endTarget.clone().addScaledVector(viewDir, distance);
+
+    const isOrthographic = camera instanceof THREE.OrthographicCamera;
+    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
+    let endZoom = startZoom;
+
+    if (isOrthographic) {
+      const ortho = camera as THREE.OrthographicCamera;
+      const frustumHeight = Math.max(1e-6, ortho.top - ortho.bottom);
+      const requiredWorldHeight = Math.max(plateWidthMm, plateDepthMm) * padding;
+      endZoom = THREE.MathUtils.clamp(frustumHeight / Math.max(1e-6, requiredWorldHeight), 0.0001, 200);
+    }
+
+    animateTo({
+      startPos,
+      endPos,
+      startTarget,
+      endTarget,
+      startZoom,
+      endZoom,
+      isOrthographic,
+      durationMs: 700,
+      onComplete: () => {
+        activeRunIdRef.current = null;
+        completedFrameRunIdRef.current = runId;
+      },
+    });
+
+    return () => {
+      if (activeRunIdRef.current === runId && completedFrameRunIdRef.current !== runId) {
+        activeRunIdRef.current = null;
+      }
+    };
+  }, [animateTo, camera, controls, plateDepthMm, plateWidthMm, runId, size.height, size.width, target]);
+
+  React.useLayoutEffect(() => {
+    if (!restoreRunId) return;
+    if (completedRestoreRunIdRef.current === restoreRunId) return;
+    if (activeRunIdRef.current === restoreRunId) return;
+    if (!controls || typeof controls !== 'object' || !('target' in controls) || !('update' in controls)) return;
+
+    const snapshot = cameraSnapshotRef.current;
+    if (!snapshot) {
+      completedRestoreRunIdRef.current = restoreRunId;
+      return;
+    }
+
+    const orbit = controls as unknown as {
+      target: THREE.Vector3;
+      update: () => void;
+    };
+
+    activeRunIdRef.current = restoreRunId;
+
+    const isOrthographic = camera instanceof THREE.OrthographicCamera;
+    const startPos = camera.position.clone();
+    const endPos = snapshot.position.clone();
+    const startTarget = orbit.target.clone();
+    const endTarget = snapshot.target.clone();
+    const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
+    const endZoom = (isOrthographic && snapshot.zoom != null) ? snapshot.zoom : startZoom;
+
+    animateTo({
+      startPos,
+      endPos,
+      startTarget,
+      endTarget,
+      startZoom,
+      endZoom,
+      isOrthographic,
+      durationMs: 520,
+      onComplete: () => {
+        activeRunIdRef.current = null;
+        completedRestoreRunIdRef.current = restoreRunId;
+        cameraSnapshotRef.current = null;
+      },
+    });
+
+    return () => {
+      if (activeRunIdRef.current === restoreRunId && completedRestoreRunIdRef.current !== restoreRunId) {
+        activeRunIdRef.current = null;
+      }
+    };
+  }, [animateTo, camera, controls, restoreRunId]);
+
+  React.useEffect(() => {
+    return () => {
+      cancelAnimation();
+    };
+  }, [cancelAnimation]);
+
+  return null;
+}
+
 export function SceneCanvas({
   models: modelsProp = [],
   activeModelId: activeModelIdProp,
@@ -737,12 +961,33 @@ export function SceneCanvas({
   }, [computeModelWorldBounds, models]);
 
   const [entryDropOffsets, setEntryDropOffsets] = React.useState<Record<string, number>>({});
+  const [modeEntryFramingRunId, setModeEntryFramingRunId] = React.useState(0);
+  const [modeExitRestoreRunId, setModeExitRestoreRunId] = React.useState(0);
   const knownModelIdsRef = React.useRef<Set<string>>(new Set());
+  const prevTransformModeRef = React.useRef<TransformMode | undefined>(transformMode);
   const entryAnimRef = React.useRef<Record<string, { startMs: number; fromZ: number; skipBounce: boolean }>>({});
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
   const dynamicDpr = (isIntroAnimating || isDropAnimating) ? ([1, 1.5] as [number, number]) : ([1, 10] as [number, number]);
+
+  React.useEffect(() => {
+    const prevMode = prevTransformModeRef.current;
+    const prevIsPresentationMode = prevMode === 'arrange' || prevMode === 'duplicate';
+    const nextIsPresentationMode = transformMode === 'arrange' || transformMode === 'duplicate';
+    const enteringArrangeOrDuplicate = mode === 'prepare' && nextIsPresentationMode && !prevIsPresentationMode;
+    const leavingArrangeOrDuplicate = mode === 'prepare' && prevIsPresentationMode && !nextIsPresentationMode;
+
+    if (enteringArrangeOrDuplicate) {
+      setModeEntryFramingRunId((id) => id + 1);
+    }
+
+    if (leavingArrangeOrDuplicate) {
+      setModeExitRestoreRunId((id) => id + 1);
+    }
+
+    prevTransformModeRef.current = transformMode;
+  }, [mode, transformMode]);
 
   React.useEffect(() => {
     const currentIds = new Set(models.map((model) => model.id));
@@ -1485,6 +1730,13 @@ export function SceneCanvas({
           homePosition={defaultCamera.position}
           homeTarget={[buildVolumeCenterTarget.x, buildVolumeCenterTarget.y, buildVolumeCenterTarget.z]}
           homeFovDeg={defaultCamera.fov}
+        />
+        <CameraModeEntryFramingController
+          runId={modeEntryFramingRunId}
+          restoreRunId={modeExitRestoreRunId}
+          target={buildVolumeCenterTarget}
+          plateWidthMm={activeBuildVolumeSettings.widthMm}
+          plateDepthMm={activeBuildVolumeSettings.depthMm}
         />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
