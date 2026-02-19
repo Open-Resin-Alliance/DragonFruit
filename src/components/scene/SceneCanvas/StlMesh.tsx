@@ -79,7 +79,7 @@ export function StlMesh({
   onSmoothingGeometryActivate?: (geometry: THREE.BufferGeometry | null) => void;
   onSupportClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
-  onActiveModelChange?: (id: string | null) => void;
+  onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   disableRaycast?: boolean;
   blockSupportPlacement?: boolean;
   suppressNextClickRef?: React.RefObject<boolean>;
@@ -274,7 +274,13 @@ export function StlMesh({
 
             // Update active model in parent state
             if (onActiveModelChange) {
-              onActiveModelChange(modelId);
+              const native = (e as unknown as { nativeEvent?: MouseEvent }).nativeEvent;
+              const selectionMode = native?.ctrlKey || native?.metaKey
+                ? 'toggle'
+                : native?.shiftKey
+                  ? 'add'
+                  : 'single';
+              onActiveModelChange(modelId, { selectionMode });
             }
           }
 
