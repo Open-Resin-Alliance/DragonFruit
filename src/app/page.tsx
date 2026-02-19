@@ -17,7 +17,7 @@ import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
 import { ArrangePanel, type ArrangeAnchorMode } from '@/components/controls/ArrangePanel';
-import { DuplicatePanel } from '@/components/controls/DuplicatePanel';
+import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
@@ -87,6 +87,13 @@ export default function Home() {
   const [pasteArrangeNonce, setPasteArrangeNonce] = React.useState(0);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(5);
+  const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
+  const [duplicateArrayCountX, setDuplicateArrayCountX] = React.useState(2);
+  const [duplicateArrayCountY, setDuplicateArrayCountY] = React.useState(1);
+  const [duplicateArrayCountZ, setDuplicateArrayCountZ] = React.useState(1);
+  const [duplicateArrayGapX, setDuplicateArrayGapX] = React.useState(5);
+  const [duplicateArrayGapY, setDuplicateArrayGapY] = React.useState(5);
+  const [duplicateArrayGapZ, setDuplicateArrayGapZ] = React.useState(5);
   const [isDuplicating, setIsDuplicating] = React.useState(false);
   const [duplicatePreviewTransforms, setDuplicatePreviewTransforms] = React.useState<Array<{
     position: THREE.Vector3;
@@ -101,6 +108,7 @@ export default function Home() {
   const dragDepthRef = React.useRef(0);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const lastHandledPasteArrangeNonceRef = React.useRef(0);
+  const cameraResumeTimeoutRef = React.useRef<number | null>(null);
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
     if (scene.mode !== 'prepare') return;
@@ -986,8 +994,33 @@ export default function Home() {
     }, 0);
   };
 
-  const handleCameraChange = React.useCallback(() => { }, []);
-  const handleCameraEnd = React.useCallback(() => { }, []);
+  const handleCameraChange = React.useCallback(() => {
+    if (cameraResumeTimeoutRef.current !== null) {
+      window.clearTimeout(cameraResumeTimeoutRef.current);
+      cameraResumeTimeoutRef.current = null;
+    }
+    scene.setBackgroundGeometryWorkPaused(true);
+  }, [scene]);
+
+  const handleCameraEnd = React.useCallback(() => {
+    if (cameraResumeTimeoutRef.current !== null) {
+      window.clearTimeout(cameraResumeTimeoutRef.current);
+    }
+
+    cameraResumeTimeoutRef.current = window.setTimeout(() => {
+      scene.setBackgroundGeometryWorkPaused(false);
+      cameraResumeTimeoutRef.current = null;
+    }, 140);
+  }, [scene]);
+
+  React.useEffect(() => {
+    return () => {
+      if (cameraResumeTimeoutRef.current !== null) {
+        window.clearTimeout(cameraResumeTimeoutRef.current);
+      }
+      scene.setBackgroundGeometryWorkPaused(false);
+    };
+  }, [scene]);
 
   React.useEffect(() => {
     if (scene.mode === 'prepare') return;
@@ -1104,19 +1137,55 @@ export default function Home() {
       return;
     }
 
-    if (!scene.activeModel || duplicateTotalCopies <= 1) {
+    if (!scene.activeModel) {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
       return;
     }
 
     const model = scene.activeModel;
-    const totalCount = Math.max(1, duplicateTotalCopies);
     const { width, depth } = getModelFootprintMm(model);
-    const stepX = width + duplicateSpacingMm;
-    const stepY = depth + duplicateSpacingMm;
+    const height = Math.max(2, Math.abs(model.geometry.size.z * model.transform.scale.z));
 
-    const slots = computeArrangeSlots(totalCount, stepX, stepY);
+    const slots: THREE.Vector3[] = [];
+
+    if (duplicateLayoutMode === 'array') {
+      const countX = Math.max(1, Math.round(duplicateArrayCountX));
+      const countY = Math.max(1, Math.round(duplicateArrayCountY));
+      const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
+      const stepX = width + Math.max(0, duplicateArrayGapX);
+      const stepY = depth + Math.max(0, duplicateArrayGapY);
+      const stepZ = height + Math.max(0, duplicateArrayGapZ);
+
+      const originOffsetX = ((countX - 1) * stepX) * 0.5;
+      const originOffsetY = ((countY - 1) * stepY) * 0.5;
+      const originOffsetZ = ((countZ - 1) * stepZ) * 0.5;
+
+      for (let z = 0; z < countZ; z += 1) {
+        for (let y = 0; y < countY; y += 1) {
+          for (let x = 0; x < countX; x += 1) {
+            slots.push(new THREE.Vector3(
+              model.transform.position.x + (x * stepX) - originOffsetX,
+              model.transform.position.y + (y * stepY) - originOffsetY,
+              model.transform.position.z + (z * stepZ) - originOffsetZ,
+            ));
+          }
+        }
+      }
+    } else {
+      const totalCount = Math.max(1, duplicateTotalCopies);
+      const stepX = width + duplicateSpacingMm;
+      const stepY = depth + duplicateSpacingMm;
+      slots.push(...computeArrangeSlots(totalCount, stepX, stepY).map((slot) => (
+        new THREE.Vector3(slot.x, slot.y, model.transform.position.z)
+      )));
+    }
+
+    if (slots.length <= 1) {
+      setDuplicatePreviewTransforms([]);
+      setDuplicateSourcePreviewTransform(null);
+      return;
+    }
 
     let sourceSlotIndex = 0;
     let sourceSlotDistanceSq = Number.POSITIVE_INFINITY;
@@ -1133,7 +1202,7 @@ export default function Home() {
 
     const sourceSlot = slots[sourceSlotIndex];
     setDuplicateSourcePreviewTransform({
-      position: new THREE.Vector3(sourceSlot.x, sourceSlot.y, model.transform.position.z),
+      position: new THREE.Vector3(sourceSlot.x, sourceSlot.y, sourceSlot.z),
       rotation: model.transform.rotation.clone(),
       scale: model.transform.scale.clone(),
     });
@@ -1142,14 +1211,29 @@ export default function Home() {
     slots.forEach((slot, index) => {
       if (index === sourceSlotIndex) return;
       previews.push({
-        position: new THREE.Vector3(slot.x, slot.y, model.transform.position.z),
+        position: new THREE.Vector3(slot.x, slot.y, slot.z),
         rotation: model.transform.rotation.clone(),
         scale: model.transform.scale.clone(),
       });
     });
 
     setDuplicatePreviewTransforms(previews);
-  }, [computeArrangeSlots, duplicateSpacingMm, duplicateTotalCopies, getModelFootprintMm, scene.activeModel, scene.mode, transformMgr.transformMode]);
+  }, [
+    computeArrangeSlots,
+    duplicateArrayCountX,
+    duplicateArrayCountY,
+    duplicateArrayCountZ,
+    duplicateArrayGapX,
+    duplicateArrayGapY,
+    duplicateArrayGapZ,
+    duplicateLayoutMode,
+    duplicateSpacingMm,
+    duplicateTotalCopies,
+    getModelFootprintMm,
+    scene.activeModel,
+    scene.mode,
+    transformMgr.transformMode,
+  ]);
 
   const handleConfirmDuplicate = React.useCallback(async () => {
     if (isDuplicating) return;
@@ -1348,12 +1432,26 @@ export default function Home() {
               <DuplicatePanel
                 key="prepare-duplicate-panel"
                 activeModelName={scene.activeModel?.name ?? null}
+                layoutMode={duplicateLayoutMode}
+                onLayoutModeChange={setDuplicateLayoutMode}
                 totalCopies={duplicateTotalCopies}
                 onTotalCopiesChange={setDuplicateTotalCopies}
                 spacingMm={duplicateSpacingMm}
                 onSpacingMmChange={setDuplicateSpacingMm}
+                arrayCountX={duplicateArrayCountX}
+                arrayCountY={duplicateArrayCountY}
+                arrayCountZ={duplicateArrayCountZ}
+                onArrayCountXChange={setDuplicateArrayCountX}
+                onArrayCountYChange={setDuplicateArrayCountY}
+                onArrayCountZChange={setDuplicateArrayCountZ}
+                arrayGapX={duplicateArrayGapX}
+                arrayGapY={duplicateArrayGapY}
+                arrayGapZ={duplicateArrayGapZ}
+                onArrayGapXChange={setDuplicateArrayGapX}
+                onArrayGapYChange={setDuplicateArrayGapY}
+                onArrayGapZChange={setDuplicateArrayGapZ}
                 onConfirm={handleConfirmDuplicate}
-                previewCount={Math.max(0, duplicateTotalCopies - 1)}
+                previewCount={duplicatePreviewTransforms.length}
                 isApplying={isDuplicating}
               />
             )}
