@@ -53,6 +53,7 @@ export function SupportSidebar() {
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
     const [baseViewportScale, setBaseViewportScale] = useState(1);
     const [appliedCompactScale, setAppliedCompactScale] = useState(1);
+    const [isCompactLayout, setIsCompactLayout] = useState(false);
     const viewportRef = React.useRef<HTMLDivElement | null>(null);
     const contentRef = React.useRef<HTMLDivElement | null>(null);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
@@ -73,6 +74,42 @@ export function SupportSidebar() {
                 setAnatomyPreviewActiveSettingKey(null);
             },
         };
+    }, []);
+
+    const deriveViewportBaseScale = React.useCallback((viewportWidth: number, viewportHeight: number, contentHeight: number) => {
+        let nextScale = 1;
+
+        // Width-led compact tiers (panel-local, not full window)
+        if (viewportWidth <= 410) nextScale = 0.97;
+        if (viewportWidth <= 390) nextScale = 0.94;
+        if (viewportWidth <= 370) nextScale = 0.91;
+        if (viewportWidth <= 350) nextScale = 0.88;
+        if (viewportWidth <= 330) nextScale = 0.84;
+        if (viewportWidth <= 312) nextScale = 0.8;
+
+        // Height pressure only matters when genuinely short
+        if (viewportHeight <= 960) nextScale = Math.min(nextScale, 0.95);
+        if (viewportHeight <= 860) nextScale = Math.min(nextScale, 0.9);
+        if (viewportHeight <= 760) nextScale = Math.min(nextScale, 0.86);
+        if (viewportHeight <= 680) nextScale = Math.min(nextScale, 0.8);
+
+        // If there is meaningful vertical slack, recover readability (except on very small panes).
+        const verticalSlack = viewportHeight - contentHeight;
+        const isVerySmallPane = viewportWidth <= 335 || viewportHeight <= 700;
+        if (!isVerySmallPane && verticalSlack > 120) {
+            nextScale = Math.min(1, nextScale + 0.07);
+        }
+        if (!isVerySmallPane && verticalSlack > 220) {
+            nextScale = Math.min(1, nextScale + 0.05);
+        }
+
+        // Tall+narrow columns should keep larger fonts when possible.
+        const isTallNarrow = viewportHeight / Math.max(viewportWidth, 1) >= 1.9;
+        if (isTallNarrow) {
+            nextScale = Math.max(nextScale, 0.9);
+        }
+
+        return nextScale;
     }, []);
 
     useEffect(() => {
@@ -101,32 +138,6 @@ export function SupportSidebar() {
         };
     }, []);
 
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-
-        const updateScaleFromViewport = () => {
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
-
-            let nextScale = 1;
-            if (vw <= 2100 || vh <= 1080) nextScale = 0.86;
-            if (vw <= 1950 || vh <= 960) nextScale = 0.78;
-            if (vw <= 1750 || vh <= 900) nextScale = 0.72;
-            if (vw <= 1550 || vh <= 840) nextScale = 0.66;
-            if (vw <= 1366 || vh <= 780) nextScale = 0.6;
-            if (vw <= 1200 || vh <= 720) nextScale = 0.54;
-
-            setBaseViewportScale(nextScale);
-        };
-
-        updateScaleFromViewport();
-        window.addEventListener('resize', updateScaleFromViewport);
-
-        return () => {
-            window.removeEventListener('resize', updateScaleFromViewport);
-        };
-    }, []);
-
     React.useLayoutEffect(() => {
         const viewportEl = viewportRef.current;
         const contentEl = contentRef.current;
@@ -141,13 +152,38 @@ export function SupportSidebar() {
             if (viewportWidth <= 0 || viewportHeight <= 0 || contentWidth <= 0 || contentHeight <= 0) return;
 
             const fitWidthScale = viewportWidth / contentWidth;
-            const fitHeightScale = viewportHeight / contentHeight;
+            const fitHeightSafety = viewportHeight <= 950 ? 10 : 6;
+            const fitHeightScale = Math.max(0.45, (viewportHeight - fitHeightSafety) / contentHeight);
             const fitScale = Math.min(1, fitWidthScale, fitHeightScale);
-            const nextScale = Math.max(0.46, Math.min(baseViewportScale, fitScale));
+            const nextBaseScale = deriveViewportBaseScale(viewportWidth, viewportHeight, contentHeight);
+
+            let windowScaleCap = 1;
+            if (typeof window !== 'undefined') {
+                const vw = window.innerWidth;
+                const vh = window.innerHeight;
+                if (vw <= 2000 || vh <= 950) windowScaleCap = 0.88;
+                if (vw <= 1850 || vh <= 900) windowScaleCap = 0.84;
+                if (vw <= 1700 || vh <= 840) windowScaleCap = 0.8;
+            }
+
+            if (Math.abs(nextBaseScale - baseViewportScale) > 0.01) {
+                setBaseViewportScale(nextBaseScale);
+            }
+
+            const minScaleFloor = viewportWidth <= 320 || viewportHeight <= 660
+                ? 0.54
+                : viewportWidth <= 350 || viewportHeight <= 740
+                    ? 0.58
+                    : 0.64;
+
+            const nextScale = Math.max(minScaleFloor, Math.min(nextBaseScale, fitScale, windowScaleCap));
+            const nextCompactLayout = nextScale < 0.9 || viewportHeight <= 880;
 
             if (Math.abs(nextScale - appliedCompactScale) > 0.01) {
                 setAppliedCompactScale(nextScale);
             }
+
+            setIsCompactLayout((prev) => (prev === nextCompactLayout ? prev : nextCompactLayout));
         };
 
         computeFitScale();
@@ -160,7 +196,7 @@ export function SupportSidebar() {
         return () => {
             observer.disconnect();
         };
-    }, [activeKind, baseViewportScale, appliedCompactScale]);
+    }, [activeKind, appliedCompactScale, baseViewportScale, deriveViewportBaseScale]);
 
     const handleSave = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -439,7 +475,7 @@ export function SupportSidebar() {
                     </div>
                 )}
 
-                {activeKind === 'trunk' && (
+                {activeKind === 'trunk' && !isCompactLayout && (
                     <div className="rounded-md p-2 border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                         <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>Placement</div>
                         <p className="leading-tight">
