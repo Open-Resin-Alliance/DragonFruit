@@ -16,6 +16,8 @@ import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
+import { ArrangePanel } from '@/components/controls/ArrangePanel';
+import { DuplicatePanel } from '@/components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
@@ -77,6 +79,21 @@ export default function Home() {
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
+  const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(12);
+  const [isAutoArranging, setIsAutoArranging] = React.useState(false);
+  const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
+  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(12);
+  const [isDuplicating, setIsDuplicating] = React.useState(false);
+  const [duplicatePreviewTransforms, setDuplicatePreviewTransforms] = React.useState<Array<{
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }>>([]);
+  const [duplicateSourcePreviewTransform, setDuplicateSourcePreviewTransform] = React.useState<{
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  } | null>(null);
   const dragDepthRef = React.useRef(0);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
@@ -339,6 +356,83 @@ export default function Home() {
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
+  const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
+    const size = model.geometry.size;
+    return {
+      width: Math.max(2, Math.abs(size.x * model.transform.scale.x)),
+      depth: Math.max(2, Math.abs(size.y * model.transform.scale.y)),
+    };
+  }, []);
+
+  const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  }), []);
+
+  const handleAutoArrangeModels = React.useCallback(async () => {
+    if (isAutoArranging) return;
+
+    const visibleModels = scene.models.filter((m) => m.visible);
+    if (visibleModels.length <= 1) return;
+
+    const minSpinnerMs = 220;
+    const startedAt = performance.now();
+    setIsAutoArranging(true);
+    await sleep(0);
+
+    try {
+      const maxWidth = visibleModels.reduce((acc, model) => Math.max(acc, getModelFootprintMm(model).width), 0);
+      const maxDepth = visibleModels.reduce((acc, model) => Math.max(acc, getModelFootprintMm(model).depth), 0);
+
+      const columns = Math.max(1, Math.ceil(Math.sqrt(visibleModels.length)));
+      const rows = Math.ceil(visibleModels.length / columns);
+      const stepX = maxWidth + arrangeSpacingMm;
+      const stepY = maxDepth + arrangeSpacingMm;
+      const centerX = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0;
+      const centerY = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0;
+      const startX = centerX - ((columns - 1) * stepX) * 0.5;
+      const startY = centerY - ((rows - 1) * stepY) * 0.5;
+
+      scene.updateModelTransforms(
+        visibleModels.map((model, index) => {
+          const col = index % columns;
+          const row = Math.floor(index / columns);
+
+          return {
+            id: model.id,
+            transform: {
+              position: new THREE.Vector3(startX + col * stepX, startY + row * stepY, model.transform.position.z),
+              rotation: model.transform.rotation.clone(),
+              scale: model.transform.scale.clone(),
+            },
+          };
+        }),
+      );
+
+      transformMgr.setTransformMode('select');
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < minSpinnerMs) {
+        await sleep(minSpinnerMs - elapsed);
+      }
+      setIsAutoArranging(false);
+    }
+  }, [arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
+
+  const computeArrangeSlots = React.useCallback((count: number, stepX: number, stepY: number) => {
+    const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const rows = Math.ceil(count / columns);
+    const centerX = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.widthMm * 0.5 : 0;
+    const centerY = scene.view3dSettings.originMode === 'front_left' ? scene.view3dSettings.depthMm * 0.5 : 0;
+    const startX = centerX - ((columns - 1) * stepX) * 0.5;
+    const startY = centerY - ((rows - 1) * stepY) * 0.5;
+
+    return Array.from({ length: count }, (_, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      return new THREE.Vector3(startX + col * stepX, startY + row * stepY, 0);
+    });
+  }, [scene.view3dSettings.depthMm, scene.view3dSettings.originMode, scene.view3dSettings.widthMm]);
+
   useUndoRedoHotkeys();
   useDeleteHotkey();
   useCameraProjectionHotkey();
@@ -516,6 +610,93 @@ export default function Home() {
     };
   }, [scene.mode, scene.models.length]);
 
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'duplicate') {
+      setDuplicatePreviewTransforms([]);
+      setDuplicateSourcePreviewTransform(null);
+      return;
+    }
+
+    if (!scene.activeModel || duplicateTotalCopies <= 1) {
+      setDuplicatePreviewTransforms([]);
+      setDuplicateSourcePreviewTransform(null);
+      return;
+    }
+
+    const model = scene.activeModel;
+    const totalCount = Math.max(1, duplicateTotalCopies);
+    const { width, depth } = getModelFootprintMm(model);
+    const stepX = width + duplicateSpacingMm;
+    const stepY = depth + duplicateSpacingMm;
+
+    const slots = computeArrangeSlots(totalCount, stepX, stepY);
+
+    let sourceSlotIndex = 0;
+    let sourceSlotDistanceSq = Number.POSITIVE_INFINITY;
+
+    slots.forEach((slot, index) => {
+      const dx = slot.x - model.transform.position.x;
+      const dy = slot.y - model.transform.position.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < sourceSlotDistanceSq) {
+        sourceSlotDistanceSq = distSq;
+        sourceSlotIndex = index;
+      }
+    });
+
+    const sourceSlot = slots[sourceSlotIndex];
+    setDuplicateSourcePreviewTransform({
+      position: new THREE.Vector3(sourceSlot.x, sourceSlot.y, model.transform.position.z),
+      rotation: model.transform.rotation.clone(),
+      scale: model.transform.scale.clone(),
+    });
+
+    const previews: Array<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }> = [];
+    slots.forEach((slot, index) => {
+      if (index === sourceSlotIndex) return;
+      previews.push({
+        position: new THREE.Vector3(slot.x, slot.y, model.transform.position.z),
+        rotation: model.transform.rotation.clone(),
+        scale: model.transform.scale.clone(),
+      });
+    });
+
+    setDuplicatePreviewTransforms(previews);
+  }, [computeArrangeSlots, duplicateSpacingMm, duplicateTotalCopies, getModelFootprintMm, scene.activeModel, scene.mode, transformMgr.transformMode]);
+
+  const handleConfirmDuplicate = React.useCallback(async () => {
+    if (isDuplicating) return;
+    if (!scene.activeModelId) return;
+    if (duplicatePreviewTransforms.length === 0) return;
+
+    const minSpinnerMs = 220;
+    const startedAt = performance.now();
+    setIsDuplicating(true);
+    await sleep(0);
+
+    try {
+      if (duplicateSourcePreviewTransform) {
+        scene.updateModelTransform(scene.activeModelId, {
+          position: duplicateSourcePreviewTransform.position.clone(),
+          rotation: duplicateSourcePreviewTransform.rotation.clone(),
+          scale: duplicateSourcePreviewTransform.scale.clone(),
+        });
+      }
+
+      scene.duplicateModelWithTransforms(scene.activeModelId, duplicatePreviewTransforms);
+      setDuplicateTotalCopies(2);
+      setDuplicateSourcePreviewTransform(null);
+      setDuplicatePreviewTransforms([]);
+      transformMgr.setTransformMode('select');
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < minSpinnerMs) {
+        await sleep(minSpinnerMs - elapsed);
+      }
+      setIsDuplicating(false);
+    }
+  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr]);
+
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden">
       <TopBar
@@ -646,6 +827,31 @@ export default function Home() {
                   </div>
                 )}
               </div>
+            )}
+
+            {scene.geom && transformMgr.transformMode === 'arrange' && (
+              <ArrangePanel
+                key="prepare-arrange-panel"
+                spacingMm={arrangeSpacingMm}
+                onSpacingMmChange={setArrangeSpacingMm}
+                onApply={handleAutoArrangeModels}
+                modelCount={scene.models.filter((m) => m.visible).length}
+                isApplying={isAutoArranging}
+              />
+            )}
+
+            {scene.geom && transformMgr.transformMode === 'duplicate' && (
+              <DuplicatePanel
+                key="prepare-duplicate-panel"
+                activeModelName={scene.activeModel?.name ?? null}
+                totalCopies={duplicateTotalCopies}
+                onTotalCopiesChange={setDuplicateTotalCopies}
+                spacingMm={duplicateSpacingMm}
+                onSpacingMmChange={setDuplicateSpacingMm}
+                onConfirm={handleConfirmDuplicate}
+                previewCount={Math.max(0, duplicateTotalCopies - 1)}
+                isApplying={isDuplicating}
+              />
             )}
           </>
         ) : scene.mode === 'analysis' ? (
@@ -914,6 +1120,9 @@ export default function Home() {
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
             ghostData={ghostData}
+            duplicatePreviewModel={transformMgr.transformMode === 'duplicate' ? scene.activeModel : null}
+            duplicatePreviewTransforms={duplicatePreviewTransforms}
+            duplicateActivePreviewTransform={duplicateSourcePreviewTransform}
             view3dSettings={scene.view3dSettings}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (

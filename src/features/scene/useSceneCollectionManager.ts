@@ -898,6 +898,20 @@ export function useSceneCollectionManager() {
     ));
   }, []);
 
+  const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
+    if (updates.length === 0) return;
+
+    const updateMap = new Map<string, ModelTransform>();
+    updates.forEach((entry) => {
+      updateMap.set(entry.id, entry.transform);
+    });
+
+    setModels((prev) => prev.map((m) => {
+      const nextTransform = updateMap.get(m.id);
+      return nextTransform ? { ...m, transform: nextTransform } : m;
+    }));
+  }, []);
+
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, visible } : m
@@ -982,6 +996,43 @@ export function useSceneCollectionManager() {
     setActiveModelId(id);
     return id;
   }, [cloneGeometryWithBounds, generateId, modelClipboard]);
+
+  const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[]) => {
+    if (transforms.length === 0) return [] as string[];
+
+    const source = models.find((m) => m.id === sourceId);
+    if (!source) return [] as string[];
+
+    const createdIds: string[] = [];
+
+    const newModels: LoadedModel[] = transforms.map((nextTransform, index) => {
+      const id = generateId();
+      createdIds.push(id);
+
+      return {
+        id,
+        name: `${source.name} Copy ${index + 1}`,
+        fileUrl: '',
+        fileSizeBytes: source.fileSizeBytes,
+        geometry: cloneGeometryWithBounds(source.geometry),
+        transform: {
+          position: nextTransform.position.clone(),
+          rotation: nextTransform.rotation.clone(),
+          scale: nextTransform.scale.clone(),
+        },
+        visible: source.visible,
+        color: source.color,
+        polygonCount: source.polygonCount,
+      };
+    });
+
+    setModels((prev) => [...prev, ...newModels]);
+    if (createdIds.length > 0) {
+      setActiveModelId(createdIds[0]);
+    }
+
+    return createdIds;
+  }, [cloneGeometryWithBounds, generateId, models]);
 
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
@@ -1300,12 +1351,14 @@ export function useSceneCollectionManager() {
     loadFiles,
     onFileChange,
     updateModelTransform,
+    updateModelTransforms,
     setModelVisibility,
     renameModel,
     deleteModel,
     copyModel,
     cutModel,
     pasteModel,
+    duplicateModelWithTransforms,
     canPasteModel: modelClipboard !== null,
 
     // Scene settings

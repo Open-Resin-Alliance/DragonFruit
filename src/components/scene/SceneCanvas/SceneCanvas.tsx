@@ -201,6 +201,9 @@ export function SceneCanvas({
   blockSupportPlacement,
   supportsRef,
   ghostData,
+  duplicatePreviewModel,
+  duplicatePreviewTransforms,
+  duplicateActivePreviewTransform,
   isBranchPlacementActive,
   isLeafPlacementActive,
   isBracePlacementActive,
@@ -276,6 +279,17 @@ export function SceneCanvas({
   blockSupportPlacement?: boolean;
   supportsRef?: React.RefObject<THREE.Group | null>;
   ghostData?: any;
+  duplicatePreviewModel?: LoadedModel | null;
+  duplicatePreviewTransforms?: Array<{
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }>;
+  duplicateActivePreviewTransform?: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  } | null;
   isBranchPlacementActive?: boolean;
   isLeafPlacementActive?: boolean;
   isBracePlacementActive?: boolean;
@@ -659,6 +673,15 @@ export function SceneCanvas({
     return models.find((m) => m.id === activeModelId) ?? null;
   }, [models, activeModelId]);
 
+  const duplicatePreviewMeshOffset = React.useMemo(() => {
+    if (!duplicatePreviewModel) return null;
+    return new THREE.Vector3(
+      -duplicatePreviewModel.geometry.center.x,
+      -duplicatePreviewModel.geometry.center.y,
+      -duplicatePreviewModel.geometry.center.z,
+    );
+  }, [duplicatePreviewModel]);
+
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
     if (transform && activeModelId === activeModel.id) return transform;
@@ -972,7 +995,9 @@ export function SceneCanvas({
               {models.map((model) => {
                 const isActive = model.id === activeModelId;
                 // Use props.transform if active (for smooth drag), else model.transform
-                const transformToUse = isActive && transform ? transform : model.transform;
+                const transformToUse = isActive
+                  ? (duplicateActivePreviewTransform ?? (transform ?? model.transform))
+                  : model.transform;
                 const dropOffsetZ = entryDropOffsets[model.id] ?? 0;
                 const animatedTransform = dropOffsetZ > 0
                   ? {
@@ -1063,6 +1088,36 @@ export function SceneCanvas({
                   </React.Fragment>
                 );
               })}
+
+              {duplicatePreviewModel
+                && duplicatePreviewMeshOffset
+                && (duplicatePreviewTransforms?.length ?? 0) > 0
+                ? duplicatePreviewTransforms!.map((previewTransform, index) => (
+                    <group
+                      key={`duplicate-preview-${index}`}
+                      position={previewTransform.position}
+                      rotation={previewTransform.rotation}
+                      scale={previewTransform.scale}
+                      raycast={() => null}
+                    >
+                      <mesh
+                        geometry={duplicatePreviewModel.geometry.geometry}
+                        position={duplicatePreviewMeshOffset}
+                        raycast={() => null}
+                        renderOrder={2}
+                      >
+                        <meshStandardMaterial
+                          color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                          transparent
+                          opacity={0.22}
+                          roughness={0.5}
+                          metalness={0.02}
+                          depthWrite={false}
+                        />
+                      </mesh>
+                    </group>
+                  ))
+                : null}
 
               {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
                 <group
