@@ -659,6 +659,7 @@ export function SceneCanvas({
   duplicatePreviewModel,
   duplicatePreviewTransforms,
   duplicateActivePreviewTransform,
+  arrangeArrayPreviewItems,
   hideDuplicateSourceDuringApply,
   isBranchPlacementActive,
   isLeafPlacementActive,
@@ -747,6 +748,14 @@ export function SceneCanvas({
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   } | null;
+  arrangeArrayPreviewItems?: Array<{
+    model: LoadedModel;
+    transform: {
+      position: THREE.Vector3;
+      rotation: THREE.Euler;
+      scale: THREE.Vector3;
+    };
+  }>;
   hideDuplicateSourceDuringApply?: boolean;
   isBranchPlacementActive?: boolean;
   isLeafPlacementActive?: boolean;
@@ -1686,6 +1695,42 @@ export function SceneCanvas({
                       </mesh>
                     </group>
                   )
+                : null}
+
+              {arrangeArrayPreviewItems && arrangeArrayPreviewItems.length > 0
+                ? arrangeArrayPreviewItems.map((item) => {
+                    const offset = new THREE.Vector3(
+                      -item.model.geometry.center.x,
+                      -item.model.geometry.center.y,
+                      -item.model.geometry.center.z,
+                    );
+
+                    return (
+                      <group
+                        key={`arrange-array-preview-${item.model.id}`}
+                        position={item.transform.position}
+                        rotation={item.transform.rotation}
+                        scale={item.transform.scale}
+                        raycast={() => null}
+                      >
+                        <mesh
+                          geometry={item.model.geometry.geometry}
+                          position={offset}
+                          raycast={() => null}
+                          renderOrder={2}
+                        >
+                          <meshStandardMaterial
+                            color={item.model.color ?? '#a3a3a3'}
+                            transparent
+                            opacity={0.22}
+                            roughness={0.5}
+                            metalness={0.02}
+                            depthWrite={false}
+                          />
+                        </mesh>
+                      </group>
+                    );
+                  })
                 : null}
 
               {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
