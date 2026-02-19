@@ -324,6 +324,8 @@ function generateRecentEntryId(): string {
 export interface LoadedModel {
   id: string;
   name: string;
+  groupId?: string;
+  groupName?: string;
   fileUrl: string;
   fileSizeBytes?: number;
   geometry: GeometryWithBounds;
@@ -377,6 +379,7 @@ export function useSceneCollectionManager() {
 
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry | null>(null);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>(() => readRecentOpenedFilesFromLocalStorage());
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
@@ -715,6 +718,31 @@ export function useSceneCollectionManager() {
     models.find(m => m.id === activeModelId) || null
     , [models, activeModelId]);
 
+  useEffect(() => {
+    const modelIdSet = new Set(models.map((m) => m.id));
+    setSelectedModelIds((prev) => prev.filter((id) => modelIdSet.has(id)));
+    if (activeModelId && !modelIdSet.has(activeModelId)) {
+      setActiveModelId(null);
+    }
+  }, [activeModelId, models]);
+
+  const selectModel = useCallback((id: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
+    setActiveModelId(id);
+
+    setSelectedModelIds((prev) => {
+      if (mode === 'single') return [id];
+      if (mode === 'add') {
+        return prev.includes(id) ? prev : [...prev, id];
+      }
+      return prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id];
+    });
+  }, []);
+
+  const clearModelSelection = useCallback(() => {
+    setSelectedModelIds([]);
+    setActiveModelId(null);
+  }, []);
+
   // Clear support selection when switching away from support mode
   useEffect(() => {
     if (mode !== 'support') {
@@ -870,6 +898,7 @@ export function useSceneCollectionManager() {
         // If no active model, select the first new one
         if (!activeModelId) {
           setActiveModelId(newModels[0].id);
+          setSelectedModelIds([newModels[0].id]);
         }
       }
     } finally {
@@ -924,6 +953,91 @@ export function useSceneCollectionManager() {
     ));
   }, []);
 
+  const groupModels = useCallback((modelIds: string[], groupName?: string) => {
+    const ids = Array.from(new Set(modelIds));
+    if (ids.length === 0) return null;
+
+    let resolvedGroupId: string | null = null;
+    let resolvedGroupName: string | null = null;
+
+    setModels((prev) => {
+      const selected = prev.filter((model) => ids.includes(model.id));
+      if (selected.length === 0) return prev;
+
+      const commonGroupId = selected.every((model) => model.groupId && model.groupId === selected[0].groupId)
+        ? (selected[0].groupId ?? null)
+        : null;
+
+      resolvedGroupId = commonGroupId ?? `group-${generateId()}`;
+      const rawName = groupName?.trim();
+      resolvedGroupName = rawName && rawName.length > 0
+        ? rawName
+        : (selected.find((model) => model.groupName?.trim())?.groupName ?? selected[0].name);
+
+      return prev.map((model) => {
+        if (!ids.includes(model.id)) return model;
+        return {
+          ...model,
+          groupId: resolvedGroupId ?? undefined,
+          groupName: resolvedGroupName ?? undefined,
+        };
+      });
+    });
+
+    if (resolvedGroupId) {
+      setSelectedModelIds((prev) => {
+        const next = Array.from(new Set([...prev, ...ids]));
+        return next;
+      });
+      setActiveModelId((prev) => prev ?? ids[0] ?? null);
+    }
+
+    return resolvedGroupId;
+  }, []);
+
+  const ungroupModels = useCallback((modelIds: string[]) => {
+    const ids = new Set(modelIds);
+    if (ids.size === 0) return;
+
+    setModels((prev) => prev.map((model) => (
+      ids.has(model.id)
+        ? { ...model, groupId: undefined, groupName: undefined }
+        : model
+    )));
+  }, []);
+
+  const ungroupGroup = useCallback((groupId: string) => {
+    setModels((prev) => prev.map((model) => (
+      model.groupId === groupId
+        ? { ...model, groupId: undefined, groupName: undefined }
+        : model
+    )));
+  }, []);
+
+  const renameGroup = useCallback((groupId: string, nextName: string) => {
+    const trimmed = nextName.trim();
+    if (!trimmed) return;
+
+    setModels((prev) => prev.map((model) => (
+      model.groupId === groupId
+        ? { ...model, groupName: trimmed }
+        : model
+    )));
+  }, []);
+
+  const selectGroup = useCallback((groupId: string, mode: 'single' | 'add' = 'single') => {
+    const groupIds = models.filter((model) => model.groupId === groupId).map((model) => model.id);
+    if (groupIds.length === 0) return;
+
+    setActiveModelId(groupIds[0]);
+    setSelectedModelIds((prev) => {
+      if (mode === 'add') {
+        return Array.from(new Set([...prev, ...groupIds]));
+      }
+      return groupIds;
+    });
+  }, [models]);
+
   const deleteModel = useCallback((id: string) => {
     setModels(prev => {
       const model = prev.find(m => m.id === id);
@@ -937,6 +1051,8 @@ export function useSceneCollectionManager() {
     if (activeModelId === id) {
       setActiveModelId(null);
     }
+
+    setSelectedModelIds((prev) => prev.filter((sid) => sid !== id));
 
     // Clean up associated supports
     const supportState = getSnapshot();
@@ -994,6 +1110,7 @@ export function useSceneCollectionManager() {
 
     setModels((prev) => [...prev, pastedModel]);
     setActiveModelId(id);
+    setSelectedModelIds([id]);
     return id;
   }, [cloneGeometryWithBounds, generateId, modelClipboard]);
 
@@ -1002,6 +1119,9 @@ export function useSceneCollectionManager() {
 
     const source = models.find((m) => m.id === sourceId);
     if (!source) return [] as string[];
+
+    const resolvedGroupId = source.groupId ?? `group-${generateId()}`;
+    const resolvedGroupName = source.groupName ?? source.name;
 
     const createdIds: string[] = [];
 
@@ -1012,6 +1132,8 @@ export function useSceneCollectionManager() {
       return {
         id,
         name: `${source.name} Copy ${index + 1}`,
+        groupId: resolvedGroupId,
+        groupName: resolvedGroupName,
         fileUrl: '',
         fileSizeBytes: source.fileSizeBytes,
         geometry: cloneGeometryWithBounds(source.geometry),
@@ -1026,9 +1148,23 @@ export function useSceneCollectionManager() {
       };
     });
 
-    setModels((prev) => [...prev, ...newModels]);
+    setModels((prev) => {
+      const withSourceGroup = prev.map((model) => {
+        if (model.id !== sourceId) return model;
+        if (model.groupId === resolvedGroupId && model.groupName === resolvedGroupName) return model;
+        return {
+          ...model,
+          groupId: resolvedGroupId,
+          groupName: resolvedGroupName,
+        };
+      });
+
+      return [...withSourceGroup, ...newModels];
+    });
+
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
+      setSelectedModelIds([sourceId, ...createdIds]);
     }
 
     return createdIds;
@@ -1092,6 +1228,7 @@ export function useSceneCollectionManager() {
 
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
+        setSelectedModelIds([model.id]);
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
       } else {
         const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
@@ -1203,6 +1340,7 @@ export function useSceneCollectionManager() {
 
     setModels(prev => [...prev, model]);
     setActiveModelId(result.modelId);
+    setSelectedModelIds([result.modelId]);
 
     console.log('[SceneCollection] Lychee import complete:', {
       modelId: result.modelId,
@@ -1328,6 +1466,10 @@ export function useSceneCollectionManager() {
     models,
     activeModelId,
     setActiveModelId,
+    selectedModelIds,
+    setSelectedModelIds,
+    selectModel,
+    clearModelSelection,
     activeModel,
 
     // Active Model Compatibility helpers
@@ -1354,6 +1496,11 @@ export function useSceneCollectionManager() {
     updateModelTransforms,
     setModelVisibility,
     renameModel,
+    groupModels,
+    ungroupModels,
+    ungroupGroup,
+    renameGroup,
+    selectGroup,
     deleteModel,
     copyModel,
     cutModel,
