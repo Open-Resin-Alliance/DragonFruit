@@ -42,6 +42,13 @@ import {
   saveWorkspaceCameraSettings,
   type WorkspaceCameraDefaults,
 } from '@/components/settings/workspaceCameraPreferences';
+import {
+  DEFAULT_VIEW3D_SETTINGS,
+  getSavedView3DSettings,
+  normalizeView3DSettings,
+  saveView3DSettings,
+  type View3DSettings,
+} from '@/components/settings/view3dPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 import {
   clearSavedFloatingLayout,
@@ -95,6 +102,8 @@ type SettingsModalProps = {
   onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
+  view3dSettings: View3DSettings;
+  onView3dSettingsChange: (settings: View3DSettings) => void;
 };
 
 type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'spacemouse' | 'ui' | 'hotkeys' | 'about';
@@ -129,6 +138,8 @@ export function SettingsModal({
   onSelectionHighlightModeChange,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
+  view3dSettings,
+  onView3dSettingsChange,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>('general');
 
@@ -152,6 +163,7 @@ export function SettingsModal({
   const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
+  const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
 
   const resetDraftFromProps = React.useCallback(() => {
     setDraftMeshColor(meshColor);
@@ -174,6 +186,7 @@ export function SettingsModal({
     setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
+    setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
   }, [
     ambientIntensity,
     directionalIntensity,
@@ -186,6 +199,7 @@ export function SettingsModal({
     selectedTintStrength,
     selectionHighlightMode,
     debugPrimitivesPanelVisible,
+    view3dSettings,
     shaderType,
     xrayOpacity,
   ]);
@@ -228,6 +242,7 @@ export function SettingsModal({
     setDraftDebugPrimitivesPanelVisible(true);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
+    setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
   }, []);
 
   const handleApply = React.useCallback(() => {
@@ -251,6 +266,9 @@ export function SettingsModal({
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
     saveWorkspaceCameraSettings({ defaults: draftWorkspaceCameraDefaults });
+    const normalized3dView = normalizeView3DSettings(draftView3dSettings);
+    saveView3DSettings(normalized3dView);
+    onView3dSettingsChange(normalized3dView);
     onDebugPrimitivesPanelVisibleChange(draftDebugPrimitivesPanelVisible);
 
     if (typeof window !== 'undefined') {
@@ -280,6 +298,7 @@ export function SettingsModal({
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
     draftWorkspaceCameraDefaults,
+    draftView3dSettings,
     draftXrayOpacity,
     onAmbientIntensityChange,
     onClose,
@@ -292,6 +311,7 @@ export function SettingsModal({
     onSelectedTintStrengthChange,
     onSelectionHighlightModeChange,
     onDebugPrimitivesPanelVisibleChange,
+    onView3dSettingsChange,
     onShaderTypeChange,
     onToonStepsChange,
     onXrayOpacityChange,
@@ -581,6 +601,8 @@ export function SettingsModal({
                 <WorkspacesSettingsTab
                   workspaceCameraDefaults={draftWorkspaceCameraDefaults}
                   onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
+                  view3dSettings={draftView3dSettings}
+                  onView3dSettingsChange={setDraftView3dSettings}
                 />
               )}
               {activeTab === 'mesh' && (

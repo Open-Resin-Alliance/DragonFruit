@@ -4,11 +4,14 @@ import React from 'react';
 import type { SupportMode } from '@/supports/types';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
+import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import { Layers3 } from 'lucide-react';
 
 interface WorkspacesSettingsTabProps {
   workspaceCameraDefaults: WorkspaceCameraDefaults;
   onWorkspaceCameraModeChange: (workspace: SupportMode, mode: CameraProjectionMode) => void;
+  view3dSettings: View3DSettings;
+  onView3dSettingsChange: (settings: View3DSettings) => void;
 }
 
 const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = [
@@ -21,11 +24,179 @@ const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = 
 export function WorkspacesSettingsTab({
   workspaceCameraDefaults,
   onWorkspaceCameraModeChange,
+  view3dSettings,
+  onView3dSettingsChange,
 }: WorkspacesSettingsTabProps) {
   const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
 
+  const patchView3dSettings = React.useCallback((patch: Partial<View3DSettings>) => {
+    onView3dSettingsChange({ ...view3dSettings, ...patch });
+  }, [onView3dSettingsChange, view3dSettings]);
+
   return (
     <div className="space-y-3">
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <Layers3 className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              3D View
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Build volume boundaries and display resolution hints used across workspaces.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Enable build volume bounds
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Shows a faint printer volume outline and enables out-of-bounds checks.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => patchView3dSettings({ enabled: !view3dSettings.enabled })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={view3dSettings.enabled
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent-contrast)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {view3dSettings.enabled ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Build Width (mm)
+              <input
+                type="number"
+                min={10}
+                step={1}
+                value={view3dSettings.widthMm}
+                onChange={(e) => patchView3dSettings({ widthMm: Number(e.target.value) })}
+                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
+              />
+            </label>
+
+            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Build Depth (mm)
+              <input
+                type="number"
+                min={10}
+                step={1}
+                value={view3dSettings.depthMm}
+                onChange={(e) => patchView3dSettings({ depthMm: Number(e.target.value) })}
+                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
+              />
+            </label>
+
+            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Max Z Height (mm)
+              <input
+                type="number"
+                min={10}
+                step={1}
+                value={view3dSettings.maxZMm}
+                onChange={(e) => patchView3dSettings({ maxZMm: Number(e.target.value) })}
+                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
+              />
+            </label>
+
+            <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Build Volume</div>
+              <div className="mt-0.5 text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                {Math.round(view3dSettings.widthMm)} × {Math.round(view3dSettings.depthMm)} × {Math.round(view3dSettings.maxZMm)} mm
+              </div>
+            </div>
+
+            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Screen Width (px)
+              <input
+                type="number"
+                min={320}
+                step={1}
+                value={view3dSettings.screenWidthPx}
+                onChange={(e) => patchView3dSettings({ screenWidthPx: Number(e.target.value) })}
+                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
+              />
+            </label>
+
+            <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Screen Height (px)
+              <input
+                type="number"
+                min={200}
+                step={1}
+                value={view3dSettings.screenHeightPx}
+                onChange={(e) => patchView3dSettings({ screenHeightPx: Number(e.target.value) })}
+                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
+              />
+            </label>
+          </div>
+
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Show out-of-bounds warnings
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Warn when any visible model extends beyond the configured build volume.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => patchView3dSettings({ showViolationWarning: !view3dSettings.showViolationWarning })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={view3dSettings.showViolationWarning
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent-contrast)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {view3dSettings.showViolationWarning ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        </div>
+      </section>
+
       <section
         className="rounded-lg border p-3"
         style={{

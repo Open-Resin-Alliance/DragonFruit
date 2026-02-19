@@ -12,6 +12,7 @@ import {
   getSavedThemeCustomColors,
   getSavedThemePreference,
 } from '@/components/settings/themeCustomizations';
+import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 interface TopBarProps {
   meshColor: string;
@@ -40,6 +41,8 @@ interface TopBarProps {
   onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
   debugPrimitivesPanelVisible: boolean;
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
+  view3dSettings: View3DSettings;
+  onView3dSettingsChange: (settings: View3DSettings) => void;
   // New: global application mode (prepare vs support)
   mode: SupportMode;
   onModeChange: (mode: SupportMode) => void;
@@ -75,6 +78,8 @@ export function TopBar({
   onSelectionHighlightModeChange,
   debugPrimitivesPanelVisible,
   onDebugPrimitivesPanelVisibleChange,
+  view3dSettings,
+  onView3dSettingsChange,
   mode,
   onModeChange,
   hasModels,
@@ -300,6 +305,8 @@ export function TopBar({
         onSelectionHighlightModeChange={onSelectionHighlightModeChange}
         debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
+        view3dSettings={view3dSettings}
+        onView3dSettingsChange={onView3dSettingsChange}
       />
     </div>
   );

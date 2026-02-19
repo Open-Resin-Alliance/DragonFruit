@@ -60,6 +60,7 @@ import {
   subscribeToCameraProjectionSettings,
   type CameraProjectionMode,
 } from '@/components/settings/cameraProjectionPreferences';
+import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -213,6 +214,7 @@ export function SceneCanvas({
   classificationFaceLabels,
   classificationGeometry,
   showClassification,
+  view3dSettings,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -290,6 +292,7 @@ export function SceneCanvas({
   classificationFaceLabels?: Int32Array;
   classificationGeometry?: THREE.BufferGeometry;
   showClassification?: boolean;
+  view3dSettings?: View3DSettings;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -384,6 +387,9 @@ export function SceneCanvas({
 
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
   const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
+  const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
+
+  const activeBuildVolumeSettings = view3dSettings;
 
   const computeModelWorldBounds = React.useCallback((model: LoadedModel) => {
     const modelBox = model.geometry.bbox.clone();
@@ -400,24 +406,95 @@ export function SceneCanvas({
     return modelBox;
   }, []);
 
+  const buildVolumeBounds = React.useMemo(() => {
+    if (!activeBuildVolumeSettings?.enabled) return null;
+
+    const halfWidth = activeBuildVolumeSettings.widthMm * 0.5;
+    const halfDepth = activeBuildVolumeSettings.depthMm * 0.5;
+
+    return new THREE.Box3(
+      new THREE.Vector3(-halfWidth, -halfDepth, 0),
+      new THREE.Vector3(halfWidth, halfDepth, activeBuildVolumeSettings.maxZMm),
+    );
+  }, [activeBuildVolumeSettings]);
+
+  const outOfBoundsModels = React.useMemo(() => {
+    if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
+
+    return models
+      .filter((model) => model.visible)
+      .map((model) => ({
+        id: model.id,
+        name: model.name,
+        bounds: computeModelWorldBounds(model),
+      }))
+      .filter(({ bounds }) => (
+        bounds.min.x < buildVolumeBounds.min.x
+        || bounds.max.x > buildVolumeBounds.max.x
+        || bounds.min.y < buildVolumeBounds.min.y
+        || bounds.max.y > buildVolumeBounds.max.y
+        || bounds.min.z < buildVolumeBounds.min.z
+        || bounds.max.z > buildVolumeBounds.max.z
+      ));
+  }, [buildVolumeBounds, computeModelWorldBounds, models]);
+
+  const outOfBoundsModelIds = React.useMemo(() => {
+    return new Set(outOfBoundsModels.map((m) => m.id));
+  }, [outOfBoundsModels]);
+
+  const buildVolumeBoxGeometry = React.useMemo(() => {
+    if (!activeBuildVolumeSettings?.enabled) return null;
+
+    const geometry = new THREE.BoxGeometry(
+      activeBuildVolumeSettings.widthMm,
+      activeBuildVolumeSettings.depthMm,
+      activeBuildVolumeSettings.maxZMm,
+    );
+    return geometry;
+  }, [activeBuildVolumeSettings]);
+
+  const buildVolumeEdgeGeometry = React.useMemo(() => {
+    if (!buildVolumeBoxGeometry) return null;
+    return new THREE.EdgesGeometry(buildVolumeBoxGeometry);
+  }, [buildVolumeBoxGeometry]);
+
+  React.useEffect(() => {
+    return () => {
+      buildVolumeEdgeGeometry?.dispose();
+      buildVolumeBoxGeometry?.dispose();
+    };
+  }, [buildVolumeBoxGeometry, buildVolumeEdgeGeometry]);
+
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const resolveHoverTint = () => {
       const rootStyles = getComputedStyle(document.documentElement);
       const accent = rootStyles.getPropertyValue('--accent').trim();
+      const accentSecondary = rootStyles.getPropertyValue('--accent-secondary').trim();
 
       if (!accent) {
         setHoverTintColor('#ec2a77');
-        return;
+      } else {
+        try {
+          const parsed = new THREE.Color();
+          parsed.setStyle(accent);
+          setHoverTintColor(parsed.getStyle());
+        } catch {
+          setHoverTintColor('#ec2a77');
+        }
       }
 
-      try {
-        const parsed = new THREE.Color();
-        parsed.setStyle(accent);
-        setHoverTintColor(parsed.getStyle());
-      } catch {
-        setHoverTintColor('#ec2a77');
+      if (!accentSecondary) {
+        setOutOfBoundsStripeColor('#b6ff2e');
+      } else {
+        try {
+          const parsedSecondary = new THREE.Color();
+          parsedSecondary.setStyle(accentSecondary);
+          setOutOfBoundsStripeColor(parsedSecondary.getStyle());
+        } catch {
+          setOutOfBoundsStripeColor('#b6ff2e');
+        }
       }
     };
 
@@ -775,7 +852,10 @@ export function SceneCanvas({
           directionalIntensity={directionalIntensity ?? 0.3}
           headlightIntensity={headlightIntensity ?? 1.0}
         />
-        <Helpers />
+        <Helpers
+          gridWidthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.widthMm : undefined}
+          gridDepthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.depthMm : undefined}
+        />
         <EnableLocalClipping />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} />
@@ -803,6 +883,7 @@ export function SceneCanvas({
                     scale: transformToUse.scale,
                   }
                   : transformToUse;
+                const showOutOfBoundsOverlay = !!activeBuildVolumeSettings?.enabled;
                 // Use per-model visibility
                 if (!model.visible) return null;
 
@@ -851,6 +932,10 @@ export function SceneCanvas({
                       hoverTintColor={hoverTintColor}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
+                      showOutOfBoundsOverlay={showOutOfBoundsOverlay}
+                      outOfBoundsMin={buildVolumeBounds?.min ?? null}
+                      outOfBoundsMax={buildVolumeBounds?.max ?? null}
+                      outOfBoundsStripeColor={outOfBoundsStripeColor}
                     />
 
                     {/* Cross-section cap (fill) at the cut plane - Render per model */}
@@ -881,6 +966,31 @@ export function SceneCanvas({
                   </React.Fragment>
                 );
               })}
+
+              {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
+                <group
+                  position={[0, 0, activeBuildVolumeSettings.maxZMm * 0.5]}
+                  raycast={() => null}
+                >
+                  <mesh geometry={buildVolumeBoxGeometry} raycast={() => null} renderOrder={-1}>
+                    <meshBasicMaterial
+                      color={outOfBoundsModels.length > 0 ? '#ff5b6f' : '#78b7ff'}
+                      transparent
+                      opacity={0.04}
+                      depthWrite={false}
+                      side={THREE.BackSide}
+                    />
+                  </mesh>
+                  <lineSegments geometry={buildVolumeEdgeGeometry} raycast={() => null}>
+                    <lineBasicMaterial
+                      color={outOfBoundsModels.length > 0 ? '#ff5b6f' : '#8abfff'}
+                      transparent
+                      opacity={0.36}
+                      depthWrite={false}
+                    />
+                  </lineSegments>
+                </group>
+              )}
 
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {!hidePlateContactPrimitives && (
@@ -1211,6 +1321,20 @@ export function SceneCanvas({
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
+
+      {activeBuildVolumeSettings?.enabled && activeBuildVolumeSettings.showViolationWarning && outOfBoundsModels.length > 0 && (
+        <div
+          className="absolute left-3 top-3 z-40 rounded-md border px-3 py-2 text-xs"
+          style={{
+            borderColor: 'color-mix(in srgb, #ff5b6f, var(--border-subtle) 30%)',
+            background: 'color-mix(in srgb, #ff5b6f, var(--surface-0) 88%)',
+            color: 'var(--text-strong)',
+          }}
+          title={outOfBoundsModels.map((m) => m.name).join(', ')}
+        >
+          {outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume
+        </div>
+      )}
     </div>
   );
 }

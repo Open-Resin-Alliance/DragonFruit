@@ -13,6 +13,12 @@ import { useLycheeImport, type LycheeImportResult } from '@/components/lys-impor
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry } from '@/utils/bvh';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
+import {
+  getSavedView3DSettings,
+  normalizeView3DSettings,
+  saveView3DSettings,
+  type View3DSettings,
+} from '@/components/settings/view3dPreferences';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -584,6 +590,13 @@ export function useSceneCollectionManager() {
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(persistedAppearance?.meshColor ?? DEFAULT_MESH_COLOR);
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(persistedAppearance?.hoverTintStrength ?? DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(persistedAppearance?.selectedTintStrength ?? DEFAULT_SELECTED_TINT_STRENGTH);
+  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => getSavedView3DSettings());
+
+  const setView3dSettings = useCallback((next: View3DSettings) => {
+    const normalized = normalizeView3DSettings(next);
+    setView3dSettingsState(normalized);
+    saveView3DSettings(normalized);
+  }, []);
 
   useEffect(() => {
     const prev = readMeshAppearanceFromLocalStorage();
@@ -1273,6 +1286,8 @@ export function useSceneCollectionManager() {
     importProgress,
     recentOpenedFiles,
     reopenRecentOpenedFile,
+    view3dSettings,
+    setView3dSettings,
 
     // Actions
     loadFiles,

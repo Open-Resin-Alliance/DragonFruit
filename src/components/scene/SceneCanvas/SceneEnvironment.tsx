@@ -125,9 +125,64 @@ export function SceneMoodOverlay() {
   );
 }
 
-export function Helpers() {
+export function Helpers({
+  gridWidthMm,
+  gridDepthMm,
+}: {
+  gridWidthMm?: number;
+  gridDepthMm?: number;
+}) {
   const nullRaycast = () => null;
   const axesRef = React.useRef<THREE.AxesHelper | null>(null);
+
+  const width = Number.isFinite(gridWidthMm) && (gridWidthMm as number) > 0 ? (gridWidthMm as number) : 200;
+  const depth = Number.isFinite(gridDepthMm) && (gridDepthMm as number) > 0 ? (gridDepthMm as number) : 200;
+  const baseSize = Math.max(width, depth);
+  const divisions = Math.max(20, Math.min(240, Math.round(baseSize / 5)));
+  const scaleX = width / baseSize;
+  const scaleZ = depth / baseSize;
+  const frontMarkerWidth = 24;
+  const frontMarkerDepth = 6.8;
+  const frontYOffset = depth * 0.5 + frontMarkerDepth * 0.46;
+
+  const frontTexture = React.useMemo(() => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+
+    canvas.width = 256;
+    canvas.height = 72;
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = 'rgba(92,92,92,0.62)';
+    context.beginPath();
+    context.moveTo(20, 12);
+    context.lineTo(236, 12);
+    context.lineTo(216, 60);
+    context.lineTo(40, 60);
+    context.closePath();
+    context.fill();
+
+    context.strokeStyle = 'rgba(158,158,158,0.9)';
+    context.lineWidth = 3;
+    context.stroke();
+
+    context.fillStyle = 'rgba(220,220,220,0.95)';
+    context.font = 'bold 34px Arial';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText('FRONT', canvas.width / 2, canvas.height / 2 + 1);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      frontTexture?.dispose();
+    };
+  }, [frontTexture]);
 
   React.useEffect(() => {
     if (!axesRef.current) return;
@@ -154,9 +209,10 @@ export function Helpers() {
     <>
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
       <gridHelper
-        args={[200, 40, '#333333', '#333333']}
+        args={[baseSize, divisions, '#333333', '#333333']}
         position={[0, 0, -0.01]}
         rotation={[Math.PI / 2, 0, 0]}
+        scale={[scaleX, 1, scaleZ]}
         raycast={nullRaycast}
       />
       {/* Axes: X=red, Y=green, Z=blue(up) */}
@@ -167,6 +223,26 @@ export function Helpers() {
         raycast={nullRaycast}
       />
       <AxisLabels size={100} />
+
+      {/* FRONT orientation marker locked to build plate front edge */}
+      <group position={[0, -frontYOffset, 0.001]}>
+        {frontTexture && (
+          <mesh raycast={nullRaycast}>
+            <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />
+            <meshBasicMaterial
+              map={frontTexture}
+              transparent
+              opacity={0.92}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-1}
+              polygonOffsetUnits={-1}
+              side={THREE.FrontSide}
+              toneMapped={false}
+            />
+          </mesh>
+        )}
+      </group>
     </>
   );
 }

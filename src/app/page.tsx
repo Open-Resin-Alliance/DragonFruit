@@ -545,6 +545,8 @@ export default function Home() {
         onSelectionHighlightModeChange={scene.setSelectionHighlightMode}
         debugPrimitivesPanelVisible={debugPrimitivesPanelVisible}
         onDebugPrimitivesPanelVisibleChange={setDebugPrimitivesPanelVisible}
+        view3dSettings={scene.view3dSettings}
+        onView3dSettingsChange={scene.setView3dSettings}
         mode={scene.mode}
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
@@ -910,6 +912,7 @@ export default function Home() {
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
             ghostData={ghostData}
+            view3dSettings={scene.view3dSettings}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />

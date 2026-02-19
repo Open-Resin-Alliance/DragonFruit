@@ -53,6 +53,10 @@ export function StlMesh({
   hoverTintColor,
   hoverTintStrength,
   selectedTintStrength,
+  showOutOfBoundsOverlay,
+  outOfBoundsMin,
+  outOfBoundsMax,
+  outOfBoundsStripeColor,
 }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
@@ -93,6 +97,10 @@ export function StlMesh({
   hoverTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
+  showOutOfBoundsOverlay?: boolean;
+  outOfBoundsMin?: THREE.Vector3 | null;
+  outOfBoundsMax?: THREE.Vector3 | null;
+  outOfBoundsStripeColor?: string;
 }) {
   // Access GPU picking state to detect gizmo hover
   // Note: This works because StlMesh is rendered inside PickingProvider
@@ -172,6 +180,67 @@ export function StlMesh({
   const baseShaderType: MeshShaderType = shaderType === 'opaque_wire_mesh' ? 'soft_clay' : shaderType;
   const showOpaqueWireOverlay = shaderType === 'opaque_wire_mesh';
   const isHoveredModel = isPointerHovered || (hit.category === 'model' && hit.objectId === modelId);
+
+  const outOfBoundsMaterial = React.useMemo(() => {
+    if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
+
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+      uniforms: {
+        boundsMin: { value: outOfBoundsMin.clone() },
+        boundsMax: { value: outOfBoundsMax.clone() },
+        stripeFreq: { value: 0.22 },
+        stripeAlpha: { value: 0.42 },
+        stripeColor: { value: new THREE.Color(outOfBoundsStripeColor ?? '#b6ff2e') },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vec4 worldPos = modelMatrix * vec4(position, 1.0);
+          vWorldPos = worldPos.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPos;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldPos;
+        uniform vec3 boundsMin;
+        uniform vec3 boundsMax;
+        uniform float stripeFreq;
+        uniform float stripeAlpha;
+        uniform vec3 stripeColor;
+
+        void main() {
+          bool outside =
+            vWorldPos.x < boundsMin.x || vWorldPos.x > boundsMax.x ||
+            vWorldPos.y < boundsMin.y || vWorldPos.y > boundsMax.y ||
+            vWorldPos.z < boundsMin.z || vWorldPos.z > boundsMax.z;
+
+          if (!outside) discard;
+
+          float stripeSeed = (vWorldPos.x + vWorldPos.y + vWorldPos.z) * stripeFreq;
+          float band = step(0.5, fract(stripeSeed));
+          vec3 colorA = stripeColor;
+          vec3 colorB = vec3(1.0, 1.0, 1.0);
+          vec3 color = mix(colorA, colorB, band);
+
+          gl_FragColor = vec4(color, stripeAlpha);
+        }
+      `,
+    });
+
+    return material;
+  }, [outOfBoundsMax, outOfBoundsMin, outOfBoundsStripeColor, showOutOfBoundsOverlay]);
+
+  React.useEffect(() => {
+    return () => {
+      outOfBoundsMaterial?.dispose();
+    };
+  }, [outOfBoundsMaterial]);
 
   return (
     <group
@@ -338,6 +407,12 @@ export function StlMesh({
       {showOpaqueWireOverlay && (
         <mesh geometry={geometry} position={meshLocalOffset} renderOrder={1} raycast={() => null}>
           <OpaqueWireOverlayMaterial clippingPlanes={planes} />
+        </mesh>
+      )}
+
+      {outOfBoundsMaterial && (
+        <mesh geometry={geometry} position={meshLocalOffset} renderOrder={3} raycast={() => null}>
+          <primitive object={outOfBoundsMaterial} attach="material" />
         </mesh>
       )}
     </group>
