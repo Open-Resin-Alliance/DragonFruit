@@ -1214,12 +1214,23 @@ export function useSceneCollectionManager() {
 
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
+    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+    const maxX = minX + view3dSettings.widthMm;
+    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+    const maxY = minY + view3dSettings.depthMm;
 
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
       return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
     };
+
+    const isRectInsidePlate = (rect: Rect2D) => (
+      rect.minX >= minX
+      && rect.maxX <= maxX
+      && rect.minY >= minY
+      && rect.maxY <= maxY
+    );
 
     const footprintFor = (size: THREE.Vector3, transform: ModelTransform) => {
       const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
@@ -1251,7 +1262,13 @@ export function useSceneCollectionManager() {
       });
 
     const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
-    const maxRing = 36;
+    const halfSpanX = Math.max(Math.abs(centerX - minX), Math.abs(maxX - centerX));
+    const halfSpanY = Math.max(Math.abs(centerY - minY), Math.abs(maxY - centerY));
+    const inPlateRingX = Math.ceil(halfSpanX / stepX) + 2;
+    const inPlateRingY = Math.ceil(halfSpanY / stepY) + 2;
+    const maxInPlateRing = Math.max(inPlateRingX, inPlateRingY);
+    const outsideRings = 12;
+    const maxRing = maxInPlateRing + outsideRings;
 
     for (let ring = 0; ring <= maxRing; ring += 1) {
       if (ring === 0) {
@@ -1301,13 +1318,29 @@ export function useSceneCollectionManager() {
     const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry) => {
       const { width, depth } = footprintFor(entry.geometry.size, entry.transform);
 
+      const makeRectAt = (x: number, y: number): Rect2D => ({
+        minX: x - (width * 0.5),
+        maxX: x + (width * 0.5),
+        minY: y - (depth * 0.5),
+        maxY: y + (depth * 0.5),
+      });
+
+      // Pass 1: exhaust all valid in-plate positions first.
       for (const candidate of candidateCenters) {
-        const rect: Rect2D = {
-          minX: candidate.x - (width * 0.5),
-          maxX: candidate.x + (width * 0.5),
-          minY: candidate.y - (depth * 0.5),
-          maxY: candidate.y + (depth * 0.5),
-        };
+        const rect = makeRectAt(candidate.x, candidate.y);
+        if (!isRectInsidePlate(rect)) continue;
+
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+          continue;
+        }
+
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      // Pass 2: if in-plate is full, allow outside placements.
+      for (const candidate of candidateCenters) {
+        const rect = makeRectAt(candidate.x, candidate.y);
 
         if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
           continue;
@@ -1366,7 +1399,7 @@ export function useSceneCollectionManager() {
     deferAccelerateGeometry(pastedGeometries);
 
     return createdIds;
-  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models]);
+  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[]) => {
     if (transforms.length === 0) return [] as string[];
