@@ -27,6 +27,7 @@ interface ModelManagerPanelProps {
   activeModelId: string | null;
   selectedModelIds: string[];
   onSelect: (id: string, mode?: SelectMode) => void;
+  onSelectRange?: (ids: string[], activeId: string, mode?: 'replace' | 'add') => void;
   onSelectGroup?: (groupId: string, mode?: GroupSelectMode) => void;
   onGroupModels?: (modelIds: string[]) => void;
   onUngroupModels?: (modelIds: string[]) => void;
@@ -60,6 +61,7 @@ export function ModelManagerPanel({
   activeModelId,
   selectedModelIds,
   onSelect,
+  onSelectRange,
   onSelectGroup,
   onGroupModels,
   onUngroupModels,
@@ -127,6 +129,8 @@ export function ModelManagerPanel({
   }, [models, selectedModelIds.length, selectedSet]);
 
   const closeContextMenu = () => setContextMenu(null);
+
+  const orderedModelIds = useMemo(() => grouped.flatMap((group) => group.models.map((model) => model.id)), [grouped]);
 
   const toggleGroupCollapsed = (groupId: string) => {
     setCollapsedGroupIds((prev) => ({
@@ -414,9 +418,33 @@ export function ModelManagerPanel({
                           }`}
                           style={!isSelected ? { background: 'var(--surface-1)' } : undefined}
                           onClick={(e) => {
+                            if (e.shiftKey) {
+                              const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
+                              const anchorIndex = orderedModelIds.indexOf(anchorId);
+                              const clickedIndex = orderedModelIds.indexOf(model.id);
+
+                              if (anchorIndex >= 0 && clickedIndex >= 0) {
+                                const start = Math.min(anchorIndex, clickedIndex);
+                                const end = Math.max(anchorIndex, clickedIndex);
+                                const rangeIds = orderedModelIds.slice(start, end + 1);
+                                const additive = e.ctrlKey || e.metaKey;
+
+                                if (onSelectRange) {
+                                  onSelectRange(rangeIds, model.id, additive ? 'add' : 'replace');
+                                } else {
+                                  if (additive) {
+                                    rangeIds.forEach((id) => onSelect(id, 'add'));
+                                  } else {
+                                    onSelect(model.id, 'single');
+                                    rangeIds.filter((id) => id !== model.id).forEach((id) => onSelect(id, 'add'));
+                                  }
+                                }
+                                return;
+                              }
+                            }
+
                             const isToggle = e.ctrlKey || e.metaKey;
-                            const isAdd = e.shiftKey;
-                            onSelect(model.id, isToggle ? 'toggle' : isAdd ? 'add' : 'single');
+                            onSelect(model.id, isToggle ? 'toggle' : 'single');
                           }}
                           onContextMenu={(e) => {
                             e.preventDefault();
