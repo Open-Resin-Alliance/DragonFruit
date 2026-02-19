@@ -531,27 +531,65 @@ export function SceneCanvas({
     const cameraZ = cameraRef.current?.position?.z;
     if (typeof cameraZ !== 'number') return;
 
+    const camera = cameraRef.current;
+    if (!camera) return;
+
+    const viewDir = new THREE.Vector3();
+    camera.getWorldDirection(viewDir);
+    const viewAbsZ = Math.abs(viewDir.z);
+
     // Culling thresholds (earlier than before) with hysteresis to avoid flicker.
-    const ENTER_BELOW_Z = 3.2;
-    const EXIT_BELOW_Z = 5.2;
+    const ENTER_BELOW_Z = 4.8;
+    const EXIT_BELOW_Z = 7.0;
 
-    // Separate, wider fade band for a softer visual transition.
+    // Wider/earlier height fade band.
     // Above FADE_VISIBLE_Z the plate is fully visible, below FADE_HIDDEN_Z it's fully hidden.
-    const FADE_VISIBLE_Z = 8.0;
-    const FADE_HIDDEN_Z = 2.8;
+    const FADE_VISIBLE_Z = 12.0;
+    const FADE_HIDDEN_Z = 3.8;
 
-    // Smoothly fade plate visibility as camera approaches the culling band.
-    const fadeT = THREE.MathUtils.clamp(
+    // Side-on view fade: start fading once camera is nearly flat to the build plate plane.
+    // Smaller |viewDir.z| means flatter side-view.
+    const SIDE_VIEW_FADE_START_ABS_Z = 0.26;
+    const SIDE_VIEW_FADE_END_ABS_Z = 0.08;
+    const SIDE_VIEW_HEIGHT_MAX_Z = 20.0;
+
+    // Side-view cull hysteresis (prevents toggling near threshold).
+    const SIDE_ENTER_ABS_Z = 0.10;
+    const SIDE_EXIT_ABS_Z = 0.20;
+    const SIDE_ACTIVE_HEIGHT_MAX_Z = 22.0;
+
+    // Height-based fade.
+    const heightFadeT = THREE.MathUtils.clamp(
       (cameraZ - FADE_HIDDEN_Z) / Math.max(0.0001, FADE_VISIBLE_Z - FADE_HIDDEN_Z),
       0,
       1,
     );
-    const smoothFade = fadeT * fadeT * (3 - 2 * fadeT); // smoothstep
+    const smoothHeightFade = heightFadeT * heightFadeT * (3 - 2 * heightFadeT); // smoothstep
 
-    setBuildPlateOpacity((prev) => (Math.abs(prev - smoothFade) < 1e-4 ? prev : smoothFade));
+    // Side-view fade (gated by being near the plate in height).
+    const sideViewRaw = THREE.MathUtils.clamp(
+      (SIDE_VIEW_FADE_START_ABS_Z - viewAbsZ) / Math.max(0.0001, SIDE_VIEW_FADE_START_ABS_Z - SIDE_VIEW_FADE_END_ABS_Z),
+      0,
+      1,
+    );
+    const sideViewFade = sideViewRaw * sideViewRaw * (3 - 2 * sideViewRaw);
+    const sideHeightGate = THREE.MathUtils.clamp(
+      (SIDE_VIEW_HEIGHT_MAX_Z - cameraZ) / SIDE_VIEW_HEIGHT_MAX_Z,
+      0,
+      1,
+    );
+
+    // Combine fades: whichever hides more wins.
+    const combinedFade = Math.min(smoothHeightFade, 1 - (sideViewFade * sideHeightGate));
+
+    setBuildPlateOpacity((prev) => (Math.abs(prev - combinedFade) < 1e-4 ? prev : combinedFade));
 
     setIsCameraBelowBuildPlate((prev) => {
-      const next = prev ? cameraZ < EXIT_BELOW_Z : cameraZ < ENTER_BELOW_Z;
+      const heightTriggered = prev ? cameraZ < EXIT_BELOW_Z : cameraZ < ENTER_BELOW_Z;
+      const sideTriggered = cameraZ < SIDE_ACTIVE_HEIGHT_MAX_Z
+        ? (prev ? viewAbsZ < SIDE_EXIT_ABS_Z : viewAbsZ < SIDE_ENTER_ABS_Z)
+        : false;
+      const next = heightTriggered || sideTriggered;
       return prev === next ? prev : next;
     });
   }, []);
