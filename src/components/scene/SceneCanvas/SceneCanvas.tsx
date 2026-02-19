@@ -405,6 +405,16 @@ function SupportModeCameraRestoreController({
     }
   }, []);
 
+  const ensureAboveTarget = React.useCallback((position: THREE.Vector3, target: THREE.Vector3) => {
+    const clamped = position.clone();
+    const horizontalDistance = Math.hypot(clamped.x - target.x, clamped.y - target.y);
+    const minVerticalClearance = Math.max(10, horizontalDistance * 0.22);
+    if (clamped.z < target.z + minVerticalClearance) {
+      clamped.z = target.z + minVerticalClearance;
+    }
+    return clamped;
+  }, []);
+
   React.useLayoutEffect(() => {
     if (!capturePreSupportRunId) return;
     if (capturedPreSupportRunIdRef.current === capturePreSupportRunId) return;
@@ -458,7 +468,7 @@ function SupportModeCameraRestoreController({
 
     const isOrthographic = camera instanceof THREE.OrthographicCamera;
     const startPos = camera.position.clone();
-    const endPos = snapshot.position.clone();
+    const endPos = ensureAboveTarget(snapshot.position.clone(), snapshot.target);
     const startTarget = orbit.target.clone();
     const endTarget = snapshot.target.clone();
     const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
@@ -575,7 +585,7 @@ function SupportModeCameraRestoreController({
         activeRunIdRef.current = null;
       }
     };
-  }, [camera, cancelAnimation, controls, restoreSupportRunId]);
+  }, [camera, cancelAnimation, controls, ensureAboveTarget, restoreSupportRunId]);
 
   React.useEffect(() => {
     return () => {
@@ -867,6 +877,7 @@ export function SceneCanvas({
   const [supportCameraRestoreRunId, setSupportCameraRestoreRunId] = React.useState(0);
   const [supportExitRestoreRunId, setSupportExitRestoreRunId] = React.useState(0);
   const hasSavedSupportCameraRef = React.useRef(false);
+  const savedSupportCameraModelIdRef = React.useRef<string | null>(null);
   const prevModeRef = React.useRef<SupportMode | undefined>(mode);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
@@ -1163,7 +1174,12 @@ export function SceneCanvas({
 
     if (enteringSupport && models.length > 0) {
       setSupportEntryCaptureRunId((id) => id + 1);
-      if (hasSavedSupportCameraRef.current) {
+      const canRestoreSavedSupportView =
+        hasSavedSupportCameraRef.current
+        && savedSupportCameraModelIdRef.current != null
+        && savedSupportCameraModelIdRef.current === activeModelId;
+
+      if (canRestoreSavedSupportView) {
         setSupportCameraRestoreRunId((id) => id + 1);
       } else {
         setSupportEntryIntroRunId((id) => id + 1);
@@ -1173,11 +1189,12 @@ export function SceneCanvas({
     if (leavingSupport) {
       setSupportCameraCaptureRunId((id) => id + 1);
       hasSavedSupportCameraRef.current = true;
+      savedSupportCameraModelIdRef.current = activeModelId ?? null;
       setSupportExitRestoreRunId((id) => id + 1);
     }
 
     prevModeRef.current = mode;
-  }, [mode, models.length]);
+  }, [activeModelId, mode, models.length]);
 
   const selectedSpaceMousePivotPoint = React.useMemo(() => {
     if (!activeModel?.visible) return null;
