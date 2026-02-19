@@ -361,9 +361,9 @@ export function SceneCanvas({
 
   const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
 
-  // In support mode, having an activeModelId implies selection even if
-  // no model-clicked event was dispatched (auto-select on mode entry).
-  const effectiveModelSelected = isModelSelected || (mode === 'support' && !!activeModelId);
+  // Any active model should be treated as selected for highlight effects
+  // across all modes (prepare/support/analysis/export).
+  const effectiveModelSelected = isModelSelected || !!activeModelId;
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
 
@@ -897,8 +897,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = isCameraBelowBuildPlate;
   const isSpotlightHighlightActive =
-    (mode === 'prepare' || mode === 'support')
-    && effectiveModelSelected
+    effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
 
   const handleOrbitChange = React.useCallback(() => {
@@ -1321,7 +1320,7 @@ export function SceneCanvas({
         {/* Selection outline - renders when model is selected */}
         <SelectionOutlineRenderer
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
-          enabled={(mode === 'prepare' || mode === 'support') && effectiveModelSelected && selectionHighlightMode === 'fresnel'}
+          enabled={effectiveModelSelected && selectionHighlightMode === 'fresnel'}
           color="#82ccff"
           intensity={0.38}
           power={3.5}
@@ -1332,7 +1331,7 @@ export function SceneCanvas({
         {/* Selection spotlight - illuminates only the selected model via layers */}
         <SelectionSpotlight
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
-          enabled={(mode === 'prepare' || mode === 'support') && effectiveModelSelected && selectionHighlightMode === 'spotlight'}
+          enabled={effectiveModelSelected && selectionHighlightMode === 'spotlight'}
           color="#ffeacc"
           intensity={7.6}
           angle={Math.PI / 3}
