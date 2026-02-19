@@ -903,6 +903,34 @@ export default function Home() {
     }
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
 
+  React.useEffect(() => {
+    if (scene.mode !== 'support') return;
+    if (scene.selectedModelIds.length <= 1) return;
+
+    const selectedIdSet = new Set(scene.selectedModelIds);
+    const firstValidSelectedId = scene.selectedModelIds.find((id) => scene.models.some((model) => model.id === id));
+    const firstVisibleSelectedId = scene.models.find((model) => model.visible && selectedIdSet.has(model.id))?.id;
+    const keptId = firstVisibleSelectedId ?? firstValidSelectedId;
+
+    if (!keptId) {
+      scene.clearModelSelection();
+      return;
+    }
+
+    scene.setSelectedModelIds([keptId]);
+    if (scene.activeModelId !== keptId) {
+      scene.setActiveModelId(keptId);
+    }
+  }, [
+    scene.mode,
+    scene.selectedModelIds,
+    scene.models,
+    scene.activeModelId,
+    scene.setActiveModelId,
+    scene.setSelectedModelIds,
+    scene.clearModelSelection,
+  ]);
+
   const importOverlayState = React.useMemo(() => {
     if (scene.importProgress.active) {
       return {
