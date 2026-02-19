@@ -128,11 +128,11 @@ export function SceneMoodOverlay() {
 export function Helpers({
   gridWidthMm,
   gridDepthMm,
-  cameraBelowGrid,
+  buildPlateOpacity,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
-  cameraBelowGrid?: boolean;
+  buildPlateOpacity?: number;
 }) {
   const nullRaycast = () => null;
   const axesRef = React.useRef<THREE.AxesHelper | null>(null);
@@ -146,6 +146,11 @@ export function Helpers({
   const buildPlateOversizeEachSideMm = 4;
   const buildPlateThicknessMm = 4;
   const buildPlateCornerRadiusMm = 3;
+  const clampedBuildPlateOpacity = THREE.MathUtils.clamp(buildPlateOpacity ?? 1, 0, 1);
+  const gridColor = '#333333';
+  const frontMarkerColor = React.useMemo(() => {
+    return new THREE.Color(gridColor).lerp(new THREE.Color('#ffffff'), 0.38).getStyle();
+  }, [gridColor]);
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
@@ -162,20 +167,18 @@ export function Helpers({
     canvas.height = 72;
 
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = 'rgba(92,92,92,0.62)';
     context.beginPath();
     context.moveTo(20, 12);
     context.lineTo(236, 12);
     context.lineTo(216, 60);
     context.lineTo(40, 60);
     context.closePath();
-    context.fill();
 
-    context.strokeStyle = 'rgba(158,158,158,0.9)';
-    context.lineWidth = 3;
+    context.strokeStyle = frontMarkerColor;
+    context.lineWidth = 1.6;
     context.stroke();
 
-    context.fillStyle = 'rgba(220,220,220,0.95)';
+    context.fillStyle = frontMarkerColor;
     context.font = 'bold 34px Arial';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
@@ -184,7 +187,7 @@ export function Helpers({
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
     return texture;
-  }, []);
+  }, [frontMarkerColor]);
 
   React.useEffect(() => {
     return () => {
@@ -254,7 +257,7 @@ export function Helpers({
       <mesh
         position={[0, 0, buildPlateCenterZ]}
         raycast={nullRaycast}
-        visible={!cameraBelowGrid}
+        visible={clampedBuildPlateOpacity > 0.001}
       >
         <primitive object={buildPlateGeometry} attach="geometry" />
         <meshStandardMaterial
@@ -262,7 +265,7 @@ export function Helpers({
           roughness={0.9}
           metalness={0.03}
           transparent
-          opacity={0.94}
+          opacity={0.94 * clampedBuildPlateOpacity}
           side={THREE.FrontSide}
           depthWrite
         />
@@ -270,7 +273,7 @@ export function Helpers({
 
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
       <gridHelper
-        args={[baseSize, divisions, '#333333', '#333333']}
+        args={[baseSize, divisions, gridColor, gridColor]}
         position={[0, 0, -0.01]}
         rotation={[Math.PI / 2, 0, 0]}
         scale={[scaleX, 1, scaleZ]}
@@ -293,7 +296,7 @@ export function Helpers({
             <meshBasicMaterial
               map={frontTexture}
               transparent
-              opacity={0.92}
+              opacity={1}
               depthWrite={false}
               polygonOffset
               polygonOffsetFactor={-1}

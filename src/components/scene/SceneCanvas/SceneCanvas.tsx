@@ -386,6 +386,7 @@ export function SceneCanvas({
   });
 
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
+  const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
   const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
 
@@ -513,10 +514,24 @@ export function SceneCanvas({
     const cameraZ = cameraRef.current?.position?.z;
     if (typeof cameraZ !== 'number') return;
 
-    // Activate culling a little before crossing the exact grid plane to feel responsive.
-    // Use hysteresis to avoid flicker when orbiting near the threshold.
-    const ENTER_BELOW_Z = 2.5;
-    const EXIT_BELOW_Z = 4.5;
+    // Culling thresholds (earlier than before) with hysteresis to avoid flicker.
+    const ENTER_BELOW_Z = 3.2;
+    const EXIT_BELOW_Z = 5.2;
+
+    // Separate, wider fade band for a softer visual transition.
+    // Above FADE_VISIBLE_Z the plate is fully visible, below FADE_HIDDEN_Z it's fully hidden.
+    const FADE_VISIBLE_Z = 8.0;
+    const FADE_HIDDEN_Z = 2.8;
+
+    // Smoothly fade plate visibility as camera approaches the culling band.
+    const fadeT = THREE.MathUtils.clamp(
+      (cameraZ - FADE_HIDDEN_Z) / Math.max(0.0001, FADE_VISIBLE_Z - FADE_HIDDEN_Z),
+      0,
+      1,
+    );
+    const smoothFade = fadeT * fadeT * (3 - 2 * fadeT); // smoothstep
+
+    setBuildPlateOpacity((prev) => (Math.abs(prev - smoothFade) < 1e-4 ? prev : smoothFade));
 
     setIsCameraBelowBuildPlate((prev) => {
       const next = prev ? cameraZ < EXIT_BELOW_Z : cameraZ < ENTER_BELOW_Z;
@@ -862,7 +877,7 @@ export function SceneCanvas({
         <Helpers
           gridWidthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.widthMm : undefined}
           gridDepthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.depthMm : undefined}
-          cameraBelowGrid={isCameraBelowBuildPlate}
+          buildPlateOpacity={buildPlateOpacity}
         />
         <EnableLocalClipping />
         <CameraProvider cameraRef={cameraRef} />
