@@ -49,6 +49,27 @@
 
   --topbar-height: 56px;
   --floating-panel-width: 25rem;
+
+  /* Viewport-driven floating window density (browser window size, not monitor size) */
+  --ui-window-scale: 1;
+}
+
+@media (max-width: 1600px), (max-height: 900px) {
+  :root {
+    --ui-window-scale: 0.95;
+  }
+}
+
+@media (max-width: 1366px), (max-height: 820px) {
+  :root {
+    --ui-window-scale: 0.9;
+  }
+}
+
+@media (max-width: 1100px), (max-height: 700px) {
+  :root {
+    --ui-window-scale: 0.82;
+  }
 }
 
 :root[data-theme='dark'] {
@@ -243,19 +264,28 @@ body {
 .ui-panel {
   background: var(--surface-0);
   border: 1px solid var(--border-subtle);
-  font-size: var(--font-size-sm);
+  font-size: calc(var(--font-size-sm) * var(--ui-window-scale));
   line-height: var(--line-height-normal);
 }
 
 .ui-panel h3 {
-  font-size: var(--font-size-md);
+  font-size: calc(var(--font-size-md) * var(--ui-window-scale));
   line-height: var(--line-height-tight);
 }
 
 .ui-panel .ui-input,
 .ui-panel .ui-select,
 .ui-panel .ui-button {
-  font-size: var(--font-size-sm);
+  font-size: calc(var(--font-size-sm) * var(--ui-window-scale));
+}
+
+.ui-panel .ui-input,
+.ui-panel .ui-select {
+  padding: calc(7px * var(--ui-window-scale)) calc(11px * var(--ui-window-scale));
+}
+
+.ui-panel .ui-button {
+  padding: calc(8px * var(--ui-window-scale)) calc(13px * var(--ui-window-scale));
 }
 
 button:not(:disabled),

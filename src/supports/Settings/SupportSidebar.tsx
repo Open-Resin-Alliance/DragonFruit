@@ -51,6 +51,10 @@ export function SupportSidebar() {
     usePresetHotkeys();
     const [settings, setLocalSettings] = useState(() => getSettings());
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+    const [baseViewportScale, setBaseViewportScale] = useState(1);
+    const [appliedCompactScale, setAppliedCompactScale] = useState(1);
+    const viewportRef = React.useRef<HTMLDivElement | null>(null);
+    const contentRef = React.useRef<HTMLDivElement | null>(null);
     const isAdaptiveConeAngle = (settings.tip.coneAngleMode ?? 'normal') === 'adaptive';
     const supportKindState = React.useSyncExternalStore(subscribeToSupportKindState, getSupportKindSnapshot, getSupportKindSnapshot);
     const activeKind = supportKindState.kind;
@@ -96,6 +100,67 @@ export function SupportSidebar() {
             unsubscribeSettings();
         };
     }, []);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const updateScaleFromViewport = () => {
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+
+            let nextScale = 1;
+            if (vw <= 2100 || vh <= 1080) nextScale = 0.86;
+            if (vw <= 1950 || vh <= 960) nextScale = 0.78;
+            if (vw <= 1750 || vh <= 900) nextScale = 0.72;
+            if (vw <= 1550 || vh <= 840) nextScale = 0.66;
+            if (vw <= 1366 || vh <= 780) nextScale = 0.6;
+            if (vw <= 1200 || vh <= 720) nextScale = 0.54;
+
+            setBaseViewportScale(nextScale);
+        };
+
+        updateScaleFromViewport();
+        window.addEventListener('resize', updateScaleFromViewport);
+
+        return () => {
+            window.removeEventListener('resize', updateScaleFromViewport);
+        };
+    }, []);
+
+    React.useLayoutEffect(() => {
+        const viewportEl = viewportRef.current;
+        const contentEl = contentRef.current;
+        if (!viewportEl || !contentEl) return;
+
+        const computeFitScale = () => {
+            const viewportWidth = viewportEl.clientWidth;
+            const viewportHeight = viewportEl.clientHeight;
+            const contentWidth = contentEl.scrollWidth;
+            const contentHeight = contentEl.scrollHeight;
+
+            if (viewportWidth <= 0 || viewportHeight <= 0 || contentWidth <= 0 || contentHeight <= 0) return;
+
+            const fitWidthScale = viewportWidth / contentWidth;
+            const fitHeightScale = viewportHeight / contentHeight;
+            const fitScale = Math.min(1, fitWidthScale, fitHeightScale);
+            const nextScale = Math.max(0.46, Math.min(baseViewportScale, fitScale));
+
+            if (Math.abs(nextScale - appliedCompactScale) > 0.01) {
+                setAppliedCompactScale(nextScale);
+            }
+        };
+
+        computeFitScale();
+        const observer = new ResizeObserver(() => {
+            computeFitScale();
+        });
+        observer.observe(viewportEl);
+        observer.observe(contentEl);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [activeKind, baseViewportScale, appliedCompactScale]);
 
     const handleSave = React.useCallback(() => {
         const RAFT_STORAGE_KEY = 'raft-settings';
@@ -172,7 +237,17 @@ export function SupportSidebar() {
     );
 
     return (
-        <div className="h-full w-full flex flex-col">
+        <div ref={viewportRef} className="h-full w-full overflow-hidden">
+            <div
+                ref={contentRef}
+                className="h-full w-full flex flex-col"
+                style={{
+                    transform: `scale(${appliedCompactScale})`,
+                    transformOrigin: 'top left',
+                    width: `${100 / appliedCompactScale}%`,
+                    height: `${100 / appliedCompactScale}%`,
+                }}
+            >
             <div className="px-2.5 py-2">
                 <SupportKindTabs
                     value={activeKind}
@@ -183,7 +258,7 @@ export function SupportSidebar() {
                 />
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-2.5 pb-3 pt-2 space-y-2.5">
+            <div className="flex-1 min-h-0 overflow-hidden px-2.5 pb-3 pt-2 space-y-2.5">
                 {activeKind === 'raft' ? (
                     <div className="space-y-2.5">
                         {renderPreviewBox('h-[212px]')}
@@ -393,6 +468,7 @@ export function SupportSidebar() {
                         <span>Restore Defaults</span>
                     </Button>
                 </div>
+            </div>
             </div>
         </div>
     );

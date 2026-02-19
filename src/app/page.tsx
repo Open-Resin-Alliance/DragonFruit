@@ -746,7 +746,7 @@ export default function Home() {
 
             <div
               key="support-settings"
-              className="ui-panel rounded-lg border shadow-lg overflow-hidden"
+              className={`ui-panel rounded-lg border shadow-lg overflow-hidden ${supportSettingsExpanded ? 'h-[calc(100vh-var(--topbar-height)-24px)] flex flex-col' : ''}`}
               style={{ borderColor: 'var(--border-subtle)' }}
             >
               <div
@@ -776,7 +776,7 @@ export default function Home() {
                 </h3>
               </div>
               {supportSettingsExpanded && (
-                <div className="max-h-[calc(100vh-var(--topbar-height)-88px)] overflow-hidden">
+                <div className="flex-1 min-h-0 overflow-hidden">
                   <SupportSidebar />
                 </div>
               )}
@@ -793,6 +793,7 @@ export default function Home() {
             layerIndex={slicing.layerIndex}
             maxLayers={slicing.numLayers}
             onLayerIndexChange={slicing.setLayerIndex}
+            onCrossSectionModeChange={slicing.setCrossSectionMode}
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
             crossSectionMode={slicing.crossSectionMode}

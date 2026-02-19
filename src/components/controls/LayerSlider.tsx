@@ -8,6 +8,7 @@ type LayerSliderProps = {
   step: number;
   value: number;
   onChange: (next: number) => void;
+  onCrossSectionModeChange?: (mode: 'smooth' | 'rasterized') => void;
   currentHeightMm?: number;
   maxHeightMm?: number;
   className?: string;
@@ -18,7 +19,8 @@ type LayerSliderProps = {
   expandToContainer?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false }: LayerSliderProps) {
+  const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const [inputValue, setInputValue] = React.useState(String(Math.round(value)));
@@ -196,6 +198,18 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
   }, []);
 
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
+  const railBadgeClass = 'inline-flex items-center rounded-md border px-1 py-0.5 text-[9px] font-semibold tabular-nums';
+  const railBadgeStyle: React.CSSProperties = {
+    color: 'var(--text-muted)',
+    borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 15%)',
+    background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
+  };
+  const railCurrentBadgeStyle: React.CSSProperties = {
+    color: 'var(--text-strong)',
+    borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 10%)',
+    background: 'color-mix(in srgb, var(--surface-1), transparent 4%)',
+  };
+  const shouldPlaceCurrentBadgeBelowThumb = isMinimalRail && percent >= 96;
 
   return (
     <div
@@ -208,7 +222,7 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
     >
       <div
         className={embedded
-          ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} w-full rounded-lg px-1.5 py-1.5`
+          ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} w-full rounded-lg ${isMinimalRail ? 'px-0 py-1.5' : 'px-1 py-1'}`
           : 'ui-panel w-44 rounded-lg px-2.5 py-2.5 shadow-lg'}
         style={embedded
           ? undefined
@@ -218,80 +232,121 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
             }
         }
       >
-        <div className="mb-2">
-          <div className="flex items-center justify-between">
-            <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              Layer
+        {!isMinimalRail && (
+          <div className={embedded ? 'mb-1.5' : 'mb-2'}>
+            <div className="flex items-center justify-between">
+              <div className={`${embedded ? 'text-[10px]' : 'text-[11px]'} font-semibold uppercase tracking-wide`} style={{ color: 'var(--text-muted)' }}>
+                Layer
+              </div>
+              <div className="text-xs font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
+                {value}
+              </div>
             </div>
-            <div className="text-xs font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-              {value}
-            </div>
-          </div>
 
-          <div className="mt-0.5 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] tabular-nums"
-            style={{
-              color: 'var(--text-muted)',
-              borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 25%)',
-              background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
-            }}
-          >
-            {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'}
-          </div>
-          {typeof maxHeightMm === 'number' && !embedded && (
-            <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-              Max {formatMm(maxHeightMm)} mm
+            <div className="mt-0.5 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] tabular-nums"
+              style={{
+                color: 'var(--text-muted)',
+                borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 25%)',
+                background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
+              }}
+            >
+              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'}
             </div>
-          )}
-        </div>
+            {typeof maxHeightMm === 'number' && !embedded && (
+              <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                Max {formatMm(maxHeightMm)} mm
+              </div>
+            )}
+          </div>
+        )}
+
+        {isMinimalRail && (
+          <div className="flex items-center justify-center mb-1">
+            <div className={railBadgeClass} style={railBadgeStyle}>
+              {max}
+            </div>
+          </div>
+        )}
 
         <div
-          ref={containerRef}
           data-no-drag="true"
-          className={`relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} w-10 cursor-pointer`}
+          className={`relative mx-auto ${embedded ? (expandToContainer ? (isMinimalRail ? 'flex-1 h-full min-h-[300px]' : 'flex-1 h-full min-h-[300px]') : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? 'w-5' : 'w-7') : 'w-10'} cursor-pointer`}
           onMouseDown={onPointerDown}
+          onContextMenu={(e) => {
+            if (!onCrossSectionModeChange) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onCrossSectionModeChange(crossSectionMode === 'smooth' ? 'rasterized' : 'smooth');
+          }}
           tabIndex={0}
           onKeyDown={onKeyDown}
+          title={isMinimalRail
+            ? `Layer ${value} • ${typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : '—'} • Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
+            : undefined}
         >
-          <div className="absolute left-1/2 -translate-x-1/2 -top-5 text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-            {max}
-          </div>
+          {!isMinimalRail && (
+            <div
+              className="absolute left-1/2 -translate-x-1/2 -top-5 text-[10px] tabular-nums"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              {max}
+            </div>
+          )}
 
-          {/* Track */}
           <div
-            className="absolute left-1/2 top-0 h-full w-1.5 -translate-x-1/2 rounded-full"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-2), black 8%)',
-              border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 40%)',
-            }}
-          />
-
-          {/* Progress fill */}
-          <div
-            className="absolute left-1/2 -translate-x-1/2 bottom-0 w-1.5 rounded-full"
-            style={{
-              height: `${percent}%`,
-              background: 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))',
-              boxShadow: '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)',
-            }}
-          />
-
-          {/* Thumb */}
-          <div
-            className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
-            style={{
-              top: `${100 - percent}%`,
-              transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
-            }}
+            ref={containerRef}
+            data-no-drag="true"
+            className={isMinimalRail
+              ? 'absolute left-0 right-0 top-0 bottom-0'
+              : 'absolute left-0 right-0 top-0 bottom-0'}
           >
-            <div className="relative">
-              {showValue && typeof currentHeightMm === 'number' && (
-                <div
-                  className="absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] shadow tabular-nums pointer-events-none"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-0), transparent 12%)', color: 'var(--text-strong)' }}
-                >
-                  {formatMm(currentHeightMm)} mm
-                </div>
-              )}
+
+            {/* Track */}
+            <div
+              className="absolute left-1/2 top-0 h-full w-1.5 -translate-x-1/2 rounded-full"
+              style={{
+                background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+                border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 40%)',
+              }}
+            />
+
+            {/* Progress fill */}
+            <div
+              className="absolute left-1/2 -translate-x-1/2 bottom-0 w-1.5 rounded-full"
+              style={{
+                height: `${percent}%`,
+                background: 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))',
+                boxShadow: '0 0 10px color-mix(in srgb, var(--accent), transparent 65%)',
+              }}
+            />
+
+            {/* Thumb */}
+            <div
+              className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
+              style={{
+                top: `${100 - percent}%`,
+                transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+              }}
+            >
+              <div className="relative">
+                {showValue && typeof currentHeightMm === 'number' && (
+                  <div
+                    className={isMinimalRail
+                      ? `absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${railBadgeClass} pointer-events-none ${shouldPlaceCurrentBadgeBelowThumb ? 'top-3' : '-top-5'}`
+                      : 'absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] shadow tabular-nums pointer-events-none'}
+                    style={isMinimalRail
+                      ? railCurrentBadgeStyle
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-0), transparent 12%)',
+                          color: 'var(--text-strong)',
+                        }}
+                  >
+                    {isMinimalRail
+                      ? `${value}`
+                      : `${formatMm(currentHeightMm)} mm`}
+                  </div>
+                )}
 
             {crossSectionMode === 'rasterized' ? (
               <div
@@ -389,16 +444,37 @@ export function LayerSlider({ min, max, step, value, onChange, currentHeightMm, 
                 )}
               </div>
             )}
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="mt-1 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-          {min}
-        </div>
+        {!isMinimalRail && (
+          <div className="mt-1 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+            {min}
+          </div>
+        )}
+
+        {isMinimalRail && (
+          <div className="mt-1 flex items-center justify-center gap-1.5">
+            <div
+              className={railBadgeClass}
+              style={railBadgeStyle}
+            >
+              {min}
+            </div>
+            <div
+              className={railBadgeClass}
+              style={railBadgeStyle}
+              title={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}
+            >
+              {crossSectionMode === 'smooth' ? 'S' : 'R'}
+            </div>
+          </div>
+        )}
 
         {/* Static input field below slider */}
-        {showValue && (
+        {showValue && !isMinimalRail && (
           <input
             type="text"
             value={inputValue}

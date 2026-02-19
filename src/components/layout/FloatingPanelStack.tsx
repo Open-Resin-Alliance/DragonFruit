@@ -69,16 +69,17 @@ const EDGE_MAGNET_THRESHOLD = 22;
 const EDGE_HINT_THRESHOLD = 36;
 const PANEL_MAGNET_THRESHOLD = 24;
 const PANEL_GAP = 12;
-const DEFAULT_PANEL_WIDTH = 400;
+const DEFAULT_PANEL_WIDTH = 320;
 const DEFAULT_PANEL_HEIGHT = 150;
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
-  'visual-settings': 208,
-  'support-settings': 460,
+  'visual-settings': 72,
   'prepare-smoothing-settings': 340,
 };
+const PANEL_SCALE_EXEMPT_IDS = new Set<string>(['support-settings']);
+const LOCKED_PANEL_IDS = new Set<string>(['visual-settings']);
 const CHAIN_ATTACH_TOLERANCE = 30;
 
-function getPanelWidth(panelId: string) {
+function getPanelBaseWidth(panelId: string) {
   return PANEL_WIDTH_OVERRIDES[panelId] ?? DEFAULT_PANEL_WIDTH;
 }
 
@@ -110,12 +111,12 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function overlaps(a: PanelRect, b: PanelRect) {
+function overlaps(a: PanelRect, b: PanelRect, gap = PANEL_GAP) {
   return !(
-    a.x + a.width + PANEL_GAP <= b.x ||
-    b.x + b.width + PANEL_GAP <= a.x ||
-    a.y + a.height + PANEL_GAP <= b.y ||
-    b.y + b.height + PANEL_GAP <= a.y
+    a.x + a.width + gap <= b.x ||
+    b.x + b.width + gap <= a.x ||
+    a.y + a.height + gap <= b.y ||
+    b.y + b.height + gap <= a.y
   );
 }
 
@@ -133,12 +134,13 @@ function findNearestFreePosition(
   size: PanelSize,
   occupied: PanelRect[],
   bounds: PanelSize,
+  panelGap = PANEL_GAP,
 ): PanelPosition {
   const base = clampPosition(desired, size, bounds);
 
   const collidesAt = (position: PanelPosition) => {
     const candidate: PanelRect = { ...position, ...size };
-    return occupied.some((rect) => overlaps(candidate, rect));
+    return occupied.some((rect) => overlaps(candidate, rect, panelGap));
   };
 
   if (!collidesAt(base)) {
@@ -225,7 +227,7 @@ function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: numbe
   return aStart < bEnd && bStart < aEnd;
 }
 
-function applyPanelMagnet(position: PanelPosition, size: PanelSize, otherPanels: PanelRect[]): PanelPosition {
+function applyPanelMagnet(position: PanelPosition, size: PanelSize, otherPanels: PanelRect[], panelGap = PANEL_GAP): PanelPosition {
   const next = { ...position };
   let bestXDistance = PANEL_MAGNET_THRESHOLD + 1;
   let bestYDistance = PANEL_MAGNET_THRESHOLD + 1;
@@ -235,8 +237,8 @@ function applyPanelMagnet(position: PanelPosition, size: PanelSize, otherPanels:
     const horizontalOverlap = rangesOverlap(next.x, next.x + size.width, panel.x, panel.x + panel.width);
 
     if (verticalOverlap) {
-      const dockLeftX = panel.x - size.width - PANEL_GAP;
-      const dockRightX = panel.x + panel.width + PANEL_GAP;
+      const dockLeftX = panel.x - size.width - panelGap;
+      const dockRightX = panel.x + panel.width + panelGap;
 
       const leftDistance = Math.abs(next.x - dockLeftX);
       if (leftDistance <= PANEL_MAGNET_THRESHOLD && leftDistance < bestXDistance) {
@@ -252,8 +254,8 @@ function applyPanelMagnet(position: PanelPosition, size: PanelSize, otherPanels:
     }
 
     if (horizontalOverlap) {
-      const dockTopY = panel.y - size.height - PANEL_GAP;
-      const dockBottomY = panel.y + panel.height + PANEL_GAP;
+      const dockTopY = panel.y - size.height - panelGap;
+      const dockBottomY = panel.y + panel.height + panelGap;
 
       const topDistance = Math.abs(next.y - dockTopY);
       if (topDistance <= PANEL_MAGNET_THRESHOLD && topDistance < bestYDistance) {
@@ -347,6 +349,7 @@ function getAnchoredDesiredPosition(
   panelMemory: Record<string, PanelPosition>,
   bounds: PanelSize,
   getPanelSize: (id: string) => PanelSize,
+  panelGap = PANEL_GAP,
   anchorTargetOverride?: string,
 ): PanelPosition | null {
   if (!profile?.anchors) return null;
@@ -358,7 +361,7 @@ function getAnchoredDesiredPosition(
   if (!anchorPos) return null;
 
   const anchorSize = getPanelSize(anchorTargetId);
-  const gap = rule.gap ?? PANEL_GAP;
+  const gap = rule.gap ?? panelGap;
   const offsetX = rule.offsetX ?? 0;
   const offsetY = rule.offsetY ?? 0;
 
@@ -504,20 +507,21 @@ function buildSeededPositions(
   profile: LayoutProfile | null,
   bounds: PanelSize,
   getPanelSize: (id: string) => PanelSize,
+  panelGap = PANEL_GAP,
 ): Record<string, PanelPosition> {
   const occupied: PanelRect[] = [];
   const next: Record<string, PanelPosition> = {};
 
   for (const panelId of orderedPanelIds) {
     const size = getPanelSize(panelId);
-    const anchored = getAnchoredDesiredPosition(panelId, size, profile, next, {}, {}, bounds, getPanelSize);
+    const anchored = getAnchoredDesiredPosition(panelId, size, profile, next, {}, {}, bounds, getPanelSize, panelGap);
 
     const desired = anchored
       ? clampPosition(anchored, size, bounds)
       : occupied.length > 0
         ? {
             x: PANEL_MARGIN,
-            y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + PANEL_GAP,
+            y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + panelGap,
           }
         : {
             x: PANEL_MARGIN,
@@ -526,7 +530,7 @@ function buildSeededPositions(
 
     const freePosition = isEdgeAnchored(panelId, profile)
       ? desired
-      : findNearestFreePosition(desired, size, occupied, bounds);
+      : findNearestFreePosition(desired, size, occupied, bounds, panelGap);
     next[panelId] = freePosition;
     occupied.push({ ...freePosition, ...size });
   }
@@ -590,7 +594,7 @@ function FloatingPanelItem({
 
     const emitSize = () => {
       onSizeChange(id, {
-        width: element.offsetWidth || getPanelWidth(id),
+        width: element.offsetWidth || panelWidth,
         height: element.offsetHeight || DEFAULT_PANEL_HEIGHT,
       });
     };
@@ -603,7 +607,7 @@ function FloatingPanelItem({
 
     observer.observe(element);
     return () => observer.disconnect();
-  }, [id, onSizeChange]);
+  }, [id, onSizeChange, panelWidth]);
 
   return (
     <div
@@ -681,17 +685,53 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   const dropPreviewRef = React.useRef<DropPreview | null>(null);
   const layoutHydratedRef = React.useRef(false);
 
-  const getPanelSize = React.useCallback((panelId: string): PanelSize => {
-    return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
-  }, []);
-
   const panelEntries = React.useMemo(() => flattenPanelChildren(children), [children]);
   const panelIds = React.useMemo(() => panelEntries.map((entry) => entry.id), [panelEntries]);
+  const panelWidthScale = React.useMemo(() => {
+    const width = containerSize.width;
+    const height = containerSize.height;
+
+    if (width >= 3200 && height >= 1100) return 1.14;
+    if (width >= 2600 && height >= 980) return 1.08;
+    if (width <= 1100 || height <= 700) return 0.72;
+    if (width <= 1366 || height <= 820) return 0.82;
+    if (width <= 1600 || height <= 900) return 0.9;
+    if (width <= 1800 || height <= 980) return 0.95;
+    return 1;
+  }, [containerSize.height, containerSize.width]);
+
+  const panelGap = React.useMemo(() => {
+    if (panelWidthScale <= 0.72) return 7;
+    if (panelWidthScale <= 0.82) return 8;
+    if (panelWidthScale <= 0.9) return 9;
+    if (panelWidthScale <= 0.95) return 10;
+    return PANEL_GAP;
+  }, [panelWidthScale]);
+
+  const getPanelWidth = React.useCallback((panelId: string) => {
+    const baseWidth = getPanelBaseWidth(panelId);
+    if (PANEL_SCALE_EXEMPT_IDS.has(panelId)) {
+      if (panelWidthScale <= 1) {
+        return baseWidth;
+      }
+      return Math.max(72, Math.round(baseWidth * panelWidthScale));
+    }
+    const analysisCompactFactor = panelId.startsWith('analysis-')
+      ? (panelWidthScale < 1 ? 0.88 : 1)
+      : 1;
+    const scaledWidth = Math.round(baseWidth * panelWidthScale * analysisCompactFactor);
+    return Math.max(72, scaledWidth);
+  }, [panelWidthScale]);
+
+  const getPanelSize = React.useCallback((panelId: string): PanelSize => {
+    return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
+  }, [getPanelWidth]);
+
   const layoutProfile = React.useMemo(() => resolveLayoutProfile(panelIds), [panelIds]);
   const orderedPanelIds = React.useMemo(() => buildOrderedPanelIds(panelIds, layoutProfile), [layoutProfile, panelIds]);
   const seededPositions = React.useMemo(
-    () => buildSeededPositions(orderedPanelIds, layoutProfile, containerSize, getPanelSize),
-    [containerSize, getPanelSize, layoutProfile, orderedPanelIds],
+    () => buildSeededPositions(orderedPanelIds, layoutProfile, containerSize, getPanelSize, panelGap),
+    [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap],
   );
 
   const collectProfileAnchorDescendants = React.useCallback((rootId: string) => {
@@ -788,6 +828,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
       const restored: Record<string, PanelPosition> = {};
       for (const panelId of panelIds) {
+        if (LOCKED_PANEL_IDS.has(panelId)) continue;
         const pos = saved[panelId];
         if (!pos) continue;
         if (typeof pos.x !== 'number' || typeof pos.y !== 'number') continue;
@@ -807,8 +848,8 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
         if (modelPos && debugPos && Math.abs(debugPos.x - modelPos.x) <= CHAIN_ATTACH_TOLERANCE * 2) {
           const modelSize = getPanelSize(modelsId);
-          const expectedDebugY = modelPos.y + modelSize.height + PANEL_GAP;
-          const hasLargeGap = debugPos.y - expectedDebugY > PANEL_GAP;
+          const expectedDebugY = modelPos.y + modelSize.height + panelGap;
+          const hasLargeGap = debugPos.y - expectedDebugY > panelGap;
 
           if (hasLargeGap) {
             restored[debugId] = {
@@ -825,7 +866,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     } finally {
       layoutHydratedRef.current = true;
     }
-  }, [getPanelSize, panelIds, persistLayout]);
+  }, [getPanelSize, panelGap, panelIds, persistLayout]);
 
   React.useEffect(() => {
     if (!layoutHydratedRef.current) return;
@@ -856,7 +897,8 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         const existing = previous[panelId];
         const remembered = panelMemoryRef.current[panelId];
         const linkedCandidates = attachmentMemoryRef.current[panelId] ?? [];
-        const hasManualOverride = manualOverrideRef.current[panelId] === true;
+        const isLockedPanel = LOCKED_PANEL_IDS.has(panelId);
+        const hasManualOverride = !isLockedPanel && manualOverrideRef.current[panelId] === true;
         const anchorRule = layoutProfile?.anchors?.[panelId];
         let effectiveAnchorTarget: string | undefined;
 
@@ -885,6 +927,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
           panelMemoryRef.current,
           containerSize,
           getPanelSize,
+          panelGap,
           effectiveAnchorTarget,
         );
         const linkedDesired = linkedCandidates
@@ -898,7 +941,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
           .find((pos): pos is PanelPosition => !!pos) ?? null;
         const forceAnchoredPanelIds = new Set(['visual-settings', 'support-settings', 'prepare-smoothing-settings']);
         const hasProfileAnchor = !!layoutProfile?.anchors?.[panelId];
-        const shouldPreferAnchor = !hasManualOverride && !!anchored && (forceAnchoredPanelIds.has(panelId) || hasProfileAnchor);
+        const shouldPreferAnchor = !hasManualOverride && !!anchored && (forceAnchoredPanelIds.has(panelId) || hasProfileAnchor || isLockedPanel);
         const shouldPinEdgeAnchor = shouldPreferAnchor && isEdgeAnchored(panelId, layoutProfile);
         const desired = hasManualOverride
           ? (linkedDesired
@@ -912,7 +955,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
                   : occupied.length > 0
                     ? {
                         x: PANEL_MARGIN,
-                        y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + PANEL_GAP,
+                        y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + panelGap,
                       }
                     : {
                         x: PANEL_MARGIN,
@@ -931,7 +974,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
                     : occupied.length > 0
                       ? {
                           x: PANEL_MARGIN,
-                          y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + PANEL_GAP,
+                          y: occupied[occupied.length - 1].y + occupied[occupied.length - 1].height + panelGap,
                         }
                       : {
                           x: PANEL_MARGIN,
@@ -940,7 +983,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
         const freePosition = shouldPinEdgeAnchor
           ? desired
-          : findNearestFreePosition(desired, size, occupied, containerSize);
+          : findNearestFreePosition(desired, size, occupied, containerSize, panelGap);
         next[panelId] = freePosition;
         panelMemoryRef.current[panelId] = freePosition;
         occupied.push({ ...freePosition, ...size });
@@ -948,7 +991,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
       return positionsEqual(previous, next, panelIds) ? previous : next;
     });
-  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelIds, panelSizeVersion]);
+  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap, panelIds, panelSizeVersion]);
 
   const handlePanelSizeChange = React.useCallback((panelId: string, size: PanelSize) => {
     const prev = panelSizesRef.current[panelId];
@@ -990,7 +1033,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
           if (!basePos) continue;
 
           const baseSize = getPanelSize(item.id);
-          const expectedAttachedY = basePos.y + baseSize.height + PANEL_GAP + item.delta;
+          const expectedAttachedY = basePos.y + baseSize.height + panelGap + item.delta;
 
           for (const candidateId of panelIdsRef.current) {
             if (candidateId === item.id || visited.has(candidateId)) continue;
@@ -1037,7 +1080,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
       return next;
     });
-  }, [containerSize, getPanelSize]);
+  }, [containerSize, getPanelSize, panelGap]);
 
   const snapPanelToNearestSpot = React.useCallback((panelId: string, position: PanelPosition) => {
     const size = getPanelSize(panelId);
@@ -1055,7 +1098,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       });
 
     const edgeMagnetic = applyEdgeMagnet(clamped, size, containerSize);
-    const snappedToPanels = applyPanelMagnet(edgeMagnetic, size, otherPanels);
+    const snappedToPanels = applyPanelMagnet(edgeMagnetic, size, otherPanels, panelGap);
 
     const rightEdgeX = Math.max(PANEL_MARGIN, containerSize.width - size.width - PANEL_MARGIN);
     const bottomEdgeY = Math.max(PANEL_MARGIN, containerSize.height - size.height - PANEL_MARGIN);
@@ -1073,8 +1116,8 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
           : snappedToPanels.y,
     };
 
-    return findNearestFreePosition(snapped, size, otherPanels, containerSize);
-  }, [containerSize, getPanelSize, panelIds, panelPositions]);
+    return findNearestFreePosition(snapped, size, otherPanels, containerSize, panelGap);
+  }, [containerSize, getPanelSize, panelGap, panelIds, panelPositions]);
 
   React.useEffect(() => {
     if (!activeDragPanelId) return;
@@ -1108,11 +1151,11 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         });
 
       const edgeMagnetic = applyEdgeMagnet(clamped, size, containerSize);
-      const magneticPosition = applyPanelMagnet(edgeMagnetic, size, otherPanels);
+      const magneticPosition = applyPanelMagnet(edgeMagnetic, size, otherPanels, panelGap);
       const hint = getEdgeHint(magneticPosition, size, containerSize, EDGE_HINT_THRESHOLD);
       setEdgeHint(hint);
 
-      const previewPosition = findNearestFreePosition(magneticPosition, size, otherPanels, containerSize);
+      const previewPosition = findNearestFreePosition(magneticPosition, size, otherPanels, containerSize, panelGap);
       setDropPreview({ id: activeDragPanelId, position: previewPosition, size });
 
       setPanelPositions((previous) => ({
@@ -1201,7 +1244,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
     };
-  }, [activeDragPanelId, containerSize, getPanelSize, snapPanelToNearestSpot]);
+  }, [activeDragPanelId, containerSize, getPanelSize, panelGap, snapPanelToNearestSpot]);
 
   React.useEffect(() => {
     const validIds = new Set(panelIdsRef.current);
@@ -1227,6 +1270,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
   const handlePointerDown = React.useCallback((panelId: string, event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
+    if (LOCKED_PANEL_IDS.has(panelId)) return;
     if (isDragBlockedByTarget(event.target)) return;
 
     const containerRect = containerRef.current?.getBoundingClientRect();

@@ -82,6 +82,13 @@ export function TopBar({
   onViewTypeOverrideChange,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [windowMetrics, setWindowMetrics] = useState(() => ({
+    innerWidth: 0,
+    innerHeight: 0,
+    screenAvailWidth: 0,
+    screenAvailHeight: 0,
+    isLikelyMaximized: true,
+  }));
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -95,6 +102,52 @@ export function TopBar({
 
     applyThemeCustomColors(getSavedThemeCustomColors());
   }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateMetrics = () => {
+      const innerWidth = window.innerWidth;
+      const innerHeight = window.innerHeight;
+      const screenAvailWidth = window.screen?.availWidth ?? innerWidth;
+      const screenAvailHeight = window.screen?.availHeight ?? innerHeight;
+
+      const widthGap = Math.abs(screenAvailWidth - innerWidth);
+      const heightGap = Math.abs(screenAvailHeight - innerHeight);
+      const isLikelyMaximized = widthGap <= 24 && heightGap <= 96;
+
+      setWindowMetrics({
+        innerWidth,
+        innerHeight,
+        screenAvailWidth,
+        screenAvailHeight,
+        isLikelyMaximized,
+      });
+    };
+
+    updateMetrics();
+    window.addEventListener('resize', updateMetrics);
+    window.addEventListener('orientationchange', updateMetrics);
+
+    return () => {
+      window.removeEventListener('resize', updateMetrics);
+      window.removeEventListener('orientationchange', updateMetrics);
+    };
+  }, []);
+
+  const MIN_GOOD_WIDTH = 1920;
+  const MIN_GOOD_HEIGHT = 1080;
+  const isUnderRecommendedViewport =
+    windowMetrics.innerWidth > 0 &&
+    (windowMetrics.innerWidth < MIN_GOOD_WIDTH || windowMetrics.innerHeight < MIN_GOOD_HEIGHT);
+  const showLayoutWarning =
+    isUnderRecommendedViewport ||
+    (windowMetrics.innerWidth >= MIN_GOOD_WIDTH && windowMetrics.innerHeight >= MIN_GOOD_HEIGHT && !windowMetrics.isLikelyMaximized);
+
+  const metricsLabel =
+    windowMetrics.innerWidth > 0
+      ? `${windowMetrics.innerWidth}×${windowMetrics.innerHeight}`
+      : 'detecting…';
 
   const steps: Array<{ mode: SupportMode; label: string; step: 1 | 2 | 3 | 4; hint: string }> = [
     { mode: 'prepare', label: 'Prepare', step: 1, hint: 'Arrange model and transforms' },
@@ -180,7 +233,21 @@ export function TopBar({
         </div>
       </div>
 
-      <div className="ml-auto flex w-[220px] items-center justify-end gap-2">
+      <div className="ml-auto flex w-[420px] items-center justify-end gap-2">
+        {showLayoutWarning && (
+          <div
+            className="pointer-events-none hidden md:flex items-center rounded-md border px-2 py-1 text-[10px] leading-tight"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
+              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+              color: 'var(--text-muted)',
+            }}
+            title={`Current window: ${metricsLabel}. Recommended for full panel comfort: >= ${MIN_GOOD_WIDTH}x${MIN_GOOD_HEIGHT} and maximized.`}
+          >
+            <span className="font-semibold mr-1" style={{ color: 'var(--text-strong)' }}>Layout tip:</span>
+            <span>{metricsLabel} • for best fit use ≥ {MIN_GOOD_WIDTH}×{MIN_GOOD_HEIGHT} maximized</span>
+          </div>
+        )}
         <ViewTypeDropdown
           value={viewTypeOverride}
           onChange={onViewTypeOverrideChange}
