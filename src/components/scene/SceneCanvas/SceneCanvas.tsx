@@ -360,6 +360,10 @@ export function SceneCanvas({
   const prevLeafHoverDotVisibleRef = React.useRef<boolean | null>(null);
 
   const [isModelSelected, setIsModelSelected] = React.useState(true); // Track for gizmo visibility
+
+  // In support mode, having an activeModelId implies selection even if
+  // no model-clicked event was dispatched (auto-select on mode entry).
+  const effectiveModelSelected = isModelSelected || (mode === 'support' && !!activeModelId);
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
 
@@ -674,10 +678,14 @@ export function SceneCanvas({
       return;
     }
 
-    if (activeModelId == null) {
+    // Only fall back to build-volume center when the scene is truly empty.
+    // When models exist, auto-select will fire shortly and provide the
+    // proper pivot; animating to the build-volume center first causes
+    // a jarring double-animation on first open.
+    if (activeModelId == null && models.length === 0) {
       setOrbitTargetFromPoint(buildVolumeCenterTarget.clone());
     }
-  }, [activeModelId, buildVolumeCenterTarget, mode, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
+  }, [activeModelId, buildVolumeCenterTarget, mode, models.length, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
 
   const spaceMousePivotCandidates = React.useMemo(() => {
     const centers: THREE.Vector3[] = [];
@@ -888,6 +896,10 @@ export function SceneCanvas({
   }, [updateCameraBelowBuildPlate]);
 
   const hidePlateContactPrimitives = isCameraBelowBuildPlate;
+  const isSpotlightHighlightActive =
+    (mode === 'prepare' || mode === 'support')
+    && effectiveModelSelected
+    && selectionHighlightMode === 'spotlight';
 
   const handleOrbitChange = React.useCallback(() => {
     if (orbitInteractionActiveRef.current) {
@@ -1001,8 +1013,7 @@ export function SceneCanvas({
                       isSelected={
                         isActive &&
                         (
-                          (isModelSelected && mode === 'prepare' && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')) ||
-                          mode === 'support'
+                          effectiveModelSelected && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')
                         )
                       }
                       isBranchPlacementActive={isBranchPlacementActive}
@@ -1310,7 +1321,7 @@ export function SceneCanvas({
         {/* Selection outline - renders when model is selected */}
         <SelectionOutlineRenderer
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
-          enabled={mode === 'prepare' && selectionHighlightMode === 'fresnel'}
+          enabled={(mode === 'prepare' || mode === 'support') && effectiveModelSelected && selectionHighlightMode === 'fresnel'}
           color="#82ccff"
           intensity={0.38}
           power={3.5}
@@ -1321,14 +1332,13 @@ export function SceneCanvas({
         {/* Selection spotlight - illuminates only the selected model via layers */}
         <SelectionSpotlight
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
-          enabled={mode === 'prepare' && isModelSelected && selectionHighlightMode === 'spotlight'}
+          enabled={(mode === 'prepare' || mode === 'support') && effectiveModelSelected && selectionHighlightMode === 'spotlight'}
           color="#ffeacc"
-          intensity={1.5}
+          intensity={6.4}
           angle={Math.PI / 3}
-          penumbra={0}
+          penumbra={0.3}
           elevation={60}
           radius={60}
-          affectAll
         />
         <OrbitControls
           makeDefault
