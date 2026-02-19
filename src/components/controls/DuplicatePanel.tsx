@@ -26,6 +26,7 @@ interface DuplicatePanelProps {
   onArrayGapYChange: (value: number) => void;
   onArrayGapZChange: (value: number) => void;
   onConfirm: () => void;
+  onFillPlate: () => void;
   previewCount: number;
   isApplying?: boolean;
 }
@@ -111,6 +112,7 @@ export function DuplicatePanel({
   onArrayGapYChange,
   onArrayGapZChange,
   onConfirm,
+  onFillPlate,
   previewCount,
   isApplying = false,
 }: DuplicatePanelProps) {
@@ -354,6 +356,21 @@ export function DuplicatePanel({
             ) : (
               `Confirm Duplicate (${Math.max(0, previewCount)} new)`
             )}
+          </Button>
+
+          <Button
+            onClick={onFillPlate}
+            variant="secondary"
+            size="sm"
+            className="w-full !h-8 text-[11px]"
+            disabled={!hasSelection || isApplying || layoutMode !== 'auto'}
+            title={
+              layoutMode !== 'auto'
+                ? 'Fill Plate is available in Auto layout mode'
+                : (!hasSelection ? 'Select a model to fill the plate' : 'Set copies to fill current plate capacity')
+            }
+          >
+            Fill Plate
           </Button>
         </div>
       )}

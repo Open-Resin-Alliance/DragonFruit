@@ -1383,6 +1383,95 @@ export default function Home() {
     }
   }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr]);
 
+  const handleFillPlateDuplicate = React.useCallback(() => {
+    if (isDuplicating) return;
+    if (duplicateLayoutMode !== 'auto') return;
+    const model = scene.activeModel;
+    if (!model) return;
+
+    const baseWidth = Math.max(2, Math.abs(model.geometry.size.x * model.transform.scale.x));
+    const baseDepth = Math.max(2, Math.abs(model.geometry.size.y * model.transform.scale.y));
+    const rz = model.transform.rotation.z;
+    const rc = Math.abs(Math.cos(rz));
+    const rs = Math.abs(Math.sin(rz));
+    const width = (baseWidth * rc) + (baseDepth * rs);
+    const depth = (baseWidth * rs) + (baseDepth * rc);
+    const spacing = Math.max(0, duplicateSpacingMm);
+
+    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+    const maxX = minX + scene.view3dSettings.widthMm;
+    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+    const maxY = minY + scene.view3dSettings.depthMm;
+
+    const plateWidth = Math.max(1, maxX - minX);
+    const plateDepth = Math.max(1, maxY - minY);
+    const maxCols = Math.max(1, Math.floor((plateWidth + spacing) / (width + spacing)));
+    const maxRows = Math.max(1, Math.floor((plateDepth + spacing) / (depth + spacing)));
+
+    const totalUsedWidth = (maxCols * width) + Math.max(0, maxCols - 1) * spacing;
+    const totalUsedDepth = (maxRows * depth) + Math.max(0, maxRows - 1) * spacing;
+    const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
+    const startY = minY + ((plateDepth - totalUsedDepth) * 0.5) + (depth * 0.5);
+
+    type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
+
+    const intersectsRect = (a: Rect2D, b: Rect2D) => {
+      return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+    };
+
+    const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
+      const mBaseW = Math.max(2, Math.abs(m.geometry.size.x * m.transform.scale.x));
+      const mBaseD = Math.max(2, Math.abs(m.geometry.size.y * m.transform.scale.y));
+      const z = m.transform.rotation.z;
+      const c = Math.abs(Math.cos(z));
+      const s = Math.abs(Math.sin(z));
+      const mW = (mBaseW * c) + (mBaseD * s);
+      const mD = (mBaseW * s) + (mBaseD * c);
+      return {
+        minX: m.transform.position.x - (mW * 0.5),
+        maxX: m.transform.position.x + (mW * 0.5),
+        minY: m.transform.position.y - (mD * 0.5),
+        maxY: m.transform.position.y + (mD * 0.5),
+      };
+    };
+
+    const blockedRects = scene.models
+      .filter((m) => m.visible && m.id !== model.id)
+      .map(modelToRect);
+
+    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+    for (let row = 0; row < maxRows; row += 1) {
+      for (let col = 0; col < maxCols; col += 1) {
+        const x = startX + col * (width + spacing);
+        const y = startY + row * (depth + spacing);
+        const dx = x - model.transform.position.x;
+        const dy = y - model.transform.position.y;
+        candidateCenters.push({ x, y, distSq: dx * dx + dy * dy });
+      }
+    }
+    candidateCenters.sort((a, b) => a.distSq - b.distSq);
+
+    let capacity = 0;
+    for (const candidate of candidateCenters) {
+      const rect: Rect2D = {
+        minX: candidate.x - (width * 0.5),
+        maxX: candidate.x + (width * 0.5),
+        minY: candidate.y - (depth * 0.5),
+        maxY: candidate.y + (depth * 0.5),
+      };
+
+      if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+        continue;
+      }
+
+      blockedRects.push(rect);
+      capacity += 1;
+    }
+
+    const targetCopies = Math.min(128, Math.max(1, capacity));
+    setDuplicateTotalCopies(targetCopies);
+  }, [duplicateLayoutMode, duplicateSpacingMm, isDuplicating, scene]);
+
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden">
       <TopBar
@@ -1566,6 +1655,7 @@ export default function Home() {
                 onArrayGapYChange={setDuplicateArrayGapY}
                 onArrayGapZChange={setDuplicateArrayGapZ}
                 onConfirm={handleConfirmDuplicate}
+                onFillPlate={handleFillPlateDuplicate}
                 previewCount={duplicatePreviewTransforms.length}
                 isApplying={isDuplicating}
               />
