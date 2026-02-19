@@ -60,7 +60,7 @@ import {
   subscribeToCameraProjectionSettings,
   type CameraProjectionMode,
 } from '@/components/settings/cameraProjectionPreferences';
-import type { View3DSettings } from '@/components/settings/view3dPreferences';
+import { DEFAULT_VIEW3D_SETTINGS, type View3DSettings } from '@/components/settings/view3dPreferences';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -369,9 +369,26 @@ export function SceneCanvas({
   const orbitInteractionMovedRef = React.useRef(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
   const [mouseOrbitDragRunId, setMouseOrbitDragRunId] = React.useState(0);
+  const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
+
+  const buildVolumeCenterTarget = React.useMemo(() => {
+    if (activeBuildVolumeSettings.enabled) {
+      const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
+      const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
+      const centerZ = activeBuildVolumeSettings.maxZMm * 0.5;
+      return new THREE.Vector3(centerX, centerY, centerZ);
+    }
+    return new THREE.Vector3(0, 0, 0);
+  }, [
+    activeBuildVolumeSettings.depthMm,
+    activeBuildVolumeSettings.enabled,
+    activeBuildVolumeSettings.maxZMm,
+    activeBuildVolumeSettings.originMode,
+    activeBuildVolumeSettings.widthMm,
+  ]);
 
   const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId } =
-    useStlLoadCameraIntro(models);
+    useStlLoadCameraIntro(models, buildVolumeCenterTarget);
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
@@ -389,8 +406,6 @@ export function SceneCanvas({
   const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
   const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
-
-  const activeBuildVolumeSettings = view3dSettings;
 
   const computeModelWorldBounds = React.useCallback((model: LoadedModel) => {
     const modelBox = model.geometry.bbox.clone();
@@ -410,12 +425,14 @@ export function SceneCanvas({
   const buildVolumeBounds = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled) return null;
 
-    const halfWidth = activeBuildVolumeSettings.widthMm * 0.5;
-    const halfDepth = activeBuildVolumeSettings.depthMm * 0.5;
+    const width = activeBuildVolumeSettings.widthMm;
+    const depth = activeBuildVolumeSettings.depthMm;
+    const minX = activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -width * 0.5;
+    const minY = activeBuildVolumeSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
 
     return new THREE.Box3(
-      new THREE.Vector3(-halfWidth, -halfDepth, 0),
-      new THREE.Vector3(halfWidth, halfDepth, activeBuildVolumeSettings.maxZMm),
+      new THREE.Vector3(minX, minY, 0),
+      new THREE.Vector3(minX + width, minY + depth, activeBuildVolumeSettings.maxZMm),
     );
   }, [activeBuildVolumeSettings]);
 
@@ -620,9 +637,9 @@ export function SceneCanvas({
     }
 
     if (activeModelId == null) {
-      setOrbitTargetFromPoint(new THREE.Vector3(0, 0, 0));
+      setOrbitTargetFromPoint(buildVolumeCenterTarget.clone());
     }
-  }, [activeModelId, mode, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
+  }, [activeModelId, buildVolumeCenterTarget, mode, selectedSpaceMousePivotPoint, setOrbitTargetFromPoint, spaceMouseNavigationActive]);
 
   const spaceMousePivotCandidates = React.useMemo(() => {
     const centers: THREE.Vector3[] = [];
@@ -877,6 +894,8 @@ export function SceneCanvas({
         <Helpers
           gridWidthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.widthMm : undefined}
           gridDepthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.depthMm : undefined}
+          originMinX={buildVolumeBounds?.min.x}
+          originMinY={buildVolumeBounds?.min.y}
           buildPlateOpacity={buildPlateOpacity}
         />
         <EnableLocalClipping />
@@ -992,7 +1011,11 @@ export function SceneCanvas({
 
               {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
                 <group
-                  position={[0, 0, activeBuildVolumeSettings.maxZMm * 0.5]}
+                  position={[
+                    (buildVolumeBounds!.min.x + buildVolumeBounds!.max.x) * 0.5,
+                    (buildVolumeBounds!.min.y + buildVolumeBounds!.max.y) * 0.5,
+                    activeBuildVolumeSettings.maxZMm * 0.5,
+                  ]}
                   raycast={() => null}
                 >
                   <mesh geometry={buildVolumeBoxGeometry} raycast={() => null} renderOrder={-1}>
@@ -1283,12 +1306,18 @@ export function SceneCanvas({
         <SpaceMouseController
           pivotPoint={selectedSpaceMousePivotPoint}
           pivotCandidates={spaceMousePivotCandidates}
+          fallbackPivot={buildVolumeCenterTarget}
           mouseOrbitDragRunId={mouseOrbitDragRunId}
           onNavigationActiveChange={setSpaceMouseNavigationActive}
         />
         <CameraFocusHotkeyController hoverPointRef={lastHoveredModelPointRef} setOrbitTargetFromPoint={setOrbitTargetFromPoint} />
         <CameraIntroController bounds={introBoundsSnapshot} runId={cameraIntroRunId} onComplete={setCameraIntroCompletedRunId} />
-        <CameraHomeResetController runId={cameraHomeResetRunId} homePosition={defaultCamera.position} homeTarget={[0, 0, 0]} homeFovDeg={defaultCamera.fov} />
+        <CameraHomeResetController
+          runId={cameraHomeResetRunId}
+          homePosition={defaultCamera.position}
+          homeTarget={[buildVolumeCenterTarget.x, buildVolumeCenterTarget.y, buildVolumeCenterTarget.z]}
+          homeFovDeg={defaultCamera.fov}
+        />
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} />
         {/* Selection outline effect - rendered by SelectionOutlineRenderer inside SelectionProvider */}
         {children}

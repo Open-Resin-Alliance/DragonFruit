@@ -598,6 +598,13 @@ export function useSceneCollectionManager() {
     saveView3DSettings(normalized);
   }, []);
 
+  const defaultImportCenterXY = useMemo(() => {
+    if (view3dSettings.originMode === 'front_left') {
+      return new THREE.Vector2(view3dSettings.widthMm * 0.5, view3dSettings.depthMm * 0.5);
+    }
+    return new THREE.Vector2(0, 0);
+  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+
   useEffect(() => {
     const prev = readMeshAppearanceFromLocalStorage();
 
@@ -832,7 +839,7 @@ export function useSceneCollectionManager() {
           fileSizeBytes: file.size,
           geometry: geom,
           transform: {
-            position: new THREE.Vector3(0, 0, initialZ),
+            position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
             rotation: new THREE.Euler(0, 0, 0),
             scale: new THREE.Vector3(1, 1, 1)
           },
@@ -874,7 +881,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {

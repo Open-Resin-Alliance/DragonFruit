@@ -125,9 +125,9 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
 
 ### `app-3d-view-settings`
 
-- **Description**: Stores cross-workspace 3D view debug settings for build volume bounds, max Z, screen resolution hints, and out-of-bounds warnings.
+- **Description**: Stores cross-workspace 3D view debug settings for build volume bounds, origin placement, max Z, screen resolution hints, and out-of-bounds warnings.
 - **Location**: `src/components/settings/view3dPreferences.ts`, `src/components/settings/WorkspacesSettingsTab.tsx`, `src/components/scene/SceneCanvas/SceneCanvas.tsx`
-- **Schema**: `{ enabled: boolean; widthMm: number; depthMm: number; maxZMm: number; screenWidthPx: number; screenHeightPx: number; showViolationWarning: boolean }`
+- **Schema**: `{ enabled: boolean; widthMm: number; depthMm: number; maxZMm: number; originMode: 'center' | 'front_left'; screenWidthPx: number; screenHeightPx: number; showViolationWarning: boolean }`
 - **Example**:
   ```json
   {
@@ -135,6 +135,7 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
     "widthMm": 218,
     "depthMm": 123,
     "maxZMm": 250,
+    "originMode": "front_left",
     "screenWidthPx": 2560,
     "screenHeightPx": 1440,
     "showViolationWarning": true

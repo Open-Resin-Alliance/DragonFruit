@@ -139,6 +139,53 @@ export function WorkspacesSettingsTab({
               </div>
             </div>
 
+            <div className="col-span-2 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Build volume origin
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Choose where XYZ 0,0,0 is located for the printer volume.
+              </div>
+              <div className="mt-2 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => patchView3dSettings({ originMode: 'center' })}
+                  className="h-10 min-w-[140px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={view3dSettings.originMode === 'center'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  Center
+                </button>
+                <button
+                  type="button"
+                  onClick={() => patchView3dSettings({ originMode: 'front_left' })}
+                  className="h-10 min-w-[140px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={view3dSettings.originMode === 'front_left'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  Front-left corner
+                </button>
+              </div>
+            </div>
+
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Screen Width (px)
               <input

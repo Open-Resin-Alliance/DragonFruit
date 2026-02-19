@@ -128,17 +128,24 @@ export function SceneMoodOverlay() {
 export function Helpers({
   gridWidthMm,
   gridDepthMm,
+  originMinX,
+  originMinY,
   buildPlateOpacity,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
+  originMinX?: number;
+  originMinY?: number;
   buildPlateOpacity?: number;
 }) {
   const nullRaycast = () => null;
-  const axesRef = React.useRef<THREE.AxesHelper | null>(null);
 
   const width = Number.isFinite(gridWidthMm) && (gridWidthMm as number) > 0 ? (gridWidthMm as number) : 200;
   const depth = Number.isFinite(gridDepthMm) && (gridDepthMm as number) > 0 ? (gridDepthMm as number) : 200;
+  const resolvedOriginMinX = Number.isFinite(originMinX) ? (originMinX as number) : -width * 0.5;
+  const resolvedOriginMinY = Number.isFinite(originMinY) ? (originMinY as number) : -depth * 0.5;
+  const buildVolumeCenterX = resolvedOriginMinX + width * 0.5;
+  const buildVolumeCenterY = resolvedOriginMinY + depth * 0.5;
   const baseSize = Math.max(width, depth);
   const baseDivisions = Math.max(20, Math.min(240, Math.round(baseSize / 5)));
   const divisions = Math.max(8, Math.round(baseDivisions / 3));
@@ -164,6 +171,12 @@ export function Helpers({
   const markerAvailableWidth = Math.max(12, frontTabBackWidth - frontMarkerInsetMm * 2);
   const frontMarkerDepth = Math.min(markerAvailableDepth, markerAvailableWidth / frontMarkerAspect);
   const frontMarkerWidth = frontMarkerDepth * frontMarkerAspect;
+  const axisBaseZ = 0.16;
+  const axisLength = 44;
+  const axisShaftRadius = 0.42;
+  const axisHeadRadius = 1.3;
+  const axisHeadLength = 3.8;
+  const axisLabelLift = 0.9;
   // Seat marker over the front tab so it reads as part of the build plate geometry.
   const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.1;
 
@@ -187,11 +200,91 @@ export function Helpers({
     return texture;
   }, [frontMarkerColor]);
 
+  const xAxisGradient = React.useMemo(() => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+
+    canvas.width = 16;
+    canvas.height = 256;
+
+    const gradient = context.createLinearGradient(0, canvas.height, 0, 0);
+    gradient.addColorStop(0, '#8d232f');
+    gradient.addColorStop(1, '#ff7a7a');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    return texture;
+  }, []);
+
+  const yAxisGradient = React.useMemo(() => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+
+    canvas.width = 16;
+    canvas.height = 256;
+
+    const gradient = context.createLinearGradient(0, canvas.height, 0, 0);
+    gradient.addColorStop(0, '#1e6b35');
+    gradient.addColorStop(1, '#74ff95');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    return texture;
+  }, []);
+
+  const zAxisGradient = React.useMemo(() => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+
+    canvas.width = 16;
+    canvas.height = 256;
+
+    const gradient = context.createLinearGradient(0, canvas.height, 0, 0);
+    gradient.addColorStop(0, '#21428d');
+    gradient.addColorStop(1, '#74a3ff');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    return texture;
+  }, []);
+
   React.useEffect(() => {
     return () => {
       frontTexture?.dispose();
     };
   }, [frontTexture]);
+
+  React.useEffect(() => {
+    return () => {
+      xAxisGradient?.dispose();
+      yAxisGradient?.dispose();
+      zAxisGradient?.dispose();
+    };
+  }, [xAxisGradient, yAxisGradient, zAxisGradient]);
 
   const buildPlateGeometry = React.useMemo(() => {
     const halfW = buildPlateWidth * 0.5;
@@ -243,32 +336,11 @@ export function Helpers({
     };
   }, [buildPlateGeometry]);
 
-  React.useEffect(() => {
-    if (!axesRef.current) return;
-
-    axesRef.current.renderOrder = 3;
-    axesRef.current.traverse((obj) => {
-      const material = (obj as THREE.LineSegments).material;
-      if (!material) return;
-
-      if (Array.isArray(material)) {
-        material.forEach((m) => {
-          m.depthTest = true;
-          m.depthWrite = false;
-        });
-        return;
-      }
-
-      material.depthTest = true;
-      material.depthWrite = false;
-    });
-  }, []);
-
   return (
     <>
       {/* Primitive mock build plate under grid */}
       <mesh
-        position={[0, 0, buildPlateCenterZ]}
+        position={[buildVolumeCenterX, buildVolumeCenterY, buildPlateCenterZ]}
         raycast={nullRaycast}
         visible={clampedBuildPlateOpacity > 0.001}
       >
@@ -287,22 +359,50 @@ export function Helpers({
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
       <gridHelper
         args={[baseSize, divisions, gridColor, gridColor]}
-        position={[0, 0, -0.01]}
+        position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
         rotation={[Math.PI / 2, 0, 0]}
         scale={[scaleX, 1, scaleZ]}
         raycast={nullRaycast}
       />
-      {/* Axes: X=red, Y=green, Z=blue(up) */}
-      <axesHelper
-        ref={axesRef}
-        args={[100]}
-        position={[0, 0, 0.01]}
-        raycast={nullRaycast}
-      />
-      <AxisLabels size={100} />
+      {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping */}
+      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]}>
+        {/* X axis */}
+        <mesh position={[axisLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
+          <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
+          <meshBasicMaterial map={xAxisGradient ?? undefined} toneMapped={false} />
+        </mesh>
+        <mesh position={[axisLength + axisHeadLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
+          <coneGeometry args={[axisHeadRadius, axisHeadLength, 12]} />
+          <meshBasicMaterial map={xAxisGradient ?? undefined} toneMapped={false} />
+        </mesh>
+
+        {/* Y axis */}
+        <mesh position={[0, axisLength * 0.5, 0]} raycast={nullRaycast}>
+          <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
+          <meshBasicMaterial map={yAxisGradient ?? undefined} toneMapped={false} />
+        </mesh>
+        <mesh position={[0, axisLength + axisHeadLength * 0.5, 0]} raycast={nullRaycast}>
+          <coneGeometry args={[axisHeadRadius, axisHeadLength, 12]} />
+          <meshBasicMaterial map={yAxisGradient ?? undefined} toneMapped={false} />
+        </mesh>
+
+        {/* Z axis */}
+        <mesh position={[0, 0, axisLength * 0.5]} rotation={[Math.PI * 0.5, 0, 0]} raycast={nullRaycast}>
+          <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
+          <meshBasicMaterial map={zAxisGradient ?? undefined} toneMapped={false} />
+        </mesh>
+        <mesh position={[0, 0, axisLength + axisHeadLength * 0.5]} rotation={[Math.PI * 0.5, 0, 0]} raycast={nullRaycast}>
+          <coneGeometry args={[axisHeadRadius, axisHeadLength, 12]} />
+          <meshBasicMaterial map={zAxisGradient ?? undefined} toneMapped={false} />
+        </mesh>
+
+        <group position={[0, 0, axisLabelLift]}>
+          <AxisLabels size={axisLength + 6} />
+        </group>
+      </group>
 
       {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
-      <group position={[0, frontMarkerY, 0.001]}>
+      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]}>
         {frontTexture && (
           <mesh raycast={nullRaycast}>
             <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />

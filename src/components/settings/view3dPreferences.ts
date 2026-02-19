@@ -3,6 +3,7 @@ export type View3DSettings = {
   widthMm: number;
   depthMm: number;
   maxZMm: number;
+  originMode: 'center' | 'front_left';
   screenWidthPx: number;
   screenHeightPx: number;
   showViolationWarning: boolean;
@@ -16,6 +17,7 @@ export const DEFAULT_VIEW3D_SETTINGS: View3DSettings = {
   widthMm: 218,
   depthMm: 123,
   maxZMm: 250,
+  originMode: 'center',
   screenWidthPx: 2560,
   screenHeightPx: 1440,
   showViolationWarning: true,
@@ -35,6 +37,10 @@ function clampBoolean(input: unknown, fallback: boolean): boolean {
   return typeof input === 'boolean' ? input : fallback;
 }
 
+function clampOriginMode(input: unknown, fallback: View3DSettings['originMode']): View3DSettings['originMode'] {
+  return input === 'front_left' || input === 'center' ? input : fallback;
+}
+
 export function normalizeView3DSettings(input: unknown): View3DSettings {
   if (!input || typeof input !== 'object') return DEFAULT_VIEW3D_SETTINGS;
 
@@ -44,6 +50,7 @@ export function normalizeView3DSettings(input: unknown): View3DSettings {
     widthMm: clampNumber(candidate.widthMm, 10, 2000, DEFAULT_VIEW3D_SETTINGS.widthMm),
     depthMm: clampNumber(candidate.depthMm, 10, 2000, DEFAULT_VIEW3D_SETTINGS.depthMm),
     maxZMm: clampNumber(candidate.maxZMm, 10, 3000, DEFAULT_VIEW3D_SETTINGS.maxZMm),
+    originMode: clampOriginMode(candidate.originMode, DEFAULT_VIEW3D_SETTINGS.originMode),
     screenWidthPx: clampInteger(candidate.screenWidthPx, 320, 16384, DEFAULT_VIEW3D_SETTINGS.screenWidthPx),
     screenHeightPx: clampInteger(candidate.screenHeightPx, 200, 16384, DEFAULT_VIEW3D_SETTINGS.screenHeightPx),
     showViolationWarning: clampBoolean(candidate.showViolationWarning, DEFAULT_VIEW3D_SETTINGS.showViolationWarning),

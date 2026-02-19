@@ -82,18 +82,23 @@ function readAxes(settings: SpaceMouseSettings, pad: Gamepad) {
 export function SpaceMouseController({
   pivotPoint,
   pivotCandidates,
+  fallbackPivot,
   mouseOrbitDragRunId,
   onNavigationActiveChange,
 }: {
   pivotPoint?: THREE.Vector3 | null;
   pivotCandidates?: THREE.Vector3[];
+  fallbackPivot?: THREE.Vector3 | null;
   mouseOrbitDragRunId?: number;
   onNavigationActiveChange?: (active: boolean) => void;
 }) {
   const { camera, controls, scene } = useThree();
 
   const worldUp = React.useMemo(() => new THREE.Vector3(0, 0, 1), []);
-  const defaultPivot = React.useMemo(() => new THREE.Vector3(0, 0, 0), []);
+  const defaultPivot = React.useMemo(
+    () => fallbackPivot?.clone() ?? new THREE.Vector3(0, 0, 0),
+    [fallbackPivot?.x, fallbackPivot?.y, fallbackPivot?.z],
+  );
 
   const settings = React.useSyncExternalStore(
     subscribeToSpaceMouseSettings,
@@ -123,6 +128,18 @@ export function SpaceMouseController({
   const rayDirectionRef = React.useRef(new THREE.Vector3());
   const raycastTargetsRef = React.useRef<THREE.Object3D[]>([]);
   const isNavigatingRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (pivotPoint) return;
+    if (pivotCandidates && pivotCandidates.length > 0) return;
+
+    if (!hasActivePivotRef.current) {
+      activePivotRef.current.copy(defaultPivot);
+    }
+    if (!hasLookTargetRef.current) {
+      lookTargetRef.current.copy(defaultPivot);
+    }
+  }, [defaultPivot, pivotCandidates, pivotPoint]);
 
   const getHandoffTarget = React.useCallback(() => {
     if (hasLookTargetRef.current) return lookTargetRef.current;
@@ -398,7 +415,7 @@ export function SpaceMouseController({
       if (orthoCamera) {
         // Orthographic zoom should change camera.zoom, not dolly camera position.
         const zoomFactor = Math.exp(dolly * settings.zoomSensitivity * 2.0 * dt);
-        orthoCamera.zoom = THREE.MathUtils.clamp(orthoCamera.zoom * zoomFactor, 0.01, 200);
+        orthoCamera.zoom = THREE.MathUtils.clamp(orthoCamera.zoom * zoomFactor, 0.0001, 2000);
         orthoCamera.updateProjectionMatrix();
       } else {
         camera.position.addScaledVector(forward, dolly * zoomScale);
