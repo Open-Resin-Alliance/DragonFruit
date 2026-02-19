@@ -107,7 +107,7 @@ export function SceneMoodOverlay() {
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
-          background: 'radial-gradient(120% 95% at 50% 46%, rgba(0,0,0,0) 56%, rgba(255, 55, 170, 0.18) 100%)',
+          background: 'radial-gradient(120% 95% at 50% 46%, rgba(0,0,0,0) 56%, color-mix(in srgb, var(--scene-gradient-radial, #ff37aa), transparent 82%) 100%)',
           mixBlendMode: 'screen',
           opacity: 0.75,
         }}
@@ -116,7 +116,7 @@ export function SceneMoodOverlay() {
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
-          background: 'linear-gradient(180deg, rgba(255, 55, 170, 0.08) 0%, rgba(111, 51, 255, 0.05) 40%, rgba(0,0,0,0) 100%)',
+          background: 'linear-gradient(180deg, color-mix(in srgb, var(--scene-gradient-linear-start, #ff37aa), transparent 92%) 0%, color-mix(in srgb, var(--scene-gradient-linear-mid, #6f33ff), transparent 95%) 40%, rgba(0,0,0,0) 100%)',
           mixBlendMode: 'screen',
           opacity: 0.8,
         }}
