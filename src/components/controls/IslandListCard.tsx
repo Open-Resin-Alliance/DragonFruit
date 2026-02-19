@@ -28,10 +28,27 @@ export function IslandListCard({
   layerHeightMm,
   zOffsetMm,
 }: IslandListCardProps) {
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'id' | 'volume' | 'layers'>('id');
   const [showHierarchyModal, setShowHierarchyModal] = useState(false);
+  const [compactHeader, setCompactHeader] = useState(false);
+
+  React.useLayoutEffect(() => {
+    const element = cardRef.current;
+    if (!element) return;
+
+    const updateCompactState = () => {
+      setCompactHeader(element.clientWidth <= 286);
+    };
+
+    updateCompactState();
+    const observer = new ResizeObserver(updateCompactState);
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, []);
 
   // Separate active islands
   const activeIslands = islands.filter(i => i.status === 'active');
@@ -54,6 +71,7 @@ export function IslandListCard({
   });
 
   return (
+    <div ref={cardRef}>
     <Card>
       <CardHeader
         left={(
@@ -85,21 +103,25 @@ export function IslandListCard({
             onClick={() => setShowHierarchyModal(true)}
             variant="accent"
             size="sm"
-            className="!h-9 !px-2.5 !py-0 text-[12px] font-semibold"
+            className={compactHeader ? '!h-9 !px-2 !py-0 text-[12px] font-semibold' : '!h-9 !px-2.5 !py-0 text-[12px] font-semibold'}
             title="View island hierarchy tree"
           >
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-              <span
-                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border"
-                style={{
-                  borderColor: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 45%)',
-                  background: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 86%)',
-                }}
-              >
-                <Network className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary-contrast)' }} />
-              </span>
+              {!compactHeader && (
+                <span
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 45%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 86%)',
+                  }}
+                >
+                  <Network className="h-3.5 w-3.5" style={{ color: 'var(--accent-secondary-contrast)' }} />
+                </span>
+              )}
               <span className="leading-none" style={{ color: 'var(--accent-secondary-contrast)' }}>Hierarchy</span>
-              <ChevronRight className="h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 18%)' }} />
+              {!compactHeader && (
+                <ChevronRight className="h-3.5 w-3.5 shrink-0" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), transparent 18%)' }} />
+              )}
             </span>
           </Button>
         )}
@@ -257,5 +279,6 @@ export function IslandListCard({
         zOffsetMm={zOffsetMm}
       />
     </Card>
+    </div>
   );
 }

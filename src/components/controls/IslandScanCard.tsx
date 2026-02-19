@@ -2,6 +2,7 @@ import React from 'react';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { NumberInput } from '@/components/ui/NumberInput';
 import type { ImportPhase } from '@/features/lys-conversion/useLycheeImport';
+import { Search, ScanLine } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 
 interface IslandScanCardProps {
@@ -31,8 +32,10 @@ export function IslandScanCard({
     onLycheeStlFile,
     onCancelLycheeImport
 }: IslandScanCardProps) {
+    const cardRef = React.useRef<HTMLDivElement | null>(null);
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const stlInputRef = React.useRef<HTMLInputElement>(null);
+    const [compactActions, setCompactActions] = React.useState(false);
 
     // Determine if we're using the new two-step flow
     const useTwoStepFlow = !!onLycheeJsonFile && !!onLycheeStlFile;
@@ -78,7 +81,23 @@ export function IslandScanCard({
         }
     };
 
+    React.useLayoutEffect(() => {
+        const element = cardRef.current;
+        if (!element) return;
+
+        const updateCompactState = () => {
+            setCompactActions(element.clientWidth <= 276);
+        };
+
+        updateCompactState();
+        const observer = new ResizeObserver(updateCompactState);
+        observer.observe(element);
+
+        return () => observer.disconnect();
+    }, []);
+
     return (
+        <div ref={cardRef}>
         <Card>
             <input
                 type="file"
@@ -126,19 +145,24 @@ export function IslandScanCard({
                             disabled={!hasGeometry || islands.scanning}
                             variant="secondary"
                             size="sm"
-                            className="!h-8 !px-2.5 !py-0 text-[11px]"
+                            className={compactActions ? '!h-8 !w-8 !min-w-8 !px-0 !py-0 !inline-flex !items-center !justify-center !leading-none text-[11px]' : '!h-8 !px-2.5 !py-0 text-[11px]'}
+                            title="Run classic island scan"
                         >
-                            {islands.scanning ? 'Scanning…' : 'Scan'}
+                            {compactActions
+                                ? (islands.scanning ? '…' : <Search className="h-3.5 w-3.5" />)
+                                : (islands.scanning ? 'Scanning…' : 'Scan')}
                         </Button>
                         <Button
                             onClick={islands.onRunScanlineScan}
                             disabled={!hasGeometry || islands.scanning}
                             variant="accent"
                             size="sm"
-                            className="!h-8 !px-2.5 !py-0 text-[11px]"
+                            className={compactActions ? '!h-8 !w-8 !min-w-8 !px-0 !py-0 !inline-flex !items-center !justify-center !leading-none text-[11px]' : '!h-8 !px-2.5 !py-0 text-[11px]'}
                             title="Run optimized scanline rasterization"
                         >
-                            {islands.scanning ? '...' : 'Scanline'}
+                            {compactActions
+                                ? (islands.scanning ? '…' : <ScanLine className="h-3.5 w-3.5" />)
+                                : (islands.scanning ? '...' : 'Scanline')}
                         </Button>
                     </div>
                 )}
@@ -318,5 +342,6 @@ export function IslandScanCard({
             )}
             </div>
         </Card>
+        </div>
     );
 }
