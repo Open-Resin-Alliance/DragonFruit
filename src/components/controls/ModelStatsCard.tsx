@@ -23,6 +23,11 @@ export function ModelStatsCard({
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  const connectedHostName = React.useMemo(() => {
+    const networkConnection = activePrinterProfile?.networkConnection;
+    if (!networkConnection?.connected) return null;
+    return networkConnection.hostName || networkConnection.ipAddress || null;
+  }, [activePrinterProfile]);
 
   const formatBytes = (bytes: number) => {
     const abs = Math.max(0, bytes);
@@ -132,6 +137,13 @@ export function ModelStatsCard({
         </div>
 
         <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          {connectedHostName && (
+            <>
+              <span>Connected host:</span>
+              <span style={{ color: '#86efac' }}>{connectedHostName}</span>
+            </>
+          )}
+
           <span>Printer:</span>
           <button
             type="button"

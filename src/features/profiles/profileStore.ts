@@ -9,6 +9,16 @@ export type PrinterNetworkSettings = {
   ipAddress: string;
 };
 
+export type PrinterNetworkConnectionState = {
+  mode: PrinterNetworkSupport;
+  connected: boolean;
+  hostName: string;
+  ipAddress: string;
+  port: number;
+  lastCheckedAt: string;
+  statusText?: string;
+};
+
 export type PrinterPreset = {
   presetId: string;
   manufacturer: string;
@@ -47,6 +57,7 @@ export type PrinterProfile = {
     outputFormat: PrinterOutputFormat;
   };
   network?: PrinterNetworkSettings;
+  networkConnection?: PrinterNetworkConnectionState;
 };
 
 function normalizeNetworkSupport(value: unknown): PrinterNetworkSupport | undefined {
@@ -100,6 +111,38 @@ const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
   discoveryEnabled: true,
   ipAddress: '',
 };
+
+function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddress = ''): PrinterNetworkConnectionState {
+  return {
+    mode,
+    connected: false,
+    hostName: '',
+    ipAddress: ipAddress.trim(),
+    port: 80,
+    lastCheckedAt: '',
+    statusText: '',
+  };
+}
+
+function sanitizePrinterNetworkConnectionState(
+  input: unknown,
+  mode: PrinterNetworkSupport,
+  fallbackIpAddress = '',
+): PrinterNetworkConnectionState {
+  const source = (input ?? {}) as any;
+
+  return {
+    mode,
+    connected: source.connected === true,
+    hostName: typeof source.hostName === 'string' ? source.hostName.trim() : '',
+    ipAddress: typeof source.ipAddress === 'string'
+      ? source.ipAddress.trim()
+      : fallbackIpAddress.trim(),
+    port: Number.isFinite(Number(source.port)) ? Math.max(1, Number(source.port)) : 80,
+    lastCheckedAt: typeof source.lastCheckedAt === 'string' ? source.lastCheckedAt : '',
+    statusText: typeof source.statusText === 'string' ? source.statusText : '',
+  };
+}
 
 function sanitizePrinterNetworkSettings(input: unknown): PrinterNetworkSettings {
   const discoveryEnabled = typeof (input as any)?.discoveryEnabled === 'boolean'
@@ -261,6 +304,13 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
           },
           network: sanitizePrinterNetworkSettings((profile as any).network),
+          networkConnection: resolveNetworkSupport(profile)
+            ? sanitizePrinterNetworkConnectionState(
+              (profile as any).networkConnection,
+              resolveNetworkSupport(profile)!,
+              sanitizePrinterNetworkSettings((profile as any).network).ipAddress,
+            )
+            : undefined,
         };
       })
       .filter((profile): profile is PrinterProfile => profile !== null)
@@ -514,12 +564,15 @@ export function setActiveMaterialProfile(id: string): void {
 
 export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>): string {
   ensureHydrated();
+  const networkSupport = normalizeNetworkSupport(partial?.networkSupport);
+  const networkSettings = sanitizePrinterNetworkSettings(partial?.network);
+
   const profile: PrinterProfile = {
     id: createId('printer'),
     name: partial?.name?.trim() || `Printer ${state.printerProfiles.length + 1}`,
     manufacturer: partial?.manufacturer?.trim() || 'Generic',
     imageDataUrl: partial?.imageDataUrl,
-    networkSupport: normalizeNetworkSupport(partial?.networkSupport),
+    networkSupport,
     officialPresetId: partial?.officialPresetId?.trim(),
     isOfficial: partial?.isOfficial ?? false,
     isCustom: partial?.isCustom ?? true,
@@ -529,7 +582,10 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       resolutionY: partial?.display?.resolutionY ?? 1620,
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
     },
-    network: sanitizePrinterNetworkSettings(partial?.network),
+    network: networkSettings,
+    networkConnection: networkSupport
+      ? sanitizePrinterNetworkConnectionState(partial?.networkConnection, networkSupport, networkSettings.ipAddress)
+      : undefined,
   };
 
   const nextState = {
@@ -643,6 +699,21 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       buildVolumeMm: updates.buildVolumeMm ?? profile.buildVolumeMm,
       display: updates.display ?? profile.display,
       network: updates.network !== undefined ? sanitizePrinterNetworkSettings(updates.network) : profile.network,
+      networkConnection: updates.networkConnection !== undefined
+        ? (
+          (updates.networkSupport !== undefined
+            ? normalizeNetworkSupport(updates.networkSupport)
+            : profile.networkSupport)
+            ? sanitizePrinterNetworkConnectionState(
+              updates.networkConnection,
+              (updates.networkSupport !== undefined
+                ? normalizeNetworkSupport(updates.networkSupport)
+                : profile.networkSupport)!,
+              sanitizePrinterNetworkSettings(updates.network ?? profile.network).ipAddress,
+            )
+            : undefined
+        )
+        : profile.networkConnection,
     };
   });
 
@@ -675,9 +746,71 @@ export function updatePrinterNetworkSettings(id: string, updates: Partial<Printe
     }
 
     changed = true;
+
+    const networkConnection = profile.networkSupport
+      ? {
+        ...createDefaultNetworkConnectionState(profile.networkSupport, next.ipAddress),
+        lastCheckedAt: profile.networkConnection?.lastCheckedAt ?? '',
+      }
+      : undefined;
+
     return {
       ...profile,
       network: next,
+      networkConnection,
+    };
+  });
+
+  if (!changed) return;
+
+  setState(ensureActiveMaterialForActivePrinter({
+    ...state,
+    printerProfiles,
+  }));
+}
+
+export function updatePrinterNetworkConnectionStatus(
+  id: string,
+  updates: Partial<PrinterNetworkConnectionState>,
+): void {
+  ensureHydrated();
+  let changed = false;
+
+  const printerProfiles = state.printerProfiles.map((profile) => {
+    if (profile.id !== id) return profile;
+    if (!profile.networkSupport) return profile;
+
+    const base = sanitizePrinterNetworkConnectionState(
+      profile.networkConnection,
+      profile.networkSupport,
+      sanitizePrinterNetworkSettings(profile.network).ipAddress,
+    );
+
+    const next = sanitizePrinterNetworkConnectionState(
+      {
+        ...base,
+        ...updates,
+      },
+      profile.networkSupport,
+      sanitizePrinterNetworkSettings(profile.network).ipAddress,
+    );
+
+    if (
+      next.mode === base.mode
+      && next.connected === base.connected
+      && next.hostName === base.hostName
+      && next.ipAddress === base.ipAddress
+      && next.port === base.port
+      && next.lastCheckedAt === base.lastCheckedAt
+      && next.statusText === base.statusText
+    ) {
+      return profile;
+    }
+
+    changed = true;
+    return {
+      ...profile,
+      networkConnection: next,
     };
   });
 
