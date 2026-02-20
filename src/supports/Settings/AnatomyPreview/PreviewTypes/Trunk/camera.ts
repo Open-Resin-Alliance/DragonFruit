@@ -13,6 +13,18 @@ export const TRUNK_HOME_FOCUS_STATE: CameraFocusState = {
     zoom: 30,
 };
 
+export const STICK_HOME_FOCUS_STATE: CameraFocusState = {
+    position: [0, -49.53, 10],
+    target: [0, 0, 9.2],
+    zoom: 23,
+};
+
+export const TWIG_HOME_FOCUS_STATE: CameraFocusState = {
+    position: [0, -49.53, 10],
+    target: [0, 0, 9.2],
+    zoom: 23,
+};
+
 export const TIP_FOCUS_STATE: CameraFocusState = {
     position: [1.66, -49.25, 10],
     target: [1.66, 0.28, 14.9],
@@ -55,4 +67,13 @@ export const SUPPORT_CAMERA_FOCUS_MAP: Record<string, CameraFocusState> = {
 export function getSupportTargetFocusState(key: string | null): CameraFocusState {
     if (!key) return SUPPORT_HOME_FOCUS_STATE;
     return SUPPORT_CAMERA_FOCUS_MAP[key] || SUPPORT_HOME_FOCUS_STATE;
+}
+
+export function getStickTargetFocusState(_key: string | null): CameraFocusState {
+    // Stick preview has dual contact points and should avoid aggressive parameter-specific zoom jumps.
+    return STICK_HOME_FOCUS_STATE;
+}
+
+export function getTwigTargetFocusState(_key: string | null): CameraFocusState {
+    return TWIG_HOME_FOCUS_STATE;
 }
