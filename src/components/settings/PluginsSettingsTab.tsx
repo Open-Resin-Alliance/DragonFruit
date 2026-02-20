@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Download, ExternalLink, Github, Loader2, Plug, ShieldCheck, Trash2 } from 'lucide-react';
+import { CheckCircle2, Download, ExternalLink, Github, Loader2, Plug, ShieldCheck, Trash2 } from 'lucide-react';
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
@@ -13,6 +13,17 @@ import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 
 const BUILTIN_ATHENA_DEVELOPER = 'Open Resin Alliance';
 const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/Dragonfruit';
+
+function isOraHostedRepository(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    if (!/github\.com$/i.test(parsed.hostname)) return false;
+    return parsed.pathname.toLowerCase().startsWith('/open-resin-alliance/');
+  } catch {
+    return false;
+  }
+}
 
 type GithubManifestResponse = {
   ok: boolean;
@@ -157,6 +168,10 @@ export function PluginsSettingsTab() {
             const developer = manifest.author || (isBuiltin ? BUILTIN_ATHENA_DEVELOPER : 'Unknown');
             const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);
             const hasRepositoryLink = typeof repositoryUrl === 'string' && repositoryUrl.trim().length > 0;
+            const isOraVerifiedBuiltin = isBuiltin && (
+              developer.toLowerCase().includes('open resin alliance')
+              || isOraHostedRepository(repositoryUrl)
+            );
 
             return (
               <div
@@ -211,7 +226,20 @@ export function PluginsSettingsTab() {
                     </div>
                   </div>
 
-                  {!isBuiltin && (
+                  {isOraVerifiedBuiltin ? (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold"
+                      style={{
+                        borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 40%)',
+                        color: '#f59e0b',
+                        background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
+                      }}
+                      title="Built-in and hosted by Open Resin Alliance"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      ORA Verified
+                    </span>
+                  ) : !isBuiltin ? (
                     <button
                       type="button"
                       onClick={() => handleUninstall(manifest.id)}
@@ -221,7 +249,7 @@ export function PluginsSettingsTab() {
                       <Trash2 className="h-3.5 w-3.5" />
                       Remove
                     </button>
-                  )}
+                  ) : null}
                 </div>
               </div>
             );
