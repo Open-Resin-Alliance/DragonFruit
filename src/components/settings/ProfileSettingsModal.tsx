@@ -48,6 +48,15 @@ type NanoDlpDetailRow = {
   value: string;
 };
 
+type NanoDlpEditDraft = {
+  burnInCureTime: number;
+  normalCureTime: number;
+  liftAfterPrint: number;
+  burnInCount: number;
+  waitAfterCure: number;
+  waitAfterLift: number;
+};
+
 function toDisplayValue(value: unknown): string | null {
   if (value == null) return null;
   if (typeof value === 'string') {
@@ -143,23 +152,92 @@ function resolveNanodlpMaterialProcessValues(material: NanoDlpMaterial): {
   };
 }
 
-function buildNanoDlpMaterialSubtitle(material: NanoDlpMaterial): string | null {
+function resolveNanodlpEditDraft(material: NanoDlpMaterial): NanoDlpEditDraft {
+  const meta = material.meta ?? {};
+
+  const burnInCureTime = firstMetaNumericValue(meta, [
+    'SupportCureTime',
+    'supportCureTime',
+    'burn_in_cure_time',
+    'BurnInCureTime',
+    'BottomCureTime',
+  ]) ?? 10;
+
+  const normalCureTime = firstMetaNumericValue(meta, [
+    'CureTime',
+    'cureTime',
+    'normal_cure_time',
+    'NormalExposure',
+    'normalExposure',
+  ]) ?? 8;
+
+  const liftAfterPrint = firstMetaNumericValue(meta, [
+    'WaitHeight',
+    'waitHeight',
+    'lift_after_print',
+    'LiftAfterPrint',
+    'ZLiftDistance',
+  ]) ?? 5;
+
+  const burnInCount = firstMetaNumericValue(meta, [
+    'SupportLayerNumber',
+    'supportLayerNumber',
+    'burn_in_count',
+    'BottomLayerCount',
+  ]) ?? 3;
+
+  const waitAfterCure = firstMetaNumericValue(meta, [
+    'TopWait',
+    'topWait',
+    'wait_after_cure',
+    'WaitAfterCure',
+  ]) ?? 2;
+
+  const waitAfterLift = firstMetaNumericValue(meta, [
+    'WaitAfterPrint',
+    'waitAfterPrint',
+    'wait_after_life',
+    'wait_after_lift',
+  ]) ?? 2;
+
+  return {
+    burnInCureTime,
+    normalCureTime,
+    liftAfterPrint,
+    burnInCount: Math.max(0, Math.round(burnInCount)),
+    waitAfterCure,
+    waitAfterLift,
+  };
+}
+
+function denormalizeNanodlpEditDraftForBackend(draft: NanoDlpEditDraft): Record<string, string> {
+  return {
+    SupportCureTime: String(draft.burnInCureTime),
+    CureTime: String(draft.normalCureTime),
+    WaitHeight: String(draft.liftAfterPrint),
+    SupportLayerNumber: String(Math.max(0, Math.round(draft.burnInCount))),
+    TopWait: String(draft.waitAfterCure),
+    WaitAfterPrint: String(draft.waitAfterLift),
+  };
+}
+
+function buildNanoDlpMaterialChips(material: NanoDlpMaterial): string[] {
   const processValues = resolveNanodlpMaterialProcessValues(material);
   const parts: string[] = [];
 
   if (processValues.bottomLayerCount != null) {
-    parts.push(`Burn-In: ${processValues.bottomLayerCount}L`);
+    parts.push(`Burn-In ${processValues.bottomLayerCount}L`);
   }
 
   if (processValues.bottomExposureSec != null) {
-    parts.push(`${processValues.bottomExposureSec.toFixed(1)}s`);
+    parts.push(`Burn-In ${processValues.bottomExposureSec.toFixed(1)}s`);
   }
 
   if (processValues.normalExposureSec != null) {
-    parts.push(`Cure: ${processValues.normalExposureSec.toFixed(1)}s`);
+    parts.push(`Cure ${processValues.normalExposureSec.toFixed(1)}s`);
   }
 
-  return parts.length > 0 ? parts.join(', ') : null;
+  return parts;
 }
 
 function buildNanoDlpDetailRows(material: NanoDlpMaterial): NanoDlpDetailRow[] {
@@ -173,10 +251,10 @@ function buildNanoDlpDetailRows(material: NanoDlpMaterial): NanoDlpDetailRow[] {
 
   add('Profile ID', ['ProfileID', 'ProfileId', 'profileId', 'id', 'ID']);
   add('Path', ['Path', 'path', 'File', 'file']);
-  add('Normal Exposure', ['Exposure', 'exposure', 'NormalExposure', 'normalExposure', 'ExpTime']);
-  add('Bottom Exposure', ['BottomExposure', 'bottomExposure', 'BottomExp', 'bottomExp']);
+  add('Normal Exposure', ['CureTime', 'cureTime', 'Exposure', 'exposure', 'NormalExposure', 'normalExposure', 'ExpTime']);
+  add('Bottom Exposure', ['SupportCureTime', 'supportCureTime', 'BottomExposure', 'bottomExposure', 'BottomExp', 'bottomExp']);
   add('Layer Height', ['LayerHeight', 'layerHeight', 'SliceHeight', 'sliceHeight']);
-  add('Bottom Layers', ['BottomLayers', 'bottomLayers', 'BottomLayerCount', 'bottomLayerCount']);
+  add('Bottom Layers', ['SupportLayerNumber', 'supportLayerNumber', 'BottomLayers', 'bottomLayers', 'BottomLayerCount', 'bottomLayerCount']);
   add('Lift Distance', ['LiftDistance', 'liftDistance']);
   add('Lift Speed', ['LiftSpeed', 'liftSpeed']);
   add('Retract Speed', ['RetractSpeed', 'retractSpeed']);
@@ -252,6 +330,16 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
   const [nanodlpMaterialsError, setNanodlpMaterialsError] = React.useState<string | null>(null);
   const [selectedNanodlpMaterialId, setSelectedNanodlpMaterialId] = React.useState<string>('');
   const [isNanodlpDetailsDialogOpen, setIsNanodlpDetailsDialogOpen] = React.useState(false);
+  const [isNanodlpEditDialogOpen, setIsNanodlpEditDialogOpen] = React.useState(false);
+  const [isSavingNanodlpEdit, setIsSavingNanodlpEdit] = React.useState(false);
+  const [nanodlpEditDraft, setNanodlpEditDraft] = React.useState<NanoDlpEditDraft>({
+    burnInCureTime: 10,
+    normalCureTime: 8,
+    liftAfterPrint: 5,
+    burnInCount: 3,
+    waitAfterCure: 2,
+    waitAfterLift: 2,
+  });
   const [deleteConfirmTarget, setDeleteConfirmTarget] = React.useState<DeleteConfirmTarget | null>(null);
   const [editMaterialDraft, setEditMaterialDraft] = React.useState<MaterialDraft>({
     name: 'Standard 405nm',
@@ -609,6 +697,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
       setNanodlpMaterials([]);
       setSelectedNanodlpMaterialId('');
       setIsNanodlpDetailsDialogOpen(false);
+      setIsNanodlpEditDialogOpen(false);
       setNanodlpMaterialsError(null);
       return;
     }
@@ -629,6 +718,53 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
       selectedMaterialBottomLayerCount: processValues.bottomLayerCount,
     });
   }, [selectedPrinter]);
+
+  const openNanodlpEditDialog = React.useCallback(() => {
+    if (!selectedNanodlpMaterial) return;
+    setNanodlpEditDraft(resolveNanodlpEditDraft(selectedNanodlpMaterial));
+    setIsNanodlpEditDialogOpen(true);
+  }, [selectedNanodlpMaterial]);
+
+  const handleSaveNanodlpEdits = React.useCallback(async () => {
+    if (!selectedPrinter) return;
+    if (!selectedNanodlpMaterial) return;
+
+    const host = (selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress || '').trim();
+    const profileId = Number(selectedNanodlpMaterial.id);
+    if (!host || !Number.isFinite(profileId) || profileId <= 0) return;
+
+    setIsSavingNanodlpEdit(true);
+    setNanodlpMaterialsError(null);
+
+    try {
+      const response = await fetch('/api/network/nanodlp/materials/edit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          host,
+          profileId,
+          fields: denormalizeNanodlpEditDraftForBackend(nanodlpEditDraft),
+        }),
+      });
+
+      const payload = await response.json().catch(() => null) as any;
+      if (!response.ok || payload?.ok !== true) {
+        throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to save NanoDLP material profile.');
+      }
+
+      setIsNanodlpEditDialogOpen(false);
+      setNetworkConnectionMessage('NanoDLP profile updated. Refreshing materials…');
+      await loadNanodlpMaterials();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save NanoDLP profile.';
+      setNanodlpMaterialsError(message);
+      setNetworkConnectionMessage(message);
+    } finally {
+      setIsSavingNanodlpEdit(false);
+    }
+  }, [loadNanodlpMaterials, nanodlpEditDraft, selectedNanodlpMaterial, selectedPrinter]);
 
   React.useEffect(() => {
     if (isNetworkSettingsOpen) {
@@ -1439,7 +1575,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                       ) : (
                         nanodlpMaterials.map((material) => {
                           const active = selectedNanodlpMaterialId === material.id;
-                          const subtitle = buildNanoDlpMaterialSubtitle(material);
+                          const chips = buildNanoDlpMaterialChips(material);
                           return (
                             <button
                               key={material.id}
@@ -1461,8 +1597,18 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                               <div className="flex items-center justify-between gap-2">
                                 <div className="flex-1">
                                   <span className="truncate text-sm font-semibold block">{material.name}</span>
-                                  {subtitle && (
-                                    <span className="truncate text-[11px] opacity-75 block mt-0.5">{subtitle}</span>
+                                  {chips.length > 0 && (
+                                    <span className="flex flex-wrap gap-1 mt-1">
+                                      {chips.map((chip) => (
+                                        <span
+                                          key={`${material.id}-${chip}`}
+                                          className="text-[10px] rounded-full border px-1.5 py-0.5"
+                                          style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)', color: 'var(--text-muted)' }}
+                                        >
+                                          {chip}
+                                        </span>
+                                      ))}
+                                    </span>
                                   )}
                                 </div>
                                 <span className="text-[10px]" style={{ color: material.locked ? '#fbbf24' : 'var(--text-muted)' }}>
@@ -1490,8 +1636,16 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                             </span>
                           )}
                           <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-                            Read-only (from NanoDLP)
+                            Synced with NanoDLP
                           </span>
+                          <button
+                            type="button"
+                            onClick={openNanodlpEditDialog}
+                            className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
+                            style={{ color: 'var(--accent-secondary)' }}
+                          >
+                            Edit profile
+                          </button>
                           <button
                             type="button"
                             onClick={() => setIsNanodlpDetailsDialogOpen(true)}
@@ -2114,6 +2268,92 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
           </div>
         )}
 
+        {isNanodlpEditDialogOpen && selectedNanodlpMaterial && (
+          <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isSavingNanodlpEdit) setIsNanodlpEditDialogOpen(false);
+          }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit NanoDLP Resin Profile</h3>
+                  <p className="ui-meta">{selectedNanodlpMaterial.name} • Profile ID {selectedNanodlpMaterial.id}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsNanodlpEditDialogOpen(false)}
+                  disabled={isSavingNanodlpEdit}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Close NanoDLP edit dialog"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3 space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  <LabeledNumberInput
+                    label="Burn-In Layer Cure Time (s)"
+                    value={nanodlpEditDraft.burnInCureTime}
+                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, burnInCureTime: value }))}
+                  />
+                  <LabeledNumberInput
+                    label="Burn-In Layer Count"
+                    value={nanodlpEditDraft.burnInCount}
+                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, burnInCount: Math.max(0, Math.round(value)) }))}
+                  />
+                  <LabeledNumberInput
+                    label="Normal Layer Cure Time (s)"
+                    value={nanodlpEditDraft.normalCureTime}
+                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, normalCureTime: value }))}
+                  />
+                  <LabeledNumberInput
+                    label="Wait After Cure (s)"
+                    value={nanodlpEditDraft.waitAfterCure}
+                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, waitAfterCure: value }))}
+                  />
+                  <LabeledNumberInput
+                    label="Lift After Print (mm)"
+                    value={nanodlpEditDraft.liftAfterPrint}
+                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, liftAfterPrint: value }))}
+                  />
+                  <LabeledNumberInput
+                    label="Wait After Lift (s)"
+                    value={nanodlpEditDraft.waitAfterLift}
+                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, waitAfterLift: value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Applies to NanoDLP profile on the printer.
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsNanodlpEditDialogOpen(false)}
+                    disabled={isSavingNanodlpEdit}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void handleSaveNanodlpEdits(); }}
+                    disabled={isSavingNanodlpEdit}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-60"
+                    style={{ color: 'var(--accent-secondary)' }}
+                  >
+                    {isSavingNanodlpEdit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    {isSavingNanodlpEdit ? 'Saving…' : 'Save to NanoDLP'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isNanodlpDetailsDialogOpen && selectedNanodlpMaterial && (
           <div className="fixed inset-0 z-[72] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsNanodlpDetailsDialogOpen(false);
@@ -2121,7 +2361,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
             <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>NanoDLP Resin Profile (Read-only)</h3>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>NanoDLP Resin Profile Details</h3>
                   <p className="ui-meta">{selectedNanodlpMaterial.name}</p>
                 </div>
                 <button

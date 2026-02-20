@@ -834,6 +834,7 @@ export function updatePrinterNetworkConnectionStatus(
       && next.selectedMaterialLayerHeightMm === base.selectedMaterialLayerHeightMm
       && next.selectedMaterialNormalExposureSec === base.selectedMaterialNormalExposureSec
       && next.selectedMaterialBottomExposureSec === base.selectedMaterialBottomExposureSec
+      && next.selectedMaterialBottomLayerCount === base.selectedMaterialBottomLayerCount
     ) {
       return profile;
     }

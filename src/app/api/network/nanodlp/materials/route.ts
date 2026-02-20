@@ -196,17 +196,23 @@ export async function POST(request: Request) {
       if (!entry || typeof entry !== 'object') continue;
 
       const raw = entry as NanoDlpRawProfile;
-      const id = resolveProfileId(raw);
+      const customValues = (raw as any).CustomValues;
+      const mergedMeta: NanoDlpRawProfile = {
+        ...raw,
+        ...(customValues && typeof customValues === 'object' ? customValues as Record<string, unknown> : {}),
+      };
+
+      const id = resolveProfileId(mergedMeta);
       if (!id || seen.has(id)) continue;
 
-      const name = resolveProfileName(raw);
-      const locked = detectLockedProfile(name, raw);
+      const name = resolveProfileName(mergedMeta);
+      const locked = detectLockedProfile(name, mergedMeta);
 
       materials.push({
         id,
         name,
         locked,
-        meta: raw,
+        meta: mergedMeta,
       });
 
       seen.add(id);
