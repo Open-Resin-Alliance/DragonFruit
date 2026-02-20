@@ -193,7 +193,10 @@ export function StlMesh({
   // Group has the transform, mesh inside is offset to center the geometry
   const baseShaderType: MeshShaderType = shaderType === 'opaque_wire_mesh' ? 'soft_clay' : shaderType;
   const showOpaqueWireOverlay = shaderType === 'opaque_wire_mesh';
-  const isHoveredModel = isPointerHovered || (hit.category === 'model' && hit.objectId === modelId);
+  const hasGpuModelHoverId = hit.category === 'model' && typeof hit.objectId === 'string' && hit.objectId.length > 0;
+  const isHoveredModel = hasGpuModelHoverId
+    ? hit.objectId === modelId
+    : isPointerHovered;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
   const dimmedBaseOpacity = isSupportDimmed
     ? Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity))
@@ -361,8 +364,14 @@ export function StlMesh({
           }
         }}
         onPointerMove={(e) => {
-          setIsPointerHovered(true);
+          const isTopMostIntersection = e.intersections[0]?.object === e.object;
+          if (!isTopMostIntersection) {
+            setIsPointerHovered(false);
+            return;
+          }
 
+          e.stopPropagation();
+          setIsPointerHovered(true);
           if (hit.category === 'gizmo' || hit.category === 'support') {
             onModelHoverPointChange?.(null);
           } else {
