@@ -155,10 +155,11 @@ export function Helpers({
   const buildPlateThicknessMm = 4;
   const buildPlateCornerRadiusMm = 3;
   const clampedBuildPlateOpacity = THREE.MathUtils.clamp(buildPlateOpacity ?? 1, 0, 1);
-  const gridColor = '#333333';
+  const gridMajorColor = '#4f5560';
+  const gridMinorColor = '#2c3138';
   const frontMarkerColor = React.useMemo(() => {
-    return new THREE.Color(gridColor).lerp(new THREE.Color('#ffffff'), 0.38).getStyle();
-  }, [gridColor]);
+    return new THREE.Color(gridMajorColor).lerp(new THREE.Color('#ffffff'), 0.36).getStyle();
+  }, [gridMajorColor]);
   const buildPlateWidth = width + buildPlateOversizeEachSideMm * 2;
   const buildPlateDepth = depth + buildPlateOversizeEachSideMm * 2;
   const buildPlateCenterZ = -buildPlateThicknessMm * 0.5 - 0.08;
@@ -356,7 +357,7 @@ export function Helpers({
 
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
       <gridHelper
-        args={[baseSize, divisions, gridColor, gridColor]}
+        args={[baseSize, divisions, gridMajorColor, gridMinorColor]}
         position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
         rotation={[Math.PI / 2, 0, 0]}
         scale={[scaleX, 1, scaleZ]}
