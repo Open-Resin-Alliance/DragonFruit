@@ -183,7 +183,7 @@ export function DuplicatePanel({
       />
 
       {expanded && (
-        <div className="px-2.5 pb-2.5 space-y-2">
+        <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Selected model</div>
             <div className="mt-0.5 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
@@ -193,10 +193,10 @@ export function DuplicatePanel({
 
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
-            <div className="grid grid-cols-2 gap-1">
+            <div className="grid grid-cols-2 gap-1 min-w-0">
               <button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 text-[11px]"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={isApplying}
                 style={layoutMode === 'auto'
@@ -211,7 +211,7 @@ export function DuplicatePanel({
               </button>
               <button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 text-[11px]"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={isApplying}
                 style={layoutMode === 'array'
@@ -231,9 +231,9 @@ export function DuplicatePanel({
             <>
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total copies</label>
-                <div className="mt-1 flex items-center gap-1">
+                <div className="mt-1 flex min-w-0 items-center gap-1">
                   <IconButton
-                    className="!h-8 !w-8 !p-0"
+                    className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedCopies(totalCopies - 1)}
                     disabled={totalCopies <= 1 || isApplying}
                     title="Decrease total copies"
@@ -250,11 +250,11 @@ export function DuplicatePanel({
                       setClampedCopies(totalCopies + (e.deltaY < 0 ? 1 : -1));
                     }}
                     disabled={isApplying}
-                    className="ui-input h-8 flex-1 px-0 text-sm text-center tabular-nums font-semibold no-spinners"
+                    className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
                   />
 
                   <IconButton
-                    className="!h-8 !w-8 !p-0"
+                    className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedCopies(totalCopies + 1)}
                     disabled={totalCopies >= 128 || isApplying}
                     title="Increase total copies"
@@ -266,9 +266,9 @@ export function DuplicatePanel({
 
               <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                 <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
-                <div className="mt-1 flex items-center gap-1">
+                <div className="mt-1 flex min-w-0 items-center gap-1">
                   <IconButton
-                    className="!h-8 !w-8 !p-0"
+                    className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedSpacing(spacingMm - 1)}
                     disabled={spacingMm <= 0 || isApplying}
                     title="Decrease spacing"
@@ -285,11 +285,11 @@ export function DuplicatePanel({
                       setClampedSpacing(spacingMm + (e.deltaY < 0 ? 1 : -1));
                     }}
                     disabled={isApplying}
-                    className="ui-input h-8 flex-1 px-0 text-sm text-center tabular-nums font-semibold no-spinners"
+                    className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
                   />
 
                   <IconButton
-                    className="!h-8 !w-8 !p-0"
+                    className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedSpacing(spacingMm + 1)}
                     disabled={spacingMm >= 120 || isApplying}
                     title="Increase spacing"
@@ -344,7 +344,7 @@ export function DuplicatePanel({
             onClick={onConfirm}
             variant="accent"
             size="sm"
-            className="w-full !h-8 text-[11px]"
+            className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
             disabled={!hasSelection || previewCount <= 0 || isApplying}
             title={!hasSelection ? 'Select a model to duplicate' : 'Generate duplicates from preview'}
           >
@@ -362,7 +362,7 @@ export function DuplicatePanel({
             onClick={onFillPlate}
             variant="secondary"
             size="sm"
-            className="w-full !h-8 text-[11px]"
+            className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
             disabled={!hasSelection || isApplying || layoutMode !== 'auto'}
             title={
               layoutMode !== 'auto'

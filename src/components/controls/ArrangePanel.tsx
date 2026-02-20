@@ -162,13 +162,13 @@ export function ArrangePanel({
       />
 
       {expanded && (
-        <div className="px-2.5 pb-2.5 space-y-2">
+        <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
             <div className="grid grid-cols-2 gap-1">
               <button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 text-[11px]"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={isApplying}
                 style={layoutMode === 'auto'
@@ -183,7 +183,7 @@ export function ArrangePanel({
               </button>
               <button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 text-[11px]"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={isApplying}
                 style={layoutMode === 'array'
@@ -210,7 +210,7 @@ export function ArrangePanel({
                 }
               }}
               disabled={isApplying}
-              className="ui-input mt-1 w-full !h-8 px-2 text-sm no-spinners"
+              className="ui-input mt-1 w-full min-w-0 !h-8 px-2 text-xs sm:text-sm no-spinners"
             />
           </div>
 
@@ -297,7 +297,7 @@ export function ArrangePanel({
               onClick={onApplyAll}
               variant="accent"
               size="sm"
-              className="w-full !h-8 text-[11px]"
+              className="w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight"
               disabled={modelCount <= 1 || isApplying}
               title={modelCount <= 1 ? 'Need at least 2 visible models to arrange' : 'Arrange all visible models'}
             >
@@ -315,7 +315,7 @@ export function ArrangePanel({
               onClick={onApplySelected}
               variant="secondary"
               size="sm"
-              className="w-full !h-8 text-[11px]"
+              className="w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight"
               disabled={selectedModelCount <= 1 || isApplying}
               title={selectedModelCount <= 1 ? 'Select at least 2 visible models to arrange' : 'Arrange selected models only'}
             >
