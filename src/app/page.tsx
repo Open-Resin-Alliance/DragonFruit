@@ -26,6 +26,7 @@ import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmooth
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -90,6 +91,7 @@ export default function Home() {
   const [supportSettingsExpanded, setSupportSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(5);
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
@@ -316,6 +318,23 @@ export default function Home() {
   }, [arrangeSpacingMm, closeEditorContextMenu, scene]);
 
   React.useEffect(() => {
+    const handleDiagnosticsHotkey = (event: KeyboardEvent) => {
+      const isCtrlShiftD = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd';
+      if (!isCtrlShiftD) return;
+
+      // Important: block browser default (e.g. "Bookmark all tabs").
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDiagnosticsOpen((prev) => !prev);
+    };
+
+    window.addEventListener('keydown', handleDiagnosticsHotkey, true);
+    return () => {
+      window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
+    };
+  }, []);
+
+  React.useEffect(() => {
     if (!editorContextMenuPos) return;
 
     const handlePointerDown = () => closeEditorContextMenu();
@@ -515,6 +534,18 @@ export default function Home() {
       .filter((model) => !outsideSet.has(model.id))
       .map((model) => model.id);
   }, [outsidePlateModelIds, scene.models]);
+
+  const totalPolygons = React.useMemo(() => {
+    return scene.models.reduce((sum, model) => sum + (model.polygonCount || 0), 0);
+  }, [scene.models]);
+
+  const selectedPolygons = React.useMemo(() => {
+    if (scene.selectedModelIds.length === 0) return 0;
+    const selectedIdSet = new Set(scene.selectedModelIds);
+    return scene.models
+      .filter((model) => selectedIdSet.has(model.id))
+      .reduce((sum, model) => sum + (model.polygonCount || 0), 0);
+  }, [scene.models, scene.selectedModelIds]);
 
   const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
     const size = model.geometry.size;
@@ -2397,6 +2428,18 @@ export default function Home() {
           'arrange',
           'repair',
         ]}
+      />
+
+      <DiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
+        appMode={scene.mode}
+        cameraProjectionMode={getSavedCameraProjectionSettings().mode}
+        modelCount={scene.models.length}
+        visibleModelCount={scene.models.filter((m) => m.visible).length}
+        selectedModelCount={scene.selectedModelIds.length}
+        totalPolygons={totalPolygons}
+        selectedPolygons={selectedPolygons}
       />
 
     </div>
