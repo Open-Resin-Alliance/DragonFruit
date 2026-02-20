@@ -136,9 +136,9 @@ function toSubnetPrefix(ipAddress: string): string | null {
   return `${a}.${b}.${c}`;
 }
 
-async function probeNanoDlp(hostOrIp: string, port: number): Promise<NanoDlpDiscoveredDevice | null> {
+async function probeNanoDlp(hostOrIp: string, port: number, timeoutMs: number = 5000): Promise<NanoDlpDiscoveredDevice | null> {
   try {
-    const status = await fetchNanoDlpStatus(hostOrIp, port, 5000);
+    const status = await fetchNanoDlpStatus(hostOrIp, port, timeoutMs);
     if (!status) return null;
 
     const hostName = resolveNanoDlpStatusHostName(status);
@@ -157,6 +157,12 @@ async function probeNanoDlp(hostOrIp: string, port: number): Promise<NanoDlpDisc
   } catch {
     return null;
   }
+}
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(numeric)));
 }
 
 async function runWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R | null>): Promise<R[]> {
@@ -405,11 +411,18 @@ async function handleNanoDlpDiscover(payload: unknown): Promise<HandlerResult> {
     }
   }
 
+  const progressive = (payload as any)?.progressive === true;
+  const probeTimeoutMs = clampNumber((payload as any)?.probeTimeoutMs, 1200, 350, 8000);
+  const localConcurrency = clampNumber((payload as any)?.localConcurrency, forcedHost ? 8 : 20, 4, 64);
+  const subnetConcurrency = clampNumber((payload as any)?.subnetConcurrency, forcedHost ? 12 : 84, 8, 160);
+  const requestedBatchStart = clampNumber((payload as any)?.batchStart, 0, 0, Number.MAX_SAFE_INTEGER);
+  const requestedBatchSize = clampNumber((payload as any)?.batchSize, 96, 8, 256);
+
   const foundByAddress = new Map<string, NanoDlpDiscoveredDevice>();
 
   if (localTargets.length > 0) {
-    await runWithConcurrency(localTargets, forcedHost ? 8 : 20, async (target) => {
-      const result = await probeNanoDlp(target.host, target.port);
+    await runWithConcurrency(localTargets, localConcurrency, async (target) => {
+      const result = await probeNanoDlp(target.host, target.port, Math.max(probeTimeoutMs, 1500));
       if (!result) return null;
       if (foundByAddress.has(result.ipAddress)) return null;
       foundByAddress.set(result.ipAddress, result);
@@ -417,10 +430,44 @@ async function handleNanoDlpDiscover(payload: unknown): Promise<HandlerResult> {
     });
   }
 
+  if (progressive && scanScope === 'subnet') {
+    const totalEndpoints = subnetTargets.length;
+    const batchStart = Math.min(requestedBatchStart, totalEndpoints);
+    const batchEnd = Math.min(totalEndpoints, batchStart + requestedBatchSize);
+    const batchTargets = subnetTargets.slice(batchStart, batchEnd);
+
+    await runWithConcurrency(batchTargets, subnetConcurrency, async (target) => {
+      const result = await probeNanoDlp(target.ipAddress, target.port, probeTimeoutMs);
+      if (!result) return null;
+      if (foundByAddress.has(result.ipAddress)) return null;
+      foundByAddress.set(result.ipAddress, result);
+      return result;
+    });
+
+    return {
+      status: 200,
+      body: {
+        mode: 'nanodlp',
+        devices: Array.from(foundByAddress.values()),
+        scannedHosts: effectiveSubnetHostCandidates.length,
+        scannedEndpoints: batchEnd,
+        scannedLocalHostnames: 0,
+        scannedSubnetHosts: effectiveSubnetHostCandidates.length,
+        scanScope,
+        progressive: true,
+        totalEndpoints,
+        batchStart,
+        batchSize: batchTargets.length,
+        nextBatchStart: batchEnd,
+        done: batchEnd >= totalEndpoints,
+      },
+    };
+  }
+
   if (subnetTargets.length > 0) {
-    await runWithConcurrency(subnetTargets, forcedHost ? 8 : 48, async (target) => {
+    await runWithConcurrency(subnetTargets, subnetConcurrency, async (target) => {
       if (foundByAddress.has(target.ipAddress)) return null;
-      const result = await probeNanoDlp(target.ipAddress, target.port);
+      const result = await probeNanoDlp(target.ipAddress, target.port, probeTimeoutMs);
       if (!result) return null;
 
       if (!foundByAddress.has(result.ipAddress)) {

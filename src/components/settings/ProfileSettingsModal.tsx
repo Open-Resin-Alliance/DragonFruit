@@ -750,51 +750,96 @@ export function ProfileSettingsModal({
         };
       }).filter((item) => item.ipAddress.length > 0);
 
+      const baseDiscovered = [...seedDevices, ...localDiscovered].filter((item, index, array) => (
+        array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
+      ));
+
+      setDiscoveredPrinters(baseDiscovered);
+
       setNetworkScanProgressPct(44);
       setNetworkScanPhaseLabel('Scanning local subnet…');
       setNetworkConnectionMessage('Scanning local subnet for NanoDLP devices…');
       setNetworkScanProgressPct(56);
 
-      const response = await fetch('/api/network/plugin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          pluginId: 'athena',
-          operation: 'nanodlp/discover',
-          mode: 'nanodlp',
-          scanScope: 'subnet',
-          host: networkIpAddress.trim() || undefined,
-          excludeHosts: localDiscovered.map((item) => item.ipAddress),
-          seedIps: localDiscovered.map((item) => item.ipAddress),
-          ports: [80, 8080],
-        }),
-      });
+      const subnetDiscovered: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
+      let subnetPayloadLast: any = null;
+      let subnetBatchStart = 0;
+      let subnetTotalEndpoints = 0;
+      let subnetScannedEndpoints = 0;
 
-      const payload = await response.json().catch(() => null) as any;
-      const devices: any[] = Array.isArray(payload?.devices) ? payload.devices : [];
-      const scannedHosts = Number.isFinite(Number(payload?.scannedHosts)) ? Number(payload.scannedHosts) : 0;
-      const scannedEndpoints = Number.isFinite(Number(payload?.scannedEndpoints)) ? Number(payload.scannedEndpoints) : 0;
+      while (true) {
+        const response = await fetch('/api/network/plugin', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            pluginId: 'athena',
+            operation: 'nanodlp/discover',
+            mode: 'nanodlp',
+            scanScope: 'subnet',
+            progressive: true,
+            batchStart: subnetBatchStart,
+            batchSize: 96,
+            probeTimeoutMs: 1200,
+            subnetConcurrency: 84,
+            host: networkIpAddress.trim() || undefined,
+            excludeHosts: localDiscovered.map((item) => item.ipAddress),
+            seedIps: localDiscovered.map((item) => item.ipAddress),
+            ports: [80, 8080],
+          }),
+        });
+
+        const payload = await response.json().catch(() => null) as any;
+        subnetPayloadLast = payload;
+
+        const devices: any[] = Array.isArray(payload?.devices) ? payload.devices : [];
+        const discoveredBatch = devices.map((device, index) => {
+          const hostName = typeof device?.hostName === 'string' ? device.hostName.trim() : '';
+          const printerName = typeof device?.printerName === 'string' ? device.printerName.trim() : '';
+          const ipAddress = typeof device?.ipAddress === 'string' ? device.ipAddress.trim() : '';
+
+          return {
+            id: `${selectedPrinter.id}-scan-batch-${subnetBatchStart}-${index}`,
+            name: hostName || printerName || 'NanoDLP Printer',
+            ipAddress,
+            status: 'online' as const,
+          };
+        }).filter((item) => item.ipAddress.length > 0);
+
+        subnetDiscovered.push(...discoveredBatch);
+
+        const liveMerged = [...baseDiscovered, ...subnetDiscovered].filter((item, index, array) => (
+          array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
+        ));
+        setDiscoveredPrinters(liveMerged);
+
+        subnetTotalEndpoints = Number.isFinite(Number(payload?.totalEndpoints)) ? Number(payload.totalEndpoints) : subnetTotalEndpoints;
+        subnetScannedEndpoints = Number.isFinite(Number(payload?.scannedEndpoints)) ? Number(payload.scannedEndpoints) : subnetScannedEndpoints;
+
+        const subnetProgressRatio = subnetTotalEndpoints > 0
+          ? Math.min(1, subnetScannedEndpoints / subnetTotalEndpoints)
+          : 1;
+        const progressPct = Math.round(56 + (subnetProgressRatio * 42));
+
+        setNetworkScanProgressPct(Math.max(56, Math.min(98, progressPct)));
+        setNetworkScanPhaseLabel(`Scanning local subnet… ${subnetScannedEndpoints}/${subnetTotalEndpoints || 0} endpoints`);
+
+        const done = payload?.done === true;
+        const nextBatchStart = Number.isFinite(Number(payload?.nextBatchStart)) ? Number(payload.nextBatchStart) : subnetScannedEndpoints;
+        if (done || nextBatchStart <= subnetBatchStart) {
+          break;
+        }
+
+        subnetBatchStart = nextBatchStart;
+      }
+
+      const scannedHosts = Number.isFinite(Number(subnetPayloadLast?.scannedHosts)) ? Number(subnetPayloadLast.scannedHosts) : 0;
+      const scannedEndpoints = subnetScannedEndpoints;
       const scannedLocalHostnames = Number.isFinite(Number(localPayload?.scannedLocalHostnames)) ? Number(localPayload.scannedLocalHostnames) : localHostnameCandidates.length;
-      const scannedSubnetHosts = Number.isFinite(Number(payload?.scannedSubnetHosts)) ? Number(payload.scannedSubnetHosts) : scannedHosts;
+      const scannedSubnetHosts = Number.isFinite(Number(subnetPayloadLast?.scannedSubnetHosts)) ? Number(subnetPayloadLast.scannedSubnetHosts) : scannedHosts;
 
-      setNetworkScanProgressPct(92);
-
-      const discovered = devices.map((device, index) => {
-        const hostName = typeof device?.hostName === 'string' ? device.hostName.trim() : '';
-        const printerName = typeof device?.printerName === 'string' ? device.printerName.trim() : '';
-        const ipAddress = typeof device?.ipAddress === 'string' ? device.ipAddress.trim() : '';
-
-        return {
-          id: `${selectedPrinter.id}-scan-${index}`,
-          name: hostName || printerName || 'NanoDLP Printer',
-          ipAddress,
-          status: 'online' as const,
-        };
-      }).filter((item) => item.ipAddress.length > 0);
-
-      const merged = [...seedDevices, ...localDiscovered, ...discovered].filter((item, index, array) => (
+      const merged = [...baseDiscovered, ...subnetDiscovered].filter((item, index, array) => (
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
