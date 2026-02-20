@@ -781,7 +781,18 @@ export function useSceneCollectionManager() {
   const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
 
   const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean }): GeometryWithBounds => {
+    const sourceVolumeKey = String(source.geometry.userData?.resinVolumeSourceKey ?? source.geometry.uuid);
+    source.geometry.userData = {
+      ...source.geometry.userData,
+      resinVolumeSourceKey: sourceVolumeKey,
+    };
+
     const clonedGeometry = source.geometry.clone();
+    clonedGeometry.userData = {
+      ...clonedGeometry.userData,
+      resinVolumeSourceKey: sourceVolumeKey,
+    };
+
     if (options?.accelerate ?? true) {
       accelerateGeometry(clonedGeometry);
     }
