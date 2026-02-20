@@ -663,7 +663,15 @@ export function useSceneCollectionManager() {
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
   const view3dSettings = useMemo(() => {
-    if (!activePrinterProfile) return storedView3dSettings;
+    if (!activePrinterProfile) {
+      // When no printer is selected ("Use without Printer" mode),
+      // disable build volume bounds and out-of-bounds warnings by default
+      return normalizeView3DSettings({
+        ...storedView3dSettings,
+        enabled: false,
+        showViolationWarning: false,
+      });
+    }
 
     return normalizeView3DSettings({
       ...storedView3dSettings,

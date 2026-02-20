@@ -117,6 +117,8 @@ export function WorkspacesSettingsTab({
             </button>
           </div>
 
+          {view3dSettings.enabled && (
+          <>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Build Width (mm)
@@ -266,6 +268,8 @@ export function WorkspacesSettingsTab({
               {view3dSettings.showViolationWarning ? 'ON' : 'OFF'}
             </button>
           </div>
+          </>
+          )}
 
             </>
           )}
