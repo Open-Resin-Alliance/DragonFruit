@@ -1,44 +1,47 @@
-# Dragonfruit Plugins
+# DragonFruit Plugins
 
-Dragonfruit supports a **safe profile-plugin system** for vendor/printer extensions.
+DragonFruit supports a plugin architecture for printer ecosystems and vendor-specific extensions.
 
-This root `plugins/` directory is for built-in plugins that ship with Dragonfruit (for example Athena).
-External plugins can be installed from GitHub via the Settings → Plugins loader.
-
----
-
-## Goals
-
-The plugin system is designed to:
-
-- keep vendor-specific logic out of core app UI,
-- allow new printer ecosystems to add presets/material profiles,
-- avoid hard dependencies on any single vendor,
-- remain safe: **no remote code execution**.
+This directory contains **built-in plugins** that ship with DragonFruit (for example Athena). DragonFruit also supports installing **external GitHub manifest plugins** through the Settings UI.
 
 ---
 
-## Safety model
+## Plugin model at a glance
 
-Dragonfruit only loads **JSON manifest data** from external GitHub repos.
+DragonFruit supports two plugin paths:
 
-- ✅ Allowed: metadata, printer preset packs, material template packs.
-- ❌ Not allowed: downloading and executing arbitrary JS/TS from external repos.
-
-Built-in plugins (like Athena) are compiled with Dragonfruit and always available.
+1. **External manifest plugins (GitHub)**
+   - Data-only extensions: metadata, printer presets, and material templates.
+   - Installed from a GitHub repository manifest.
+2. **Built-in complex plugins (repository PRs)**
+   - Runtime logic/tooling: protocol handlers, custom workflows, advanced integration code.
+   - Contributed directly to this repository and compiled with the app.
 
 ---
 
-## Built-in plugin
+## Security model
 
-- `plugins/athena/nanodlpProfilePlugin.ts`
-  - Athena/NanoDLP field semantics
-  - Basic/Advanced grouping and classification
-  - dynamic wait behavior logic
-  - tooltip/help text for advanced parameters
-- `plugins/athena/printers/concepts3d/`
-  - plugin-owned printer presets (`printers.json`)
-  - plugin-owned images (`assets/*`)
+External GitHub plugins are intentionally restricted to manifest data.
+
+- Allowed: metadata, printer preset packs, material template packs.
+- Not allowed: remote JS/TS execution, runtime code download/eval, external binaries.
+
+This keeps external plugin installation safe while allowing advanced integrations through built-in plugins.
+
+---
+
+## Built-in plugins
+
+Built-in plugins live under `plugins/<vendor>/`.
+
+Current example:
+
+- `plugins/athena/`
+  - `pluginManifest.ts`
+  - `nanodlpProfilePlugin.ts`
+  - `network/nanodlpHandlers.ts`
+  - `network/nanodlp.ts`
+  - `printers/concepts3d/`
 
 Built-in plugin assets can be served from:
 
@@ -50,13 +53,13 @@ Example:
 
 ---
 
-## External plugin manifest
+## External GitHub manifest plugins
 
-Default manifest filename:
+### Manifest filename
 
-- `dragonfruit-plugin.json`
+- Default: `dragonfruit-plugin.json`
 
-Minimal schema:
+### Minimal schema
 
 ```json
 {
@@ -72,40 +75,90 @@ Minimal schema:
 }
 ```
 
-### Notes
+### Required fields
 
-- `id`, `name`, `version` are required.
-- `printerPresets` and `materialTemplates` are optional.
-- Relative preset image paths are resolved to raw GitHub URLs during install.
+- `id` (max 120 chars)
+- `name` (max 120 chars)
+- `version` (max 48 chars)
 
----
+### Optional fields
 
-## Loader flow
+- `description` (max 500 chars)
+- `author` (max 120 chars)
+- `homepage` (http/https URL)
+- `printerPresets` (max 128)
+- `materialTemplates` (max 512)
 
-1. User opens **Settings → Plugins**.
-2. User enters GitHub repo URL.
-3. Dragonfruit server route fetches manifest from GitHub and validates it.
-4. Manifest is stored locally as an installed external plugin.
-5. Runtime preset/template lists are merged with built-in data.
+### Asset path behavior
 
-If no external plugins are installed, Dragonfruit behaves normally with built-in defaults.
-
----
-
-## Where plugin runtime lives
-
-- Registry/runtime merge logic:
-  - `src/features/plugins/pluginRegistry.ts`
-- GitHub manifest fetch endpoint:
-  - `src/app/api/plugins/github-manifest/route.ts`
-- Settings UI plugin loader:
-  - `src/components/settings/PluginsSettingsTab.tsx`
+- Relative paths are resolved relative to the manifest location.
+- Absolute `http(s)` URLs are accepted.
+- `data:` URLs are rejected.
 
 ---
 
-## Authoring guidance
+## External plugin repository layout
 
-- Keep plugin logic pure and declarative where possible.
-- Put vendor-specific semantics in plugin files, not generic components.
-- Version plugin manifests semantically (`x.y.z`).
-- Test with and without plugin installed to ensure graceful fallback behavior.
+Typical repository structure:
+
+```text
+my-vendor-plugin/
+├── dragonfruit-plugin.json
+└── assets/
+    ├── printer-1.png
+    └── ...
+```
+
+Presets and material templates can be embedded directly in `dragonfruit-plugin.json`.
+
+---
+
+## Install flow (external plugins)
+
+### User flow
+
+1. Open **Settings → Plugins**
+2. Enter a GitHub repository URL
+3. Click **Install Plugin**
+
+### Runtime flow
+
+1. `POST /api/plugins/github-manifest` fetches the manifest from GitHub
+2. Manifest fields are validated/sanitized
+3. Installed plugin metadata is persisted locally
+4. Presets/templates are merged into runtime lists
+
+Uninstall is handled from the same Settings UI.
+
+### Optional custom manifest path
+
+The API supports `manifestPath` when the manifest is not at repository root.
+
+---
+
+## Complex plugin contributions
+
+Complex plugins (custom tooling/runtime logic) are contributed as built-in plugins via pull request.
+
+See:
+
+- `plugins/CONTRIBUTING_COMPLEX_PLUGINS.md`
+
+---
+
+## Runtime integration points
+
+- Plugin profile registry: `src/features/plugins/pluginRegistry.ts`
+- Network plugin handler registry: `src/features/plugins/networkPluginRegistry.ts`
+- GitHub manifest route: `src/app/api/plugins/github-manifest/route.ts`
+- Network plugin route dispatcher: `src/app/api/network/plugin/route.ts`
+- Settings UI: `src/components/settings/PluginsSettingsTab.tsx`
+
+---
+
+## Authoring guidelines
+
+- Keep vendor-specific logic in plugin-owned files.
+- Keep shared/core UI generic.
+- Use semantic versions for plugin manifests.
+- Validate behavior with and without the plugin enabled.
