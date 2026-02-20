@@ -11,12 +11,18 @@ import { openProfileSettingsModal } from '@/components/settings/profileModalEven
 
 interface ModelStatsCardProps {
   model: LoadedModel | null;
+  models: LoadedModel[];
+  selectedModelIds: string[];
+  inBoundsModelIds: string[];
   numLayers: number;
   heightMm: number;
 }
 
 export function ModelStatsCard({
   model,
+  models,
+  selectedModelIds,
+  inBoundsModelIds,
   numLayers,
   heightMm
 }: ModelStatsCardProps) {
@@ -37,6 +43,60 @@ export function ModelStatsCard({
     }
     return activeMaterialProfile?.name ?? '-';
   }, [activeMaterialProfile, activePrinterProfile]);
+
+  const effectiveLayerHeightMm = React.useMemo(() => {
+    const networkConnection = activePrinterProfile?.networkConnection;
+    if (
+      activePrinterProfile?.networkSupport === 'nanodlp'
+      && networkConnection?.connected
+      && Number.isFinite(Number(networkConnection.selectedMaterialLayerHeightMm))
+    ) {
+      const value = Number(networkConnection.selectedMaterialLayerHeightMm);
+      if (value > 0) return value;
+    }
+    return activeMaterialProfile?.layerHeightMm;
+  }, [activeMaterialProfile, activePrinterProfile]);
+
+  const effectiveNormalExposureSec = React.useMemo(() => {
+    const networkConnection = activePrinterProfile?.networkConnection;
+    if (
+      activePrinterProfile?.networkSupport === 'nanodlp'
+      && networkConnection?.connected
+      && Number.isFinite(Number(networkConnection.selectedMaterialNormalExposureSec))
+    ) {
+      const value = Number(networkConnection.selectedMaterialNormalExposureSec);
+      if (value > 0) return value;
+    }
+    return activeMaterialProfile?.normalExposureSec;
+  }, [activeMaterialProfile, activePrinterProfile]);
+
+  const effectiveBottomExposureSec = React.useMemo(() => {
+    const networkConnection = activePrinterProfile?.networkConnection;
+    if (
+      activePrinterProfile?.networkSupport === 'nanodlp'
+      && networkConnection?.connected
+      && Number.isFinite(Number(networkConnection.selectedMaterialBottomExposureSec))
+    ) {
+      const value = Number(networkConnection.selectedMaterialBottomExposureSec);
+      if (value > 0) return value;
+    }
+    return activeMaterialProfile?.bottomExposureSec;
+  }, [activeMaterialProfile, activePrinterProfile]);
+
+  const effectiveBottomLayerCount = React.useMemo(() => {
+    const networkConnection = activePrinterProfile?.networkConnection;
+    if (
+      activePrinterProfile?.networkSupport === 'nanodlp'
+      && networkConnection?.connected
+      && Number.isFinite(Number(networkConnection.selectedMaterialBottomLayerCount))
+    ) {
+      const value = Number(networkConnection.selectedMaterialBottomLayerCount);
+      if (value > 0) return value;
+    }
+    return activeMaterialProfile?.bottomLayerCount ?? 0;
+  }, [activeMaterialProfile, activePrinterProfile]);
+
+  // Compute per-model layer counts
 
   const formatBytes = (bytes: number) => {
     const abs = Math.max(0, bytes);
@@ -61,31 +121,81 @@ export function ModelStatsCard({
     return `${s}s`;
   };
 
-  const estimatedExposureOnlySeconds = React.useMemo(() => {
-    if (!model || !activeMaterialProfile || numLayers <= 0) return null;
 
-    const bottomLayers = Math.max(0, Math.min(numLayers, Math.round(activeMaterialProfile.bottomLayerCount || 0)));
+  // Move these above selectedLayerCounts to avoid use-before-declaration
+
+  // Must be declared before any hook that uses them
+
+  // Must be declared before any hook or logic that uses them
+  const selectedModelSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  const inBoundsModelSet = React.useMemo(() => new Set(inBoundsModelIds), [inBoundsModelIds]);
+
+  // Compute per-model layer counts
+  const getModelLayerCount = React.useCallback((entry: LoadedModel): number | null => {
+    // Use model height and effective layer height
+    const bbox = entry.geometry.bbox;
+    const minZ = bbox.min.z;
+    const maxZ = bbox.max.z;
+    const height = Math.max(0, maxZ - minZ) * Math.abs(entry.transform.scale.z || 1);
+    if (!effectiveLayerHeightMm || effectiveLayerHeightMm <= 0) return null;
+    return Math.ceil(height / effectiveLayerHeightMm);
+  }, [effectiveLayerHeightMm]);
+
+  // Compute per-selected or plate layer count
+  const selectedLayerCounts = React.useMemo(() => {
+    if (selectedModelSet.size > 0) {
+      return models.filter((entry) => selectedModelSet.has(entry.id) && entry.visible)
+        .map((entry) => ({ name: entry.name, count: getModelLayerCount(entry) }));
+    }
+    if (inBoundsModelSet.size > 0) {
+      return models.filter((entry) => inBoundsModelSet.has(entry.id) && entry.visible)
+        .map((entry) => ({ name: entry.name, count: getModelLayerCount(entry) }));
+    }
+    return [];
+  }, [getModelLayerCount, inBoundsModelSet, models, selectedModelSet]);
+
+  const maxLayerCount = React.useMemo(() => {
+    if (selectedLayerCounts.length === 0) return null;
+    return selectedLayerCounts.reduce((max, entry) => (entry.count != null && entry.count > max ? entry.count : max), 0);
+  }, [selectedLayerCounts]);
+
+  const resinTargetModels = React.useMemo(() => {
+    const visibleModels = models.filter((entry) => entry.visible);
+
+    if (selectedModelSet.size > 0) {
+      return visibleModels.filter((entry) => selectedModelSet.has(entry.id));
+    }
+
+    if (inBoundsModelSet.size > 0) {
+      return visibleModels.filter((entry) => inBoundsModelSet.has(entry.id));
+    }
+
+    return [] as LoadedModel[];
+  }, [inBoundsModelSet, models, selectedModelSet]);
+
+  const estimatedExposureOnlySeconds = React.useMemo(() => {
+    if (resinTargetModels.length === 0 || numLayers <= 0 || effectiveNormalExposureSec == null) return null;
+
+    const bottomLayers = Math.max(0, Math.min(numLayers, Math.round(effectiveBottomLayerCount || 0)));
     const normalLayers = Math.max(0, numLayers - bottomLayers);
 
-    const bottomTime = bottomLayers * Math.max(0, activeMaterialProfile.bottomExposureSec || 0);
-    const normalTime = normalLayers * Math.max(0, activeMaterialProfile.normalExposureSec || 0);
+    const bottomTime = bottomLayers * Math.max(0, effectiveBottomExposureSec ?? effectiveNormalExposureSec);
+    const normalTime = normalLayers * Math.max(0, effectiveNormalExposureSec);
 
     // A small fixed overhead per layer for lift/retract + settle.
     const movementOverheadSec = numLayers * 3.0;
     return bottomTime + normalTime + movementOverheadSec;
-  }, [activeMaterialProfile, model, numLayers]);
+  }, [effectiveBottomExposureSec, effectiveBottomLayerCount, effectiveNormalExposureSec, numLayers, resinTargetModels.length]);
 
-  const estimatedResinMl = React.useMemo(() => {
-    if (!model) return null;
-
-    const geometry = model.geometry.geometry;
+  const estimateModelResinMl = React.useCallback((entry: LoadedModel): number | null => {
+    const geometry = entry.geometry.geometry;
     const position = geometry.getAttribute('position');
     if (!position) return null;
 
     const index = geometry.getIndex();
-    const sx = Math.abs(model.transform.scale.x || 1);
-    const sy = Math.abs(model.transform.scale.y || 1);
-    const sz = Math.abs(model.transform.scale.z || 1);
+    const sx = Math.abs(entry.transform.scale.x || 1);
+    const sy = Math.abs(entry.transform.scale.y || 1);
+    const sz = Math.abs(entry.transform.scale.z || 1);
 
     let signedVolume = 0;
 
@@ -124,7 +234,23 @@ export function ModelStatsCard({
     const volumeMm3 = Math.abs(signedVolume);
     if (!Number.isFinite(volumeMm3)) return null;
     return volumeMm3 / 1000; // 1000 mm^3 = 1 ml
-  }, [model]);
+  }, []);
+
+  const estimatedResinMl = React.useMemo(() => {
+    if (resinTargetModels.length === 0) return null;
+
+    let totalMl = 0;
+    let found = false;
+
+    for (const entry of resinTargetModels) {
+      const modelMl = estimateModelResinMl(entry);
+      if (modelMl == null) continue;
+      totalMl += modelMl;
+      found = true;
+    }
+
+    return found ? totalMl : null;
+  }, [estimateModelResinMl, resinTargetModels]);
 
   const estimatedResinCost = React.useMemo(() => {
     if (estimatedResinMl == null || !activeMaterialProfile) return null;
@@ -210,18 +336,29 @@ export function ModelStatsCard({
 
               <span>Layer profile:</span>
               <span style={{ color: 'var(--text-strong)' }}>
-                {activeMaterialProfile ? `${Math.round(activeMaterialProfile.layerHeightMm * 1000)}μm` : '-'}
+                {effectiveLayerHeightMm != null ? `${Math.round(effectiveLayerHeightMm * 1000)}μm` : '-'}
               </span>
 
               <span>Exposure:</span>
               <span style={{ color: 'var(--text-strong)' }}>
-                {activeMaterialProfile
-                  ? `${activeMaterialProfile.normalExposureSec.toFixed(1)}s • ${activeMaterialProfile.bottomExposureSec.toFixed(1)}s`
+                {effectiveNormalExposureSec != null
+                  ? `${effectiveNormalExposureSec.toFixed(1)}s • ${(effectiveBottomExposureSec ?? effectiveNormalExposureSec).toFixed(1)}s`
                   : '-'}
               </span>
 
+
               <span>Layers:</span>
-              <span style={{ color: 'var(--text-strong)' }}>{model ? numLayers : '-'}</span>
+              <span style={{ color: 'var(--text-strong)' }}>
+                {selectedModelSet.size > 0
+                  ? selectedLayerCounts.map((entry, i) => (
+                      <span key={entry.name}>
+                        {entry.name}: {entry.count ?? '-'}{i < selectedLayerCounts.length - 1 ? ', ' : ''}
+                      </span>
+                    ))
+                  : maxLayerCount != null
+                    ? `Plate: ${maxLayerCount}`
+                    : '-'}
+              </span>
 
               <span>Est. print time:</span>
               <span style={{ color: 'var(--text-strong)' }}>
