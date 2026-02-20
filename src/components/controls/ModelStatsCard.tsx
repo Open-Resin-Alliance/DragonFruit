@@ -7,6 +7,7 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 
 interface ModelStatsCardProps {
   model: LoadedModel | null;
@@ -132,10 +133,26 @@ export function ModelStatsCard({
 
         <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
           <span>Printer:</span>
-          <span style={{ color: 'var(--text-strong)' }}>{activePrinterProfile?.name ?? '-'}</span>
+          <button
+            type="button"
+            onClick={() => openProfileSettingsModal('printer')}
+            className="pointer-events-auto text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
+            style={{ color: 'var(--text-strong)' }}
+            title="Open printer profiles"
+          >
+            {activePrinterProfile?.name ?? '-'}
+          </button>
 
           <span>Material:</span>
-          <span style={{ color: 'var(--text-strong)' }}>{activeMaterialProfile?.name ?? '-'}</span>
+          <button
+            type="button"
+            onClick={() => openProfileSettingsModal('material')}
+            className="pointer-events-auto text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
+            style={{ color: 'var(--text-strong)' }}
+            title="Open material profiles"
+          >
+            {activeMaterialProfile?.name ?? '-'}
+          </button>
 
           <span>Layer profile:</span>
           <span style={{ color: 'var(--text-strong)' }}>

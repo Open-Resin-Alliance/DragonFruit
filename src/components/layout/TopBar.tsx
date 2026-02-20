@@ -15,6 +15,10 @@ import {
   getSavedThemePreference,
 } from '@/components/settings/themeCustomizations';
 import {
+  OPEN_PROFILE_SETTINGS_MODAL_EVENT,
+  type ProfileSettingsTab,
+} from '@/components/settings/profileModalEvents';
+import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   hydrateProfilesFromStorage,
@@ -120,6 +124,26 @@ export function TopBar({
 
   React.useEffect(() => {
     hydrateProfilesFromStorage();
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleOpenProfileModal = (event: Event) => {
+      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab }>;
+      const requestedTab = customEvent.detail?.tab;
+      if (requestedTab === 'printer' || requestedTab === 'material') {
+        setProfileModalTab(requestedTab);
+      } else {
+        setProfileModalTab('printer');
+      }
+      setIsProfileModalOpen(true);
+    };
+
+    window.addEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
+    return () => {
+      window.removeEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
+    };
   }, []);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
