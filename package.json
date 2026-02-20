@@ -33,8 +33,8 @@
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
     "baseline-browser-mapping": "^2.9.4",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.1",
+    "eslint": "^4.0.0",
+    "eslint-config-next": "^12.0.4",
     "tailwindcss": "^4",
     "tsx": "^4.7.0",
     "typescript": "^5"
