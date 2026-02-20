@@ -2132,14 +2132,16 @@ export function SceneCanvas({
 
       {activeBuildVolumeSettings?.enabled && activeBuildVolumeSettings.showViolationWarning && outOfBoundsModels.length > 0 && (
         <div
-          className="absolute left-3 top-3 z-40 rounded-md border px-3 py-2 text-xs"
+          className="absolute bottom-5 left-1/2 z-40 -translate-x-1/2 animate-pulse rounded-full border px-5 py-2 text-sm font-semibold shadow-lg"
           style={{
-            borderColor: 'color-mix(in srgb, #ff5b6f, var(--border-subtle) 30%)',
-            background: 'color-mix(in srgb, #ff5b6f, var(--surface-0) 88%)',
+            pointerEvents: 'none',
+            borderColor: 'color-mix(in srgb, #ff5b6f, var(--border-subtle) 42%)',
+            background: 'color-mix(in srgb, #ff5b6f, var(--surface-0) 90%)',
             color: 'var(--text-strong)',
           }}
           title={outOfBoundsModels.map((m) => m.name).join(', ')}
         >
+          <span style={{ marginRight: 6 }}>⚠</span>
           {outOfBoundsModels.length} model{outOfBoundsModels.length === 1 ? '' : 's'} out of build volume
         </div>
       )}
