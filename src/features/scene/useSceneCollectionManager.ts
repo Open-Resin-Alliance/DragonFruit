@@ -1524,7 +1524,7 @@ export function useSceneCollectionManager() {
     return createdIds;
   }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
-  const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[]) => {
+  const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[], sourceTransform?: ModelTransform | null) => {
     if (transforms.length === 0) return [] as string[];
 
     const source = models.find((m) => m.id === sourceId);
@@ -1566,11 +1566,20 @@ export function useSceneCollectionManager() {
 
     const withSourceGroup = models.map((model) => {
       if (model.id !== sourceId) return model;
-      if (model.groupId === resolvedGroupId && model.groupName === resolvedGroupName) return model;
+      const shouldUpdateGroup = model.groupId !== resolvedGroupId || model.groupName !== resolvedGroupName;
+      const shouldUpdateTransform = !!sourceTransform;
+      if (!shouldUpdateGroup && !shouldUpdateTransform) return model;
       return {
         ...model,
         groupId: resolvedGroupId,
         groupName: resolvedGroupName,
+        transform: sourceTransform
+          ? {
+              position: sourceTransform.position.clone(),
+              rotation: sourceTransform.rotation.clone(),
+              scale: sourceTransform.scale.clone(),
+            }
+          : model.transform,
       };
     });
 

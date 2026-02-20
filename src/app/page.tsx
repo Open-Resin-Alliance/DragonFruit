@@ -1596,15 +1596,17 @@ export default function Home() {
     await sleep(0);
 
     try {
-      if (duplicateSourcePreviewTransform) {
-        scene.updateModelTransform(scene.activeModelId, {
-          position: duplicateSourcePreviewTransform.position.clone(),
-          rotation: duplicateSourcePreviewTransform.rotation.clone(),
-          scale: duplicateSourcePreviewTransform.scale.clone(),
-        });
-      }
-
-      scene.duplicateModelWithTransforms(scene.activeModelId, duplicatePreviewTransforms);
+      scene.duplicateModelWithTransforms(
+        scene.activeModelId,
+        duplicatePreviewTransforms,
+        duplicateSourcePreviewTransform
+          ? {
+              position: duplicateSourcePreviewTransform.position.clone(),
+              rotation: duplicateSourcePreviewTransform.rotation.clone(),
+              scale: duplicateSourcePreviewTransform.scale.clone(),
+            }
+          : null,
+      );
       setDuplicateTotalCopies(2);
       setDuplicateSourcePreviewTransform(null);
       setDuplicatePreviewTransforms([]);
