@@ -28,6 +28,7 @@ export function ModelStatsCard({
   heightMm
 }: ModelStatsCardProps) {
   const [isFlipped, setIsFlipped] = React.useState(false);
+  const baseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
@@ -194,47 +195,55 @@ export function ModelStatsCard({
     if (!position) return null;
 
     const index = geometry.getIndex();
+    const cacheKey = `${geometry.uuid}:${position.version}:${index?.version ?? 0}`;
+    let baseMl = baseResinMlCacheRef.current.get(cacheKey);
+
+    if (baseMl === undefined) {
+      let signedVolume = 0;
+
+      const vax = { x: 0, y: 0, z: 0 };
+      const vbx = { x: 0, y: 0, z: 0 };
+      const vcx = { x: 0, y: 0, z: 0 };
+
+      const readVertex = (i: number, out: { x: number; y: number; z: number }) => {
+        out.x = position.getX(i);
+        out.y = position.getY(i);
+        out.z = position.getZ(i);
+      };
+
+      const addTriangle = (ia: number, ib: number, ic: number) => {
+        readVertex(ia, vax);
+        readVertex(ib, vbx);
+        readVertex(ic, vcx);
+
+        signedVolume += (
+          vax.x * (vbx.y * vcx.z - vbx.z * vcx.y)
+          - vax.y * (vbx.x * vcx.z - vbx.z * vcx.x)
+          + vax.z * (vbx.x * vcx.y - vbx.y * vcx.x)
+        ) / 6;
+      };
+
+      if (index) {
+        for (let i = 0; i < index.count; i += 3) {
+          addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
+        }
+      } else {
+        for (let i = 0; i < position.count; i += 3) {
+          addTriangle(i, i + 1, i + 2);
+        }
+      }
+
+      const baseVolumeMm3 = Math.abs(signedVolume);
+      baseMl = Number.isFinite(baseVolumeMm3) ? (baseVolumeMm3 / 1000) : null;
+      baseResinMlCacheRef.current.set(cacheKey, baseMl);
+    }
+
+    if (baseMl == null) return null;
+
     const sx = Math.abs(entry.transform.scale.x || 1);
     const sy = Math.abs(entry.transform.scale.y || 1);
     const sz = Math.abs(entry.transform.scale.z || 1);
-
-    let signedVolume = 0;
-
-    const vax = { x: 0, y: 0, z: 0 };
-    const vbx = { x: 0, y: 0, z: 0 };
-    const vcx = { x: 0, y: 0, z: 0 };
-
-    const readVertex = (i: number, out: { x: number; y: number; z: number }) => {
-      out.x = position.getX(i) * sx;
-      out.y = position.getY(i) * sy;
-      out.z = position.getZ(i) * sz;
-    };
-
-    const addTriangle = (ia: number, ib: number, ic: number) => {
-      readVertex(ia, vax);
-      readVertex(ib, vbx);
-      readVertex(ic, vcx);
-
-      signedVolume += (
-        vax.x * (vbx.y * vcx.z - vbx.z * vcx.y)
-        - vax.y * (vbx.x * vcx.z - vbx.z * vcx.x)
-        + vax.z * (vbx.x * vcx.y - vbx.y * vcx.x)
-      ) / 6;
-    };
-
-    if (index) {
-      for (let i = 0; i < index.count; i += 3) {
-        addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
-      }
-    } else {
-      for (let i = 0; i < position.count; i += 3) {
-        addTriangle(i, i + 1, i + 2);
-      }
-    }
-
-    const volumeMm3 = Math.abs(signedVolume);
-    if (!Number.isFinite(volumeMm3)) return null;
-    return volumeMm3 / 1000; // 1000 mm^3 = 1 ml
+    return baseMl * sx * sy * sz;
   }, []);
 
   const estimatedResinMl = React.useMemo(() => {
