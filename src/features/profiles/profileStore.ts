@@ -1,5 +1,5 @@
-import printerPresetsData from '../../../assets/profiles/printers.json';
-import materialTemplatesData from '../../../assets/profiles/materials.json';
+import printerPresetsData from '../../../profiles/printers';
+import materialTemplatesData from '../../../profiles/materials';
 
 export type PrinterOutputFormat = '.nanodlp' | '.goo' | '.lumen';
 export type PrinterNetworkSupport = 'nanodlp';
@@ -84,7 +84,15 @@ export type ProfileStoreState = {
   activeMaterialProfileId: string;
 };
 
+type PersistedProfileStoreEnvelope = {
+  version: number;
+  state: Partial<ProfileStoreState>;
+};
+
 const STORAGE_KEY = 'dragonfruit-profiles-v1';
+const STORAGE_BACKUP_KEY = 'dragonfruit-profiles-v1-backup';
+const LEGACY_STORAGE_KEYS = ['dragonfruit-profiles'];
+const PROFILE_STORE_SCHEMA_VERSION = 2;
 
 const DEFAULT_OUTPUT_FORMAT: PrinterOutputFormat = '.goo';
 
@@ -333,10 +341,41 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
 function persist(next: ProfileStoreState): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    const payload: PersistedProfileStoreEnvelope = {
+      version: PROFILE_STORE_SCHEMA_VERSION,
+      state: next,
+    };
+
+    const serialized = JSON.stringify(payload);
+    window.localStorage.setItem(STORAGE_KEY, serialized);
+    window.localStorage.setItem(STORAGE_BACKUP_KEY, serialized);
   } catch (error) {
     console.error('[ProfileStore] Failed to persist profile state', error);
   }
+}
+
+function parsePersistedState(raw: string | null): Partial<ProfileStoreState> | null {
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    const envelopeState = (parsed as any).state;
+    if (envelopeState && typeof envelopeState === 'object') {
+      return envelopeState as Partial<ProfileStoreState>;
+    }
+
+    return parsed as Partial<ProfileStoreState>;
+  } catch {
+    return null;
+  }
+}
+
+function ensureHydrated(): void {
+  if (typeof window === 'undefined') return;
+  if (isHydrated) return;
+  hydrateProfilesFromStorage();
 }
 
 export function hydrateProfilesFromStorage(): void {
@@ -346,13 +385,23 @@ export function hydrateProfilesFromStorage(): void {
   isHydrated = true;
 
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
+    const candidateRawValues = [
+      window.localStorage.getItem(STORAGE_KEY),
+      window.localStorage.getItem(STORAGE_BACKUP_KEY),
+      ...LEGACY_STORAGE_KEYS.map((key) => window.localStorage.getItem(key)),
+    ];
+
+    const parsed = candidateRawValues
+      .map((raw) => parsePersistedState(raw))
+      .find((candidate): candidate is Partial<ProfileStoreState> => candidate !== null);
+
+    if (!parsed) {
       persist(state);
       return;
     }
-    const parsed = JSON.parse(raw) as Partial<ProfileStoreState>;
+
     state = sanitizeState(parsed);
+    persist(state);
     notify();
   } catch (error) {
     console.error('[ProfileStore] Failed to hydrate profile state', error);
@@ -363,15 +412,18 @@ export function hydrateProfilesFromStorage(): void {
 }
 
 export function subscribeToProfileStore(listener: Listener): () => void {
+  ensureHydrated();
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
 export function getProfileStoreSnapshot(): ProfileStoreState {
+  ensureHydrated();
   return state;
 }
 
 function setState(next: ProfileStoreState): void {
+  ensureHydrated();
   state = sanitizeState(next);
   persist(state);
   notify();
@@ -437,6 +489,7 @@ function createId(prefix: 'printer' | 'material'): string {
 }
 
 export function setActivePrinterProfile(id: string): void {
+  ensureHydrated();
   if (!state.printerProfiles.some((profile) => profile.id === id)) return;
   if (state.activePrinterProfileId === id) return;
 
@@ -447,6 +500,7 @@ export function setActivePrinterProfile(id: string): void {
 }
 
 export function setActiveMaterialProfile(id: string): void {
+  ensureHydrated();
   const match = state.materialProfiles.find((profile) => profile.id === id);
   if (!match) return;
   if (match.printerProfileId !== state.activePrinterProfileId) return;
@@ -459,6 +513,7 @@ export function setActiveMaterialProfile(id: string): void {
 }
 
 export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>): string {
+  ensureHydrated();
   const profile: PrinterProfile = {
     id: createId('printer'),
     name: partial?.name?.trim() || `Printer ${state.printerProfiles.length + 1}`,
@@ -493,6 +548,7 @@ export function getAvailablePrinterPresets(): PrinterPreset[] {
 }
 
 export function addPrinterProfileFromPreset(presetId: string): string {
+  ensureHydrated();
   const preset = PRINTER_PRESETS.find((item) => item.presetId === presetId);
   if (!preset) {
     throw new Error(`[ProfileStore] Unknown printer preset id: ${presetId}`);
@@ -528,6 +584,7 @@ export function addMaterialProfile(
   printerProfileId: string,
   partial?: Partial<Omit<MaterialProfile, 'id' | 'printerProfileId'>>,
 ): string {
+  ensureHydrated();
   if (!state.printerProfiles.some((profile) => profile.id === printerProfileId)) {
     throw new Error(`[ProfileStore] Cannot add material. Unknown printer profile id: ${printerProfileId}`);
   }
@@ -566,6 +623,7 @@ export function addMaterialProfile(
 }
 
 export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterProfile, 'id'>>): void {
+  ensureHydrated();
   let changed = false;
 
   const printerProfiles = state.printerProfiles.map((profile) => {
@@ -597,6 +655,7 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
 }
 
 export function updatePrinterNetworkSettings(id: string, updates: Partial<PrinterNetworkSettings>): void {
+  ensureHydrated();
   let changed = false;
 
   const printerProfiles = state.printerProfiles.map((profile) => {
@@ -631,6 +690,7 @@ export function updatePrinterNetworkSettings(id: string, updates: Partial<Printe
 }
 
 export function updateMaterialProfile(id: string, updates: Partial<Omit<MaterialProfile, 'id'>>): void {
+  ensureHydrated();
   let changed = false;
 
   const materialProfiles = state.materialProfiles.map((profile) => {
@@ -655,6 +715,7 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
 }
 
 export function removePrinterProfile(id: string): void {
+  ensureHydrated();
   if (!state.printerProfiles.some((profile) => profile.id === id)) return;
 
   const printerProfiles = state.printerProfiles.filter((profile) => profile.id !== id);
@@ -673,6 +734,7 @@ export function removePrinterProfile(id: string): void {
 }
 
 export function duplicatePrinterProfileAsCustom(id: string): string {
+  ensureHydrated();
   const source = state.printerProfiles.find((profile) => profile.id === id);
   if (!source) {
     throw new Error(`[ProfileStore] Cannot duplicate unknown printer profile id: ${id}`);
@@ -732,6 +794,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
 }
 
 export function removeMaterialProfile(id: string): void {
+  ensureHydrated();
   const target = state.materialProfiles.find((profile) => profile.id === id);
   if (!target) return;
 
