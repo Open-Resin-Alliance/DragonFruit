@@ -1,0 +1,20 @@
+{
+  "presetId": "concepts3d-athena2-12k",
+  "manufacturer": "Concepts3D",
+  "name": "Athena 2 12K",
+  "imageAssetPath": "/assets/printers/concepts3d/athena2-12k.png",
+  "buildVolumeMm": {
+    "width": 211.68,
+    "depth": 118.37,
+    "height": 235
+  },
+  "display": {
+    "resolutionX": 11520,
+    "resolutionY": 5120,
+    "outputFormat": ".nanodlp"
+  },
+  "notes": {
+    "source": "sample-template",
+    "todo": "Replace with verified Athena 2 12K manufacturer specs"
+  }
+}
