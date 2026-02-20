@@ -4,6 +4,7 @@ import {
   EyeOff,
   Trash2,
   Box,
+  AlertTriangle,
   Upload,
   FolderInput,
   Folder,
@@ -24,6 +25,7 @@ type GroupSelectMode = 'single' | 'add';
 
 interface ModelManagerPanelProps {
   models: LoadedModel[];
+  outsidePlateModelIds?: string[];
   activeModelId: string | null;
   selectedModelIds: string[];
   onSelect: (id: string, mode?: SelectMode) => void;
@@ -46,6 +48,7 @@ type GroupedEntry = {
   name: string;
   models: LoadedModel[];
   isGrouped: boolean;
+  isSystemGroup?: boolean;
 };
 
 type PanelContextMenuState = {
@@ -54,10 +57,14 @@ type PanelContextMenuState = {
   modelId?: string;
   groupId?: string;
   groupName?: string;
+  isSystemGroup?: boolean;
 };
+
+const OUTSIDE_PLATE_GROUP_ID = '__system_outside_plate__';
 
 export function ModelManagerPanel({
   models,
+  outsidePlateModelIds = [],
   activeModelId,
   selectedModelIds,
   onSelect,
@@ -83,9 +90,13 @@ export function ModelManagerPanel({
   const selectedSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
 
   const grouped = useMemo<GroupedEntry[]>(() => {
+    const outsidePlateSet = new Set(outsidePlateModelIds);
+    const outsideModels = models.filter((model) => outsidePlateSet.has(model.id));
+    const inPlateModels = models.filter((model) => !outsidePlateSet.has(model.id));
+
     const groupedMap = new Map<string, GroupedEntry>();
 
-    models.forEach((model) => {
+    inPlateModels.forEach((model) => {
       const key = model.groupId ?? `single-${model.id}`;
       const existing = groupedMap.get(key);
       if (existing) {
@@ -109,8 +120,20 @@ export function ModelManagerPanel({
       .sort((a, b) => {
         if (a.isGrouped !== b.isGrouped) return a.isGrouped ? -1 : 1;
         return a.name.localeCompare(b.name);
-      });
-  }, [models]);
+      })
+      .reduce<GroupedEntry[]>((acc, group) => {
+        acc.push(group);
+        return acc;
+      }, outsideModels.length > 0
+        ? [{
+            id: OUTSIDE_PLATE_GROUP_ID,
+            name: 'Outside Plate',
+            models: [...outsideModels].sort((a, b) => a.name.localeCompare(b.name)),
+            isGrouped: true,
+            isSystemGroup: true,
+          }]
+        : []);
+  }, [models, outsidePlateModelIds]);
 
   const contextModel = useMemo(() => {
     if (!contextMenu?.modelId) return null;
@@ -166,7 +189,7 @@ export function ModelManagerPanel({
   const selectFolder = (group: GroupedEntry, mode: GroupSelectMode) => {
     if (group.models.length === 0) return;
 
-    if (onSelectGroup && group.isGrouped) {
+    if (onSelectGroup && group.isGrouped && !group.isSystemGroup) {
       onSelectGroup(group.id, mode);
       return;
     }
@@ -321,7 +344,16 @@ export function ModelManagerPanel({
                 const showHeader = group.isGrouped;
 
                 return (
-                  <div key={group.id} className="space-y-1">
+                  <div
+                    key={group.id}
+                    className={showHeader ? 'space-y-1 rounded-md border p-1' : 'space-y-1'}
+                    style={showHeader
+                      ? {
+                          borderColor: 'color-mix(in srgb, var(--border-subtle), var(--accent) 14%)',
+                          background: 'color-mix(in srgb, var(--surface-1), var(--accent) 3%)',
+                        }
+                      : undefined}
+                  >
                     {showHeader && (
                       <div
                         className={`px-1.5 py-1 rounded border flex items-center gap-1.5 cursor-pointer transition-colors ${
@@ -346,6 +378,7 @@ export function ModelManagerPanel({
                             y: e.clientY,
                             groupId: group.id,
                             groupName: group.name,
+                            isSystemGroup: group.isSystemGroup,
                           });
                         }}
                       >
@@ -363,7 +396,9 @@ export function ModelManagerPanel({
                             : <ChevronDown className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />}
                         </button>
 
-                        {isCollapsed
+                        {group.isSystemGroup ? (
+                          <AlertTriangle className="w-3.5 h-3.5" style={{ color: '#ff7c88' }} />
+                        ) : isCollapsed
                           ? <Folder className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
                           : <FolderOpen className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />}
 
@@ -404,7 +439,11 @@ export function ModelManagerPanel({
                       </div>
                     )}
 
-                    {(!showHeader || !isCollapsed) && group.models.map((model) => {
+                    {(!showHeader || !isCollapsed) && (
+                      <div
+                        className={showHeader ? 'ml-1.5 space-y-1 pl-1' : 'space-y-1'}
+                      >
+                        {group.models.map((model) => {
                       const isActive = model.id === activeModelId;
                       const isSelected = selectedSet.has(model.id);
 
@@ -414,9 +453,14 @@ export function ModelManagerPanel({
                           className={`p-2 rounded border transition-colors flex items-center gap-2 cursor-pointer ${
                             isSelected
                               ? 'bg-blue-500/10 border-blue-500/50'
-                              : 'border-transparent hover:bg-neutral-700/70'
+                              : 'hover:bg-neutral-700/70'
                           }`}
-                          style={!isSelected ? { background: 'var(--surface-1)' } : undefined}
+                          style={!isSelected
+                            ? {
+                                background: 'var(--surface-1)',
+                                borderColor: 'var(--border-subtle)',
+                              }
+                            : undefined}
                           onClick={(e) => {
                             if (e.shiftKey) {
                               const anchorId = activeModelId ?? selectedModelIds[selectedModelIds.length - 1] ?? model.id;
@@ -497,6 +541,8 @@ export function ModelManagerPanel({
                         </div>
                       );
                     })}
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -575,10 +621,10 @@ export function ModelManagerPanel({
             <button
               type="button"
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId}
+              style={{ color: contextMenu.groupId && !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId && !contextMenu.isSystemGroup ? 1 : 0.6 }}
+              disabled={!contextMenu.groupId || !!contextMenu.isSystemGroup}
               onClick={() => {
-                if (!contextMenu.groupId || !onRenameGroup) return;
+                if (!contextMenu.groupId || !onRenameGroup || contextMenu.isSystemGroup) return;
                 beginRenameGroup(contextMenu.groupId, contextMenu.groupName ?? contextGroup?.name ?? 'Group');
               }}
             >
@@ -589,10 +635,10 @@ export function ModelManagerPanel({
             <button
               type="button"
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium hover:bg-white/5"
-              style={{ color: contextMenu.groupId ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId ? 1 : 0.6 }}
-              disabled={!contextMenu.groupId}
+              style={{ color: contextMenu.groupId && !contextMenu.isSystemGroup ? 'var(--text-strong)' : 'var(--text-muted)', opacity: contextMenu.groupId && !contextMenu.isSystemGroup ? 1 : 0.6 }}
+              disabled={!contextMenu.groupId || !!contextMenu.isSystemGroup}
               onClick={() => {
-                if (!contextMenu.groupId || !onUngroupGroup) return;
+                if (!contextMenu.groupId || !onUngroupGroup || contextMenu.isSystemGroup) return;
                 onUngroupGroup(contextMenu.groupId);
                 closeContextMenu();
               }}

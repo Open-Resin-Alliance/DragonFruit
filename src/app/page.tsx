@@ -435,6 +435,60 @@ export default function Home() {
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
+  const computeModelWorldBounds = React.useCallback((model: (typeof scene.models)[number]) => {
+    const modelBox = model.geometry.bbox.clone();
+    const center = model.geometry.center;
+    modelBox.translate(new THREE.Vector3(-center.x, -center.y, -center.z));
+
+    const t = model.transform;
+    const matrix = new THREE.Matrix4().compose(
+      t.position,
+      new THREE.Quaternion().setFromEuler(t.rotation),
+      t.scale,
+    );
+    modelBox.applyMatrix4(matrix);
+    return modelBox;
+  }, [scene.models]);
+
+  const buildVolumeBounds = React.useMemo(() => {
+    if (!scene.view3dSettings.enabled) return null;
+
+    const width = scene.view3dSettings.widthMm;
+    const depth = scene.view3dSettings.depthMm;
+    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
+    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+
+    return new THREE.Box3(
+      new THREE.Vector3(minX, minY, 0),
+      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+    );
+  }, [
+    scene.view3dSettings.depthMm,
+    scene.view3dSettings.enabled,
+    scene.view3dSettings.maxZMm,
+    scene.view3dSettings.originMode,
+    scene.view3dSettings.widthMm,
+  ]);
+
+  const outsidePlateModelIds = React.useMemo(() => {
+    if (!buildVolumeBounds) return [] as string[];
+
+    return scene.models
+      .filter((model) => model.visible)
+      .filter((model) => {
+        const bounds = computeModelWorldBounds(model);
+        return (
+          bounds.min.x < buildVolumeBounds.min.x
+          || bounds.max.x > buildVolumeBounds.max.x
+          || bounds.min.y < buildVolumeBounds.min.y
+          || bounds.max.y > buildVolumeBounds.max.y
+          || bounds.min.z < buildVolumeBounds.min.z
+          || bounds.max.z > buildVolumeBounds.max.z
+        );
+      })
+      .map((model) => model.id);
+  }, [buildVolumeBounds, computeModelWorldBounds, scene.models]);
+
   const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
     const size = model.geometry.size;
     return {
@@ -1140,6 +1194,43 @@ export default function Home() {
     scene.clearModelSelection,
   ]);
 
+  React.useEffect(() => {
+    if (scene.mode !== 'support') return;
+    if (scene.models.length === 0) return;
+
+    const modelIdSet = new Set(scene.models.map((model) => model.id));
+    const activeId = scene.activeModelId;
+
+    if (activeId && modelIdSet.has(activeId)) {
+      if (scene.selectedModelIds.length === 1 && scene.selectedModelIds[0] === activeId) {
+        return;
+      }
+
+      if (scene.selectedModelIds.length === 0 || !scene.selectedModelIds.includes(activeId)) {
+        scene.setSelectedModelIds([activeId]);
+        return;
+      }
+
+      if (scene.selectedModelIds.length > 1) {
+        scene.setSelectedModelIds([activeId]);
+      }
+      return;
+    }
+
+    const fallback = scene.models.find((model) => model.visible) ?? scene.models[0];
+    if (!fallback) return;
+
+    scene.setActiveModelId(fallback.id);
+    scene.setSelectedModelIds([fallback.id]);
+  }, [
+    scene.mode,
+    scene.models,
+    scene.activeModelId,
+    scene.selectedModelIds,
+    scene.setActiveModelId,
+    scene.setSelectedModelIds,
+  ]);
+
   const importOverlayState = React.useMemo(() => {
     if (scene.importProgress.active) {
       return {
@@ -1755,6 +1846,7 @@ export default function Home() {
             <ModelManagerPanel
               key="prepare-models"
               models={scene.models}
+              outsidePlateModelIds={outsidePlateModelIds}
               activeModelId={scene.activeModelId}
               selectedModelIds={scene.selectedModelIds}
               onSelect={handleModelSelection}
