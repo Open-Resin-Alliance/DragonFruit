@@ -5,6 +5,7 @@ import { CheckCircle2, Download, ExternalLink, Github, Loader2, Plug, ShieldChec
 import {
   getInstalledPlugins,
   getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
   installPluginFromManifest,
   subscribeToProfileStore,
   uninstallPlugin,
@@ -63,7 +64,7 @@ function normalizePluginManifest(input: GithubManifestResponse['manifest']): Plu
 }
 
 export function PluginsSettingsTab() {
-  const profileSnapshot = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const profileSnapshot = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
 
   const [repoUrl, setRepoUrl] = React.useState('');
   const [isInstalling, setIsInstalling] = React.useState(false);

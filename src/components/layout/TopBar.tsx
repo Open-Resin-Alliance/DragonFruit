@@ -21,6 +21,7 @@ import {
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
   hydrateProfilesFromStorage,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
@@ -153,7 +154,7 @@ export function TopBar({
     };
   }, []);
 
-  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
   React.useEffect(() => {

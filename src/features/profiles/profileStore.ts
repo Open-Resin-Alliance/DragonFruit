@@ -517,6 +517,10 @@ export function getProfileStoreSnapshot(): ProfileStoreState {
   return state;
 }
 
+export function getProfileStoreServerSnapshot(): ProfileStoreState {
+  return createDefaultState();
+}
+
 function setState(next: ProfileStoreState): void {
   ensureHydrated();
   state = sanitizeState(next);

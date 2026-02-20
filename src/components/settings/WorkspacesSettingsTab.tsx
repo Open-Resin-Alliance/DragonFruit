@@ -7,6 +7,7 @@ import type { SelectionHighlightMode } from '@/components/selection';
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type {
@@ -41,7 +42,7 @@ export function WorkspacesSettingsTab({
   onView3dSettingsChange,
 }: WorkspacesSettingsTabProps) {
   const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
-  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const isBuildVolumeManagedByPrinter = Boolean(activePrinterProfile);
 

@@ -25,6 +25,7 @@ import {
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 
@@ -658,7 +659,7 @@ export function useSceneCollectionManager() {
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
   const [storedView3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
-  const profileState = useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const profileState = useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
   const view3dSettings = useMemo(() => {

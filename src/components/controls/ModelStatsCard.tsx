@@ -5,6 +5,7 @@ import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
   getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
@@ -27,7 +28,7 @@ export function ModelStatsCard({
   heightMm
 }: ModelStatsCardProps) {
   const [isFlipped, setIsFlipped] = React.useState(false);
-  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const connectedHostName = React.useMemo(() => {

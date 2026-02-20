@@ -10,6 +10,7 @@ import {
   getAvailablePrinterPresets,
   getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
   removeMaterialProfile,
   removePrinterProfile,
   setActiveMaterialProfile,
@@ -135,7 +136,7 @@ export function ProfileSettingsModal({
   initialTab = 'printer',
   openPrinterLibraryToken = 0,
 }: ProfileSettingsModalProps) {
-  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const [selectedPrinterId, setSelectedPrinterId] = React.useState<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = React.useState<string | null>(null);
   const [selectedManufacturer, setSelectedManufacturer] = React.useState<string | null>(null);

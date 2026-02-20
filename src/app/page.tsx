@@ -50,6 +50,7 @@ import { openProfileSettingsModal } from '@/components/settings/profileModalEven
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 
@@ -67,7 +68,7 @@ if (typeof window !== 'undefined') {
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
-  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
