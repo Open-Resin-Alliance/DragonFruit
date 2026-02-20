@@ -2,12 +2,19 @@ import printerPresetsData from '../../../assets/profiles/printers.json';
 import materialTemplatesData from '../../../assets/profiles/materials.json';
 
 export type PrinterOutputFormat = '.nanodlp' | '.goo' | '.lumen';
+export type PrinterNetworkSupport = 'nanodlp';
+
+export type PrinterNetworkSettings = {
+  discoveryEnabled: boolean;
+  ipAddress: string;
+};
 
 export type PrinterPreset = {
   presetId: string;
   manufacturer: string;
   name: string;
   imageAssetPath?: string;
+  networkSupport?: PrinterNetworkSupport;
   buildVolumeMm: {
     width: number;
     depth: number;
@@ -25,6 +32,7 @@ export type PrinterProfile = {
   name: string;
   manufacturer?: string;
   imageDataUrl?: string;
+  networkSupport?: PrinterNetworkSupport;
   officialPresetId?: string;
   isOfficial?: boolean;
   isCustom?: boolean;
@@ -38,7 +46,13 @@ export type PrinterProfile = {
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
   };
+  network?: PrinterNetworkSettings;
 };
+
+function normalizeNetworkSupport(value: unknown): PrinterNetworkSupport | undefined {
+  if (value === 'nanodlp') return 'nanodlp';
+  return undefined;
+}
 
 export type MaterialProfile = {
   id: string;
@@ -74,6 +88,26 @@ const STORAGE_KEY = 'dragonfruit-profiles-v1';
 
 const DEFAULT_OUTPUT_FORMAT: PrinterOutputFormat = '.goo';
 
+const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
+  discoveryEnabled: true,
+  ipAddress: '',
+};
+
+function sanitizePrinterNetworkSettings(input: unknown): PrinterNetworkSettings {
+  const discoveryEnabled = typeof (input as any)?.discoveryEnabled === 'boolean'
+    ? (input as any).discoveryEnabled
+    : DEFAULT_PRINTER_NETWORK_SETTINGS.discoveryEnabled;
+
+  const ipAddress = typeof (input as any)?.ipAddress === 'string'
+    ? (input as any).ipAddress.trim()
+    : DEFAULT_PRINTER_NETWORK_SETTINGS.ipAddress;
+
+  return {
+    discoveryEnabled,
+    ipAddress,
+  };
+}
+
 const PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterPreset[]).map((preset) => ({
   ...preset,
   display: {
@@ -89,11 +123,13 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = PRINTER_PRESETS.map((preset) 
   name: preset.name,
   manufacturer: preset.manufacturer,
   imageDataUrl: preset.imageAssetPath,
+  networkSupport: normalizeNetworkSupport(preset.networkSupport),
   officialPresetId: preset.presetId,
   isOfficial: true,
   isCustom: false,
   buildVolumeMm: preset.buildVolumeMm,
   display: preset.display,
+  network: sanitizePrinterNetworkSettings((preset as any).network),
 }));
 
 function resolveOfficialPresetId(profile: Partial<PrinterProfile>): string | undefined {
@@ -111,6 +147,17 @@ function resolveOfficialPresetId(profile: Partial<PrinterProfile>): string | und
   ));
 
   return matchedPreset?.presetId;
+}
+
+function resolveNetworkSupport(profile: Partial<PrinterProfile>): PrinterNetworkSupport | undefined {
+  const explicit = normalizeNetworkSupport((profile as any).networkSupport);
+  if (explicit) return explicit;
+
+  const presetId = resolveOfficialPresetId(profile);
+  if (!presetId) return undefined;
+
+  const preset = PRINTER_PRESETS.find((item) => item.presetId === presetId);
+  return normalizeNetworkSupport(preset?.networkSupport);
 }
 
 function isOfficialProfileByHeuristic(profile: Partial<PrinterProfile>): boolean {
@@ -171,34 +218,41 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
   const printerProfiles = Array.isArray(input?.printerProfiles)
     ? input!.printerProfiles
       .map((profile): PrinterProfile | null => {
-        if (
-          !profile
-          || typeof profile.id !== 'string'
-          || typeof profile.name !== 'string'
-          || !profile.buildVolumeMm
-          || !profile.display
-        ) {
+        if (!profile || typeof profile.id !== 'string' || typeof profile.name !== 'string') {
           return null;
         }
+
+        const officialPresetId = resolveOfficialPresetId(profile);
+        const matchedPreset = officialPresetId
+          ? PRINTER_PRESETS.find((preset) => preset.presetId === officialPresetId)
+          : undefined;
+
+        const rawBuildVolume = (profile as any).buildVolumeMm;
+        const rawDisplay = (profile as any).display;
+
+        const fallbackBuildVolume = matchedPreset?.buildVolumeMm;
+        const fallbackDisplay = matchedPreset?.display;
 
         return {
           id: profile.id,
           name: profile.name,
           manufacturer: typeof profile.manufacturer === 'string' ? profile.manufacturer : undefined,
           imageDataUrl: typeof profile.imageDataUrl === 'string' ? profile.imageDataUrl : undefined,
-          officialPresetId: resolveOfficialPresetId(profile),
+          networkSupport: resolveNetworkSupport(profile),
+          officialPresetId,
           isOfficial: isOfficialProfileByHeuristic(profile),
           isCustom: typeof profile.isCustom === 'boolean' ? profile.isCustom : !isOfficialProfileByHeuristic(profile),
           buildVolumeMm: {
-            width: Number((profile as any).buildVolumeMm?.width) || 143,
-            depth: Number((profile as any).buildVolumeMm?.depth) || 89,
-            height: Number((profile as any).buildVolumeMm?.height) || 175,
+            width: Number(rawBuildVolume?.width) || fallbackBuildVolume?.width || 143,
+            depth: Number(rawBuildVolume?.depth) || fallbackBuildVolume?.depth || 89,
+            height: Number(rawBuildVolume?.height) || fallbackBuildVolume?.height || 175,
           },
           display: {
-            resolutionX: Number((profile as any).display?.resolutionX) || 2560,
-            resolutionY: Number((profile as any).display?.resolutionY) || 1620,
-            outputFormat: normalizeOutputFormat((profile as any).display?.outputFormat),
+            resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
+            resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
+            outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
           },
+          network: sanitizePrinterNetworkSettings((profile as any).network),
         };
       })
       .filter((profile): profile is PrinterProfile => profile !== null)
@@ -211,7 +265,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
     : Array.isArray(input?.materialProfiles) && input!.materialProfiles.length > 0
       ? input!.materialProfiles
       .map((profile): MaterialProfile | null => {
-        if (!profile || typeof profile.id !== 'string' || typeof profile.name !== 'string' || typeof profile.layerHeightMm !== 'number') {
+        if (!profile || typeof profile.id !== 'string' || typeof profile.name !== 'string') {
           return null;
         }
 
@@ -235,13 +289,13 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             y: Number((profile as any).scaleCompensationPct?.y) || 0,
             z: Number((profile as any).scaleCompensationPct?.z) || 0,
           },
-          layerHeightMm: Number(profile.layerHeightMm) || 0.05,
-          normalExposureSec: Number(profile.normalExposureSec) || 2.5,
-          bottomExposureSec: Number(profile.bottomExposureSec) || 28,
-          bottomLayerCount: Number(profile.bottomLayerCount) || 5,
-          liftDistanceMm: Number(profile.liftDistanceMm) || 6,
-          liftSpeedMmMin: Number(profile.liftSpeedMmMin) || 60,
-          retractSpeedMmMin: Number(profile.retractSpeedMmMin) || 150,
+          layerHeightMm: Number((profile as any).layerHeightMm) || 0.05,
+          normalExposureSec: Number((profile as any).normalExposureSec) || 2.5,
+          bottomExposureSec: Number((profile as any).bottomExposureSec) || 28,
+          bottomLayerCount: Number((profile as any).bottomLayerCount) || 5,
+          liftDistanceMm: Number((profile as any).liftDistanceMm) || 6,
+          liftSpeedMmMin: Number((profile as any).liftSpeedMmMin) || 60,
+          retractSpeedMmMin: Number((profile as any).retractSpeedMmMin) || 150,
         };
       })
       .filter((profile): profile is MaterialProfile => profile !== null)
@@ -410,6 +464,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     name: partial?.name?.trim() || `Printer ${state.printerProfiles.length + 1}`,
     manufacturer: partial?.manufacturer?.trim() || 'Generic',
     imageDataUrl: partial?.imageDataUrl,
+    networkSupport: normalizeNetworkSupport(partial?.networkSupport),
     officialPresetId: partial?.officialPresetId?.trim(),
     isOfficial: partial?.isOfficial ?? false,
     isCustom: partial?.isCustom ?? true,
@@ -419,6 +474,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       resolutionY: partial?.display?.resolutionY ?? 1620,
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
     },
+    network: sanitizePrinterNetworkSettings(partial?.network),
   };
 
   const nextState = {
@@ -455,6 +511,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     name: preset.name,
     manufacturer: preset.manufacturer,
     imageDataUrl: preset.imageAssetPath,
+    networkSupport: normalizeNetworkSupport(preset.networkSupport),
     officialPresetId: preset.presetId,
     isOfficial: true,
     isCustom: false,
@@ -520,10 +577,48 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       ...updates,
       name: updates.name !== undefined ? updates.name : profile.name,
       manufacturer: updates.manufacturer !== undefined ? updates.manufacturer : profile.manufacturer,
+      networkSupport: updates.networkSupport !== undefined
+        ? normalizeNetworkSupport(updates.networkSupport)
+        : profile.networkSupport,
       isOfficial: profile.isOfficial,
       isCustom: profile.isCustom,
       buildVolumeMm: updates.buildVolumeMm ?? profile.buildVolumeMm,
       display: updates.display ?? profile.display,
+      network: updates.network !== undefined ? sanitizePrinterNetworkSettings(updates.network) : profile.network,
+    };
+  });
+
+  if (!changed) return;
+
+  setState(ensureActiveMaterialForActivePrinter({
+    ...state,
+    printerProfiles,
+  }));
+}
+
+export function updatePrinterNetworkSettings(id: string, updates: Partial<PrinterNetworkSettings>): void {
+  let changed = false;
+
+  const printerProfiles = state.printerProfiles.map((profile) => {
+    if (profile.id !== id) return profile;
+
+    const current = sanitizePrinterNetworkSettings(profile.network);
+    const next = sanitizePrinterNetworkSettings({
+      ...current,
+      ...updates,
+    });
+
+    if (
+      next.discoveryEnabled === current.discoveryEnabled
+      && next.ipAddress === current.ipAddress
+    ) {
+      return profile;
+    }
+
+    changed = true;
+    return {
+      ...profile,
+      network: next,
     };
   });
 
