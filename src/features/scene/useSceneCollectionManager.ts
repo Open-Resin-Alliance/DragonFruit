@@ -16,6 +16,7 @@ import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry } from '@/utils/bvh';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
+  DEFAULT_VIEW3D_SETTINGS,
   getSavedView3DSettings,
   normalizeView3DSettings,
   saveView3DSettings,
@@ -432,13 +433,11 @@ export function useSceneCollectionManager() {
     [],
   );
 
-  const persistedAppearance = useMemo(() => readMeshAppearanceFromLocalStorage(), []);
-
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry[]>([]);
-  const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>(() => readRecentOpenedFilesFromLocalStorage());
+  const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
     type: null,
@@ -637,23 +636,44 @@ export function useSceneCollectionManager() {
   }, [isDebugModelName, models, tryRevokeObjectUrl]);
 
   // Lighting controls (Global)
-  const [ambientIntensity, setAmbientIntensity] = useState<number>(persistedAppearance?.ambientIntensity ?? DEFAULT_AMBIENT_INTENSITY);
-  const [directionalIntensity, setDirectionalIntensity] = useState<number>(persistedAppearance?.directionalIntensity ?? DEFAULT_DIRECTIONAL_INTENSITY);
-  const [materialRoughness, setMaterialRoughness] = useState<number>(persistedAppearance?.materialRoughness ?? DEFAULT_MATERIAL_ROUGHNESS);
+  const [ambientIntensity, setAmbientIntensity] = useState<number>(DEFAULT_AMBIENT_INTENSITY);
+  const [directionalIntensity, setDirectionalIntensity] = useState<number>(DEFAULT_DIRECTIONAL_INTENSITY);
+  const [materialRoughness, setMaterialRoughness] = useState<number>(DEFAULT_MATERIAL_ROUGHNESS);
 
   // Shader-specific settings (Global)
-  const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(persistedAppearance?.wireframeThicknessPx ?? DEFAULT_WIREFRAME_THICKNESS_PX);
-  const [xrayOpacity, setXrayOpacity] = useState<number>(persistedAppearance?.xrayOpacity ?? DEFAULT_XRAY_OPACITY);
+  const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
+  const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
 
   // Mesh shader selection (Global)
-  const [shaderType, setShaderType] = useState<MeshShaderType>(persistedAppearance?.shaderType ?? DEFAULT_SHADER_TYPE);
-  const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(persistedAppearance?.matcapVariant ?? DEFAULT_MATCAP_VARIANT);
-  const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(persistedAppearance?.flatUseVertexColors ?? DEFAULT_FLAT_USE_VERTEX_COLORS);
-  const [toonSteps, setToonSteps] = useState<number>(persistedAppearance?.toonSteps ?? DEFAULT_TOON_STEPS);
-  const [preferredMeshColor, setPreferredMeshColor] = useState<string>(persistedAppearance?.meshColor ?? DEFAULT_MESH_COLOR);
-  const [hoverTintStrength, setHoverTintStrength] = useState<number>(persistedAppearance?.hoverTintStrength ?? DEFAULT_HOVER_TINT_STRENGTH);
-  const [selectedTintStrength, setSelectedTintStrength] = useState<number>(persistedAppearance?.selectedTintStrength ?? DEFAULT_SELECTED_TINT_STRENGTH);
-  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => getSavedView3DSettings());
+  const [shaderType, setShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
+  const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(DEFAULT_MATCAP_VARIANT);
+  const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(DEFAULT_FLAT_USE_VERTEX_COLORS);
+  const [toonSteps, setToonSteps] = useState<number>(DEFAULT_TOON_STEPS);
+  const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
+  const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
+  const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
+  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
+
+  useEffect(() => {
+    const persistedAppearance = readMeshAppearanceFromLocalStorage();
+    if (persistedAppearance) {
+      setShaderType(persistedAppearance.shaderType);
+      setMatcapVariant(persistedAppearance.matcapVariant);
+      setFlatUseVertexColors(persistedAppearance.flatUseVertexColors);
+      setToonSteps(persistedAppearance.toonSteps);
+      setAmbientIntensity(persistedAppearance.ambientIntensity);
+      setDirectionalIntensity(persistedAppearance.directionalIntensity);
+      setMaterialRoughness(persistedAppearance.materialRoughness);
+      setWireframeThicknessPx(persistedAppearance.wireframeThicknessPx);
+      setXrayOpacity(persistedAppearance.xrayOpacity);
+      setPreferredMeshColor(persistedAppearance.meshColor);
+      setHoverTintStrength(persistedAppearance.hoverTintStrength);
+      setSelectedTintStrength(persistedAppearance.selectedTintStrength);
+    }
+
+    setRecentOpenedFiles(readRecentOpenedFilesFromLocalStorage());
+    setView3dSettingsState(getSavedView3DSettings());
+  }, []);
 
   const setView3dSettings = useCallback((next: View3DSettings) => {
     const normalized = normalizeView3DSettings(next);
