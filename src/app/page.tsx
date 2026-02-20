@@ -348,6 +348,13 @@ export default function Home() {
   // Sync transform manager when active model changes
   useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
+      // Only run this sync when selection changes.
+      // If we re-run on every activeModel object mutation, it can fight
+      // with local transform/autolift updates and create feedback loops.
+      if (displayActiveModelId === scene.activeModelId) {
+        return;
+      }
+
       const t = scene.activeModel.transform;
 
       console.log('[Home] Syncing transform from model:', {
@@ -386,7 +393,7 @@ export default function Home() {
     } else {
       setDisplayActiveModelId(null);
     }
-  }, [scene.activeModelId, scene.activeModel]);
+  }, [scene.activeModelId, scene.activeModel, displayActiveModelId]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
@@ -394,9 +401,36 @@ export default function Home() {
     // Only update if the local transform state has been synchronized with the new model
     // This prevents overwriting the new model's transform with the old transform state on load
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
-      scene.updateModelTransform(scene.activeModelId, transformMgr.transform);
+      const modelTransform = scene.activeModel?.transform;
+      if (!modelTransform) return;
+
+      const current = transformMgr.transform;
+      const EPSILON = 0.0001;
+      const posChanged = current.position.distanceToSquared(modelTransform.position) > EPSILON;
+      const rotChanged =
+        Math.abs(current.rotation.x - modelTransform.rotation.x) > EPSILON ||
+        Math.abs(current.rotation.y - modelTransform.rotation.y) > EPSILON ||
+        Math.abs(current.rotation.z - modelTransform.rotation.z) > EPSILON;
+      const scaleChanged = current.scale.distanceToSquared(modelTransform.scale) > EPSILON;
+
+      if (posChanged || rotChanged || scaleChanged) {
+        scene.updateModelTransform(scene.activeModelId, current);
+      }
     }
-  }, [transformMgr.transform, scene.activeModelId, displayActiveModelId]);
+  }, [
+    scene.activeModelId,
+    scene.activeModel,
+    displayActiveModelId,
+    transformMgr.transform.position.x,
+    transformMgr.transform.position.y,
+    transformMgr.transform.position.z,
+    transformMgr.transform.rotation.x,
+    transformMgr.transform.rotation.y,
+    transformMgr.transform.rotation.z,
+    transformMgr.transform.scale.x,
+    transformMgr.transform.scale.y,
+    transformMgr.transform.scale.z,
+  ]);
 
   // Wrap transform change to update local state
   const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
@@ -1272,21 +1306,36 @@ export default function Home() {
   const showEmptySceneDialog = scene.models.length === 0;
 
   const renderId = useRef(0);
+  const postRotateLiftScheduledRef = useRef(false);
   renderId.current++;
 
   // Glue Logic: Transform End Hook
   // When rotation ends, we must clear scan data as it invalidates the scan
+  const applyPostRotateLift = () => {
+    if (!scene.activeModelId) {
+      transformMgr.pendingTransformRef.current = null;
+      return;
+    }
+
+    if (postRotateLiftScheduledRef.current) {
+      return;
+    }
+    postRotateLiftScheduledRef.current = true;
+
+    // Defer to end of current tick so transform state/store sync settles first.
+    setTimeout(() => {
+      transformMgr.performAutoSnap();
+      postRotateLiftScheduledRef.current = false;
+    }, 0);
+  };
+
   const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
     transformMgr.setIsTransforming(false);
 
     if (operation === 'rotate') {
       console.log('[Rotation] Clearing scan data - rotation invalidates island detection');
       islands.clearScanData();
-
-      // Defer auto-snap
-      setTimeout(() => {
-        transformMgr.performAutoSnap();
-      }, 0);
+      applyPostRotateLift();
     } else {
       transformMgr.pendingTransformRef.current = null;
     }
@@ -1294,9 +1343,7 @@ export default function Home() {
 
   const handleRotationComplete = () => {
     islands.clearScanData();
-    setTimeout(() => {
-      transformMgr.performAutoSnap();
-    }, 0);
+    applyPostRotateLift();
   };
 
   const handleCameraChange = React.useCallback(() => {
