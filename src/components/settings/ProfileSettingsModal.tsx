@@ -149,6 +149,8 @@ export function ProfileSettingsModal({
   const [networkDiscoveryEnabled, setNetworkDiscoveryEnabled] = React.useState(true);
   const [networkIpAddress, setNetworkIpAddress] = React.useState('');
   const [isNetworkScanning, setIsNetworkScanning] = React.useState(false);
+  const [networkScanProgressPct, setNetworkScanProgressPct] = React.useState(0);
+  const [networkScanPhaseLabel, setNetworkScanPhaseLabel] = React.useState('');
   const [isNetworkConnecting, setIsNetworkConnecting] = React.useState(false);
   const [networkConnectionMessage, setNetworkConnectionMessage] = React.useState('');
   const [showManualNetworkEntry, setShowManualNetworkEntry] = React.useState(false);
@@ -532,12 +534,16 @@ export function ProfileSettingsModal({
     setNanodlpMaterialsError(null);
 
     try {
-      const response = await fetch('/api/network/nanodlp/materials', {
+      const response = await fetch('/api/network/plugin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ host }),
+        body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/materials',
+          host,
+        }),
       });
 
       const payload = await response.json().catch(() => null) as any;
@@ -626,12 +632,14 @@ export function ProfileSettingsModal({
     setNanodlpMaterialsError(null);
 
     try {
-      const response = await fetch('/api/network/nanodlp/materials/edit', {
+      const response = await fetch('/api/network/plugin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/materials/edit',
           host,
           profileId,
           fields: denormalizeNanodlpEditDraftForBackend(nanodlpEditDraft),
@@ -667,19 +675,25 @@ export function ProfileSettingsModal({
     if (selectedPrinter.networkSupport !== 'nanodlp') return;
 
     setIsNetworkScanning(true);
-    setNetworkConnectionMessage('Scanning local network for NanoDLP devices…');
+    setNetworkScanPhaseLabel('Resolving friendly .local hostnames…');
+    setNetworkConnectionMessage('Resolving friendly .local hostnames…');
+    setNetworkScanProgressPct(8);
 
     try {
       const configuredHost = networkIpAddress.trim();
       const seedDevices: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
 
       if (configuredHost.length > 0) {
-        const connectResponse = await fetch('/api/network/nanodlp/connect', {
+        const connectResponse = await fetch('/api/network/plugin', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ host: configuredHost }),
+          body: JSON.stringify({
+            pluginId: 'athena',
+            operation: 'nanodlp/connect',
+            host: configuredHost,
+          }),
         });
 
         const connectPayload = await connectResponse.json().catch(() => null) as any;
@@ -696,14 +710,64 @@ export function ProfileSettingsModal({
         }
       }
 
-      const response = await fetch('/api/network/nanodlp/discover', {
+      const localHostnameCandidates = Array.from(new Set([
+        'nanodlp.local',
+        'athena.local',
+        'printer.local',
+        'resin.local',
+        (selectedPrinter.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') + '.local',
+        configuredHost.toLowerCase().endsWith('.local') ? configuredHost.toLowerCase() : '',
+      ].filter((value) => value && value.endsWith('.local'))));
+
+      const localResponse = await fetch('/api/network/plugin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/discover',
           mode: 'nanodlp',
+          scanScope: 'local-hostnames',
           host: networkIpAddress.trim() || undefined,
+          localHostnames: localHostnameCandidates,
+          ports: [80, 8080],
+        }),
+      });
+
+      const localPayload = await localResponse.json().catch(() => null) as any;
+      const localDevices: any[] = Array.isArray(localPayload?.devices) ? localPayload.devices : [];
+      const localDiscovered = localDevices.map((device, index) => {
+        const hostName = typeof device?.hostName === 'string' ? device.hostName.trim() : '';
+        const printerName = typeof device?.printerName === 'string' ? device.printerName.trim() : '';
+        const ipAddress = typeof device?.ipAddress === 'string' ? device.ipAddress.trim() : '';
+
+        return {
+          id: `${selectedPrinter.id}-local-scan-${index}`,
+          name: hostName || printerName || 'NanoDLP Printer',
+          ipAddress,
+          status: 'online' as const,
+        };
+      }).filter((item) => item.ipAddress.length > 0);
+
+      setNetworkScanProgressPct(44);
+      setNetworkScanPhaseLabel('Scanning local subnet…');
+      setNetworkConnectionMessage('Scanning local subnet for NanoDLP devices…');
+      setNetworkScanProgressPct(56);
+
+      const response = await fetch('/api/network/plugin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/discover',
+          mode: 'nanodlp',
+          scanScope: 'subnet',
+          host: networkIpAddress.trim() || undefined,
+          excludeHosts: localDiscovered.map((item) => item.ipAddress),
+          seedIps: localDiscovered.map((item) => item.ipAddress),
           ports: [80, 8080],
         }),
       });
@@ -712,6 +776,10 @@ export function ProfileSettingsModal({
       const devices: any[] = Array.isArray(payload?.devices) ? payload.devices : [];
       const scannedHosts = Number.isFinite(Number(payload?.scannedHosts)) ? Number(payload.scannedHosts) : 0;
       const scannedEndpoints = Number.isFinite(Number(payload?.scannedEndpoints)) ? Number(payload.scannedEndpoints) : 0;
+      const scannedLocalHostnames = Number.isFinite(Number(localPayload?.scannedLocalHostnames)) ? Number(localPayload.scannedLocalHostnames) : localHostnameCandidates.length;
+      const scannedSubnetHosts = Number.isFinite(Number(payload?.scannedSubnetHosts)) ? Number(payload.scannedSubnetHosts) : scannedHosts;
+
+      setNetworkScanProgressPct(92);
 
       const discovered = devices.map((device, index) => {
         const hostName = typeof device?.hostName === 'string' ? device.hostName.trim() : '';
@@ -726,20 +794,22 @@ export function ProfileSettingsModal({
         };
       }).filter((item) => item.ipAddress.length > 0);
 
-      const merged = [...seedDevices, ...discovered].filter((item, index, array) => (
+      const merged = [...seedDevices, ...localDiscovered, ...discovered].filter((item, index, array) => (
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
       setDiscoveredPrinters(merged);
+      setNetworkScanProgressPct(100);
+      setNetworkScanPhaseLabel('Scan complete');
 
       if (merged.length > 0) {
         setNetworkConnectionMessage(
-          `Found ${merged.length} NanoDLP device${merged.length === 1 ? '' : 's'} (scanned ${scannedHosts} hosts / ${scannedEndpoints} endpoints).`,
+          `Found ${merged.length} NanoDLP device${merged.length === 1 ? '' : 's'} (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`,
         );
       } else {
         setNetworkConnectionMessage(
-          scannedHosts > 0
-            ? `No NanoDLP devices found (scanned ${scannedHosts} hosts / ${scannedEndpoints} endpoints).`
+          scannedSubnetHosts > 0 || scannedLocalHostnames > 0
+            ? `No NanoDLP devices found (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`
             : 'No local IPv4 subnet detected by the scanner. Try entering printer IP and scanning again.',
         );
       }
@@ -747,8 +817,14 @@ export function ProfileSettingsModal({
       const message = error instanceof Error ? error.message : 'Discovery failed';
       setDiscoveredPrinters([]);
       setNetworkConnectionMessage(message);
+      setNetworkScanPhaseLabel('Scan failed');
+      setNetworkScanProgressPct(100);
     } finally {
       setIsNetworkScanning(false);
+      window.setTimeout(() => {
+        setNetworkScanProgressPct(0);
+        setNetworkScanPhaseLabel('');
+      }, 500);
     }
   }, [networkDiscoveryEnabled, networkIpAddress, selectedPrinter]);
 
@@ -775,12 +851,16 @@ export function ProfileSettingsModal({
     setNetworkConnectionMessage('Connecting to NanoDLP host…');
 
     try {
-      const response = await fetch('/api/network/nanodlp/connect', {
+      const response = await fetch('/api/network/plugin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ host }),
+        body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/connect',
+          host,
+        }),
       });
 
       const payload = await response.json().catch(() => null) as any;
@@ -2010,7 +2090,7 @@ export function ProfileSettingsModal({
                     <button
                       type="button"
                       onClick={() => setNetworkDiscoveryEnabled((prev) => !prev)}
-                      className="h-8 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                      className="h-8 min-w-[112px] rounded-md border px-3 text-xs font-semibold uppercase tracking-wide transition-colors"
                       style={networkDiscoveryEnabled
                         ? {
                             borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
@@ -2035,12 +2115,31 @@ export function ProfileSettingsModal({
                       type="button"
                       onClick={() => { void handleRunNetworkDiscovery(); }}
                       disabled={!networkDiscoveryEnabled || isNetworkScanning}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                      className="ui-button ui-button-secondary !h-8 !min-w-[112px] !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                       style={{ color: 'var(--text-strong)' }}
                     >
                       <Search className={`w-3.5 h-3.5 ${isNetworkScanning ? 'animate-pulse' : ''}`} />
                       {isNetworkScanning ? 'Scanning…' : 'Scan'}
                     </button>
+                  </div>
+
+                  <div className="mt-2.5 space-y-1.5">
+                    <div className="h-1.5 rounded-full border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), black 14%)' }}>
+                      <div
+                        className="h-full rounded-full transition-[width] duration-200 ease-out"
+                        style={{
+                          width: `${Math.max(0, Math.min(100, networkScanProgressPct))}%`,
+                          background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent), var(--accent-secondary) 22%), var(--accent-secondary))',
+                        }}
+                      />
+                    </div>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      {isNetworkScanning
+                        ? `${networkScanPhaseLabel || 'Scanning network…'} • ${Math.round(networkScanProgressPct)}%`
+                        : networkScanPhaseLabel
+                          ? `${networkScanPhaseLabel} • 100%`
+                          : 'Idle'}
+                    </div>
                   </div>
                 </div>
 
@@ -2083,7 +2182,7 @@ export function ProfileSettingsModal({
                                     void handleConnectNetworkPrinter({ host: entry.ipAddress, closeOnSuccess: true });
                                   }}
                                   disabled={isEntryConnected || isNetworkConnecting}
-                                  className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-60"
+                                  className="ui-button ui-button-secondary !h-8 !min-w-[112px] !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-60"
                                   style={{ color: isEntryConnected ? '#9ca3af' : 'var(--accent-secondary)' }}
                                 >
                                   {isEntryConnected
@@ -2133,7 +2232,7 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => { void handleConnectNetworkPrinter(); }}
                         disabled={isNetworkConnecting || !networkIpAddress.trim()}
-                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        className="ui-button ui-button-secondary !h-8 !min-w-[112px] !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                         style={{ color: 'var(--accent-secondary)' }}
                       >
                         {isNetworkConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
@@ -2154,7 +2253,7 @@ export function ProfileSettingsModal({
                 <button
                   type="button"
                   onClick={() => setIsNetworkSettingsOpen(false)}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                  className="ui-button ui-button-secondary !h-8 !min-w-[112px] !px-3 !py-0 text-xs rounded-md"
                 >
                   Cancel
                 </button>
@@ -2167,7 +2266,7 @@ export function ProfileSettingsModal({
                     });
                     setIsNetworkSettingsOpen(false);
                   }}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                  className="ui-button ui-button-secondary !h-8 !min-w-[112px] !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
                   style={{
                     color: 'var(--accent-secondary)',
                     borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',

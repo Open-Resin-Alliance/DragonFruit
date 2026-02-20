@@ -177,3 +177,65 @@ export function looksLikeNanoDlpStatusText(content: string): boolean {
 
   return false;
 }
+
+function isLikelyIpv4Address(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 4) return false;
+
+  return parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const numeric = Number(part);
+    return Number.isFinite(numeric) && numeric >= 0 && numeric <= 255;
+  });
+}
+
+/**
+ * Fetch and parse NanoDLP `/status` with a tolerant parser.
+ *
+ * NanoDLP firmware variants occasionally return JSON with a UTF-8 BOM or
+ * slightly malformed response metadata. This helper keeps the route handlers
+ * focused on flow control while the plugin owns payload parsing heuristics.
+ */
+export async function fetchNanoDlpStatus(
+  host: string,
+  port: number,
+  timeoutMs: number = 5000,
+): Promise<NanoDlpStatusPayload | null> {
+  const response = await fetch(`${buildNanoDlpBaseUrl(host, port)}/status`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+    },
+    cache: 'no-store',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (response.status !== 200) return null;
+
+  const raw = await response.text().catch(() => '');
+  if (!looksLikeNanoDlpStatusText(raw)) return null;
+
+  const cleanedRaw = raw.replace(/^\uFEFF/, '').trim();
+  const status = JSON.parse(cleanedRaw) as NanoDlpStatusPayload;
+  if (!status || typeof status !== 'object' || !looksLikeNanoDlpStatus(status)) return null;
+
+  return status;
+}
+
+/**
+ * Resolve the best host/IP to use for subsequent communication.
+ *
+ * Prefer an IPv4 value exposed by NanoDLP status payload when present, otherwise
+ * fall back to the scanned host (which may be an IP or `.local` hostname).
+ */
+export function resolveNanoDlpResolvedAddress(status: NanoDlpStatusPayload, fallbackHost: string): string {
+  const ipCandidates = [status.IP, status.ip, status.ipAddress, status.IPAddress];
+  for (const value of ipCandidates) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) continue;
+    if (isLikelyIpv4Address(trimmed)) return trimmed;
+  }
+
+  return fallbackHost.trim();
+}
