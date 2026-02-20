@@ -12,8 +12,7 @@ import {
 } from '@/features/profiles/profileStore';
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 
-const BUILTIN_ATHENA_DEVELOPER = 'Open Resin Alliance';
-const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/Dragonfruit';
+const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/DragonFruit';
 
 function isOraHostedRepository(url: string | undefined): boolean {
   if (!url) return false;
@@ -23,6 +22,22 @@ function isOraHostedRepository(url: string | undefined): boolean {
     return parsed.pathname.toLowerCase().startsWith('/open-resin-alliance/');
   } catch {
     return false;
+  }
+}
+
+function truncateRepositoryUrl(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    if (!/github\.com$/i.test(parsed.hostname)) return url;
+    // Extract path like "/owner/repo" and remove leading slash
+    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    if (pathParts.length >= 2) {
+      return `${pathParts[0]}/${pathParts[1]}`;
+    }
+    return url;
+  } catch {
+    return url;
   }
 }
 
@@ -166,13 +181,9 @@ export function PluginsSettingsTab() {
           {installedPlugins.map((plugin) => {
             const manifest = plugin.manifest;
             const isBuiltin = plugin.source === 'builtin';
-            const developer = manifest.author || (isBuiltin ? BUILTIN_ATHENA_DEVELOPER : 'Unknown');
             const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);
             const hasRepositoryLink = typeof repositoryUrl === 'string' && repositoryUrl.trim().length > 0;
-            const isOraVerifiedBuiltin = isBuiltin && (
-              developer.toLowerCase().includes('open resin alliance')
-              || isOraHostedRepository(repositoryUrl)
-            );
+            const isOraVerifiedBuiltin = isBuiltin && isOraHostedRepository(repositoryUrl);
 
             return (
               <div
@@ -202,13 +213,8 @@ export function PluginsSettingsTab() {
                       </div>
                     )}
 
-                    <div className="mt-1.5 space-y-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      <div>
-                        <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>Developer:</span>{' '}
-                        <span>{developer}</span>
-                      </div>
-
-                      {hasRepositoryLink && (
+                    {hasRepositoryLink && (
+                      <div className="mt-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                         <div className="flex items-center gap-1.5">
                           <Github className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
                           <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>Repository:</span>
@@ -219,12 +225,12 @@ export function PluginsSettingsTab() {
                             className="inline-flex items-center gap-1 underline underline-offset-2"
                             style={{ color: 'var(--accent)' }}
                           >
-                            {repositoryUrl}
+                            {truncateRepositoryUrl(repositoryUrl)}
                             <ExternalLink className="h-3 w-3" />
                           </a>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
 
                   {isOraVerifiedBuiltin ? (
