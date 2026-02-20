@@ -38,11 +38,11 @@
   --space-5: 20px;
   --space-6: 24px;
 
-  --font-size-xs: 13px;
-  --font-size-sm: 14px;
-  --font-size-md: 15px;
-  --font-size-lg: 19px;
-  --font-size-xl: 26px;
+  --font-size-xs: 15px;
+  --font-size-sm: 16px;
+  --font-size-md: 17px;
+  --font-size-lg: 21px;
+  --font-size-xl: 28px;
 
   --line-height-tight: 1.2;
   --line-height-normal: 1.45;
@@ -301,12 +301,12 @@ button:disabled,
 
 .ui-label {
   color: var(--indicator);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .ui-meta {
   color: var(--indicator);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .ui-checkbox {
@@ -539,4 +539,25 @@ input[type="number"].no-spinners {
     color-mix(in srgb, var(--accent), white 16%),
     color-mix(in srgb, var(--accent), var(--surface-2) 34%)
   );
+}
+
+/* Themed number stepper controls */
+.ui-number-input {
+  accent-color: var(--accent);
+}
+
+.ui-number-input::-webkit-inner-spin-button,
+.ui-number-input::-webkit-outer-spin-button {
+  opacity: 1;
+  width: 14px;
+  margin: 0;
+  background: color-mix(in srgb, var(--surface-2), var(--accent) 10%);
+  border-left: 1px solid color-mix(in srgb, var(--border-subtle), var(--accent) 24%);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ui-number-input:hover::-webkit-inner-spin-button,
+.ui-number-input:hover::-webkit-outer-spin-button {
+  background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
 }
