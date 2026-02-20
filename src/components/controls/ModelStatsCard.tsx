@@ -145,11 +145,11 @@ export function ModelStatsCard({
   const selectedLayerCounts = React.useMemo(() => {
     if (selectedModelSet.size > 0) {
       return models.filter((entry) => selectedModelSet.has(entry.id) && entry.visible)
-        .map((entry) => ({ name: entry.name, count: getModelLayerCount(entry) }));
+        .map((entry) => ({ count: getModelLayerCount(entry) }));
     }
     if (inBoundsModelSet.size > 0) {
       return models.filter((entry) => inBoundsModelSet.has(entry.id) && entry.visible)
-        .map((entry) => ({ name: entry.name, count: getModelLayerCount(entry) }));
+        .map((entry) => ({ count: getModelLayerCount(entry) }));
     }
     return [];
   }, [getModelLayerCount, inBoundsModelSet, models, selectedModelSet]);
@@ -349,15 +349,7 @@ export function ModelStatsCard({
 
               <span>Layers:</span>
               <span style={{ color: 'var(--text-strong)' }}>
-                {selectedModelSet.size > 0
-                  ? selectedLayerCounts.map((entry, i) => (
-                      <span key={entry.name}>
-                        {entry.name}: {entry.count ?? '-'}{i < selectedLayerCounts.length - 1 ? ', ' : ''}
-                      </span>
-                    ))
-                  : maxLayerCount != null
-                    ? `Plate: ${maxLayerCount}`
-                    : '-'}
+                {maxLayerCount != null ? maxLayerCount : '-'}
               </span>
 
               <span>Est. print time:</span>
