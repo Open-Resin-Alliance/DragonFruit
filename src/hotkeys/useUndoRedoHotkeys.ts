@@ -16,7 +16,16 @@ export function useUndoRedoHotkeys() {
       if (isTextInput(event.target)) return;
       const isMeta = event.metaKey || event.ctrlKey;
       if (!isMeta) return;
-      if (event.key.toLowerCase() !== UNIVERSAL_HOTKEYS.UNDO.key) return;
+      const key = event.key.toLowerCase();
+
+      // Windows/Linux-friendly redo shortcut.
+      if (key === 'y') {
+        event.preventDefault();
+        redo();
+        return;
+      }
+
+      if (key !== UNIVERSAL_HOTKEYS.UNDO.key) return;
 
       event.preventDefault();
       if (event.shiftKey) {
