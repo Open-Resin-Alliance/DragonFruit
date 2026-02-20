@@ -489,6 +489,26 @@ input[type="number"].no-spinners {
   }
 }
 
+@keyframes uiModalBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes uiModalPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes uiLoadingLoop {
   0% {
     transform: translateX(-130%);
@@ -511,6 +531,22 @@ input[type="number"].no-spinners {
   width: 32%;
   border-radius: 9999px;
   animation: uiLoadingLoop 1.15s linear infinite;
+}
+
+.ui-modal-backdrop-enter {
+  animation: uiModalBackdropIn 140ms ease-out;
+}
+
+.ui-modal-panel-enter {
+  animation: uiModalPanelIn 180ms ease-out;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-modal-backdrop-enter,
+  .ui-modal-panel-enter {
+    animation: none !important;
+  }
 }
 
 /* Themed custom scrollbar */

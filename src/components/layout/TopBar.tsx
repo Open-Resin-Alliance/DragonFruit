@@ -101,6 +101,7 @@ export function TopBar({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
+  const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
   const [windowMetrics, setWindowMetrics] = useState(() => ({
     innerWidth: 0,
     innerHeight: 0,
@@ -130,13 +131,19 @@ export function TopBar({
     if (typeof window === 'undefined') return;
 
     const handleOpenProfileModal = (event: Event) => {
-      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab }>;
+      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean }>;
       const requestedTab = customEvent.detail?.tab;
+      const shouldOpenPrinterLibrary = customEvent.detail?.openPrinterLibrary === true;
       if (requestedTab === 'printer' || requestedTab === 'material') {
         setProfileModalTab(requestedTab);
       } else {
         setProfileModalTab('printer');
       }
+
+      if (shouldOpenPrinterLibrary) {
+        setProfileModalOpenPrinterLibraryToken((prev) => prev + 1);
+      }
+
       setIsProfileModalOpen(true);
     };
 
@@ -399,6 +406,7 @@ export function TopBar({
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
         initialTab={profileModalTab}
+        openPrinterLibraryToken={profileModalOpenPrinterLibraryToken}
       />
     </div>
   );

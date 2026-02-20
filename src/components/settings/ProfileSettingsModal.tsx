@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, FlaskConical, ImagePlus, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, Wifi, X } from 'lucide-react';
+import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, FlaskConical, ImagePlus, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import {
   addMaterialProfile,
   addPrinterProfileFromPreset,
@@ -42,6 +42,7 @@ type ProfileSettingsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   initialTab?: 'printer' | 'material';
+  openPrinterLibraryToken?: number;
 };
 
 type DeleteConfirmTarget =
@@ -128,7 +129,12 @@ function resolveOfficialPresetIdFromProfile(profile: PrinterProfile): string | n
   return null;
 }
 
-export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalProps) {
+export function ProfileSettingsModal({
+  isOpen,
+  onClose,
+  initialTab = 'printer',
+  openPrinterLibraryToken = 0,
+}: ProfileSettingsModalProps) {
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
   const [selectedPrinterId, setSelectedPrinterId] = React.useState<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = React.useState<string | null>(null);
@@ -277,12 +283,14 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
   }, [filteredMaterialProfiles, selectedMaterialId]);
 
   const selectedPrinterSupportsNetworkSettings = Boolean(selectedPrinter?.networkSupport);
+  const isNanodlpPrinter = selectedPrinter?.networkSupport === 'nanodlp';
   const selectedNetworkModeLabel = selectedPrinter?.networkSupport === 'nanodlp' ? 'NanoDLP' : 'Unknown';
   const shouldUseNanodlpOnDeviceMaterials = Boolean(
     selectedPrinter?.networkSupport === 'nanodlp'
     && selectedPrinter.networkConnection?.connected
     && (selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress),
   );
+  const shouldShowNanodlpConnectInfo = Boolean(isNanodlpPrinter && !shouldUseNanodlpOnDeviceMaterials);
 
   const selectedNanodlpMaterial = React.useMemo(() => {
     if (!selectedNanodlpMaterialId) return null;
@@ -290,6 +298,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
   }, [nanodlpMaterials, selectedNanodlpMaterialId]);
 
   const selectedNanodlpMaterialIdRef = React.useRef('');
+  const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
 
   React.useEffect(() => {
     selectedNanodlpMaterialIdRef.current = selectedNanodlpMaterialId;
@@ -382,8 +391,17 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
     return isNanoDlpDynamicWaitEnabled(nanodlpEditDraft);
   }, [nanodlpEditDraft]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!isOpen) return;
+
+    const shouldOpenPrinterLibrary =
+      initialTab === 'printer'
+      && openPrinterLibraryToken > 0
+      && openPrinterLibraryToken > lastHandledOpenPrinterLibraryTokenRef.current;
+
+    if (shouldOpenPrinterLibrary) {
+      lastHandledOpenPrinterLibraryTokenRef.current = openPrinterLibraryToken;
+    }
 
     setSelectedPrinterId(profileState.activePrinterProfileId);
     setSelectedManufacturer(null);
@@ -391,12 +409,12 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
     setIsMaterialEditorOpen(false);
     setIsEditingPrinter(false);
     setIsNetworkSettingsOpen(false);
-    setShowPresetPicker(false);
+    setShowPresetPicker(shouldOpenPrinterLibrary);
     setPresetSearch('');
     setSelectedPresetManufacturer('All');
     const materials = getMaterialProfilesForPrinter(profileState.activePrinterProfileId, profileState);
     setSelectedMaterialId(materials[0]?.id ?? null);
-  }, [isOpen]);
+  }, [initialTab, isOpen, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -1037,13 +1055,13 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/58 backdrop-blur-sm p-5"
+      className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/58 backdrop-blur-sm p-5 ui-modal-backdrop-enter"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-[1120px] h-full flex flex-col rounded-xl border shadow-2xl overflow-hidden"
+        className={`w-full max-w-[1120px] flex flex-col rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter ${hasPrinters ? 'h-full' : 'self-center h-[700px] max-h-[94vh]'}`}
         style={{
           background: 'var(--surface-0)',
           borderColor: 'var(--border-strong)',
@@ -1076,8 +1094,8 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 custom-scrollbar">
-          <div className="flex flex-col gap-3 min-h-full">
+        <div className={`px-4 py-3 custom-scrollbar ${hasPrinters ? 'flex-1 min-h-0 overflow-y-auto' : 'flex-1 min-h-0 overflow-hidden flex'}`}>
+          <div className={`flex flex-col gap-3 ${hasPrinters ? 'min-h-full' : 'w-full h-full min-h-0'}`}>
           {isCustomSelectedPrinter && (
             <div
               className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
@@ -1093,6 +1111,45 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
               </span>
             </div>
           )}
+          {!hasPrinters && (
+            <div
+              className="rounded-xl border flex-1 h-full min-h-0 flex items-center justify-center px-4 py-10"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-2), transparent 4%), color-mix(in srgb, var(--surface-2), black 8%))',
+              }}
+            >
+              <div className="text-center max-w-[520px]">
+                <div
+                  className="inline-flex h-14 w-14 items-center justify-center rounded-full border mb-3"
+                  style={{
+                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 22%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                  }}
+                >
+                  <Printer className="w-6 h-6" style={{ color: 'var(--accent)' }} />
+                </div>
+
+                <h4 className="text-2xl font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Welcome to Printer Profiles
+                </h4>
+                <p className="mt-2 text-sm leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                  Add your first printer from the library to unlock a tailored materials list and printer-specific defaults.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={handleAddPrinter}
+                  className="ui-button ui-button-primary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Printer
+                </button>
+              </div>
+            </div>
+          )}
+
+          {hasPrinters && (
           <section className="rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
             <div className="px-3 py-2.5 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
               <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
@@ -1184,29 +1241,6 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                   );
                 })}
               </div>
-
-              {!hasPrinters && (
-                <div className="mt-3 min-h-[220px] rounded-xl border flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                  <div className="text-center max-w-[420px] px-5">
-                    <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)' }}>
-                      <Printer className="w-6 h-6" style={{ color: 'var(--accent)' }} />
-                    </div>
-                    <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Welcome to Printer Profiles</h4>
-                    <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                      Start by adding your first printer from the preset library. Once added, resin profiles will be created for that printer.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleAddPrinter}
-                      className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-full"
-                      style={{ color: 'var(--accent)' }}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Add Printer
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {isEditingPrinter && selectedPrinter ? (
                 <div className="mt-3 rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
@@ -1392,6 +1426,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
               )}
             </div>
           </section>
+          )}
 
           {hasPrinters && selectedPrinter && (
           <section
@@ -1409,6 +1444,8 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
               <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                 {shouldUseNanodlpOnDeviceMaterials
                   ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
+                  : shouldShowNanodlpConnectInfo
+                    ? <>Connect to a machine to view on-device material profiles.</>
                   : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
               </p>
             </div>
@@ -1525,6 +1562,20 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                     )}
                   </div>
                 </>
+              ) : shouldShowNanodlpConnectInfo ? (
+                <div className="rounded-xl border min-h-[240px] flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="text-center max-w-[520px]">
+                    <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)' }}>
+                      <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
+                    </div>
+                    <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      Connect to a Machine
+                    </h4>
+                    <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      Connect to a machine to view on-device material profiles.
+                    </p>
+                  </div>
+                </div>
               ) : (
                 <>
               <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-[420px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
@@ -1713,10 +1764,10 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         />
 
         {showPresetPicker && (
-          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setShowPresetPicker(false);
           }}>
-            <div className="w-full max-w-[1040px] max-h-[94vh] rounded-xl border shadow-2xl overflow-hidden" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[1040px] max-h-[94vh] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
@@ -1827,10 +1878,10 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         )}
 
         {isMaterialEditorOpen && selectedMaterial && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsMaterialEditorOpen(false);
           }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Resin Profile Settings</h3>
@@ -1879,10 +1930,10 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         )}
 
         {isCreateMaterialOpen && selectedPrinter && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsCreateMaterialOpen(false);
           }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Create Resin Profile</h3>
@@ -1926,10 +1977,10 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         )}
 
         {isNetworkSettingsOpen && selectedPrinter && selectedPrinterSupportsNetworkSettings && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsNetworkSettingsOpen(false);
           }}>
-            <div className="w-full max-w-[620px] rounded-xl border shadow-2xl" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[620px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Network Settings</h3>
@@ -2131,10 +2182,10 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         )}
 
         {isNanodlpEditDialogOpen && selectedNanodlpMaterial && (
-          <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget && !isSavingNanodlpEdit) setIsNanodlpEditDialogOpen(false);
           }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit NanoDLP Resin Profile</h3>
@@ -2331,13 +2382,13 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         )}
 
         {showOfficialLockDialog && (
-          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               setShowOfficialLockDialog(false);
               setOfficialLockedProfileId(null);
             }
           }}>
-            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
                 <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -2381,12 +2432,12 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         )}
 
         {deleteConfirmTarget && (
-          <div className="fixed inset-0 z-[76] flex items-center justify-center bg-black/60 p-4" onMouseDown={(event) => {
+          <div className="fixed inset-0 z-[76] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               setDeleteConfirmTarget(null);
             }
           }}>
-            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[520px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
                 <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>

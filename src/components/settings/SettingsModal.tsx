@@ -436,13 +436,13 @@ export function SettingsModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 backdrop-blur-sm p-5"
+      className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 backdrop-blur-sm p-5 ui-modal-backdrop-enter"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) handleCancel();
       }}
     >
       <div
-        className="w-full max-w-[72rem] h-full flex flex-col rounded-2xl shadow-2xl border overflow-hidden"
+        className="w-full max-w-[72rem] h-full flex flex-col rounded-2xl shadow-2xl border overflow-hidden ui-modal-panel-enter"
         style={{
           background: 'var(--surface-0)',
           borderColor: 'var(--border-strong)',
