@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
@@ -22,6 +22,11 @@ import {
   saveView3DSettings,
   type View3DSettings,
 } from '@/components/settings/view3dPreferences';
+import {
+  getActivePrinterProfile,
+  getProfileStoreSnapshot,
+  subscribeToProfileStore,
+} from '@/features/profiles/profileStore';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -652,7 +657,22 @@ export function useSceneCollectionManager() {
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
-  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
+  const [storedView3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
+  const profileState = useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+
+  const view3dSettings = useMemo(() => {
+    if (!activePrinterProfile) return storedView3dSettings;
+
+    return normalizeView3DSettings({
+      ...storedView3dSettings,
+      widthMm: activePrinterProfile.buildVolumeMm.width,
+      depthMm: activePrinterProfile.buildVolumeMm.depth,
+      maxZMm: activePrinterProfile.buildVolumeMm.height,
+      screenWidthPx: activePrinterProfile.display.resolutionX,
+      screenHeightPx: activePrinterProfile.display.resolutionY,
+    });
+  }, [activePrinterProfile, storedView3dSettings]);
 
   useEffect(() => {
     const persistedAppearance = readMeshAppearanceFromLocalStorage();
