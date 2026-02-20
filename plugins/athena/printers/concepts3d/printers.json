@@ -3,7 +3,7 @@
     "presetId": "concepts3d-athena2-12k-nanodlp",
     "manufacturer": "Concepts3D",
     "name": "Athena 2 12K (NanoDLP)",
-    "imageAssetPath": "../assets/athena2-12k.png",
+    "imageAssetPath": "./assets/athena2-12k.png",
     "buildVolumeMm": { "width": 211.68, "depth": 118.37, "height": 235 },
     "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp" },
     "networkSupport": "nanodlp"
@@ -12,7 +12,7 @@
     "presetId": "concepts3d-athena2-16k-nanodlp",
     "manufacturer": "Concepts3D",
     "name": "Athena 2 16K (NanoDLP)",
-    "imageAssetPath": "../assets/athena2-16k.png",
+    "imageAssetPath": "./assets/athena2-16k.png",
     "buildVolumeMm": { "width": 211.68, "depth": 118.37, "height": 235 },
     "display": { "resolutionX": 15360, "resolutionY": 8640, "outputFormat": ".nanodlp" },
     "networkSupport": "nanodlp"

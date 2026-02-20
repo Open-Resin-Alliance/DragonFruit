@@ -5,10 +5,11 @@ import { GeneralSettingsTab } from '@/components/settings/GeneralSettingsTab';
 import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
+import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, RotateCcw, Settings2, X } from 'lucide-react';
+import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -107,7 +108,7 @@ type SettingsModalProps = {
   onView3dSettingsChange: (settings: View3DSettings) => void;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'spacemouse' | 'ui' | 'hotkeys' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'spacemouse' | 'plugins' | 'ui' | 'hotkeys' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -395,6 +396,12 @@ export function SettingsModal({
       icon: Gamepad2,
       tone: 'primary',
     },
+    plugins: {
+      label: 'Plugins',
+      description: 'Load vendor profile plugins',
+      icon: Plug,
+      tone: 'secondary',
+    },
     about: {
       label: 'About',
       description: 'Version info and project details',
@@ -404,7 +411,7 @@ export function SettingsModal({
   };
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'spacemouse', 'ui', 'hotkeys'];
-  const sidebarBottomTabs: SettingsTabKey[] = ['about'];
+  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'about'];
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
     setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
@@ -666,6 +673,7 @@ export function SettingsModal({
                   onChange={handleSpaceMouseChange}
                 />
               )}
+              {activeTab === 'plugins' && <PluginsSettingsTab />}
               {activeTab === 'about' && (
                 <div className="flex min-h-full flex-col gap-3.5">
                   <div

@@ -1,5 +1,4 @@
 import genericPrinters from './generic/printers.json';
-import concepts3dPrinters from './concepts3d/printers.json';
 
 function normalizeRelativePath(baseDir: string, relativePath: string): string {
   const stack = baseDir.split('/').filter(Boolean);
@@ -58,7 +57,6 @@ function withResolvedImagePaths<T extends object>(
 
 const printerPresets = [
   ...withResolvedImagePaths('printers/generic', genericPrinters),
-  ...withResolvedImagePaths('printers/concepts3d', concepts3dPrinters),
 ];
 
 export default printerPresets;

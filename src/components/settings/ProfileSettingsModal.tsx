@@ -23,6 +23,20 @@ import {
   type PrinterOutputFormat,
   type PrinterProfile,
 } from '@/features/profiles/profileStore';
+import {
+  NANODLP_ADVANCED_SECTIONS,
+  NANODLP_BASIC_SECTIONS,
+  NANODLP_PRIMARY_EDIT_FIELDS,
+  denormalizeNanodlpEditDraftForBackend,
+  getNanoDlpFieldHelpText,
+  isNanoDlpDynamicWaitEnabled,
+  resolveNanodlpEditDraftFromMeta,
+  resolveNanoDlpAdvancedSectionId,
+  resolveNanodlpMaterialProcessValues,
+  type NanoDlpAdvancedSectionDef,
+  type NanoDlpBasicSection,
+  type NanoDlpPrimaryEditField,
+} from '../../../plugins/athena/nanodlpProfilePlugin';
 
 type ProfileSettingsModalProps = {
   isOpen: boolean;
@@ -43,39 +57,7 @@ type NanoDlpMaterial = {
   meta: Record<string, unknown>;
 };
 
-type NanoDlpDetailRow = {
-  label: string;
-  value: string;
-};
-
-type NanoDlpEditDraft = {
-  burnInCureTime: number;
-  normalCureTime: number;
-  liftAfterPrint: number;
-  burnInCount: number;
-  waitAfterCure: number;
-  waitAfterLift: number;
-};
-
-function toDisplayValue(value: unknown): string | null {
-  if (value == null) return null;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  return null;
-}
-
-function firstMetaValue(meta: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    if (!(key in meta)) continue;
-    const display = toDisplayValue(meta[key]);
-    if (display) return display;
-  }
-  return null;
-}
+type NanoDlpEditDraft = Record<string, string>;
 
 function formatNanoDlpMetaLabel(key: string): string {
   return key
@@ -84,145 +66,24 @@ function formatNanoDlpMetaLabel(key: string): string {
     .trim();
 }
 
-function firstMetaNumericValue(meta: Record<string, unknown>, keys: string[]): number | undefined {
-  for (const key of keys) {
-    if (!(key in meta)) continue;
-    const value = Number(meta[key]);
-    if (Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
-function resolveNanodlpMaterialProcessValues(material: NanoDlpMaterial): {
-  layerHeightMm?: number;
-  normalExposureSec?: number;
-  bottomExposureSec?: number;
-  bottomLayerCount?: number;
-} {
-  const meta = material.meta ?? {};
-
-  const rawLayerHeight = firstMetaNumericValue(meta, [
-    'LayerHeight',
-    'layerHeight',
-    'SliceHeight',
-    'sliceHeight',
-    'Depth',
-    'depth',
-  ]);
-
-  const layerHeightMm = rawLayerHeight == null
-    ? undefined
-    : (rawLayerHeight > 1 ? rawLayerHeight / 1000 : rawLayerHeight);
-
-  const normalExposureSec = firstMetaNumericValue(meta, [
-    'CureTime',
-    'cureTime',
-    'Exposure',
-    'exposure',
-    'NormalExposure',
-    'normalExposure',
-    'ExpTime',
-  ]);
-
-  const bottomExposureSec = firstMetaNumericValue(meta, [
-    'SupportCureTime',
-    'supportCureTime',
-    'BottomCureTime',
-    'bottomCureTime',
-    'BottomExposure',
-    'bottomExposure',
-    'BottomExp',
-    'bottomExp',
-  ]);
-
-  const bottomLayerCount = firstMetaNumericValue(meta, [
-    'SupportLayerNumber',
-    'supportLayerNumber',
-    'BottomLayerCount',
-    'bottomLayerCount',
-    'BottomLayers',
-    'bottomLayers',
-  ]);
-
-  return {
-    layerHeightMm: layerHeightMm != null && layerHeightMm > 0 ? layerHeightMm : undefined,
-    normalExposureSec: normalExposureSec != null && normalExposureSec > 0 ? normalExposureSec : undefined,
-    bottomExposureSec: bottomExposureSec != null && bottomExposureSec > 0 ? bottomExposureSec : undefined,
-    bottomLayerCount: bottomLayerCount != null && bottomLayerCount > 0 ? bottomLayerCount : undefined,
-  };
-}
-
-function resolveNanodlpEditDraft(material: NanoDlpMaterial): NanoDlpEditDraft {
-  const meta = material.meta ?? {};
-
-  const burnInCureTime = firstMetaNumericValue(meta, [
-    'SupportCureTime',
-    'supportCureTime',
-    'burn_in_cure_time',
-    'BurnInCureTime',
-    'BottomCureTime',
-  ]) ?? 10;
-
-  const normalCureTime = firstMetaNumericValue(meta, [
-    'CureTime',
-    'cureTime',
-    'normal_cure_time',
-    'NormalExposure',
-    'normalExposure',
-  ]) ?? 8;
-
-  const liftAfterPrint = firstMetaNumericValue(meta, [
-    'WaitHeight',
-    'waitHeight',
-    'lift_after_print',
-    'LiftAfterPrint',
-    'ZLiftDistance',
-  ]) ?? 5;
-
-  const burnInCount = firstMetaNumericValue(meta, [
-    'SupportLayerNumber',
-    'supportLayerNumber',
-    'burn_in_count',
-    'BottomLayerCount',
-  ]) ?? 3;
-
-  const waitAfterCure = firstMetaNumericValue(meta, [
-    'TopWait',
-    'topWait',
-    'wait_after_cure',
-    'WaitAfterCure',
-  ]) ?? 2;
-
-  const waitAfterLift = firstMetaNumericValue(meta, [
-    'WaitAfterPrint',
-    'waitAfterPrint',
-    'wait_after_life',
-    'wait_after_lift',
-  ]) ?? 2;
-
-  return {
-    burnInCureTime,
-    normalCureTime,
-    liftAfterPrint,
-    burnInCount: Math.max(0, Math.round(burnInCount)),
-    waitAfterCure,
-    waitAfterLift,
-  };
-}
-
-function denormalizeNanodlpEditDraftForBackend(draft: NanoDlpEditDraft): Record<string, string> {
-  return {
-    SupportCureTime: String(draft.burnInCureTime),
-    CureTime: String(draft.normalCureTime),
-    WaitHeight: String(draft.liftAfterPrint),
-    SupportLayerNumber: String(Math.max(0, Math.round(draft.burnInCount))),
-    TopWait: String(draft.waitAfterCure),
-    WaitAfterPrint: String(draft.waitAfterLift),
-  };
+function isLikelyNumericNanoDlpField(key: string, value: string): boolean {
+  const normalizedKey = key.toLowerCase();
+  if (Number.isFinite(Number(value))) return true;
+  return (
+    normalizedKey.includes('time')
+    || normalizedKey.includes('layer')
+    || normalizedKey.includes('speed')
+    || normalizedKey.includes('height')
+    || normalizedKey.includes('distance')
+    || normalizedKey.includes('exposure')
+    || normalizedKey.includes('lift')
+    || normalizedKey.includes('wait')
+    || normalizedKey.includes('depth')
+  );
 }
 
 function buildNanoDlpMaterialChips(material: NanoDlpMaterial): string[] {
-  const processValues = resolveNanodlpMaterialProcessValues(material);
+  const processValues = resolveNanodlpMaterialProcessValues(material.meta ?? {});
   const parts: string[] = [];
 
   if (processValues.bottomLayerCount != null) {
@@ -238,45 +99,6 @@ function buildNanoDlpMaterialChips(material: NanoDlpMaterial): string[] {
   }
 
   return parts;
-}
-
-function buildNanoDlpDetailRows(material: NanoDlpMaterial): NanoDlpDetailRow[] {
-  const meta = material.meta ?? {};
-  const rows: NanoDlpDetailRow[] = [];
-
-  const add = (label: string, keys: string[]) => {
-    const value = firstMetaValue(meta, keys);
-    if (value) rows.push({ label, value });
-  };
-
-  add('Profile ID', ['ProfileID', 'ProfileId', 'profileId', 'id', 'ID']);
-  add('Path', ['Path', 'path', 'File', 'file']);
-  add('Normal Exposure', ['CureTime', 'cureTime', 'Exposure', 'exposure', 'NormalExposure', 'normalExposure', 'ExpTime']);
-  add('Bottom Exposure', ['SupportCureTime', 'supportCureTime', 'BottomExposure', 'bottomExposure', 'BottomExp', 'bottomExp']);
-  add('Layer Height', ['LayerHeight', 'layerHeight', 'SliceHeight', 'sliceHeight']);
-  add('Bottom Layers', ['SupportLayerNumber', 'supportLayerNumber', 'BottomLayers', 'bottomLayers', 'BottomLayerCount', 'bottomLayerCount']);
-  add('Lift Distance', ['LiftDistance', 'liftDistance']);
-  add('Lift Speed', ['LiftSpeed', 'liftSpeed']);
-  add('Retract Speed', ['RetractSpeed', 'retractSpeed']);
-  add('Brand', ['Brand', 'brand']);
-  add('Resin Type', ['ResinType', 'resinType', 'Type', 'type']);
-
-  const usedValues = new Set(rows.map((row) => `${row.label}:${row.value}`));
-  for (const [key, raw] of Object.entries(meta)) {
-    if (rows.length >= 16) break;
-    const value = toDisplayValue(raw);
-    if (!value) continue;
-    const marker = `${key}:${value}`;
-    if (usedValues.has(marker)) continue;
-    usedValues.add(marker);
-    rows.push({ label: key, value });
-  }
-
-  if (!rows.some((row) => row.label === 'Profile ID')) {
-    rows.unshift({ label: 'Profile ID', value: material.id });
-  }
-
-  return rows;
 }
 
 const OUTPUT_FORMAT_OPTIONS: Array<{ value: PrinterOutputFormat; label: string }> = [
@@ -329,17 +151,10 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
   const [isLoadingNanodlpMaterials, setIsLoadingNanodlpMaterials] = React.useState(false);
   const [nanodlpMaterialsError, setNanodlpMaterialsError] = React.useState<string | null>(null);
   const [selectedNanodlpMaterialId, setSelectedNanodlpMaterialId] = React.useState<string>('');
-  const [isNanodlpDetailsDialogOpen, setIsNanodlpDetailsDialogOpen] = React.useState(false);
   const [isNanodlpEditDialogOpen, setIsNanodlpEditDialogOpen] = React.useState(false);
+  const [nanodlpEditTab, setNanodlpEditTab] = React.useState<'basic' | 'advanced'>('basic');
   const [isSavingNanodlpEdit, setIsSavingNanodlpEdit] = React.useState(false);
-  const [nanodlpEditDraft, setNanodlpEditDraft] = React.useState<NanoDlpEditDraft>({
-    burnInCureTime: 10,
-    normalCureTime: 8,
-    liftAfterPrint: 5,
-    burnInCount: 3,
-    waitAfterCure: 2,
-    waitAfterLift: 2,
-  });
+  const [nanodlpEditDraft, setNanodlpEditDraft] = React.useState<NanoDlpEditDraft>({});
   const [deleteConfirmTarget, setDeleteConfirmTarget] = React.useState<DeleteConfirmTarget | null>(null);
   const [editMaterialDraft, setEditMaterialDraft] = React.useState<MaterialDraft>({
     name: 'Standard 405nm',
@@ -380,7 +195,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('All');
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
 
-  const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), []);
+  const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
 
   const presetManufacturers = React.useMemo(() => {
     const uniq = new Set(availablePrinterPresets.map((preset) => preset.manufacturer));
@@ -484,33 +299,88 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
   const selectedNanodlpHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
 
-  const selectedNanodlpMaterialDetails = React.useMemo(() => {
-    if (!selectedNanodlpMaterial) return [];
-    return buildNanoDlpDetailRows(selectedNanodlpMaterial);
-  }, [selectedNanodlpMaterial]);
+  const nanodlpPrimaryFieldByKey = React.useMemo(() => {
+    const map = new Map<string, NanoDlpPrimaryEditField>();
+    NANODLP_PRIMARY_EDIT_FIELDS.forEach((field) => {
+      map.set(field.key, field);
+    });
+    return map;
+  }, []);
 
-  const { compactNanodlpDetailRows, expandedNanodlpDetailRows } = React.useMemo(() => {
-    const expanded: NanoDlpDetailRow[] = [];
-    const compact: NanoDlpDetailRow[] = [];
+  const sortedNanodlpDraftEntries = React.useMemo(() => {
+    const entries = Object.entries(nanodlpEditDraft);
+    const primaryOrder = new Map<string, number>();
+    NANODLP_PRIMARY_EDIT_FIELDS.forEach((field, index) => {
+      primaryOrder.set(field.key, index);
+    });
 
-    for (const row of selectedNanodlpMaterialDetails) {
-      const key = row.label.toLowerCase();
-      const isNarrativeField = key.includes('desc')
-        || key.includes('description')
-        || key.includes('title')
-        || key.includes('note')
-        || key.includes('comment');
-      const isLongValue = row.value.length > 96;
+    return entries.sort(([keyA], [keyB]) => {
+      const indexA = primaryOrder.get(keyA);
+      const indexB = primaryOrder.get(keyB);
 
-      if (isNarrativeField || isLongValue) {
-        expanded.push(row);
+      const isPrimaryA = indexA != null;
+      const isPrimaryB = indexB != null;
+
+      if (isPrimaryA && isPrimaryB) return (indexA as number) - (indexB as number);
+      if (isPrimaryA) return -1;
+      if (isPrimaryB) return 1;
+      return keyA.localeCompare(keyB);
+    });
+  }, [nanodlpEditDraft]);
+
+  const basicNanodlpDraftEntries = React.useMemo(() => {
+    return NANODLP_PRIMARY_EDIT_FIELDS
+      .map((field) => [field.key, nanodlpEditDraft[field.key]] as const)
+      .filter(([, value]) => typeof value === 'string');
+  }, [nanodlpEditDraft]);
+
+  const basicNanodlpSections = React.useMemo(() => {
+    const entryMap = new Map(basicNanodlpDraftEntries);
+    return NANODLP_BASIC_SECTIONS
+      .map((section) => ({
+        ...section,
+        entries: section.keys
+          .map((key) => [key, entryMap.get(key)] as const)
+          .filter(([, value]) => typeof value === 'string') as Array<readonly [string, string]>,
+      }))
+      .filter((section) => section.entries.length > 0);
+  }, [basicNanodlpDraftEntries]);
+
+  const advancedNanodlpDraftEntries = React.useMemo(() => {
+    return sortedNanodlpDraftEntries
+      .filter(([key]) => !nanodlpPrimaryFieldByKey.has(key));
+  }, [nanodlpPrimaryFieldByKey, sortedNanodlpDraftEntries]);
+
+  const advancedNanodlpSections = React.useMemo(() => {
+    const sectionTitleById = new Map<string, string>([
+      ...NANODLP_ADVANCED_SECTIONS.map((section) => [section.id, section.title] as const),
+      ['other', 'Other Advanced Controls'] as const,
+    ]);
+
+    const grouped = new Map<string, Array<readonly [string, string]>>();
+    for (const entry of advancedNanodlpDraftEntries) {
+      const sectionId = resolveNanoDlpAdvancedSectionId(entry[0]);
+      const current = grouped.get(sectionId);
+      if (current) {
+        current.push(entry);
       } else {
-        compact.push(row);
+        grouped.set(sectionId, [entry]);
       }
     }
 
-    return { compactNanodlpDetailRows: compact, expandedNanodlpDetailRows: expanded };
-  }, [selectedNanodlpMaterialDetails]);
+    const orderedIds = [...NANODLP_ADVANCED_SECTIONS.map((section) => section.id), 'other'];
+    return orderedIds
+      .map((id) => ({
+        id,
+        title: sectionTitleById.get(id) ?? 'Advanced',
+        entries: grouped.get(id) ?? [],
+      }))
+      .filter((section) => section.entries.length > 0);
+  }, [advancedNanodlpDraftEntries]);
+
+  const isNanodlpDynamicWaitEnabledState = React.useMemo(() => {
+    return isNanoDlpDynamicWaitEnabled(nanodlpEditDraft);
+  }, [nanodlpEditDraft]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -665,7 +535,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         ?? null;
 
       if (nextSelected) {
-        const processValues = resolveNanodlpMaterialProcessValues(nextSelected as NanoDlpMaterial);
+        const processValues = resolveNanodlpMaterialProcessValues((nextSelected as NanoDlpMaterial).meta ?? {});
         setSelectedNanodlpMaterialId(nextSelected.id);
         updatePrinterNetworkConnectionStatus(selectedPrinterResolvedId, {
           selectedMaterialId: nextSelected.id,
@@ -696,7 +566,6 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
     if (!shouldUseNanodlpOnDeviceMaterials || !selectedPrinterResolvedId) {
       setNanodlpMaterials([]);
       setSelectedNanodlpMaterialId('');
-      setIsNanodlpDetailsDialogOpen(false);
       setIsNanodlpEditDialogOpen(false);
       setNanodlpMaterialsError(null);
       return;
@@ -707,7 +576,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
 
   const handleSelectNanodlpMaterial = React.useCallback((material: NanoDlpMaterial) => {
     if (!selectedPrinter) return;
-    const processValues = resolveNanodlpMaterialProcessValues(material);
+    const processValues = resolveNanodlpMaterialProcessValues(material.meta ?? {});
     setSelectedNanodlpMaterialId(material.id);
     updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
       selectedMaterialId: material.id,
@@ -721,7 +590,8 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
 
   const openNanodlpEditDialog = React.useCallback(() => {
     if (!selectedNanodlpMaterial) return;
-    setNanodlpEditDraft(resolveNanodlpEditDraft(selectedNanodlpMaterial));
+    setNanodlpEditDraft(resolveNanodlpEditDraftFromMeta(selectedNanodlpMaterial.meta ?? {}));
+    setNanodlpEditTab('basic');
     setIsNanodlpEditDialogOpen(true);
   }, [selectedNanodlpMaterial]);
 
@@ -1644,21 +1514,13 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                             className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
                             style={{ color: 'var(--accent-secondary)' }}
                           >
-                            Edit profile
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsNanodlpDetailsDialogOpen(true)}
-                            className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
-                            style={{ color: 'var(--text-strong)' }}
-                          >
-                            View details
+                            Edit all fields
                           </button>
                         </div>
                       </div>
                     ) : (
                       <div className="h-full flex items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                        Select a printer material profile to view details.
+                        Select a printer material profile to edit available NanoDLP parameters.
                       </div>
                     )}
                   </div>
@@ -2272,8 +2134,8 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
           <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
             if (event.target === event.currentTarget && !isSavingNanodlpEdit) setIsNanodlpEditDialogOpen(false);
           }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+              <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit NanoDLP Resin Profile</h3>
                   <p className="ui-meta">{selectedNanodlpMaterial.name} • Profile ID {selectedNanodlpMaterial.id}</p>
@@ -2290,44 +2152,158 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                 </button>
               </div>
 
-              <div className="p-3 space-y-3">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                  <LabeledNumberInput
-                    label="Burn-In Layer Cure Time (s)"
-                    value={nanodlpEditDraft.burnInCureTime}
-                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, burnInCureTime: value }))}
-                  />
-                  <LabeledNumberInput
-                    label="Burn-In Layer Count"
-                    value={nanodlpEditDraft.burnInCount}
-                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, burnInCount: Math.max(0, Math.round(value)) }))}
-                  />
-                  <LabeledNumberInput
-                    label="Normal Layer Cure Time (s)"
-                    value={nanodlpEditDraft.normalCureTime}
-                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, normalCureTime: value }))}
-                  />
-                  <LabeledNumberInput
-                    label="Wait After Cure (s)"
-                    value={nanodlpEditDraft.waitAfterCure}
-                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, waitAfterCure: value }))}
-                  />
-                  <LabeledNumberInput
-                    label="Lift After Print (mm)"
-                    value={nanodlpEditDraft.liftAfterPrint}
-                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, liftAfterPrint: value }))}
-                  />
-                  <LabeledNumberInput
-                    label="Wait After Lift (s)"
-                    value={nanodlpEditDraft.waitAfterLift}
-                    onChange={(value) => setNanodlpEditDraft((prev) => ({ ...prev, waitAfterLift: value }))}
-                  />
+              <div className="p-3 space-y-3 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setNanodlpEditTab('basic')}
+                    className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
+                    style={nanodlpEditTab === 'basic'
+                      ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                      : { color: 'var(--text-muted)' }}
+                  >
+                    Basic
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNanodlpEditTab('advanced')}
+                    className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
+                    style={nanodlpEditTab === 'advanced'
+                      ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                      : { color: 'var(--text-muted)' }}
+                  >
+                    Advanced
+                  </button>
                 </div>
+
+                {nanodlpEditTab === 'basic' ? (
+                  <div className="space-y-2.5">
+                    {basicNanodlpSections.map((section) => (
+                      <div
+                        key={section.id}
+                        className="rounded-lg border p-2.5"
+                        style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                      >
+                        <div className="ui-meta font-semibold uppercase tracking-wide mb-2 flex items-center justify-between gap-2">
+                          <span>{section.title}</span>
+                          {section.id === 'timing' && isNanodlpDynamicWaitEnabledState && (
+                            <span
+                              className="text-[10px] rounded-full border px-2 py-0.5 normal-case tracking-normal"
+                              style={{
+                                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                                background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
+                                color: '#fbbf24',
+                              }}
+                              title="Dynamic Wait is controlling Wait Before Print fields"
+                            >
+                              Dynamic Wait active
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                          {section.entries.map(([key, value]) => {
+                            const field = nanodlpPrimaryFieldByKey.get(key);
+                            const isDynamicWaitLockedField = isNanodlpDynamicWaitEnabledState && (key === 'SupportBeforeWait' || key === 'BeforeWait');
+                            const dynamicWaitHelp = isDynamicWaitLockedField
+                              ? 'Controlled by Dynamic Wait. Disable Dynamic Wait in Advanced settings to edit this value.'
+                              : undefined;
+                            const numericValue = Number(value);
+                            const isNumeric = Number.isFinite(numericValue);
+                            if (isNumeric) {
+                              return (
+                                <LabeledNumberInput
+                                  key={key}
+                                  label={field?.label ?? formatNanoDlpMetaLabel(key)}
+                                  helpText={dynamicWaitHelp ?? field?.description}
+                                  disabled={isDynamicWaitLockedField}
+                                  value={numericValue}
+                                  onChange={(next) => setNanodlpEditDraft((prev) => ({
+                                    ...prev,
+                                    [key]: key === 'SupportLayerNumber' || key === 'TransitionalLayer'
+                                      ? String(Math.max(0, Math.round(next)))
+                                      : String(next),
+                                  }))}
+                                />
+                              );
+                            }
+
+                            return (
+                              <LabeledInput
+                                key={key}
+                                label={field?.label ?? formatNanoDlpMetaLabel(key)}
+                                helpText={dynamicWaitHelp ?? field?.description}
+                                disabled={isDynamicWaitLockedField}
+                                value={value}
+                                onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: next }))}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {advancedNanodlpSections.length > 0 ? (
+                      advancedNanodlpSections.map((section) => (
+                        <div
+                          key={section.id}
+                          className="rounded-lg border p-2.5"
+                          style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                        >
+                          <div className="ui-meta font-semibold uppercase tracking-wide mb-2">{section.title}</div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                            {section.entries.map(([key, value]) => {
+                              const numericValue = Number(value);
+                              const useNumericInput = Number.isFinite(numericValue)
+                                || (value.trim().length === 0 && isLikelyNumericNanoDlpField(key, value));
+
+                              if (useNumericInput) {
+                                return (
+                                  <LabeledNumberInput
+                                    key={key}
+                                    label={formatNanoDlpMetaLabel(key)}
+                                    helpText={getNanoDlpFieldHelpText(key)}
+                                    value={Number.isFinite(numericValue) ? numericValue : 0}
+                                    onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: String(next) }))}
+                                  />
+                                );
+                              }
+
+                              return (
+                                <LabeledInput
+                                  key={key}
+                                  label={formatNanoDlpMetaLabel(key)}
+                                  helpText={getNanoDlpFieldHelpText(key)}
+                                  value={value}
+                                  onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: next }))}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          No additional advanced controls were found for this profile.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div
+                className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'color-mix(in srgb, var(--surface-0), transparent 4%)',
+                  backdropFilter: 'blur(8px)',
+                }}
+              >
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Applies to NanoDLP profile on the printer.
+                  Applies to NanoDLP profile on the printer (all scalar parameters from this profile).
                 </span>
                 <div className="flex items-center gap-2">
                   <button
@@ -2349,106 +2325,6 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                     {isSavingNanodlpEdit ? 'Saving…' : 'Save to NanoDLP'}
                   </button>
                 </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isNanodlpDetailsDialogOpen && selectedNanodlpMaterial && (
-          <div className="fixed inset-0 z-[72] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setIsNanodlpDetailsDialogOpen(false);
-          }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>NanoDLP Resin Profile Details</h3>
-                  <p className="ui-meta">{selectedNanodlpMaterial.name}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsNanodlpDetailsDialogOpen(false)}
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Close NanoDLP material details"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="p-3 space-y-3">
-                <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}>
-                      Profile ID: {selectedNanodlpMaterial.id}
-                    </span>
-                    {selectedNanodlpMaterial.locked && (
-                      <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)', color: '#fbbf24', background: 'var(--surface-2)' }}>
-                        Locked on printer
-                      </span>
-                    )}
-                    <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-                      Source: NanoDLP device
-                    </span>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  {selectedNanodlpMaterialDetails.length > 0 ? (
-                    <div className="space-y-3">
-                      {compactNanodlpDetailRows.length > 0 && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-                          {compactNanodlpDetailRows.map((row) => (
-                            <div
-                              key={`${row.label}:${row.value}`}
-                              className="rounded-md border px-2.5 py-2"
-                              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                            >
-                              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                {formatNanoDlpMetaLabel(row.label)}
-                              </div>
-                              <div className="mt-1 text-[12px] font-semibold break-all" style={{ color: 'var(--text-strong)' }}>
-                                {row.value}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {expandedNanodlpDetailRows.length > 0 && (
-                        <div className="space-y-2">
-                          {expandedNanodlpDetailRows.map((row) => (
-                            <div
-                              key={`${row.label}:${row.value}`}
-                              className="rounded-md border px-2.5 py-2"
-                              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
-                            >
-                              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                                {formatNanoDlpMetaLabel(row.label)}
-                              </div>
-                              <div className="mt-1 text-[12px] leading-relaxed whitespace-pre-wrap break-words" style={{ color: 'var(--text-strong)' }}>
-                                {row.value}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      No additional material details were provided by this NanoDLP profile.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <button
-                  type="button"
-                  onClick={() => setIsNanodlpDetailsDialogOpen(false)}
-                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
-                >
-                  Close
-                </button>
               </div>
             </div>
           </div>
@@ -2550,11 +2426,13 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
 
 type LabeledInputProps = {
   label: string;
+  helpText?: string;
+  disabled?: boolean;
   value: string | number;
   onChange: (value: string) => void;
 };
 
-function LabeledInput({ label, value, onChange }: LabeledInputProps) {
+function LabeledInput({ label, helpText, disabled = false, value, onChange }: LabeledInputProps) {
   const [localValue, setLocalValue] = React.useState<string>(() => String(value));
   const [isFocused, setIsFocused] = React.useState(false);
 
@@ -2565,11 +2443,22 @@ function LabeledInput({ label, value, onChange }: LabeledInputProps) {
 
   return (
     <label className="space-y-1 block">
-      <span className="ui-label font-medium">
+      <span className="ui-label font-medium inline-flex items-center gap-1.5">
         {label}
+        {helpText && (
+          <span
+            title={helpText}
+            aria-label={`${label} help`}
+            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
+            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
+          >
+            ?
+          </span>
+        )}
       </span>
       <input
         type="text"
+        disabled={disabled}
         value={localValue}
         onChange={(event) => {
           const next = event.target.value;
@@ -2578,7 +2467,7 @@ function LabeledInput({ label, value, onChange }: LabeledInputProps) {
         }}
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
-        className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm"
+        className={`ui-input w-full h-[34px] px-2.5 py-1.5 text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
       />
     </label>
   );
@@ -2586,11 +2475,13 @@ function LabeledInput({ label, value, onChange }: LabeledInputProps) {
 
 type LabeledNumberInputProps = {
   label: string;
+  helpText?: string;
+  disabled?: boolean;
   value: number;
   onChange: (value: number) => void;
 };
 
-function LabeledNumberInput({ label, value, onChange }: LabeledNumberInputProps) {
+function LabeledNumberInput({ label, helpText, disabled = false, value, onChange }: LabeledNumberInputProps) {
   const [localValue, setLocalValue] = React.useState<string>(() => String(value));
   const [isFocused, setIsFocused] = React.useState(false);
 
@@ -2630,12 +2521,23 @@ function LabeledNumberInput({ label, value, onChange }: LabeledNumberInputProps)
 
   return (
     <label className="space-y-1 block">
-      <span className="ui-label font-medium">
+      <span className="ui-label font-medium inline-flex items-center gap-1.5">
         {label}
+        {helpText && (
+          <span
+            title={helpText}
+            aria-label={`${label} help`}
+            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
+            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
+          >
+            ?
+          </span>
+        )}
       </span>
       <div className="relative">
         <input
           type="text"
+          disabled={disabled}
           value={localValue}
           onChange={(event) => {
             setLocalValue(event.target.value);
@@ -2658,7 +2560,7 @@ function LabeledNumberInput({ label, value, onChange }: LabeledNumberInputProps)
               nudge(-1);
             }
           }}
-          className="ui-input w-full h-[34px] pl-2.5 pr-6 py-1.5 text-sm no-spinners"
+          className={`ui-input w-full h-[34px] pl-2.5 pr-6 py-1.5 text-sm no-spinners ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
         />
 
         <div className="absolute inset-y-0 right-1 flex w-4 flex-col items-center justify-center gap-0.5">
@@ -2666,6 +2568,7 @@ function LabeledNumberInput({ label, value, onChange }: LabeledNumberInputProps)
             type="button"
             className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
             onClick={() => nudge(1)}
+            disabled={disabled}
             tabIndex={-1}
             aria-label={`Increase ${label}`}
           >
@@ -2675,6 +2578,7 @@ function LabeledNumberInput({ label, value, onChange }: LabeledNumberInputProps)
             type="button"
             className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
             onClick={() => nudge(-1)}
+            disabled={disabled}
             tabIndex={-1}
             aria-label={`Decrease ${label}`}
           >

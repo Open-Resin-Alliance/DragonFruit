@@ -1,5 +1,15 @@
 import printerPresetsData from '../../../profiles/printers';
 import materialTemplatesData from '../../../profiles/materials';
+import {
+  getInstalledProfilePlugins,
+  getRuntimeMaterialTemplates,
+  getRuntimePrinterPresets,
+  hydratePluginRegistry,
+  installExternalProfilePlugin,
+  uninstallExternalProfilePlugin,
+  type InstalledProfilePlugin,
+  type PluginManifest,
+} from '@/features/plugins/pluginRegistry';
 
 export type PrinterOutputFormat = '.nanodlp' | '.goo' | '.lumen';
 export type PrinterNetworkSupport = 'nanodlp';
@@ -185,7 +195,7 @@ function sanitizePrinterNetworkSettings(input: unknown): PrinterNetworkSettings 
   };
 }
 
-const PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterPreset[]).map((preset) => ({
+const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterPreset[]).map((preset) => ({
   ...preset,
   display: {
     ...preset.display,
@@ -193,9 +203,17 @@ const PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterPreset[])
   },
 }));
 
-const MATERIAL_TEMPLATES = materialTemplatesData as Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
+const BUILTIN_MATERIAL_TEMPLATES = materialTemplatesData as Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
 
-const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = PRINTER_PRESETS.map((preset) => ({
+function getAllPrinterPresets(): PrinterPreset[] {
+  return getRuntimePrinterPresets(BUILTIN_PRINTER_PRESETS);
+}
+
+function getAllMaterialTemplates(): Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>> {
+  return getRuntimeMaterialTemplates(BUILTIN_MATERIAL_TEMPLATES);
+}
+
+const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((preset) => ({
   id: `printer-default-${preset.presetId}`,
   name: preset.name,
   manufacturer: preset.manufacturer,
@@ -218,7 +236,7 @@ function resolveOfficialPresetId(profile: Partial<PrinterProfile>): string | und
   const manufacturer = typeof profile.manufacturer === 'string' ? profile.manufacturer.trim().toLowerCase() : '';
   if (!name || !manufacturer) return undefined;
 
-  const matchedPreset = PRINTER_PRESETS.find((preset) => (
+  const matchedPreset = getAllPrinterPresets().find((preset) => (
     preset.name.trim().toLowerCase() === name
     && preset.manufacturer.trim().toLowerCase() === manufacturer
   ));
@@ -233,7 +251,7 @@ function resolveNetworkSupport(profile: Partial<PrinterProfile>): PrinterNetwork
   const presetId = resolveOfficialPresetId(profile);
   if (!presetId) return undefined;
 
-  const preset = PRINTER_PRESETS.find((item) => item.presetId === presetId);
+  const preset = getAllPrinterPresets().find((item) => item.presetId === presetId);
   return normalizeNetworkSupport(preset?.networkSupport);
 }
 
@@ -253,7 +271,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
   const primaryPrinterId = printerProfiles[0]?.id;
   if (!primaryPrinterId) return [];
 
-  return MATERIAL_TEMPLATES.map((template) => ({
+  return getAllMaterialTemplates().map((template) => ({
     ...template,
     currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
     id: `material-default-${template.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
@@ -301,7 +319,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
 
         const officialPresetId = resolveOfficialPresetId(profile);
         const matchedPreset = officialPresetId
-          ? PRINTER_PRESETS.find((preset) => preset.presetId === officialPresetId)
+          ? getAllPrinterPresets().find((preset) => preset.presetId === officialPresetId)
           : undefined;
 
         const rawBuildVolume = (profile as any).buildVolumeMm;
@@ -451,6 +469,7 @@ function parsePersistedState(raw: string | null): Partial<ProfileStoreState> | n
 function ensureHydrated(): void {
   if (typeof window === 'undefined') return;
   if (isHydrated) return;
+  hydratePluginRegistry();
   hydrateProfilesFromStorage();
 }
 
@@ -626,12 +645,13 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
 }
 
 export function getAvailablePrinterPresets(): PrinterPreset[] {
-  return PRINTER_PRESETS;
+  ensureHydrated();
+  return getAllPrinterPresets();
 }
 
 export function addPrinterProfileFromPreset(presetId: string): string {
   ensureHydrated();
-  const preset = PRINTER_PRESETS.find((item) => item.presetId === presetId);
+  const preset = getAllPrinterPresets().find((item) => item.presetId === presetId);
   if (!preset) {
     throw new Error(`[ProfileStore] Unknown printer preset id: ${presetId}`);
   }
@@ -999,4 +1019,23 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
 export function getMaterialProfilesForPrinter(printerProfileId: string, stateOverride?: ProfileStoreState): MaterialProfile[] {
   const snapshot = stateOverride ?? state;
   return snapshot.materialProfiles.filter((profile) => profile.printerProfileId === printerProfileId);
+}
+
+export function getInstalledPlugins(): InstalledProfilePlugin[] {
+  ensureHydrated();
+  return getInstalledProfilePlugins();
+}
+
+export function installPluginFromManifest(manifest: PluginManifest, sourceUrl?: string): InstalledProfilePlugin {
+  ensureHydrated();
+  const plugin = installExternalProfilePlugin(manifest, sourceUrl);
+  notify();
+  return plugin;
+}
+
+export function uninstallPlugin(pluginId: string): boolean {
+  ensureHydrated();
+  const removed = uninstallExternalProfilePlugin(pluginId);
+  if (removed) notify();
+  return removed;
 }

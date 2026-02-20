@@ -1,29 +1,10 @@
 import { NextResponse } from 'next/server';
-
-function parseHostAndPort(input: string): { host: string; port: number } | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-
-  try {
-    const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-    const parsed = new URL(normalized);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-
-    const host = parsed.hostname.trim();
-    if (!host) return null;
-
-    const port = parsed.port ? Number(parsed.port) : 80;
-    if (!Number.isFinite(port) || port < 1 || port > 65535) return null;
-
-    return { host, port };
-  } catch {
-    return null;
-  }
-}
-
-function buildBaseUrl(host: string, port: number): string {
-  return `http://${host}${port === 80 ? '' : `:${port}`}`;
-}
+import {
+  buildNanoDlpBaseUrl,
+  parseNanoDlpHostAndPort,
+  resolveNanoDlpPort,
+  resolveNanoDlpRawHost,
+} from '../../../../../../../plugins/athena/network/nanodlp';
 
 export async function POST(request: Request) {
   let payload: unknown;
@@ -33,13 +14,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Invalid request JSON' }, { status: 400 });
   }
 
-  const rawHost = typeof (payload as any)?.host === 'string'
-    ? (payload as any).host
-    : typeof (payload as any)?.ipAddress === 'string'
-      ? (payload as any).ipAddress
-      : '';
+  const rawHost = resolveNanoDlpRawHost(payload);
 
-  const parsedHost = parseHostAndPort(rawHost);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
   if (!parsedHost) {
     return NextResponse.json({ ok: false, error: 'Invalid host or IP address' }, { status: 400 });
   }
@@ -49,10 +26,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Invalid profileId' }, { status: 400 });
   }
 
-  const explicitPort = Number((payload as any)?.port);
-  const port = Number.isFinite(explicitPort) && explicitPort >= 1 && explicitPort <= 65535
-    ? explicitPort
-    : parsedHost.port;
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
 
   const fieldsRaw = (payload as any)?.fields;
   if (!fieldsRaw || typeof fieldsRaw !== 'object') {
@@ -66,7 +40,7 @@ export async function POST(request: Request) {
     body.set(key, String(value));
   }
 
-  const baseUrl = buildBaseUrl(parsedHost.host, port);
+  const baseUrl = buildNanoDlpBaseUrl(parsedHost.host, port);
 
   try {
     const response = await fetch(`${baseUrl}/profile/edit/simple/${Math.round(profileIdRaw)}`, {

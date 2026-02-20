@@ -1,4 +1,10 @@
 import { NextResponse } from 'next/server';
+import {
+  buildNanoDlpBaseUrl,
+  parseNanoDlpHostAndPort,
+  resolveNanoDlpPort,
+  resolveNanoDlpRawHost,
+} from '../../../../../../plugins/athena/network/nanodlp';
 
 type NanoDlpRawProfile = Record<string, unknown>;
 
@@ -8,31 +14,6 @@ type NanoDlpMaterialEntry = {
   locked: boolean;
   meta: NanoDlpRawProfile;
 };
-
-function parseHostAndPort(input: string): { host: string; port: number } | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-
-  try {
-    const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-    const parsed = new URL(normalized);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-
-    const host = parsed.hostname.trim();
-    if (!host) return null;
-
-    const port = parsed.port ? Number(parsed.port) : 80;
-    if (!Number.isFinite(port) || port < 1 || port > 65535) return null;
-
-    return { host, port };
-  } catch {
-    return null;
-  }
-}
-
-function buildBaseUrl(host: string, port: number): string {
-  return `http://${host}${port === 80 ? '' : `:${port}`}`;
-}
 
 function extractListFromJson(decoded: unknown, keys: string[]): unknown[] {
   if (Array.isArray(decoded)) return decoded;
@@ -140,23 +121,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid request JSON' }, { status: 400 });
   }
 
-  const rawHost = typeof (payload as any)?.host === 'string'
-    ? (payload as any).host
-    : typeof (payload as any)?.ipAddress === 'string'
-      ? (payload as any).ipAddress
-      : '';
+  const rawHost = resolveNanoDlpRawHost(payload);
 
-  const parsedHost = parseHostAndPort(rawHost);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
   if (!parsedHost) {
     return NextResponse.json({ error: 'Invalid host or IP address' }, { status: 400 });
   }
 
-  const explicitPort = Number((payload as any)?.port);
-  const port = Number.isFinite(explicitPort) && explicitPort >= 1 && explicitPort <= 65535
-    ? explicitPort
-    : parsedHost.port;
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
 
-  const baseUrl = buildBaseUrl(parsedHost.host, port);
+  const baseUrl = buildNanoDlpBaseUrl(parsedHost.host, port);
 
   try {
     const response = await fetch(`${baseUrl}/json/db/profiles.json`, {

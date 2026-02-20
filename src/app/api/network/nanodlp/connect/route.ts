@@ -1,4 +1,14 @@
 import { NextResponse } from 'next/server';
+import {
+  buildNanoDlpBaseUrl,
+  looksLikeNanoDlpStatus,
+  parseNanoDlpHostAndPort,
+  resolveNanoDlpPort,
+  resolveNanoDlpPrinterName,
+  resolveNanoDlpRawHost,
+  resolveNanoDlpStatusHostName,
+  type NanoDlpStatusPayload,
+} from '../../../../../../plugins/athena/network/nanodlp';
 
 type NanoDlpConnectResponse = {
   connected: boolean;
@@ -12,80 +22,6 @@ type NanoDlpConnectResponse = {
   firmwareVersion: string;
 };
 
-type NanoDlpStatusPayload = Record<string, unknown>;
-
-function parseHostAndPort(input: string): { host: string; port: number } | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-
-  try {
-    const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-    const parsed = new URL(normalized);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-
-    const host = parsed.hostname.trim();
-    if (!host) return null;
-
-    const port = parsed.port ? Number(parsed.port) : 80;
-    if (!Number.isFinite(port) || port < 1 || port > 65535) return null;
-
-    return { host, port };
-  } catch {
-    return null;
-  }
-}
-
-function resolveStatusHostName(status: NanoDlpStatusPayload): string {
-  const candidates = [
-    status.Hostname,
-    status.hostName,
-    status.hostname,
-    status.Name,
-    status.Build,
-    status.IP,
-  ];
-
-  for (const value of candidates) {
-    if (typeof value === 'string' && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-
-  return '';
-}
-
-function looksLikeNanoDlpStatus(status: NanoDlpStatusPayload): boolean {
-  const knownKeys = [
-    'Printing',
-    'Path',
-    'LayerID',
-    'Version',
-    'Hostname',
-    'State',
-    'Status',
-    'LayersCount',
-    'PlateID',
-    'Build',
-    'Paused',
-    'CurrentHeight',
-    'IP',
-  ];
-
-  let score = 0;
-  for (const key of knownKeys) {
-    if (key in status) {
-      score += 1;
-      if (score >= 3) return true;
-    }
-  }
-
-  return false;
-}
-
-function buildBaseUrl(host: string, port: number): string {
-  return `http://${host}${port === 80 ? '' : `:${port}`}`;
-}
-
 export async function POST(request: Request) {
   let payload: unknown;
   try {
@@ -94,23 +30,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid request JSON' }, { status: 400 });
   }
 
-  const rawHost = typeof (payload as any)?.host === 'string'
-    ? (payload as any).host
-    : typeof (payload as any)?.ipAddress === 'string'
-      ? (payload as any).ipAddress
-      : '';
+  const rawHost = resolveNanoDlpRawHost(payload);
 
-  const parsedHost = parseHostAndPort(rawHost);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
   if (!parsedHost) {
     return NextResponse.json({ error: 'Invalid host or IP address' }, { status: 400 });
   }
 
-  const explicitPort = Number((payload as any)?.port);
-  const port = Number.isFinite(explicitPort) && explicitPort >= 1 && explicitPort <= 65535
-    ? explicitPort
-    : parsedHost.port;
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
 
-  const baseUrl = buildBaseUrl(parsedHost.host, port);
+  const baseUrl = buildNanoDlpBaseUrl(parsedHost.host, port);
 
   try {
     const response = await fetch(`${baseUrl}/status`, {
@@ -151,12 +80,8 @@ export async function POST(request: Request) {
       } satisfies NanoDlpConnectResponse);
     }
 
-    const hostName = resolveStatusHostName(status);
-    const printerName = typeof status.Name === 'string'
-      ? status.Name.trim()
-      : typeof status.Build === 'string'
-        ? status.Build.trim()
-        : '';
+    const hostName = resolveNanoDlpStatusHostName(status);
+    const printerName = resolveNanoDlpPrinterName(status);
 
     const result: NanoDlpConnectResponse = {
       connected: true,

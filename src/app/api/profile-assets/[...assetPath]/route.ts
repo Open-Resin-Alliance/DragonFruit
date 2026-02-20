@@ -3,6 +3,7 @@ import path from 'path';
 import { NextResponse } from 'next/server';
 
 const PROFILE_ROOT = path.resolve(process.cwd(), 'profiles');
+const PLUGIN_ROOT = path.resolve(process.cwd(), 'plugins');
 
 const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
   '.png': 'image/png',
@@ -20,6 +21,11 @@ function getContentType(filePath: string): string {
 
 function isPathInsideRoot(targetPath: string): boolean {
   const relative = path.relative(PROFILE_ROOT, targetPath);
+  return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function isPathInsidePluginRoot(targetPath: string): boolean {
+  const relative = path.relative(PLUGIN_ROOT, targetPath);
   return !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
@@ -72,8 +78,16 @@ export async function GET(
     return NextResponse.json({ error: 'Missing asset path' }, { status: 400 });
   }
 
-  const requestedPath = path.resolve(PROFILE_ROOT, ...safeAssetPath);
-  if (!isPathInsideRoot(requestedPath)) {
+  const isPluginAsset = safeAssetPath[0] === 'plugins';
+  const requestedPath = isPluginAsset
+    ? path.resolve(process.cwd(), ...safeAssetPath)
+    : path.resolve(PROFILE_ROOT, ...safeAssetPath);
+
+  if (isPluginAsset) {
+    if (!isPathInsidePluginRoot(requestedPath)) {
+      return NextResponse.json({ error: 'Invalid plugin asset path' }, { status: 400 });
+    }
+  } else if (!isPathInsideRoot(requestedPath)) {
     return NextResponse.json({ error: 'Invalid asset path' }, { status: 400 });
   }
 
