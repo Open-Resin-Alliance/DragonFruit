@@ -791,6 +791,38 @@ export function SettingsModal({
                           </div>
                         </div>
                       </div>
+
+                      <div
+                        className="rounded-lg border px-3 py-2.5"
+                        style={{
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                        }}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                              William Patton
+                            </div>
+                            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              PattonWebz
+                            </div>
+                            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              Breaks stuff, maybe fixes it. Maybe.
+                            </div>
+                          </div>
+                          <div
+                            className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                            style={{
+                              color: 'var(--accent-secondary-contrast)',
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                            }}
+                          >
+                            Contributor
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
