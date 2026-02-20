@@ -9,7 +9,7 @@ import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X } from 'lucide-react';
+import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X , Camera, Grid3x3} from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -363,19 +363,19 @@ export function SettingsModal({
     camera: {
       label: 'Camera',
       description: 'Projection and highlight behavior',
-      icon: Settings2,
+      icon: Camera,
       tone: 'primary',
     },
     mesh: {
       label: 'Mesh',
       description: 'Shader preview and render tuning',
-      icon: MonitorCog,
+      icon: Grid3x3,
       tone: 'primary',
     },
     workspaces: {
       label: 'Workspaces',
       description: 'Per-workspace camera defaults',
-      icon: Settings2,
+      icon: MonitorCog,
       tone: 'primary',
     },
     ui: {
