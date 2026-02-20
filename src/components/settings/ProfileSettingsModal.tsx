@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, FlaskConical, ImagePlus, Lock, Plus, Printer, Search, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, FlaskConical, ImagePlus, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, X } from 'lucide-react';
 import {
   addMaterialProfile,
   addPrinterProfileFromPreset,
@@ -215,6 +215,24 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
     const materials = getMaterialProfilesForPrinter(profileState.activePrinterProfileId, profileState);
     setSelectedMaterialId(materials[0]?.id ?? null);
   }, [isOpen]);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    const sources = availablePrinterPresets
+      .map((preset) => preset.imageAssetPath)
+      .filter((path): path is string => typeof path === 'string' && path.trim().length > 0);
+
+    const uniqueSources = Array.from(new Set(sources));
+    uniqueSources.forEach((source) => {
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = source;
+      void image.decode().catch(() => {
+        // Ignore decode failures during prefetch.
+      });
+    });
+  }, [isOpen, availablePrinterPresets]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -1888,13 +1906,88 @@ type AutoTrimmedImageProps = {
   className?: string;
 };
 
+const TRIMMED_IMAGE_CACHE_STORAGE_KEY = 'dragonfruit.trimmedImageCache.v1';
+const TRIMMED_IMAGE_CACHE_MAX_ENTRIES = 48;
+const TRIMMED_IMAGE_CACHE_MAX_PERSISTED_LENGTH = 350_000;
+
+const trimmedImageMemoryCache = new Map<string, string>();
+let hasHydratedTrimmedImageCache = false;
+
+function canPersistTrimmedImage(src: string, value: string): boolean {
+  if (!src || src.startsWith('data:')) return false;
+  return value.length <= TRIMMED_IMAGE_CACHE_MAX_PERSISTED_LENGTH;
+}
+
+function persistTrimmedImageCacheToStorage() {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const entries = Array.from(trimmedImageMemoryCache.entries()).slice(-TRIMMED_IMAGE_CACHE_MAX_ENTRIES);
+    const persistableEntries = entries.filter(([key, value]) => canPersistTrimmedImage(key, value));
+    localStorage.setItem(TRIMMED_IMAGE_CACHE_STORAGE_KEY, JSON.stringify(persistableEntries));
+  } catch {
+    // Ignore cache persistence failures (e.g. quota exceeded).
+  }
+}
+
+function hydrateTrimmedImageCacheFromStorage() {
+  if (hasHydratedTrimmedImageCache || typeof window === 'undefined') return;
+  hasHydratedTrimmedImageCache = true;
+
+  try {
+    const raw = localStorage.getItem(TRIMMED_IMAGE_CACHE_STORAGE_KEY);
+    if (!raw) return;
+
+    const entries = JSON.parse(raw) as unknown;
+    if (!Array.isArray(entries)) return;
+
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length !== 2) continue;
+      const [key, value] = entry;
+      if (typeof key !== 'string' || typeof value !== 'string') continue;
+      trimmedImageMemoryCache.set(key, value);
+    }
+  } catch {
+    // Ignore corrupted cache payloads.
+  }
+}
+
+function cacheTrimmedImage(src: string, value: string) {
+  trimmedImageMemoryCache.set(src, value);
+
+  while (trimmedImageMemoryCache.size > TRIMMED_IMAGE_CACHE_MAX_ENTRIES) {
+    const oldestKey = trimmedImageMemoryCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    trimmedImageMemoryCache.delete(oldestKey);
+  }
+
+  persistTrimmedImageCacheToStorage();
+}
+
 function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
   const [displaySrc, setDisplaySrc] = React.useState(src);
+  const [isLoading, setIsLoading] = React.useState(true);
 
   React.useEffect(() => {
     let cancelled = false;
 
     const process = async () => {
+      hydrateTrimmedImageCacheFromStorage();
+
+      const cached = trimmedImageMemoryCache.get(src);
+      if (cached) {
+        if (!cancelled) {
+          setDisplaySrc(cached);
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      if (!cancelled) {
+        setDisplaySrc(src);
+        setIsLoading(true);
+      }
+
       try {
         const image = new Image();
         image.decoding = 'async';
@@ -1904,7 +1997,11 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
         const width = image.naturalWidth;
         const height = image.naturalHeight;
         if (!width || !height) {
-          if (!cancelled) setDisplaySrc(src);
+          cacheTrimmedImage(src, src);
+          if (!cancelled) {
+            setDisplaySrc(src);
+            setIsLoading(false);
+          }
           return;
         }
 
@@ -1913,7 +2010,11 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          if (!cancelled) setDisplaySrc(src);
+          cacheTrimmedImage(src, src);
+          if (!cancelled) {
+            setDisplaySrc(src);
+            setIsLoading(false);
+          }
           return;
         }
 
@@ -1939,7 +2040,11 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
         }
 
         if (maxX < minX || maxY < minY) {
-          if (!cancelled) setDisplaySrc(src);
+          cacheTrimmedImage(src, src);
+          if (!cancelled) {
+            setDisplaySrc(src);
+            setIsLoading(false);
+          }
           return;
         }
 
@@ -1958,7 +2063,11 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
           paddedWidth >= width * 0.99
           && paddedHeight >= height * 0.99
         ) {
-          if (!cancelled) setDisplaySrc(src);
+          cacheTrimmedImage(src, src);
+          if (!cancelled) {
+            setDisplaySrc(src);
+            setIsLoading(false);
+          }
           return;
         }
 
@@ -1967,7 +2076,11 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
         trimmedCanvas.height = paddedHeight;
         const trimmedCtx = trimmedCanvas.getContext('2d');
         if (!trimmedCtx) {
-          if (!cancelled) setDisplaySrc(src);
+          cacheTrimmedImage(src, src);
+          if (!cancelled) {
+            setDisplaySrc(src);
+            setIsLoading(false);
+          }
           return;
         }
 
@@ -1984,13 +2097,20 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
         );
 
         const next = trimmedCanvas.toDataURL('image/png');
-        if (!cancelled) setDisplaySrc(next);
+        cacheTrimmedImage(src, next);
+        if (!cancelled) {
+          setDisplaySrc(next);
+          setIsLoading(false);
+        }
       } catch {
-        if (!cancelled) setDisplaySrc(src);
+        cacheTrimmedImage(src, src);
+        if (!cancelled) {
+          setDisplaySrc(src);
+          setIsLoading(false);
+        }
       }
     };
 
-    setDisplaySrc(src);
     void process();
 
     return () => {
@@ -1998,5 +2118,18 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
     };
   }, [src]);
 
-  return <img src={displaySrc} alt={alt} className={className} />;
+  return (
+    <div className="relative h-full w-full">
+      {isLoading && (
+        <div className="absolute inset-0 z-[1] flex items-center justify-center" style={{ background: 'color-mix(in srgb, #151923, transparent 32%)' }}>
+          <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent-secondary)' }} />
+        </div>
+      )}
+      <img
+        src={displaySrc}
+        alt={alt}
+        className={`${className ?? ''} transition-opacity duration-150 opacity-100`}
+      />
+    </div>
+  );
 }
