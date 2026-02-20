@@ -8,14 +8,13 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { Box, FlaskConical } from 'lucide-react';
+import { Printer } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
   getSavedThemePreference,
 } from '@/components/settings/themeCustomizations';
 import {
-  getActiveMaterialProfile,
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   hydrateProfilesFromStorage,
@@ -125,7 +124,6 @@ export function TopBar({
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
-  const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -171,47 +169,51 @@ export function TopBar({
       ? `${windowMetrics.innerWidth}×${windowMetrics.innerHeight}`
       : 'detecting…';
 
-  const steps: Array<{ mode: SupportMode; label: string; step: 1 | 2 | 3 | 4; hint: string }> = [
-    { mode: 'prepare', label: 'Prepare', step: 1, hint: 'Arrange model and transforms' },
-    { mode: 'analysis', label: 'Analysis', step: 2, hint: 'Inspect islands and diagnostics' },
-    { mode: 'support', label: 'Support', step: 3, hint: 'Build and tune supports' },
-    { mode: 'export', label: 'Export', step: 4, hint: 'Finalize and export output' },
+  const steps: Array<{
+    mode: SupportMode;
+    label: string;
+    step: number;
+    hint: string;
+    locked: boolean;
+  }> = [
+    {
+      mode: 'prepare',
+      label: 'Prepare',
+      step: 1,
+      hint: 'Arrange model and transforms',
+      locked: false,
+    },
+    {
+      mode: 'analysis',
+      label: 'Analysis',
+      step: 2,
+      hint: 'Inspect islands and diagnostics',
+      locked: !hasModels,
+    },
+    {
+      mode: 'support',
+      label: 'Support',
+      step: 3,
+      hint: 'Build and tune supports',
+      locked: !hasModels,
+    },
+    {
+      mode: 'export',
+      label: 'Export',
+      step: 4,
+      hint: 'Finalize and export output',
+      locked: !hasModels,
+    },
   ];
 
   return (
     <div className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative">
-      <div className="flex w-[620px] items-center gap-2.5 pl-3 pr-4 py-1.5">
+      <div className="flex w-[280px] items-center gap-2.5 pl-3 pr-4 py-1.5">
         <img
           src="/textonlyupdate.png"
           alt="Dragonfruit Slicer"
           className="h-8 w-auto object-contain translate-y-px"
         />
-
-        <Button
-          onClick={() => {
-            setProfileModalTab('printer');
-            setIsProfileModalOpen(true);
-          }}
-          variant="secondary"
-          className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center justify-start gap-1.5 w-[210px]"
-          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Add your first printer profile'}
-        >
-          <Box className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">{activePrinterProfile?.name ?? 'Add Printer'}</span>
-        </Button>
-
-        <Button
-          onClick={() => {
-            setProfileModalTab('material');
-            setIsProfileModalOpen(true);
-          }}
-          variant="secondary"
-          className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center justify-start gap-1.5 w-[210px]"
-          title={activeMaterialProfile ? `Material profile: ${activeMaterialProfile.name}` : 'Add a printer to create material profiles'}
-        >
-          <FlaskConical className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">{activeMaterialProfile?.name ?? 'No Material Yet'}</span>
-        </Button>
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 flex justify-center px-2">
@@ -224,7 +226,7 @@ export function TopBar({
           <div className="relative grid grid-cols-4 gap-2 pointer-events-auto">
             {steps.map((item) => {
               const active = mode === item.mode;
-              const locked = !hasModels && item.mode !== 'prepare';
+              const locked = item.locked;
 
               return (
                 <button
@@ -296,6 +298,21 @@ export function TopBar({
             <span>{metricsLabel} • for best fit use ≥ {MIN_GOOD_WIDTH}×{MIN_GOOD_HEIGHT} maximized</span>
           </div>
         )}
+        <Button
+          onClick={() => {
+            setProfileModalTab('printer');
+            setIsProfileModalOpen(true);
+          }}
+          variant="secondary"
+          className="!h-8 !px-2.5 !py-0 max-w-[200px] inline-flex items-center gap-1.5"
+          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile'}
+          aria-label={activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile'}
+        >
+          <Printer className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate text-[11px] font-semibold leading-none">
+            {activePrinterProfile?.name ?? 'Select Printer'}
+          </span>
+        </Button>
         <ViewTypeDropdown
           value={viewTypeOverride}
           onChange={onViewTypeOverrideChange}
