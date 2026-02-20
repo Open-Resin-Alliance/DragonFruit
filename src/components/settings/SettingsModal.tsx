@@ -41,6 +41,7 @@ import {
   getSavedWorkspaceCameraSettings,
   saveWorkspaceCameraSettings,
   type WorkspaceCameraDefaults,
+  type WorkspaceSelectionHighlightDefaults,
 } from '@/components/settings/workspaceCameraPreferences';
 import {
   DEFAULT_VIEW3D_SETTINGS,
@@ -163,6 +164,7 @@ export function SettingsModal({
   const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
+  const [draftWorkspaceSelectionHighlightDefaults, setDraftWorkspaceSelectionHighlightDefaults] = useState<WorkspaceSelectionHighlightDefaults>(() => getSavedWorkspaceCameraSettings().selectionHighlightDefaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
 
   const resetDraftFromProps = React.useCallback(() => {
@@ -186,6 +188,7 @@ export function SettingsModal({
     setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
+    setDraftWorkspaceSelectionHighlightDefaults(getSavedWorkspaceCameraSettings().selectionHighlightDefaults);
     setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
   }, [
     ambientIntensity,
@@ -242,6 +245,7 @@ export function SettingsModal({
     setDraftDebugPrimitivesPanelVisible(true);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
+    setDraftWorkspaceSelectionHighlightDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.selectionHighlightDefaults);
     setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
   }, []);
 
@@ -265,7 +269,10 @@ export function SettingsModal({
     setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
-    saveWorkspaceCameraSettings({ defaults: draftWorkspaceCameraDefaults });
+    saveWorkspaceCameraSettings({
+      defaults: draftWorkspaceCameraDefaults,
+      selectionHighlightDefaults: draftWorkspaceSelectionHighlightDefaults,
+    });
     const normalized3dView = normalizeView3DSettings(draftView3dSettings);
     saveView3DSettings(normalized3dView);
     onView3dSettingsChange(normalized3dView);
@@ -298,6 +305,7 @@ export function SettingsModal({
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
     draftWorkspaceCameraDefaults,
+    draftWorkspaceSelectionHighlightDefaults,
     draftView3dSettings,
     draftXrayOpacity,
     onAmbientIntensityChange,
@@ -404,6 +412,13 @@ export function SettingsModal({
 
   const handleWorkspaceCameraModeChange = React.useCallback((workspace: keyof WorkspaceCameraDefaults, mode: 'orthographic' | 'perspective') => {
     setDraftWorkspaceCameraDefaults((prev) => ({
+      ...prev,
+      [workspace]: mode,
+    }));
+  }, []);
+
+  const handleWorkspaceSelectionHighlightModeChange = React.useCallback((workspace: keyof WorkspaceSelectionHighlightDefaults, mode: SelectionHighlightMode) => {
+    setDraftWorkspaceSelectionHighlightDefaults((prev) => ({
       ...prev,
       [workspace]: mode,
     }));
@@ -570,7 +585,7 @@ export function SettingsModal({
             </div>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto p-4">
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4">
             <div className="mb-3 rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
               <div className="flex items-center gap-2">
                 <ActiveTabIcon className="h-4 w-4" style={{ color: activeTabColor }} />
@@ -601,6 +616,8 @@ export function SettingsModal({
                 <WorkspacesSettingsTab
                   workspaceCameraDefaults={draftWorkspaceCameraDefaults}
                   onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
+                  workspaceSelectionHighlightDefaults={draftWorkspaceSelectionHighlightDefaults}
+                  onWorkspaceSelectionHighlightModeChange={handleWorkspaceSelectionHighlightModeChange}
                   view3dSettings={draftView3dSettings}
                   onView3dSettingsChange={setDraftView3dSettings}
                 />

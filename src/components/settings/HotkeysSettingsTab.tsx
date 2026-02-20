@@ -112,6 +112,22 @@ export function HotkeysSettingsTab() {
             onCancel={() => setRecordingKey(null)}
           />
         ))}
+
+        {config.CANVAS && (
+          <div className="pt-1">
+            <div className="text-[11px] uppercase tracking-wide text-neutral-500 mb-1">Canvas Tools</div>
+            {Object.entries(config.CANVAS).map(([action, binding]) => (
+              <HotkeyRow
+                key={action}
+                label={binding.description}
+                binding={binding}
+                isRecording={recordingKey?.category === 'CANVAS' && recordingKey?.action === action}
+                onRecord={() => setRecordingKey({ category: 'CANVAS', action })}
+                onCancel={() => setRecordingKey(null)}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Supports Section */}

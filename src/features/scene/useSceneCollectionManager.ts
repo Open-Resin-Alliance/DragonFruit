@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
@@ -7,6 +7,8 @@ import { loadFromLychee } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
+import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
+import type { HistoryAction, HistoryDirection } from '@/history/types';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
@@ -14,6 +16,7 @@ import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry } from '@/utils/bvh';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
+  DEFAULT_VIEW3D_SETTINGS,
   getSavedView3DSettings,
   normalizeView3DSettings,
   saveView3DSettings,
@@ -55,6 +58,60 @@ const RECENT_OPENED_FILES_LIMIT = 10;
 const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
+const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply';
+const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
+
+type SceneSnapshotPayload = { key: string };
+
+type SceneSnapshot = {
+  models: LoadedModel[];
+  activeModelId: string | null;
+  selectedModelIds: string[];
+};
+
+type SceneSnapshotPair = {
+  before: SceneSnapshot;
+  after: SceneSnapshot;
+};
+
+const sceneSnapshotRegistry = new Map<string, SceneSnapshotPair>();
+const sceneSnapshotOrder: string[] = [];
+
+function cloneTransform(transform: ModelTransform): ModelTransform {
+  return {
+    position: transform.position.clone(),
+    rotation: transform.rotation.clone(),
+    scale: transform.scale.clone(),
+  };
+}
+
+function cloneLoadedModel(model: LoadedModel): LoadedModel {
+  return {
+    ...model,
+    transform: cloneTransform(model.transform),
+  };
+}
+
+function captureSceneSnapshot(models: LoadedModel[], activeModelId: string | null, selectedModelIds: string[]): SceneSnapshot {
+  return {
+    models: models.map(cloneLoadedModel),
+    activeModelId,
+    selectedModelIds: [...selectedModelIds],
+  };
+}
+
+function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
+  const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  sceneSnapshotRegistry.set(key, pair);
+  sceneSnapshotOrder.push(key);
+
+  while (sceneSnapshotOrder.length > SCENE_HISTORY_MAX_SNAPSHOTS) {
+    const removed = sceneSnapshotOrder.shift();
+    if (removed) sceneSnapshotRegistry.delete(removed);
+  }
+
+  return key;
+}
 
 export type RecentOpenedFileKind = 'mesh' | 'scene';
 
@@ -324,6 +381,8 @@ function generateRecentEntryId(): string {
 export interface LoadedModel {
   id: string;
   name: string;
+  groupId?: string;
+  groupName?: string;
   fileUrl: string;
   fileSizeBytes?: number;
   geometry: GeometryWithBounds;
@@ -357,6 +416,7 @@ type ImportProgressState = {
 };
 
 type ModelClipboardEntry = {
+  sourceId: string;
   name: string;
   fileSizeBytes?: number;
   geometry: GeometryWithBounds;
@@ -373,12 +433,11 @@ export function useSceneCollectionManager() {
     [],
   );
 
-  const persistedAppearance = useMemo(() => readMeshAppearanceFromLocalStorage(), []);
-
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
-  const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry | null>(null);
-  const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>(() => readRecentOpenedFilesFromLocalStorage());
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry[]>([]);
+  const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
     active: false,
     type: null,
@@ -388,6 +447,9 @@ export function useSceneCollectionManager() {
   });
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
+  const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
+  const deferredAccelerationProcessingRef = useRef(false);
+  const deferredAccelerationPausedRef = useRef(false);
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
     if (!url) return;
@@ -574,23 +636,44 @@ export function useSceneCollectionManager() {
   }, [isDebugModelName, models, tryRevokeObjectUrl]);
 
   // Lighting controls (Global)
-  const [ambientIntensity, setAmbientIntensity] = useState<number>(persistedAppearance?.ambientIntensity ?? DEFAULT_AMBIENT_INTENSITY);
-  const [directionalIntensity, setDirectionalIntensity] = useState<number>(persistedAppearance?.directionalIntensity ?? DEFAULT_DIRECTIONAL_INTENSITY);
-  const [materialRoughness, setMaterialRoughness] = useState<number>(persistedAppearance?.materialRoughness ?? DEFAULT_MATERIAL_ROUGHNESS);
+  const [ambientIntensity, setAmbientIntensity] = useState<number>(DEFAULT_AMBIENT_INTENSITY);
+  const [directionalIntensity, setDirectionalIntensity] = useState<number>(DEFAULT_DIRECTIONAL_INTENSITY);
+  const [materialRoughness, setMaterialRoughness] = useState<number>(DEFAULT_MATERIAL_ROUGHNESS);
 
   // Shader-specific settings (Global)
-  const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(persistedAppearance?.wireframeThicknessPx ?? DEFAULT_WIREFRAME_THICKNESS_PX);
-  const [xrayOpacity, setXrayOpacity] = useState<number>(persistedAppearance?.xrayOpacity ?? DEFAULT_XRAY_OPACITY);
+  const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
+  const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
 
   // Mesh shader selection (Global)
-  const [shaderType, setShaderType] = useState<MeshShaderType>(persistedAppearance?.shaderType ?? DEFAULT_SHADER_TYPE);
-  const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(persistedAppearance?.matcapVariant ?? DEFAULT_MATCAP_VARIANT);
-  const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(persistedAppearance?.flatUseVertexColors ?? DEFAULT_FLAT_USE_VERTEX_COLORS);
-  const [toonSteps, setToonSteps] = useState<number>(persistedAppearance?.toonSteps ?? DEFAULT_TOON_STEPS);
-  const [preferredMeshColor, setPreferredMeshColor] = useState<string>(persistedAppearance?.meshColor ?? DEFAULT_MESH_COLOR);
-  const [hoverTintStrength, setHoverTintStrength] = useState<number>(persistedAppearance?.hoverTintStrength ?? DEFAULT_HOVER_TINT_STRENGTH);
-  const [selectedTintStrength, setSelectedTintStrength] = useState<number>(persistedAppearance?.selectedTintStrength ?? DEFAULT_SELECTED_TINT_STRENGTH);
-  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => getSavedView3DSettings());
+  const [shaderType, setShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
+  const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(DEFAULT_MATCAP_VARIANT);
+  const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(DEFAULT_FLAT_USE_VERTEX_COLORS);
+  const [toonSteps, setToonSteps] = useState<number>(DEFAULT_TOON_STEPS);
+  const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
+  const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
+  const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
+  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
+
+  useEffect(() => {
+    const persistedAppearance = readMeshAppearanceFromLocalStorage();
+    if (persistedAppearance) {
+      setShaderType(persistedAppearance.shaderType);
+      setMatcapVariant(persistedAppearance.matcapVariant);
+      setFlatUseVertexColors(persistedAppearance.flatUseVertexColors);
+      setToonSteps(persistedAppearance.toonSteps);
+      setAmbientIntensity(persistedAppearance.ambientIntensity);
+      setDirectionalIntensity(persistedAppearance.directionalIntensity);
+      setMaterialRoughness(persistedAppearance.materialRoughness);
+      setWireframeThicknessPx(persistedAppearance.wireframeThicknessPx);
+      setXrayOpacity(persistedAppearance.xrayOpacity);
+      setPreferredMeshColor(persistedAppearance.meshColor);
+      setHoverTintStrength(persistedAppearance.hoverTintStrength);
+      setSelectedTintStrength(persistedAppearance.selectedTintStrength);
+    }
+
+    setRecentOpenedFiles(readRecentOpenedFilesFromLocalStorage());
+    setView3dSettingsState(getSavedView3DSettings());
+  }, []);
 
   const setView3dSettings = useCallback((next: View3DSettings) => {
     const normalized = normalizeView3DSettings(next);
@@ -631,12 +714,48 @@ export function useSceneCollectionManager() {
   const [mode, setMode] = useState<SupportMode>('prepare');
   const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
 
+  const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
+    setModels(snapshot.models.map(cloneLoadedModel));
+    setActiveModelId(snapshot.activeModelId);
+    setSelectedModelIds([...snapshot.selectedModelIds]);
+  }, []);
+
+  useEffect(() => {
+    const unregisterSceneModelsHistory = registerHistoryHandler(
+      SCENE_MODELS_SNAPSHOT_APPLY,
+      (action: HistoryAction, direction: HistoryDirection) => {
+        const payload = action.payload as SceneSnapshotPayload | undefined;
+        if (!payload?.key) return false;
+
+        const pair = sceneSnapshotRegistry.get(payload.key);
+        if (!pair) return false;
+
+        applySceneSnapshot(direction === 'undo' ? pair.before : pair.after);
+        return true;
+      },
+    );
+
+    return () => {
+      unregisterSceneModelsHistory();
+    };
+  }, [applySceneSnapshot]);
+
+  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot) => {
+    const key = storeSceneSnapshotPair({ before, after });
+    pushHistory({
+      type: SCENE_MODELS_SNAPSHOT_APPLY,
+      payload: { key } satisfies SceneSnapshotPayload,
+    });
+  }, []);
+
   // Helper to generate IDs
   const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
 
-  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds): GeometryWithBounds => {
+  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean }): GeometryWithBounds => {
     const clonedGeometry = source.geometry.clone();
-    accelerateGeometry(clonedGeometry);
+    if (options?.accelerate ?? true) {
+      accelerateGeometry(clonedGeometry);
+    }
 
     return {
       geometry: clonedGeometry,
@@ -645,6 +764,60 @@ export function useSceneCollectionManager() {
       size: source.size.clone(),
     };
   }, []);
+
+  const processDeferredAccelerationQueue = useCallback(() => {
+    if (deferredAccelerationProcessingRef.current) return;
+    if (deferredAccelerationPausedRef.current) return;
+    if (deferredAccelerationQueueRef.current.length === 0) return;
+
+    deferredAccelerationProcessingRef.current = true;
+
+    const scheduleNext = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(cb, { timeout: 120 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+
+    const step = () => {
+      if (deferredAccelerationPausedRef.current) {
+        deferredAccelerationProcessingRef.current = false;
+        return;
+      }
+
+      const geometry = deferredAccelerationQueueRef.current.shift();
+      if (!geometry) {
+        deferredAccelerationProcessingRef.current = false;
+        return;
+      }
+
+      accelerateGeometry(geometry);
+
+      if (deferredAccelerationQueueRef.current.length === 0) {
+        deferredAccelerationProcessingRef.current = false;
+        return;
+      }
+
+      scheduleNext(step);
+    };
+
+    scheduleNext(step);
+  }, []);
+
+  const deferAccelerateGeometry = useCallback((entries: GeometryWithBounds[]) => {
+    if (entries.length === 0) return;
+
+    deferredAccelerationQueueRef.current.push(...entries.map((entry) => entry.geometry));
+    processDeferredAccelerationQueue();
+  }, [processDeferredAccelerationQueue]);
+
+  const setBackgroundGeometryWorkPaused = useCallback((paused: boolean) => {
+    deferredAccelerationPausedRef.current = paused;
+    if (!paused) {
+      processDeferredAccelerationQueue();
+    }
+  }, [processDeferredAccelerationQueue]);
 
   const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
     if (files.length === 0) return;
@@ -714,6 +887,31 @@ export function useSceneCollectionManager() {
   const activeModel = useMemo(() =>
     models.find(m => m.id === activeModelId) || null
     , [models, activeModelId]);
+
+  useEffect(() => {
+    const modelIdSet = new Set(models.map((m) => m.id));
+    setSelectedModelIds((prev) => prev.filter((id) => modelIdSet.has(id)));
+    if (activeModelId && !modelIdSet.has(activeModelId)) {
+      setActiveModelId(null);
+    }
+  }, [activeModelId, models]);
+
+  const selectModel = useCallback((id: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
+    setActiveModelId(id);
+
+    setSelectedModelIds((prev) => {
+      if (mode === 'single') return [id];
+      if (mode === 'add') {
+        return prev.includes(id) ? prev : [...prev, id];
+      }
+      return prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id];
+    });
+  }, []);
+
+  const clearModelSelection = useCallback(() => {
+    setSelectedModelIds([]);
+    setActiveModelId(null);
+  }, []);
 
   // Clear support selection when switching away from support mode
   useEffect(() => {
@@ -870,6 +1068,7 @@ export function useSceneCollectionManager() {
         // If no active model, select the first new one
         if (!activeModelId) {
           setActiveModelId(newModels[0].id);
+          setSelectedModelIds([newModels[0].id]);
         }
       }
     } finally {
@@ -898,6 +1097,27 @@ export function useSceneCollectionManager() {
     ));
   }, []);
 
+  const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
+    if (updates.length === 0) return;
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
+    const updateMap = new Map<string, ModelTransform>();
+    updates.forEach((entry) => {
+      updateMap.set(entry.id, entry.transform);
+    });
+
+    const nextModels = models.map((m) => {
+      const nextTransform = updateMap.get(m.id);
+      return nextTransform ? { ...m, transform: nextTransform } : m;
+    });
+
+    setModels(nextModels);
+
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, visible } : m
@@ -910,35 +1130,163 @@ export function useSceneCollectionManager() {
     ));
   }, []);
 
-  const deleteModel = useCallback((id: string) => {
-    setModels(prev => {
-      const model = prev.find(m => m.id === id);
-      if (model) {
-        tryRevokeObjectUrl(model.fileUrl);
-      }
-      const newModels = prev.filter(m => m.id !== id);
-      return newModels;
+  const groupModels = useCallback((modelIds: string[], groupName?: string) => {
+    const ids = Array.from(new Set(modelIds));
+    if (ids.length === 0) return null;
+
+    let resolvedGroupId: string | null = null;
+    let resolvedGroupName: string | null = null;
+
+    setModels((prev) => {
+      const selected = prev.filter((model) => ids.includes(model.id));
+      if (selected.length === 0) return prev;
+
+      const commonGroupId = selected.every((model) => model.groupId && model.groupId === selected[0].groupId)
+        ? (selected[0].groupId ?? null)
+        : null;
+
+      resolvedGroupId = commonGroupId ?? `group-${generateId()}`;
+      const rawName = groupName?.trim();
+      resolvedGroupName = rawName && rawName.length > 0
+        ? rawName
+        : (selected.find((model) => model.groupName?.trim())?.groupName ?? selected[0].name);
+
+      return prev.map((model) => {
+        if (!ids.includes(model.id)) return model;
+        return {
+          ...model,
+          groupId: resolvedGroupId ?? undefined,
+          groupName: resolvedGroupName ?? undefined,
+        };
+      });
     });
 
-    if (activeModelId === id) {
-      setActiveModelId(null);
+    if (resolvedGroupId) {
+      setSelectedModelIds((prev) => {
+        const next = Array.from(new Set([...prev, ...ids]));
+        return next;
+      });
+      setActiveModelId((prev) => prev ?? ids[0] ?? null);
     }
 
-    // Clean up associated supports
-    const supportState = getSnapshot();
-    const removedSupports = deleteSupportsForModel(supportState, id);
-    console.log(`[SceneCollection] Deleted model ${id} and ${removedSupports} associated supports.`);
+    return resolvedGroupId;
+  }, []);
 
-  }, [activeModelId]);
+  const ungroupModels = useCallback((modelIds: string[]) => {
+    const ids = new Set(modelIds);
+    if (ids.size === 0) return;
+
+    setModels((prev) => prev.map((model) => (
+      ids.has(model.id)
+        ? { ...model, groupId: undefined, groupName: undefined }
+        : model
+    )));
+  }, []);
+
+  const ungroupGroup = useCallback((groupId: string) => {
+    setModels((prev) => prev.map((model) => (
+      model.groupId === groupId
+        ? { ...model, groupId: undefined, groupName: undefined }
+        : model
+    )));
+  }, []);
+
+  const renameGroup = useCallback((groupId: string, nextName: string) => {
+    const trimmed = nextName.trim();
+    if (!trimmed) return;
+
+    setModels((prev) => prev.map((model) => (
+      model.groupId === groupId
+        ? { ...model, groupName: trimmed }
+        : model
+    )));
+  }, []);
+
+  const selectGroup = useCallback((groupId: string, mode: 'single' | 'add' = 'single') => {
+    const groupIds = models.filter((model) => model.groupId === groupId).map((model) => model.id);
+    if (groupIds.length === 0) return;
+
+    setActiveModelId(groupIds[0]);
+    setSelectedModelIds((prev) => {
+      if (mode === 'add') {
+        return Array.from(new Set([...prev, ...groupIds]));
+      }
+      return groupIds;
+    });
+  }, [models]);
+
+  const deleteModels = useCallback((idsInput: string[]) => {
+    const ids = new Set(idsInput);
+    if (ids.size === 0) return;
+
+    const existing = models.filter((m) => ids.has(m.id));
+    if (existing.length === 0) return;
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
+    existing.forEach((model) => {
+      tryRevokeObjectUrl(model.fileUrl);
+    });
+
+    const nextModels = models.filter((m) => !ids.has(m.id));
+    const nextActiveModelId = activeModelId && ids.has(activeModelId) ? null : activeModelId;
+    const nextSelectedModelIds = selectedModelIds.filter((sid) => !ids.has(sid));
+
+    setModels(nextModels);
+    setActiveModelId(nextActiveModelId);
+    setSelectedModelIds(nextSelectedModelIds);
+
+    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds);
+    pushSceneSnapshotHistory(before, after);
+
+    // Clean up associated supports.
+    const supportState = getSnapshot();
+    let totalRemovedSupports = 0;
+    ids.forEach((id) => {
+      totalRemovedSupports += deleteSupportsForModel(supportState, id);
+    });
+    console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds, tryRevokeObjectUrl]);
+
+  const deleteModel = useCallback((id: string) => {
+    deleteModels([id]);
+  }, [deleteModels]);
 
   const copyModel = useCallback((id: string) => {
     const source = models.find((m) => m.id === id);
     if (!source) return false;
 
-    setModelClipboard({
+    setModelClipboard([
+      {
+        sourceId: source.id,
+        name: source.name,
+        fileSizeBytes: source.fileSizeBytes,
+        geometry: source.geometry,
+        transform: {
+          position: source.transform.position.clone(),
+          rotation: source.transform.rotation.clone(),
+          scale: source.transform.scale.clone(),
+        },
+        color: source.color,
+        polygonCount: source.polygonCount,
+      },
+    ]);
+
+    return true;
+  }, [models]);
+
+  const copySelectedModels = useCallback((ids?: string[]) => {
+    const idSet = new Set((ids && ids.length > 0) ? ids : selectedModelIds);
+    if (idSet.size === 0) return false;
+
+    const selected = models.filter((m) => idSet.has(m.id));
+    if (selected.length === 0) return false;
+
+    setModelClipboard(selected.map((source) => ({
+      sourceId: source.id,
       name: source.name,
       fileSizeBytes: source.fileSizeBytes,
-      geometry: cloneGeometryWithBounds(source.geometry),
+      geometry: source.geometry,
       transform: {
         position: source.transform.position.clone(),
         rotation: source.transform.rotation.clone(),
@@ -946,10 +1294,10 @@ export function useSceneCollectionManager() {
       },
       color: source.color,
       polygonCount: source.polygonCount,
-    });
+    })));
 
     return true;
-  }, [cloneGeometryWithBounds, models]);
+  }, [models, selectedModelIds]);
 
   const cutModel = useCallback((id: string) => {
     const copied = copyModel(id);
@@ -959,29 +1307,318 @@ export function useSceneCollectionManager() {
   }, [copyModel, deleteModel]);
 
   const pasteModel = useCallback(() => {
-    if (!modelClipboard) return null;
+    if (modelClipboard.length === 0) return null;
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
+    const first = modelClipboard[0];
+
+    const pastedGeometry = cloneGeometryWithBounds(first.geometry, { accelerate: false });
 
     const id = generateId();
     const pastedModel: LoadedModel = {
       id,
-      name: `${modelClipboard.name} Copy`,
+      name: `${first.name} Copy`,
       fileUrl: '',
-      fileSizeBytes: modelClipboard.fileSizeBytes,
-      geometry: cloneGeometryWithBounds(modelClipboard.geometry),
+      fileSizeBytes: first.fileSizeBytes,
+      geometry: pastedGeometry,
       transform: {
-        position: modelClipboard.transform.position.clone().add(new THREE.Vector3(6, 6, 0)),
-        rotation: modelClipboard.transform.rotation.clone(),
-        scale: modelClipboard.transform.scale.clone(),
+        position: first.transform.position.clone().add(new THREE.Vector3(6, 6, 0)),
+        rotation: first.transform.rotation.clone(),
+        scale: first.transform.scale.clone(),
       },
       visible: true,
-      color: modelClipboard.color,
-      polygonCount: modelClipboard.polygonCount,
+      color: first.color,
+      polygonCount: first.polygonCount,
     };
 
-    setModels((prev) => [...prev, pastedModel]);
+    const nextModels = [...models, pastedModel];
+    setModels(nextModels);
     setActiveModelId(id);
+    setSelectedModelIds([id]);
+
+    const after = captureSceneSnapshot(nextModels, id, [id]);
+    pushSceneSnapshotHistory(before, after);
+
+    deferAccelerateGeometry([pastedGeometry]);
     return id;
-  }, [cloneGeometryWithBounds, generateId, modelClipboard]);
+  }, [activeModelId, cloneGeometryWithBounds, deferAccelerateGeometry, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
+
+  const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
+    if (modelClipboard.length === 0) return [] as string[];
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
+    const entries = modelClipboard;
+
+    const centerX = defaultImportCenterXY.x;
+    const centerY = defaultImportCenterXY.y;
+    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+    const maxX = minX + view3dSettings.widthMm;
+    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+    const maxY = minY + view3dSettings.depthMm;
+
+    type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
+
+    const intersectsRect = (a: Rect2D, b: Rect2D) => {
+      return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+    };
+
+    const isRectInsidePlate = (rect: Rect2D) => (
+      rect.minX >= minX
+      && rect.maxX <= maxX
+      && rect.minY >= minY
+      && rect.maxY <= maxY
+    );
+
+    const footprintFor = (size: THREE.Vector3, transform: ModelTransform) => {
+      const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
+      const baseD = Math.max(2, Math.abs(size.y * transform.scale.y));
+      const rz = transform.rotation.z;
+      const c = Math.abs(Math.cos(rz));
+      const s = Math.abs(Math.sin(rz));
+      return {
+        width: (baseW * c) + (baseD * s),
+        depth: (baseW * s) + (baseD * c),
+      };
+    };
+
+    const maxWidth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).width));
+    const maxDepth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).depth));
+    const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
+    const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
+
+    const blockedRects: Rect2D[] = models
+      .filter((model) => model.visible)
+      .map((model) => {
+        const { width, depth } = footprintFor(model.geometry.size, model.transform);
+        return {
+          minX: model.transform.position.x - (width * 0.5),
+          maxX: model.transform.position.x + (width * 0.5),
+          minY: model.transform.position.y - (depth * 0.5),
+          maxY: model.transform.position.y + (depth * 0.5),
+        };
+      });
+
+    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+    const halfSpanX = Math.max(Math.abs(centerX - minX), Math.abs(maxX - centerX));
+    const halfSpanY = Math.max(Math.abs(centerY - minY), Math.abs(maxY - centerY));
+    const inPlateRingX = Math.ceil(halfSpanX / stepX) + 2;
+    const inPlateRingY = Math.ceil(halfSpanY / stepY) + 2;
+    const maxInPlateRing = Math.max(inPlateRingX, inPlateRingY);
+    const outsideRings = 12;
+    const maxRing = maxInPlateRing + outsideRings;
+
+    for (let ring = 0; ring <= maxRing; ring += 1) {
+      if (ring === 0) {
+        candidateCenters.push({ x: centerX, y: centerY, distSq: 0 });
+        continue;
+      }
+
+      for (let gx = -ring; gx <= ring; gx += 1) {
+        const gyTop = ring;
+        const gyBottom = -ring;
+        const x = centerX + gx * stepX;
+
+        const yTop = centerY + gyTop * stepY;
+        const dxTop = x - centerX;
+        const dyTop = yTop - centerY;
+        candidateCenters.push({ x, y: yTop, distSq: (dxTop * dxTop) + (dyTop * dyTop) });
+
+        if (gyBottom !== gyTop) {
+          const yBottom = centerY + gyBottom * stepY;
+          const dxBottom = x - centerX;
+          const dyBottom = yBottom - centerY;
+          candidateCenters.push({ x, y: yBottom, distSq: (dxBottom * dxBottom) + (dyBottom * dyBottom) });
+        }
+      }
+
+      for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
+        const gxRight = ring;
+        const gxLeft = -ring;
+        const y = centerY + gy * stepY;
+
+        const xRight = centerX + gxRight * stepX;
+        const dxRight = xRight - centerX;
+        const dyRight = y - centerY;
+        candidateCenters.push({ x: xRight, y, distSq: (dxRight * dxRight) + (dyRight * dyRight) });
+
+        if (gxLeft !== gxRight) {
+          const xLeft = centerX + gxLeft * stepX;
+          const dxLeft = xLeft - centerX;
+          const dyLeft = y - centerY;
+          candidateCenters.push({ x: xLeft, y, distSq: (dxLeft * dxLeft) + (dyLeft * dyLeft) });
+        }
+      }
+    }
+
+    candidateCenters.sort((a, b) => a.distSq - b.distSq);
+
+    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry) => {
+      const { width, depth } = footprintFor(entry.geometry.size, entry.transform);
+
+      const makeRectAt = (x: number, y: number): Rect2D => ({
+        minX: x - (width * 0.5),
+        maxX: x + (width * 0.5),
+        minY: y - (depth * 0.5),
+        maxY: y + (depth * 0.5),
+      });
+
+      // Pass 1: exhaust all valid in-plate positions first.
+      for (const candidate of candidateCenters) {
+        const rect = makeRectAt(candidate.x, candidate.y);
+        if (!isRectInsidePlate(rect)) continue;
+
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+          continue;
+        }
+
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      // Pass 2: if in-plate is full, allow outside placements.
+      for (const candidate of candidateCenters) {
+        const rect = makeRectAt(candidate.x, candidate.y);
+
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) {
+          continue;
+        }
+
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      // Fallback: if exhaustive candidates are blocked, place further to the right of center.
+      const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
+      const fallbackY = centerY;
+      blockedRects.push({
+        minX: fallbackX - (width * 0.5),
+        maxX: fallbackX + (width * 0.5),
+        minY: fallbackY - (depth * 0.5),
+        maxY: fallbackY + (depth * 0.5),
+      });
+      return { x: fallbackX, y: fallbackY };
+    });
+
+    const createdIds: string[] = [];
+    const pastedGeometries: GeometryWithBounds[] = [];
+    const pastedModels: LoadedModel[] = entries.map((entry, index) => {
+      const id = generateId();
+      createdIds.push(id);
+
+      const geometry = cloneGeometryWithBounds(entry.geometry, { accelerate: false });
+      pastedGeometries.push(geometry);
+
+      const center = assignedCenters[index] ?? { x: centerX, y: centerY };
+
+      return {
+        id,
+        name: `${entry.name} Copy`,
+        fileUrl: '',
+        fileSizeBytes: entry.fileSizeBytes,
+        geometry,
+        transform: {
+          position: new THREE.Vector3(center.x, center.y, entry.transform.position.z),
+          rotation: entry.transform.rotation.clone(),
+          scale: entry.transform.scale.clone(),
+        },
+        visible: true,
+        color: entry.color,
+        polygonCount: entry.polygonCount,
+      };
+    });
+
+    const nextModels = [...models, ...pastedModels];
+    setModels(nextModels);
+    if (createdIds.length > 0) {
+      setActiveModelId(createdIds[0]);
+      setSelectedModelIds(createdIds);
+
+      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds);
+      pushSceneSnapshotHistory(before, after);
+    }
+
+    deferAccelerateGeometry(pastedGeometries);
+
+    return createdIds;
+  }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+
+  const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[], sourceTransform?: ModelTransform | null) => {
+    if (transforms.length === 0) return [] as string[];
+
+    const source = models.find((m) => m.id === sourceId);
+    if (!source) return [] as string[];
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
+    const resolvedGroupId = source.groupId ?? `group-${generateId()}`;
+    const resolvedGroupName = source.groupName ?? source.name;
+
+    const createdIds: string[] = [];
+    const duplicatedGeometries: GeometryWithBounds[] = [];
+
+    const newModels: LoadedModel[] = transforms.map((nextTransform, index) => {
+      const id = generateId();
+      createdIds.push(id);
+
+      const geometry = cloneGeometryWithBounds(source.geometry, { accelerate: false });
+      duplicatedGeometries.push(geometry);
+
+      return {
+        id,
+        name: `${source.name} Copy ${index + 1}`,
+        groupId: resolvedGroupId,
+        groupName: resolvedGroupName,
+        fileUrl: '',
+        fileSizeBytes: source.fileSizeBytes,
+        geometry,
+        transform: {
+          position: nextTransform.position.clone(),
+          rotation: nextTransform.rotation.clone(),
+          scale: nextTransform.scale.clone(),
+        },
+        visible: source.visible,
+        color: source.color,
+        polygonCount: source.polygonCount,
+      };
+    });
+
+    const withSourceGroup = models.map((model) => {
+      if (model.id !== sourceId) return model;
+      const shouldUpdateGroup = model.groupId !== resolvedGroupId || model.groupName !== resolvedGroupName;
+      const shouldUpdateTransform = !!sourceTransform;
+      if (!shouldUpdateGroup && !shouldUpdateTransform) return model;
+      return {
+        ...model,
+        groupId: resolvedGroupId,
+        groupName: resolvedGroupName,
+        transform: sourceTransform
+          ? {
+              position: sourceTransform.position.clone(),
+              rotation: sourceTransform.rotation.clone(),
+              scale: sourceTransform.scale.clone(),
+            }
+          : model.transform,
+      };
+    });
+
+    const nextModels = [...withSourceGroup, ...newModels];
+    setModels(nextModels);
+
+    if (createdIds.length > 0) {
+      setActiveModelId(createdIds[0]);
+      setSelectedModelIds([sourceId, ...createdIds]);
+
+      const nextSelected = [sourceId, ...createdIds];
+      const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected);
+      pushSceneSnapshotHistory(before, after);
+    }
+
+    deferAccelerateGeometry(duplicatedGeometries);
+
+    return createdIds;
+  }, [activeModelId, cloneGeometryWithBounds, deferAccelerateGeometry, generateId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
@@ -1041,6 +1678,7 @@ export function useSceneCollectionManager() {
 
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
+        setSelectedModelIds([model.id]);
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
       } else {
         const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
@@ -1152,6 +1790,7 @@ export function useSceneCollectionManager() {
 
     setModels(prev => [...prev, model]);
     setActiveModelId(result.modelId);
+    setSelectedModelIds([result.modelId]);
 
     console.log('[SceneCollection] Lychee import complete:', {
       modelId: result.modelId,
@@ -1277,6 +1916,10 @@ export function useSceneCollectionManager() {
     models,
     activeModelId,
     setActiveModelId,
+    selectedModelIds,
+    setSelectedModelIds,
+    selectModel,
+    clearModelSelection,
     activeModel,
 
     // Active Model Compatibility helpers
@@ -1300,13 +1943,24 @@ export function useSceneCollectionManager() {
     loadFiles,
     onFileChange,
     updateModelTransform,
+    updateModelTransforms,
     setModelVisibility,
     renameModel,
+    groupModels,
+    ungroupModels,
+    ungroupGroup,
+    renameGroup,
+    selectGroup,
+    deleteModels,
     deleteModel,
     copyModel,
+    copySelectedModels,
     cutModel,
     pasteModel,
-    canPasteModel: modelClipboard !== null,
+    pasteCopiedModelsAutoArrange,
+    duplicateModelWithTransforms,
+    setBackgroundGeometryWorkPaused,
+    canPasteModel: modelClipboard.length > 0,
 
     // Scene settings
     ambientIntensity,

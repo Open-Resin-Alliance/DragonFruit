@@ -88,6 +88,92 @@
       }
     },
     {
+      "id": "prepare-arrange",
+      "matchPanelIds": ["prepare-models", "prepare-arrange-panel"],
+      "order": [
+        "prepare-models",
+        "visual-settings",
+        "prepare-arrange-panel"
+      ],
+      "anchors": {
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-arrange-panel": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "prepare-arrange-debug",
+      "matchPanelIds": ["prepare-models", "prepare-debug-primitives", "prepare-arrange-panel"],
+      "order": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "visual-settings",
+        "prepare-arrange-panel"
+      ],
+      "anchors": {
+        "prepare-debug-primitives": {
+          "to": "prepare-models",
+          "side": "below"
+        },
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-arrange-panel": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "prepare-duplicate",
+      "matchPanelIds": ["prepare-models", "prepare-duplicate-panel"],
+      "order": [
+        "prepare-models",
+        "visual-settings",
+        "prepare-duplicate-panel"
+      ],
+      "anchors": {
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-duplicate-panel": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
+      "id": "prepare-duplicate-debug",
+      "matchPanelIds": ["prepare-models", "prepare-debug-primitives", "prepare-duplicate-panel"],
+      "order": [
+        "prepare-models",
+        "prepare-debug-primitives",
+        "visual-settings",
+        "prepare-duplicate-panel"
+      ],
+      "anchors": {
+        "prepare-debug-primitives": {
+          "to": "prepare-models",
+          "side": "below"
+        },
+        "visual-settings": {
+          "to": "prepare-models",
+          "side": "right-edge"
+        },
+        "prepare-duplicate-panel": {
+          "to": "visual-settings",
+          "side": "left"
+        }
+      }
+    },
+    {
       "id": "analysis",
       "matchPanelIds": ["analysis-scan-card", "analysis-workflow"],
       "order": [

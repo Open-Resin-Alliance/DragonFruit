@@ -1,6 +1,7 @@
 export const GRID_HOME_FOCUS_STATE = {
-    position: [22.3, -41.73, 25.19] as [number, number, number],
-    target: [-1.27, 3.34, 4.56] as [number, number, number],
+    // Slightly raised framing target so the grid preview content sits lower in the viewport.
+    position: [22.3, -41.73, 26.8] as [number, number, number],
+    target: [-1.27, 3.34, 0.0] as [number, number, number],
     zoom: 11.98
 };
 

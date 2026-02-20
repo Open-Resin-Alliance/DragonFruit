@@ -2,6 +2,7 @@
 
 import React, { useEffect } from 'react';
 import * as THREE from 'three';
+import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { MeshShaderMaterial, type MeshShaderType } from '@/features/shaders/mesh';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
@@ -53,6 +54,7 @@ export function StlMesh({
   hoverTintColor,
   hoverTintStrength,
   selectedTintStrength,
+  supportNonSelectedOpacity,
   showOutOfBoundsOverlay,
   outOfBoundsMin,
   outOfBoundsMax,
@@ -79,7 +81,7 @@ export function StlMesh({
   onSmoothingGeometryActivate?: (geometry: THREE.BufferGeometry | null) => void;
   onSupportClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
-  onActiveModelChange?: (id: string | null) => void;
+  onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
   disableRaycast?: boolean;
   blockSupportPlacement?: boolean;
   suppressNextClickRef?: React.RefObject<boolean>;
@@ -97,6 +99,7 @@ export function StlMesh({
   hoverTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
+  supportNonSelectedOpacity?: number;
   showOutOfBoundsOverlay?: boolean;
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
@@ -106,8 +109,12 @@ export function StlMesh({
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
+  const { camera } = useThree();
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
+  const supportDimCameraLocalPointRef = React.useRef(new THREE.Vector3());
+  const supportDimWorldScaleRef = React.useRef(new THREE.Vector3());
+  const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
 
   // Build clipping planes for a band [clipLower, clipUpper] on Z axis
   // Clipping planes work in WORLD space
@@ -151,6 +158,13 @@ export function StlMesh({
     [centerOffset.x, centerOffset.y, centerOffset.z],
   );
 
+  const localGeometryBounds = React.useMemo(() => {
+    return (
+      geometry.boundingBox?.clone()
+      ?? new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute)
+    );
+  }, [geometry]);
+
   // Internal ref for the mesh element to control raycasting
   const internalMeshRef = React.useRef<THREE.Mesh>(null);
 
@@ -180,6 +194,51 @@ export function StlMesh({
   const baseShaderType: MeshShaderType = shaderType === 'opaque_wire_mesh' ? 'soft_clay' : shaderType;
   const showOpaqueWireOverlay = shaderType === 'opaque_wire_mesh';
   const isHoveredModel = isPointerHovered || (hit.category === 'model' && hit.objectId === modelId);
+  const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
+  const dimmedBaseOpacity = isSupportDimmed
+    ? Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity))
+    : null;
+  const dimmedInsideOpacity = isSupportDimmed
+    ? 0.0
+    : null;
+
+  useFrame(() => {
+    if (!isSupportDimmed) return;
+
+    const mesh = internalMeshRef.current;
+    const material = supportDimMaterialRef.current;
+    if (!mesh || !material || dimmedBaseOpacity == null || dimmedInsideOpacity == null) return;
+
+    const localPoint = supportDimCameraLocalPointRef.current;
+    localPoint.copy(camera.position);
+    mesh.worldToLocal(localPoint);
+
+    const localDistanceToBounds = localGeometryBounds.distanceToPoint(localPoint);
+    mesh.getWorldScale(supportDimWorldScaleRef.current);
+    const worldScale = supportDimWorldScaleRef.current;
+    const distanceScaleFactor = Math.max(
+      1e-6,
+      Math.max(Math.abs(worldScale.x), Math.abs(worldScale.y), Math.abs(worldScale.z)),
+    );
+    const distanceToBoundsMm = localDistanceToBounds * distanceScaleFactor;
+
+    // Fade non-selected support meshes out near the camera to keep line-of-sight clear.
+    // 0mm (inside/touching): fully culled. >= proximityFadeRangeMm: baseline opacity.
+    const proximityFadeRangeMm = 24;
+    const proximityT = THREE.MathUtils.clamp(1 - (distanceToBoundsMm / proximityFadeRangeMm), 0, 1);
+    const targetOpacity = THREE.MathUtils.lerp(dimmedBaseOpacity, dimmedInsideOpacity, proximityT);
+    const nextOpacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 0.18);
+
+    if (Math.abs(nextOpacity - material.opacity) > 0.0005) {
+      material.opacity = nextOpacity;
+    }
+
+    const shouldDepthWrite = nextOpacity > 0.2;
+    if (material.depthWrite !== shouldDepthWrite) {
+      material.depthWrite = shouldDepthWrite;
+      material.needsUpdate = true;
+    }
+  });
 
   const outOfBoundsMaterial = React.useMemo(() => {
     if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
@@ -259,6 +318,7 @@ export function StlMesh({
         userData={{ modelId }}
         geometry={geometry}
         position={meshLocalOffset}
+        renderOrder={isSupportDimmed ? 2 : 0}
         onClick={(e) => {
           console.log('[SceneCanvas] Mesh clicked, mode:', mode, 'id:', modelId);
 
@@ -274,7 +334,13 @@ export function StlMesh({
 
             // Update active model in parent state
             if (onActiveModelChange) {
-              onActiveModelChange(modelId);
+              const native = (e as unknown as { nativeEvent?: MouseEvent }).nativeEvent;
+              const selectionMode = native?.ctrlKey || native?.metaKey
+                ? 'toggle'
+                : native?.shiftKey
+                  ? 'add'
+                  : 'single';
+              onActiveModelChange(modelId, { selectionMode });
             }
           }
 
@@ -382,6 +448,17 @@ export function StlMesh({
             metalness={0.02}
             clippingPlanes={planes}
             depthWrite={false}
+          />
+        ) : typeof supportNonSelectedOpacity === 'number' ? (
+          <meshStandardMaterial
+            ref={supportDimMaterialRef}
+            color={meshColor ?? '#c8c8ce'}
+            transparent
+            opacity={dimmedBaseOpacity ?? 0.5}
+            roughness={0.55}
+            metalness={0.02}
+            clippingPlanes={planes}
+            depthWrite
           />
         ) : (
           <MeshShaderMaterial

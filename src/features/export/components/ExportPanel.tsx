@@ -20,6 +20,16 @@ type ToggleRowProps = {
   onChange: (checked: boolean) => void;
 };
 
+function normalizeExportBaseName(rawName: string | null | undefined): string {
+  const trimmed = (rawName ?? '').trim();
+  if (!trimmed) return 'MyPrint';
+
+  // Strip common source suffixes if present (including chained suffixes).
+  const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json))+$/i, '');
+  const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
+  return cleaned || 'MyPrint';
+}
+
 function ToggleRow({ label, hint, checked, onChange }: ToggleRowProps) {
   return (
     <label className="flex items-center justify-between gap-3 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -51,7 +61,7 @@ export function ExportPanel({
   supportsRef,
 }: ExportPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [filename, setFilename] = useState(activeModel?.name?.replace('.stl', '') || 'MyPrint');
+  const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isExporting, setIsExporting] = useState(false);
 
   const [options, setOptions] = useState<ExportOptions>({
@@ -73,8 +83,7 @@ export function ExportPanel({
 
   useEffect(() => {
     if (!activeModel) return;
-    const baseName = activeModel.name.replace(/\.(stl|obj|3mf)$/i, '');
-    setFilename(baseName || 'MyPrint');
+    setFilename(normalizeExportBaseName(activeModel.name));
   }, [activeModel?.id]);
 
   const handleExport = async () => {

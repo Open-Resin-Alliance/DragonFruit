@@ -1,10 +1,13 @@
 import type { SupportMode } from '@/supports/types';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
+import type { SelectionHighlightMode } from '@/components/selection';
 
 export type WorkspaceCameraDefaults = Record<SupportMode, CameraProjectionMode>;
+export type WorkspaceSelectionHighlightDefaults = Record<SupportMode, SelectionHighlightMode>;
 
 export type WorkspaceCameraSettings = {
   defaults: WorkspaceCameraDefaults;
+  selectionHighlightDefaults: WorkspaceSelectionHighlightDefaults;
 };
 
 export const WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY = 'workspace-camera-settings';
@@ -17,10 +20,21 @@ export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
     support: 'perspective',
     export: 'orthographic',
   },
+  selectionHighlightDefaults: {
+    prepare: 'tint',
+    analysis: 'tint',
+    support: 'spotlight',
+    export: 'tint',
+  },
 };
 
 function normalizeMode(input: unknown): CameraProjectionMode {
   return input === 'perspective' ? 'perspective' : 'orthographic';
+}
+
+function normalizeSelectionHighlightMode(input: unknown): SelectionHighlightMode {
+  if (input === 'spotlight' || input === 'fresnel' || input === 'none') return input;
+  return 'tint';
 }
 
 export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCameraSettings {
@@ -28,9 +42,11 @@ export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCamer
 
   const candidate = input as Partial<WorkspaceCameraSettings> & {
     defaults?: Partial<Record<SupportMode, unknown>>;
+    selectionHighlightDefaults?: Partial<Record<SupportMode, unknown>>;
   };
 
   const defaults: Partial<Record<SupportMode, unknown>> = candidate.defaults ?? {};
+  const selectionHighlightDefaults: Partial<Record<SupportMode, unknown>> = candidate.selectionHighlightDefaults ?? {};
 
   return {
     defaults: {
@@ -38,6 +54,12 @@ export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCamer
       analysis: normalizeMode(defaults.analysis),
       support: normalizeMode(defaults.support),
       export: normalizeMode(defaults.export),
+    },
+    selectionHighlightDefaults: {
+      prepare: normalizeSelectionHighlightMode(selectionHighlightDefaults.prepare),
+      analysis: normalizeSelectionHighlightMode(selectionHighlightDefaults.analysis),
+      support: normalizeSelectionHighlightMode(selectionHighlightDefaults.support),
+      export: normalizeSelectionHighlightMode(selectionHighlightDefaults.export),
     },
   };
 }

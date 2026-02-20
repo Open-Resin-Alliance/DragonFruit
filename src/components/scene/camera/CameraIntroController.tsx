@@ -9,6 +9,9 @@ type CameraIntroControllerProps = {
   runId: number;
   onComplete?: (runId: number) => void;
   preserveCurrentViewDirection?: boolean;
+  mode?: 'prepare' | 'analysis' | 'support' | 'export';
+  plateWidthMm?: number;
+  plateDepthMm?: number;
 };
 
 type OrbitLikeControls = {
@@ -22,7 +25,15 @@ function isOrbitLikeControls(value: unknown): value is OrbitLikeControls {
   return !!maybe.target && typeof maybe.update === 'function';
 }
 
-export function CameraIntroController({ bounds, runId, onComplete, preserveCurrentViewDirection = false }: CameraIntroControllerProps) {
+export function CameraIntroController({
+  bounds,
+  runId,
+  onComplete,
+  preserveCurrentViewDirection = false,
+  mode = 'prepare',
+  plateWidthMm,
+  plateDepthMm,
+}: CameraIntroControllerProps) {
   const { camera, controls, size } = useThree();
   const animatingRef = React.useRef(false);
   const activeRunIdRef = React.useRef<number>(0);
@@ -52,15 +63,48 @@ export function CameraIntroController({ bounds, runId, onComplete, preserveCurre
 
     const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * aspect);
     const minFov = Math.max(0.0001, Math.min(vFov, hFov));
-    const distance = (radius / Math.sin(minFov * 0.5)) * 1.2;
+    const modelDistance = (radius / Math.sin(minFov * 0.5));
 
-    const fallbackViewDir = new THREE.Vector3(-1, -1, 1).normalize();
+    const hasPlateDims = Number.isFinite(plateWidthMm) && Number.isFinite(plateDepthMm)
+      && (plateWidthMm ?? 0) > 0
+      && (plateDepthMm ?? 0) > 0;
+
+    const plateHalfDiagonal = hasPlateDims
+      ? 0.5 * Math.hypot(plateWidthMm as number, plateDepthMm as number)
+      : 0;
+    const plateDistance = hasPlateDims
+      ? (plateHalfDiagonal / Math.sin(minFov * 0.5))
+      : 0;
+
+    const yawRad = THREE.MathUtils.degToRad(20);
+    // Adaptive support framing: smaller models get a tighter fit, larger models get more margin.
+    const supportFitMargin = THREE.MathUtils.clamp(1.08 + (radius * 0.0012), 1.08, 1.26);
+    const prepareFitDistance = Math.max(modelDistance * 0.95, plateDistance * 0.9) * 0.8;
+    const supportFitDistance = modelDistance * supportFitMargin;
+    const distance = mode === 'support'
+      ? supportFitDistance
+      : prepareFitDistance;
+    const fallbackViewDir = new THREE.Vector3(-Math.sin(yawRad), -Math.cos(yawRad), 1).normalize();
     const currentViewVector = camera.position.clone().sub(orbitControls.target);
     const hasValidCurrentView = currentViewVector.lengthSq() > 1e-8;
     const viewDir = preserveCurrentViewDirection && hasValidCurrentView
       ? currentViewVector.normalize()
       : fallbackViewDir;
+
+    if (mode === 'support' && viewDir.z < 0.18) {
+      viewDir.z = Math.abs(viewDir.z) + 0.24;
+      viewDir.normalize();
+    }
+
     const endPos = center.clone().add(viewDir.clone().multiplyScalar(distance));
+
+    if (mode === 'support') {
+      const minVerticalClearance = Math.max(10, radius * 0.35);
+      if (endPos.z < center.z + minVerticalClearance) {
+        endPos.z = center.z + minVerticalClearance;
+      }
+    }
+
     const startPos = camera.position.clone();
     const startTarget = orbitControls.target.clone();
     const startZoom = isOrthographic ? (camera as THREE.OrthographicCamera).zoom : 1;
@@ -124,7 +168,7 @@ export function CameraIntroController({ bounds, runId, onComplete, preserveCurre
         activeRunIdRef.current = 0;
       }
     };
-  }, [bounds, camera, controls, onComplete, preserveCurrentViewDirection, runId, size.height, size.width]);
+  }, [bounds, camera, controls, mode, onComplete, plateDepthMm, plateWidthMm, preserveCurrentViewDirection, runId, size.height, size.width]);
 
   return null;
 }

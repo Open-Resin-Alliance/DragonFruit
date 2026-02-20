@@ -307,22 +307,26 @@ export function SupportSidebar() {
                     </div>
                 ) : activeKind === 'grid' ? (
                     <div className="space-y-2.5">
-                        <div className="flex gap-2.5">
-                            {renderPreviewBox('h-auto min-h-[220px]', 'flex-1 min-w-0')}
-                            <div className="flex-1 min-w-0 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                                <GridSettingsCard
-                                    grid={settings.grid}
-                                    onChange={(partial) => updateGridSettings(partial)}
-                                />
-                            </div>
+                        {renderPreviewBox('h-[212px]')}
+                        <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                            <GridSettingsCard
+                                grid={settings.grid}
+                                onChange={(partial) => updateGridSettings(partial)}
+                            />
                         </div>
                     </div>
                 ) : (
                     <div className="space-y-2.5">
-                        <div className="flex gap-2.5">
-                            {renderPreviewBox('h-auto min-h-[340px]', 'flex-1 min-w-0')}
+                        <div className={activeKind === 'stick' ? 'space-y-2.5' : 'flex gap-2.5'}>
+                            {renderPreviewBox(
+                                activeKind === 'stick' ? 'h-[212px]' : 'h-auto min-h-[340px]',
+                                activeKind === 'stick' ? 'w-full' : 'flex-1 min-w-0'
+                            )}
 
-                            <div className="flex-1 min-w-0 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                            <div
+                                className={activeKind === 'stick' ? 'w-full rounded-md border p-2.5' : 'flex-1 min-w-0 rounded-md border p-2.5'}
+                                style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                            >
                             <div className="space-y-2">
                                 <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                                     Support Geometry

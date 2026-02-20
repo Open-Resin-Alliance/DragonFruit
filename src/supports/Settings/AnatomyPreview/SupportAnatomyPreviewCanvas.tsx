@@ -443,6 +443,7 @@ function PreviewContent({
 
         // --- Dynamic Zoom Logic for Tip Contact Diameter Only ---
         const isContactDiameterFocus = previewState.activeSettingKey === 'tip.contactDiameterMm';
+        const isStickLikeKind = activeKind === 'stick' || activeKind === 'twig';
 
         // Strict scope: ONLY 'tip.contactDiameterMm' triggers dynamic zoom
         // Previously we checked startsWith('tip.'), which caused snapback on other tip settings
@@ -456,8 +457,8 @@ function PreviewContent({
             const diam = liveConfigRef.current.tipContactDiameterMm;
             const minDia = 0.12;
             const maxDia = 1.0;
-            const maxZoom = 140; // Zoom for small diameter
-            const minZoom = 35;  // Zoom for large diameter
+            const maxZoom = isStickLikeKind ? 38 : 140; // Zoom for small diameter
+            const minZoom = isStickLikeKind ? 24 : 35;  // Zoom for large diameter
 
             if (diam <= minDia) {
                 finalZoom = maxZoom;
@@ -471,39 +472,41 @@ function PreviewContent({
                 finalZoom = maxZoom + t * (minZoom - maxZoom);
             }
 
-            const internalAngle = Math.abs(liveConfigRef.current.coneAngleDeg);
-            const angleRad = THREE.MathUtils.degToRad(internalAngle);
+            if (!isStickLikeKind) {
+                const internalAngle = Math.abs(liveConfigRef.current.coneAngleDeg);
+                const angleRad = THREE.MathUtils.degToRad(internalAngle);
 
-            const nx = Math.cos(angleRad);
-            const nz = Math.sin(angleRad);
+                const nx = Math.cos(angleRad);
+                const nz = Math.sin(angleRad);
 
-            const tipNormal = { x: -nx, y: 0, z: -nz };
+                const tipNormal = { x: -nx, y: 0, z: -nz };
 
-            const tipProfile: SupportTipProfile = {
-                type: 'disk',
-                contactDiameterMm: liveConfigRef.current.tipContactDiameterMm,
-                bodyDiameterMm: settings.shaft.diameterMm,
-                lengthMm: liveConfigRef.current.tipLengthMm,
-                penetrationMm: settings.tip.penetrationMm,
-                diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
-                maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
-                standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4),
-            };
+                const tipProfile: SupportTipProfile = {
+                    type: 'disk',
+                    contactDiameterMm: liveConfigRef.current.tipContactDiameterMm,
+                    bodyDiameterMm: settings.shaft.diameterMm,
+                    lengthMm: liveConfigRef.current.tipLengthMm,
+                    penetrationMm: settings.tip.penetrationMm,
+                    diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
+                    maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
+                    standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4),
+                };
 
-            const coneAngleMode = settings.tip.coneAngleMode ?? 'normal';
-            const adaptiveConeAngleOffsetDeg = settings.tip.adaptiveConeAngleOffsetDeg ?? 30;
+                const coneAngleMode = settings.tip.coneAngleMode ?? 'normal';
+                const adaptiveConeAngleOffsetDeg = settings.tip.adaptiveConeAngleOffsetDeg ?? 30;
 
-            const { coneAxis } = resolveConeAxisPolicy({
-                surfaceNormal: tipNormal,
-                coneAngleMode,
-                adaptiveConeAngleOffsetDeg,
-            });
+                const { coneAxis } = resolveConeAxisPolicy({
+                    surfaceNormal: tipNormal,
+                    coneAngleMode,
+                    adaptiveConeAngleOffsetDeg,
+                });
 
-            const diskThickness = calculateDiskThickness(tipNormal, coneAxis, tipProfile);
-            const tipX = -(tipNormal.x * diskThickness + coneAxis.x * tipProfile.lengthMm);
-            const dx = tipX - targetFocus.target[0];
+                const diskThickness = calculateDiskThickness(tipNormal, coneAxis, tipProfile);
+                const tipX = -(tipNormal.x * diskThickness + coneAxis.x * tipProfile.lengthMm);
+                const dx = tipX - targetFocus.target[0];
 
-            finalPosition[0] = targetFocus.position[0] + dx;
+                finalPosition[0] = targetFocus.position[0] + dx;
+            }
         }
 
         // --- Dynamic Zoom/Target Logic for Tip Length/Angle ---
@@ -512,7 +515,7 @@ function PreviewContent({
         // We clone here because we might modify it
         let finalTarget = [...targetFocus.target] as [number, number, number];
 
-        if (isContactDiameterFocus) {
+        if (isContactDiameterFocus && !isStickLikeKind) {
             const dx = finalPosition[0] - targetFocus.position[0];
             finalTarget[0] = targetFocus.target[0] + dx;
         }

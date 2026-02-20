@@ -39,21 +39,21 @@ export function AxisLabels({ size = 100 }: { size?: number }) {
       {/* X axis - Red */}
       {xTexture && (
         <sprite position={[labelOffset, 0, 0]} scale={[8, 8, 1]} raycast={nullRaycast}>
-          <spriteMaterial map={xTexture} transparent sizeAttenuation={true} depthTest={false} depthWrite={false} toneMapped={false} />
+          <spriteMaterial map={xTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}
       
       {/* Y axis - Green */}
       {yTexture && (
         <sprite position={[0, labelOffset, 0]} scale={[8, 8, 1]} raycast={nullRaycast}>
-          <spriteMaterial map={yTexture} transparent sizeAttenuation={true} depthTest={false} depthWrite={false} toneMapped={false} />
+          <spriteMaterial map={yTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}
       
       {/* Z axis - Blue */}
       {zTexture && (
         <sprite position={[0, 0, labelOffset]} scale={[8, 8, 1]} raycast={nullRaycast}>
-          <spriteMaterial map={zTexture} transparent sizeAttenuation={true} depthTest={false} depthWrite={false} toneMapped={false} />
+          <spriteMaterial map={zTexture} transparent sizeAttenuation={true} depthTest depthWrite={false} toneMapped={false} />
         </sprite>
       )}
     </>
