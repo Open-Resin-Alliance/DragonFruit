@@ -12,7 +12,7 @@ import {
 import type { PluginManifest } from '@/features/plugins/pluginRegistry';
 
 const BUILTIN_ATHENA_DEVELOPER = 'Open Resin Alliance';
-const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/Dragnfruit';
+const BUILTIN_ATHENA_REPOSITORY_URL = 'https://github.com/Open-Resin-Alliance/Dragonfruit';
 
 type GithubManifestResponse = {
   ok: boolean;
