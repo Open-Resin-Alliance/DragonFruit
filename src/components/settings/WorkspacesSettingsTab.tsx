@@ -4,6 +4,11 @@ import React from 'react';
 import type { SupportMode } from '@/supports/types';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
+import {
+  getActivePrinterProfile,
+  getProfileStoreSnapshot,
+  subscribeToProfileStore,
+} from '@/features/profiles/profileStore';
 import type {
   WorkspaceCameraDefaults,
   WorkspaceSelectionHighlightDefaults,
@@ -36,6 +41,9 @@ export function WorkspacesSettingsTab({
   onView3dSettingsChange,
 }: WorkspacesSettingsTabProps) {
   const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const isBuildVolumeManagedByPrinter = Boolean(activePrinterProfile);
 
   const patchView3dSettings = React.useCallback((patch: Partial<View3DSettings>) => {
     onView3dSettingsChange({ ...view3dSettings, ...patch });
@@ -71,6 +79,14 @@ export function WorkspacesSettingsTab({
         </div>
 
         <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          {isBuildVolumeManagedByPrinter ? (
+            <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 94%)' }}>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Bounding box settings are handled by the selected printer profile (<span style={{ color: 'var(--text-strong)' }}>{activePrinterProfile?.name}</span>).
+              </div>
+            </div>
+          ) : (
+            <>
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -249,6 +265,9 @@ export function WorkspacesSettingsTab({
               {view3dSettings.showViolationWarning ? 'ON' : 'OFF'}
             </button>
           </div>
+
+            </>
+          )}
         </div>
       </section>
 
