@@ -37,6 +37,15 @@ export interface ExportOptions {
 }
 
 export class ExportManager {
+  private static normalizeExportFilenameBase(filename: string): string {
+    const trimmed = filename.trim();
+    if (!trimmed) return 'export';
+
+    const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json))+$/i, '');
+    const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
+    return cleaned || 'export';
+  }
+
   /**
    * Generates and downloads an STL file based on the current scene state.
    */
@@ -298,7 +307,8 @@ export class ExportManager {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = filename.endsWith('.stl') ? filename : `${filename}.stl`;
+    const normalizedBaseName = this.normalizeExportFilenameBase(filename);
+    link.download = `${normalizedBaseName}.stl`;
     link.click();
     URL.revokeObjectURL(url);
   }
