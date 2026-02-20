@@ -1248,7 +1248,7 @@ export default function Home() {
       () => scene.mode === 'prepare' && scene.selectedModelIds.length > 0,
       () => {
         const ids = Array.from(new Set(scene.selectedModelIds));
-        ids.forEach((id) => scene.deleteModel(id));
+        scene.deleteModels(ids);
         setIsSelectAllModelsActive(false);
       },
       30,
@@ -1264,7 +1264,7 @@ export default function Home() {
       () => scene.mode === 'prepare' && isSelectAllModelsActive && scene.models.length > 0,
       () => {
         const ids = scene.models.map((model) => model.id);
-        ids.forEach((id) => scene.deleteModel(id));
+        scene.deleteModels(ids);
         setIsSelectAllModelsActive(false);
       },
       20,

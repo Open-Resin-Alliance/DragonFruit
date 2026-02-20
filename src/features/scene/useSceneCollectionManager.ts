@@ -7,6 +7,8 @@ import { loadFromLychee } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
+import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
+import type { HistoryAction, HistoryDirection } from '@/history/types';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
@@ -55,6 +57,60 @@ const RECENT_OPENED_FILES_LIMIT = 10;
 const RECENT_FILES_DB_NAME = 'dragonfruit-recent-files';
 const RECENT_FILES_DB_VERSION = 1;
 const RECENT_FILES_STORE_NAME = 'files';
+const SCENE_MODELS_SNAPSHOT_APPLY = 'scene_models_snapshot_apply';
+const SCENE_HISTORY_MAX_SNAPSHOTS = 200;
+
+type SceneSnapshotPayload = { key: string };
+
+type SceneSnapshot = {
+  models: LoadedModel[];
+  activeModelId: string | null;
+  selectedModelIds: string[];
+};
+
+type SceneSnapshotPair = {
+  before: SceneSnapshot;
+  after: SceneSnapshot;
+};
+
+const sceneSnapshotRegistry = new Map<string, SceneSnapshotPair>();
+const sceneSnapshotOrder: string[] = [];
+
+function cloneTransform(transform: ModelTransform): ModelTransform {
+  return {
+    position: transform.position.clone(),
+    rotation: transform.rotation.clone(),
+    scale: transform.scale.clone(),
+  };
+}
+
+function cloneLoadedModel(model: LoadedModel): LoadedModel {
+  return {
+    ...model,
+    transform: cloneTransform(model.transform),
+  };
+}
+
+function captureSceneSnapshot(models: LoadedModel[], activeModelId: string | null, selectedModelIds: string[]): SceneSnapshot {
+  return {
+    models: models.map(cloneLoadedModel),
+    activeModelId,
+    selectedModelIds: [...selectedModelIds],
+  };
+}
+
+function storeSceneSnapshotPair(pair: SceneSnapshotPair): string {
+  const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  sceneSnapshotRegistry.set(key, pair);
+  sceneSnapshotOrder.push(key);
+
+  while (sceneSnapshotOrder.length > SCENE_HISTORY_MAX_SNAPSHOTS) {
+    const removed = sceneSnapshotOrder.shift();
+    if (removed) sceneSnapshotRegistry.delete(removed);
+  }
+
+  return key;
+}
 
 export type RecentOpenedFileKind = 'mesh' | 'scene';
 
@@ -638,6 +694,40 @@ export function useSceneCollectionManager() {
   const [mode, setMode] = useState<SupportMode>('prepare');
   const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
 
+  const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
+    setModels(snapshot.models.map(cloneLoadedModel));
+    setActiveModelId(snapshot.activeModelId);
+    setSelectedModelIds([...snapshot.selectedModelIds]);
+  }, []);
+
+  useEffect(() => {
+    const unregisterSceneModelsHistory = registerHistoryHandler(
+      SCENE_MODELS_SNAPSHOT_APPLY,
+      (action: HistoryAction, direction: HistoryDirection) => {
+        const payload = action.payload as SceneSnapshotPayload | undefined;
+        if (!payload?.key) return false;
+
+        const pair = sceneSnapshotRegistry.get(payload.key);
+        if (!pair) return false;
+
+        applySceneSnapshot(direction === 'undo' ? pair.before : pair.after);
+        return true;
+      },
+    );
+
+    return () => {
+      unregisterSceneModelsHistory();
+    };
+  }, [applySceneSnapshot]);
+
+  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot) => {
+    const key = storeSceneSnapshotPair({ before, after });
+    pushHistory({
+      type: SCENE_MODELS_SNAPSHOT_APPLY,
+      payload: { key } satisfies SceneSnapshotPayload,
+    });
+  }, []);
+
   // Helper to generate IDs
   const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
 
@@ -990,16 +1080,23 @@ export function useSceneCollectionManager() {
   const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
     if (updates.length === 0) return;
 
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
     const updateMap = new Map<string, ModelTransform>();
     updates.forEach((entry) => {
       updateMap.set(entry.id, entry.transform);
     });
 
-    setModels((prev) => prev.map((m) => {
+    const nextModels = models.map((m) => {
       const nextTransform = updateMap.get(m.id);
       return nextTransform ? { ...m, transform: nextTransform } : m;
-    }));
-  }, []);
+    });
+
+    setModels(nextModels);
+
+    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    pushSceneSnapshotHistory(before, after);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
@@ -1098,28 +1195,42 @@ export function useSceneCollectionManager() {
     });
   }, [models]);
 
-  const deleteModel = useCallback((id: string) => {
-    setModels(prev => {
-      const model = prev.find(m => m.id === id);
-      if (model) {
-        tryRevokeObjectUrl(model.fileUrl);
-      }
-      const newModels = prev.filter(m => m.id !== id);
-      return newModels;
+  const deleteModels = useCallback((idsInput: string[]) => {
+    const ids = new Set(idsInput);
+    if (ids.size === 0) return;
+
+    const existing = models.filter((m) => ids.has(m.id));
+    if (existing.length === 0) return;
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
+    existing.forEach((model) => {
+      tryRevokeObjectUrl(model.fileUrl);
     });
 
-    if (activeModelId === id) {
-      setActiveModelId(null);
-    }
+    const nextModels = models.filter((m) => !ids.has(m.id));
+    const nextActiveModelId = activeModelId && ids.has(activeModelId) ? null : activeModelId;
+    const nextSelectedModelIds = selectedModelIds.filter((sid) => !ids.has(sid));
 
-    setSelectedModelIds((prev) => prev.filter((sid) => sid !== id));
+    setModels(nextModels);
+    setActiveModelId(nextActiveModelId);
+    setSelectedModelIds(nextSelectedModelIds);
 
-    // Clean up associated supports
+    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds);
+    pushSceneSnapshotHistory(before, after);
+
+    // Clean up associated supports.
     const supportState = getSnapshot();
-    const removedSupports = deleteSupportsForModel(supportState, id);
-    console.log(`[SceneCollection] Deleted model ${id} and ${removedSupports} associated supports.`);
+    let totalRemovedSupports = 0;
+    ids.forEach((id) => {
+      totalRemovedSupports += deleteSupportsForModel(supportState, id);
+    });
+    console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
+  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds, tryRevokeObjectUrl]);
 
-  }, [activeModelId]);
+  const deleteModel = useCallback((id: string) => {
+    deleteModels([id]);
+  }, [deleteModels]);
 
   const copyModel = useCallback((id: string) => {
     const source = models.find((m) => m.id === id);
@@ -1178,6 +1289,8 @@ export function useSceneCollectionManager() {
   const pasteModel = useCallback(() => {
     if (modelClipboard.length === 0) return null;
 
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+
     const first = modelClipboard[0];
 
     const pastedGeometry = cloneGeometryWithBounds(first.geometry, { accelerate: false });
@@ -1199,16 +1312,22 @@ export function useSceneCollectionManager() {
       polygonCount: first.polygonCount,
     };
 
-    setModels((prev) => [...prev, pastedModel]);
+    const nextModels = [...models, pastedModel];
+    setModels(nextModels);
     setActiveModelId(id);
     setSelectedModelIds([id]);
 
+    const after = captureSceneSnapshot(nextModels, id, [id]);
+    pushSceneSnapshotHistory(before, after);
+
     deferAccelerateGeometry([pastedGeometry]);
     return id;
-  }, [cloneGeometryWithBounds, deferAccelerateGeometry, generateId, modelClipboard]);
+  }, [activeModelId, cloneGeometryWithBounds, deferAccelerateGeometry, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
 
     const entries = modelClipboard;
 
@@ -1390,22 +1509,28 @@ export function useSceneCollectionManager() {
       };
     });
 
-    setModels((prev) => [...prev, ...pastedModels]);
+    const nextModels = [...models, ...pastedModels];
+    setModels(nextModels);
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds(createdIds);
+
+      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds);
+      pushSceneSnapshotHistory(before, after);
     }
 
     deferAccelerateGeometry(pastedGeometries);
 
     return createdIds;
-  }, [cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[]) => {
     if (transforms.length === 0) return [] as string[];
 
     const source = models.find((m) => m.id === sourceId);
     if (!source) return [] as string[];
+
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
 
     const resolvedGroupId = source.groupId ?? `group-${generateId()}`;
     const resolvedGroupName = source.groupName ?? source.name;
@@ -1439,29 +1564,32 @@ export function useSceneCollectionManager() {
       };
     });
 
-    setModels((prev) => {
-      const withSourceGroup = prev.map((model) => {
-        if (model.id !== sourceId) return model;
-        if (model.groupId === resolvedGroupId && model.groupName === resolvedGroupName) return model;
-        return {
-          ...model,
-          groupId: resolvedGroupId,
-          groupName: resolvedGroupName,
-        };
-      });
-
-      return [...withSourceGroup, ...newModels];
+    const withSourceGroup = models.map((model) => {
+      if (model.id !== sourceId) return model;
+      if (model.groupId === resolvedGroupId && model.groupName === resolvedGroupName) return model;
+      return {
+        ...model,
+        groupId: resolvedGroupId,
+        groupName: resolvedGroupName,
+      };
     });
+
+    const nextModels = [...withSourceGroup, ...newModels];
+    setModels(nextModels);
 
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds([sourceId, ...createdIds]);
+
+      const nextSelected = [sourceId, ...createdIds];
+      const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected);
+      pushSceneSnapshotHistory(before, after);
     }
 
     deferAccelerateGeometry(duplicatedGeometries);
 
     return createdIds;
-  }, [cloneGeometryWithBounds, deferAccelerateGeometry, generateId, models]);
+  }, [activeModelId, cloneGeometryWithBounds, deferAccelerateGeometry, generateId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
@@ -1794,6 +1922,7 @@ export function useSceneCollectionManager() {
     ungroupGroup,
     renameGroup,
     selectGroup,
+    deleteModels,
     deleteModel,
     copyModel,
     copySelectedModels,
