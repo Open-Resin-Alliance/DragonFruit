@@ -20,6 +20,7 @@ export function ModelStatsCard({
   numLayers,
   heightMm
 }: ModelStatsCardProps) {
+  const [isFlipped, setIsFlipped] = React.useState(false);
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
@@ -28,6 +29,14 @@ export function ModelStatsCard({
     if (!networkConnection?.connected) return null;
     return networkConnection.hostName || networkConnection.ipAddress || null;
   }, [activePrinterProfile]);
+
+  const effectiveMaterialName = React.useMemo(() => {
+    const networkConnection = activePrinterProfile?.networkConnection;
+    if (activePrinterProfile?.networkSupport === 'nanodlp' && networkConnection?.connected) {
+      return networkConnection.selectedMaterialName || networkConnection.selectedMaterialId || '-';
+    }
+    return activeMaterialProfile?.name ?? '-';
+  }, [activeMaterialProfile, activePrinterProfile]);
 
   const formatBytes = (bytes: number) => {
     const abs = Math.max(0, bytes);
@@ -126,81 +135,139 @@ export function ModelStatsCard({
     return `${currency} ${cost.toFixed(2)}`;
   }, [activeMaterialProfile, estimatedResinMl]);
 
+  const frontHeader = connectedHostName || activePrinterProfile?.name || 'No printer connected';
+
+  const handleToggleFlip = React.useCallback(() => {
+    setIsFlipped((prev) => !prev);
+  }, []);
+
+  const handleCardKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setIsFlipped((prev) => !prev);
+    }
+  }, []);
+
+  const stopEvent = (event: React.MouseEvent) => {
+    event.stopPropagation();
+  };
+
   return (
-    <div className="absolute bottom-4 left-2 pointer-events-none select-none w-fit">
+    <div className="absolute bottom-4 left-2 pointer-events-auto select-none w-fit">
       <div
-        className="ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 min-w-[250px]"
-        style={{ background: 'color-mix(in srgb, var(--surface-0), transparent 8%)' }}
+        className="min-w-[290px] [perspective:1200px]"
       >
-        <div className="font-semibold text-[12px] truncate" style={{ color: 'var(--text-strong)' }}>
-          {model ? model.name : 'No model selected'}
-        </div>
-
-        <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          {connectedHostName && (
-            <>
-              <span>Connected host:</span>
-              <span style={{ color: '#86efac' }}>{connectedHostName}</span>
-            </>
-          )}
-
-          <span>Printer:</span>
-          <button
-            type="button"
-            onClick={() => openProfileSettingsModal('printer')}
-            className="pointer-events-auto text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
-            style={{ color: 'var(--text-strong)' }}
-            title="Open printer profiles"
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Flip model stats card"
+          onClick={handleToggleFlip}
+          onKeyDown={handleCardKeyDown}
+          className="grid transition-transform duration-500 ease-out [transform-style:preserve-3d] focus:outline-none"
+          style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
+        >
+          <div
+            className="[grid-area:1/1] ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
+              backfaceVisibility: 'hidden',
+            }}
           >
-            {activePrinterProfile?.name ?? '-'}
-          </button>
+            <div className="font-semibold text-[12px] truncate" style={{ color: connectedHostName ? '#86efac' : 'var(--text-strong)' }}>
+              {frontHeader}
+            </div>
 
-          <span>Material:</span>
-          <button
-            type="button"
-            onClick={() => openProfileSettingsModal('material')}
-            className="pointer-events-auto text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
-            style={{ color: 'var(--text-strong)' }}
-            title="Open material profiles"
+            <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <span>Printer:</span>
+              <button
+                type="button"
+                onMouseDown={stopEvent}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openProfileSettingsModal('printer');
+                }}
+                className="text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
+                style={{ color: 'var(--text-strong)' }}
+                title="Open printer profiles"
+              >
+                {activePrinterProfile?.name ?? '-'}
+              </button>
+
+              <span>Material:</span>
+              <button
+                type="button"
+                onMouseDown={stopEvent}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openProfileSettingsModal('material');
+                }}
+                className="text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
+                style={{ color: 'var(--text-strong)' }}
+                title="Open material profiles"
+              >
+                {effectiveMaterialName}
+              </button>
+
+              <span>Layer profile:</span>
+              <span style={{ color: 'var(--text-strong)' }}>
+                {activeMaterialProfile ? `${Math.round(activeMaterialProfile.layerHeightMm * 1000)}μm` : '-'}
+              </span>
+
+              <span>Exposure:</span>
+              <span style={{ color: 'var(--text-strong)' }}>
+                {activeMaterialProfile
+                  ? `${activeMaterialProfile.normalExposureSec.toFixed(1)}s • ${activeMaterialProfile.bottomExposureSec.toFixed(1)}s`
+                  : '-'}
+              </span>
+
+              <span>Layers:</span>
+              <span style={{ color: 'var(--text-strong)' }}>{model ? numLayers : '-'}</span>
+
+              <span>Est. print time:</span>
+              <span style={{ color: 'var(--text-strong)' }}>
+                {estimatedExposureOnlySeconds != null ? formatDuration(estimatedExposureOnlySeconds) : '-'}
+              </span>
+
+              <span>Est. resin:</span>
+              <span style={{ color: 'var(--text-strong)' }}>
+                {estimatedResinMl != null
+                  ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
+                  : '-'}
+              </span>
+            </div>
+
+            <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
+              Click card to view model details
+            </div>
+          </div>
+
+          <div
+            className="[grid-area:1/1] ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
+              backfaceVisibility: 'hidden',
+              transform: 'rotateY(180deg)',
+            }}
           >
-            {activeMaterialProfile?.name ?? '-'}
-          </button>
+            <div className="font-semibold text-[12px] truncate" style={{ color: 'var(--text-strong)' }}>
+              {model ? model.name : 'No model selected'}
+            </div>
 
-          <span>Layer profile:</span>
-          <span style={{ color: 'var(--text-strong)' }}>
-            {activeMaterialProfile ? `${Math.round(activeMaterialProfile.layerHeightMm * 1000)}μm` : '-'}
-          </span>
+            <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <span>STL size:</span>
+              <span style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
-          <span>Exposure:</span>
-          <span style={{ color: 'var(--text-strong)' }}>
-            {activeMaterialProfile
-              ? `${activeMaterialProfile.normalExposureSec.toFixed(1)}s • ${activeMaterialProfile.bottomExposureSec.toFixed(1)}s`
-              : '-'}
-          </span>
+              <span>Polygons:</span>
+              <span style={{ color: 'var(--text-strong)' }}>{model ? model.polygonCount.toLocaleString() : '-'}</span>
 
-          <span>STL Size:</span>
-          <span style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
+              <span>Height:</span>
+              <span style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
+            </div>
 
-          <span>Polygons:</span>
-          <span style={{ color: 'var(--text-strong)' }}>{model ? model.polygonCount.toLocaleString() : '-'}</span>
-
-          <span>Height:</span>
-          <span style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
-
-          <span>Layers:</span>
-          <span style={{ color: 'var(--text-strong)' }}>{model ? numLayers : '-'}</span>
-
-          <span>Est. print time:</span>
-          <span style={{ color: 'var(--text-strong)' }}>
-            {estimatedExposureOnlySeconds != null ? formatDuration(estimatedExposureOnlySeconds) : '-'}
-          </span>
-
-          <span>Est. resin:</span>
-          <span style={{ color: 'var(--text-strong)' }}>
-            {estimatedResinMl != null
-              ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
-              : '-'}
-          </span>
+            <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
+              Click card to return to print settings
+            </div>
+          </div>
         </div>
       </div>
     </div>
