@@ -127,7 +127,6 @@ export function ModelStatsCard({
   const selectedModelSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const inBoundsModelSet = React.useMemo(() => new Set(inBoundsModelIds), [inBoundsModelIds]);
 
-  // Compute per-model layer counts
   const getModelLayerCount = React.useCallback((entry: LoadedModel): number | null => {
     // Use model height and effective layer height
     const bbox = entry.geometry.bbox;
