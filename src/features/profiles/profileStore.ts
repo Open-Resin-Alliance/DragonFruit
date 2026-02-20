@@ -17,6 +17,8 @@ export type PrinterNetworkConnectionState = {
   port: number;
   lastCheckedAt: string;
   statusText?: string;
+  selectedMaterialId?: string;
+  selectedMaterialName?: string;
 };
 
 export type PrinterPreset = {
@@ -121,6 +123,8 @@ function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddr
     port: 80,
     lastCheckedAt: '',
     statusText: '',
+    selectedMaterialId: '',
+    selectedMaterialName: '',
   };
 }
 
@@ -141,6 +145,8 @@ function sanitizePrinterNetworkConnectionState(
     port: Number.isFinite(Number(source.port)) ? Math.max(1, Number(source.port)) : 80,
     lastCheckedAt: typeof source.lastCheckedAt === 'string' ? source.lastCheckedAt : '',
     statusText: typeof source.statusText === 'string' ? source.statusText : '',
+    selectedMaterialId: typeof source.selectedMaterialId === 'string' ? source.selectedMaterialId.trim() : '',
+    selectedMaterialName: typeof source.selectedMaterialName === 'string' ? source.selectedMaterialName.trim() : '',
   };
 }
 
@@ -803,6 +809,8 @@ export function updatePrinterNetworkConnectionStatus(
       && next.port === base.port
       && next.lastCheckedAt === base.lastCheckedAt
       && next.statusText === base.statusText
+      && next.selectedMaterialId === base.selectedMaterialId
+      && next.selectedMaterialName === base.selectedMaterialName
     ) {
       return profile;
     }

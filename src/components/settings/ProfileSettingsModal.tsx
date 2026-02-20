@@ -36,6 +36,84 @@ type DeleteConfirmTarget =
 
 type MaterialDraft = Omit<MaterialProfile, 'id' | 'printerProfileId'>;
 
+type NanoDlpMaterial = {
+  id: string;
+  name: string;
+  locked: boolean;
+  meta: Record<string, unknown>;
+};
+
+type NanoDlpDetailRow = {
+  label: string;
+  value: string;
+};
+
+function toDisplayValue(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : null;
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return null;
+}
+
+function firstMetaValue(meta: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    if (!(key in meta)) continue;
+    const display = toDisplayValue(meta[key]);
+    if (display) return display;
+  }
+  return null;
+}
+
+function formatNanoDlpMetaLabel(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_\-]+/g, ' ')
+    .trim();
+}
+
+function buildNanoDlpDetailRows(material: NanoDlpMaterial): NanoDlpDetailRow[] {
+  const meta = material.meta ?? {};
+  const rows: NanoDlpDetailRow[] = [];
+
+  const add = (label: string, keys: string[]) => {
+    const value = firstMetaValue(meta, keys);
+    if (value) rows.push({ label, value });
+  };
+
+  add('Profile ID', ['ProfileID', 'ProfileId', 'profileId', 'id', 'ID']);
+  add('Path', ['Path', 'path', 'File', 'file']);
+  add('Normal Exposure', ['Exposure', 'exposure', 'NormalExposure', 'normalExposure', 'ExpTime']);
+  add('Bottom Exposure', ['BottomExposure', 'bottomExposure', 'BottomExp', 'bottomExp']);
+  add('Layer Height', ['LayerHeight', 'layerHeight', 'SliceHeight', 'sliceHeight']);
+  add('Bottom Layers', ['BottomLayers', 'bottomLayers', 'BottomLayerCount', 'bottomLayerCount']);
+  add('Lift Distance', ['LiftDistance', 'liftDistance']);
+  add('Lift Speed', ['LiftSpeed', 'liftSpeed']);
+  add('Retract Speed', ['RetractSpeed', 'retractSpeed']);
+  add('Brand', ['Brand', 'brand']);
+  add('Resin Type', ['ResinType', 'resinType', 'Type', 'type']);
+
+  const usedValues = new Set(rows.map((row) => `${row.label}:${row.value}`));
+  for (const [key, raw] of Object.entries(meta)) {
+    if (rows.length >= 16) break;
+    const value = toDisplayValue(raw);
+    if (!value) continue;
+    const marker = `${key}:${value}`;
+    if (usedValues.has(marker)) continue;
+    usedValues.add(marker);
+    rows.push({ label: key, value });
+  }
+
+  if (!rows.some((row) => row.label === 'Profile ID')) {
+    rows.unshift({ label: 'Profile ID', value: material.id });
+  }
+
+  return rows;
+}
+
 const OUTPUT_FORMAT_OPTIONS: Array<{ value: PrinterOutputFormat; label: string }> = [
   { value: '.nanodlp', label: '.nanodlp' },
   { value: '.goo', label: '.goo' },
@@ -82,6 +160,11 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
   const [showManualNetworkEntry, setShowManualNetworkEntry] = React.useState(false);
   const [hasAutoScannedOnOpen, setHasAutoScannedOnOpen] = React.useState(false);
   const [discoveredPrinters, setDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
+  const [nanodlpMaterials, setNanodlpMaterials] = React.useState<NanoDlpMaterial[]>([]);
+  const [isLoadingNanodlpMaterials, setIsLoadingNanodlpMaterials] = React.useState(false);
+  const [nanodlpMaterialsError, setNanodlpMaterialsError] = React.useState<string | null>(null);
+  const [selectedNanodlpMaterialId, setSelectedNanodlpMaterialId] = React.useState<string>('');
+  const [isNanodlpDetailsDialogOpen, setIsNanodlpDetailsDialogOpen] = React.useState(false);
   const [deleteConfirmTarget, setDeleteConfirmTarget] = React.useState<DeleteConfirmTarget | null>(null);
   const [editMaterialDraft, setEditMaterialDraft] = React.useState<MaterialDraft>({
     name: 'Standard 405nm',
@@ -205,6 +288,54 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
 
   const selectedPrinterSupportsNetworkSettings = Boolean(selectedPrinter?.networkSupport);
   const selectedNetworkModeLabel = selectedPrinter?.networkSupport === 'nanodlp' ? 'NanoDLP' : 'Unknown';
+  const shouldUseNanodlpOnDeviceMaterials = Boolean(
+    selectedPrinter?.networkSupport === 'nanodlp'
+    && selectedPrinter.networkConnection?.connected
+    && (selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress),
+  );
+
+  const selectedNanodlpMaterial = React.useMemo(() => {
+    if (!selectedNanodlpMaterialId) return null;
+    return nanodlpMaterials.find((material) => material.id === selectedNanodlpMaterialId) ?? null;
+  }, [nanodlpMaterials, selectedNanodlpMaterialId]);
+
+  const selectedNanodlpMaterialIdRef = React.useRef('');
+
+  React.useEffect(() => {
+    selectedNanodlpMaterialIdRef.current = selectedNanodlpMaterialId;
+  }, [selectedNanodlpMaterialId]);
+
+  const selectedPrinterResolvedId = selectedPrinter?.id ?? '';
+  const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
+  const selectedNanodlpHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
+
+  const selectedNanodlpMaterialDetails = React.useMemo(() => {
+    if (!selectedNanodlpMaterial) return [];
+    return buildNanoDlpDetailRows(selectedNanodlpMaterial);
+  }, [selectedNanodlpMaterial]);
+
+  const { compactNanodlpDetailRows, expandedNanodlpDetailRows } = React.useMemo(() => {
+    const expanded: NanoDlpDetailRow[] = [];
+    const compact: NanoDlpDetailRow[] = [];
+
+    for (const row of selectedNanodlpMaterialDetails) {
+      const key = row.label.toLowerCase();
+      const isNarrativeField = key.includes('desc')
+        || key.includes('description')
+        || key.includes('title')
+        || key.includes('note')
+        || key.includes('comment');
+      const isLongValue = row.value.length > 96;
+
+      if (isNarrativeField || isLongValue) {
+        expanded.push(row);
+      } else {
+        compact.push(row);
+      }
+    }
+
+    return { compactNanodlpDetailRows: compact, expandedNanodlpDetailRows: expanded };
+  }, [selectedNanodlpMaterialDetails]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -321,6 +452,86 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
       setIsNetworkSettingsOpen(false);
     }
   }, [selectedPrinterSupportsNetworkSettings]);
+
+  const loadNanodlpMaterials = React.useCallback(async () => {
+    if (!selectedPrinterResolvedId) return;
+    if (selectedPrinterNetworkSupportMode !== 'nanodlp') return;
+
+    const host = selectedNanodlpHost;
+    if (!host) {
+      setNanodlpMaterials([]);
+      setNanodlpMaterialsError('Connect to a NanoDLP printer to load on-device materials.');
+      return;
+    }
+
+    setIsLoadingNanodlpMaterials(true);
+    setNanodlpMaterialsError(null);
+
+    try {
+      const response = await fetch('/api/network/nanodlp/materials', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ host }),
+      });
+
+      const payload = await response.json().catch(() => null) as any;
+      const materials = Array.isArray(payload?.materials)
+        ? payload.materials.filter((item: any) => typeof item?.id === 'string' && typeof item?.name === 'string')
+        : [];
+
+      setNanodlpMaterials(materials);
+
+      const preferredId = selectedNanodlpMaterialIdRef.current;
+      const nextSelected = materials.find((item: any) => item.id === preferredId)
+        ?? materials.find((item: any) => item.locked !== true)
+        ?? materials[0]
+        ?? null;
+
+      if (nextSelected) {
+        setSelectedNanodlpMaterialId(nextSelected.id);
+        updatePrinterNetworkConnectionStatus(selectedPrinterResolvedId, {
+          selectedMaterialId: nextSelected.id,
+          selectedMaterialName: nextSelected.name,
+        });
+      } else {
+        setSelectedNanodlpMaterialId('');
+      }
+
+      const errorMessage = typeof payload?.error === 'string' ? payload.error : '';
+      if (errorMessage) {
+        setNanodlpMaterialsError(errorMessage);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load NanoDLP materials.';
+      setNanodlpMaterials([]);
+      setNanodlpMaterialsError(message);
+    } finally {
+      setIsLoadingNanodlpMaterials(false);
+    }
+  }, [selectedNanodlpHost, selectedPrinterNetworkSupportMode, selectedPrinterResolvedId]);
+
+  React.useEffect(() => {
+    if (!shouldUseNanodlpOnDeviceMaterials || !selectedPrinterResolvedId) {
+      setNanodlpMaterials([]);
+      setSelectedNanodlpMaterialId('');
+      setIsNanodlpDetailsDialogOpen(false);
+      setNanodlpMaterialsError(null);
+      return;
+    }
+
+    void loadNanodlpMaterials();
+  }, [loadNanodlpMaterials, selectedPrinterResolvedId, shouldUseNanodlpOnDeviceMaterials]);
+
+  const handleSelectNanodlpMaterial = React.useCallback((material: NanoDlpMaterial) => {
+    if (!selectedPrinter) return;
+    setSelectedNanodlpMaterialId(material.id);
+    updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
+      selectedMaterialId: material.id,
+      selectedMaterialName: material.name,
+    });
+  }, [selectedPrinter]);
 
   React.useEffect(() => {
     if (isNetworkSettingsOpen) {
@@ -1093,11 +1304,110 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                 Material Settings
               </h3>
               <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.
+                {shouldUseNanodlpOnDeviceMaterials
+                  ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
+                  : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
               </p>
             </div>
 
             <div className="p-3 flex flex-col gap-3 flex-1 min-h-0">
+              {shouldUseNanodlpOnDeviceMaterials ? (
+                <>
+                  <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-[420px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                    <div className="px-3 py-2 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                        NanoDLP On-Device Materials
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { void loadNanodlpMaterials(); }}
+                        disabled={isLoadingNanodlpMaterials}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        {isLoadingNanodlpMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                        {isLoadingNanodlpMaterials ? 'Loading…' : 'Refresh'}
+                      </button>
+                    </div>
+
+                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
+                      {isLoadingNanodlpMaterials ? (
+                        <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                          Loading materials from printer…
+                        </div>
+                      ) : nanodlpMaterials.length === 0 ? (
+                        <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                          {nanodlpMaterialsError || 'No on-device materials were returned by this NanoDLP host.'}
+                        </div>
+                      ) : (
+                        nanodlpMaterials.map((material) => {
+                          const active = selectedNanodlpMaterialId === material.id;
+                          return (
+                            <button
+                              key={material.id}
+                              type="button"
+                              onClick={() => handleSelectNanodlpMaterial(material)}
+                              className="w-full rounded-md border px-2.5 py-2 text-left"
+                              style={active
+                                ? {
+                                    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                                    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 89%)',
+                                    color: 'var(--text-strong)',
+                                  }
+                                : {
+                                    borderColor: 'var(--border-subtle)',
+                                    background: 'var(--surface-1)',
+                                    color: 'var(--text-muted)',
+                                  }}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="truncate text-sm font-semibold">{material.name}</span>
+                                <span className="text-[10px]" style={{ color: material.locked ? '#fbbf24' : 'var(--text-muted)' }}>
+                                  {material.locked ? 'Locked' : 'On device'}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border p-3 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                    {selectedNanodlpMaterial ? (
+                      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{selectedNanodlpMaterial.name}</span>
+                          <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}>
+                            Profile ID: {selectedNanodlpMaterial.id}
+                          </span>
+                          {selectedNanodlpMaterial.locked && (
+                            <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)', color: '#fbbf24', background: 'var(--surface-2)' }}>
+                              Locked on printer
+                            </span>
+                          )}
+                          <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
+                            Read-only (from NanoDLP)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsNanodlpDetailsDialogOpen(true)}
+                            className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
+                            style={{ color: 'var(--text-strong)' }}
+                          >
+                            View details
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                        Select a printer material profile to view details.
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
               <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-[420px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                 <div className="px-3 py-2 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -1267,6 +1577,8 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                   </div>
                 )}
               </div>
+                </>
+              )}
             </div>
           </section>
           )}
@@ -1693,6 +2005,106 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                 >
                   <Check className="w-3.5 h-3.5" />
                   Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isNanodlpDetailsDialogOpen && selectedNanodlpMaterial && (
+          <div className="fixed inset-0 z-[72] flex items-center justify-center bg-black/55 p-4" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsNanodlpDetailsDialogOpen(false);
+          }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>NanoDLP Resin Profile (Read-only)</h3>
+                  <p className="ui-meta">{selectedNanodlpMaterial.name}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsNanodlpDetailsDialogOpen(false)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Close NanoDLP material details"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3 space-y-3">
+                <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}>
+                      Profile ID: {selectedNanodlpMaterial.id}
+                    </span>
+                    {selectedNanodlpMaterial.locked && (
+                      <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)', color: '#fbbf24', background: 'var(--surface-2)' }}>
+                        Locked on printer
+                      </span>
+                    )}
+                    <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
+                      Source: NanoDLP device
+                    </span>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  {selectedNanodlpMaterialDetails.length > 0 ? (
+                    <div className="space-y-3">
+                      {compactNanodlpDetailRows.length > 0 && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                          {compactNanodlpDetailRows.map((row) => (
+                            <div
+                              key={`${row.label}:${row.value}`}
+                              className="rounded-md border px-2.5 py-2"
+                              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                            >
+                              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                {formatNanoDlpMetaLabel(row.label)}
+                              </div>
+                              <div className="mt-1 text-[12px] font-semibold break-all" style={{ color: 'var(--text-strong)' }}>
+                                {row.value}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {expandedNanodlpDetailRows.length > 0 && (
+                        <div className="space-y-2">
+                          {expandedNanodlpDetailRows.map((row) => (
+                            <div
+                              key={`${row.label}:${row.value}`}
+                              className="rounded-md border px-2.5 py-2"
+                              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
+                            >
+                              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                                {formatNanoDlpMetaLabel(row.label)}
+                              </div>
+                              <div className="mt-1 text-[12px] leading-relaxed whitespace-pre-wrap break-words" style={{ color: 'var(--text-strong)' }}>
+                                {row.value}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      No additional material details were provided by this NanoDLP profile.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsNanodlpDetailsDialogOpen(false)}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+                >
+                  Close
                 </button>
               </div>
             </div>
