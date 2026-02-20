@@ -3,15 +3,24 @@
 import React, { useState } from 'react';
 import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
 import { SettingsModal } from '@/components/settings/SettingsModal';
+import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
+import { Box, FlaskConical } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
   getSavedThemePreference,
 } from '@/components/settings/themeCustomizations';
+import {
+  getActiveMaterialProfile,
+  getActivePrinterProfile,
+  getProfileStoreSnapshot,
+  hydrateProfilesFromStorage,
+  subscribeToProfileStore,
+} from '@/features/profiles/profileStore';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 interface TopBarProps {
@@ -87,6 +96,8 @@ export function TopBar({
   onViewTypeOverrideChange,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [windowMetrics, setWindowMetrics] = useState(() => ({
     innerWidth: 0,
     innerHeight: 0,
@@ -107,6 +118,14 @@ export function TopBar({
 
     applyThemeCustomColors(getSavedThemeCustomColors());
   }, []);
+
+  React.useEffect(() => {
+    hydrateProfilesFromStorage();
+  }, []);
+
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreSnapshot);
+  const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -161,12 +180,38 @@ export function TopBar({
 
   return (
     <div className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative">
-      <div className="flex w-[220px] items-center pl-3 pr-6 py-1.5">
+      <div className="flex w-[620px] items-center gap-2.5 pl-3 pr-4 py-1.5">
         <img
           src="/textonlyupdate.png"
           alt="Dragonfruit Slicer"
           className="h-8 w-auto object-contain translate-y-px"
         />
+
+        <Button
+          onClick={() => {
+            setProfileModalTab('printer');
+            setIsProfileModalOpen(true);
+          }}
+          variant="secondary"
+          className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center justify-start gap-1.5 w-[210px]"
+          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Add your first printer profile'}
+        >
+          <Box className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{activePrinterProfile?.name ?? 'Add Printer'}</span>
+        </Button>
+
+        <Button
+          onClick={() => {
+            setProfileModalTab('material');
+            setIsProfileModalOpen(true);
+          }}
+          variant="secondary"
+          className="!h-8 !px-2.5 !py-0 text-[11px] inline-flex items-center justify-start gap-1.5 w-[210px]"
+          title={activeMaterialProfile ? `Material profile: ${activeMaterialProfile.name}` : 'Add a printer to create material profiles'}
+        >
+          <FlaskConical className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">{activeMaterialProfile?.name ?? 'No Material Yet'}</span>
+        </Button>
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 flex justify-center px-2">
@@ -307,6 +352,12 @@ export function TopBar({
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
         onView3dSettingsChange={onView3dSettingsChange}
+      />
+
+      <ProfileSettingsModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        initialTab={profileModalTab}
       />
     </div>
   );
