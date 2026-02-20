@@ -149,7 +149,7 @@ export function looksLikeNanoDlpStatus(status: NanoDlpStatusPayload): boolean {
  * parsing, which reduces noisy error handling during network scans.
  */
 export function looksLikeNanoDlpStatusText(content: string): boolean {
-  if (!content || !content.trimLeft().startsWith('{')) return false;
+  if (!content || !content.trimStart().startsWith('{')) return false;
 
   const knownFields = [
     '"Printing"',

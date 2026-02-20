@@ -124,15 +124,10 @@ export function ModelStatsCard({
   };
 
 
-  // Move these above selectedLayerCounts to avoid use-before-declaration
-
-  // Must be declared before any hook that uses them
-
-  // Must be declared before any hook or logic that uses them
+  // Sets of model IDs used by memoized selectors; must be declared before hooks that use them
   const selectedModelSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const inBoundsModelSet = React.useMemo(() => new Set(inBoundsModelIds), [inBoundsModelIds]);
 
-  // Compute per-model layer counts
   const getModelLayerCount = React.useCallback((entry: LoadedModel): number | null => {
     // Use model height and effective layer height
     const bbox = entry.geometry.bbox;
