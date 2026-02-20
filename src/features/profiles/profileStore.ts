@@ -292,6 +292,7 @@ function createDefaultState(): ProfileStoreState {
 }
 
 let state: ProfileStoreState = createDefaultState();
+let serverSnapshot: ProfileStoreState | null = null;
 let isHydrated = false;
 
 type Listener = () => void;
@@ -518,7 +519,10 @@ export function getProfileStoreSnapshot(): ProfileStoreState {
 }
 
 export function getProfileStoreServerSnapshot(): ProfileStoreState {
-  return createDefaultState();
+  if (!serverSnapshot) {
+    serverSnapshot = createDefaultState();
+  }
+  return serverSnapshot;
 }
 
 function setState(next: ProfileStoreState): void {
