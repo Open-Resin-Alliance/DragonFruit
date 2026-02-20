@@ -112,7 +112,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
   id: 'athena-builtin',
   name: 'Athena Plugin',
   version: '1.1.0',
-  description: 'Built-in Athena/NanoDLP integration and Concepts3D profile pack.',
+  description: 'Athena/NanoDLP integration and Concepts3D profile pack.',
   printerPresets: withResolvedImagePaths('plugins/athena/printers/concepts3d', concepts3dPrinters).map((preset) => ({
     presetId: String((preset as any).presetId),
     manufacturer: String((preset as any).manufacturer),
