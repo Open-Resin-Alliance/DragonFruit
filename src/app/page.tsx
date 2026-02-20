@@ -489,6 +489,14 @@ export default function Home() {
       .map((model) => model.id);
   }, [buildVolumeBounds, computeModelWorldBounds, scene.models]);
 
+  const inBoundsModelIds = React.useMemo(() => {
+    const outsideSet = new Set(outsidePlateModelIds);
+    return scene.models
+      .filter((model) => model.visible)
+      .filter((model) => !outsideSet.has(model.id))
+      .map((model) => model.id);
+  }, [outsidePlateModelIds, scene.models]);
+
   const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
     const size = model.geometry.size;
     return {
@@ -2310,6 +2318,9 @@ export default function Home() {
           {/* Model Info Overlay Card */}
           <ModelStatsCard
             model={scene.models.find(m => m.id === displayActiveModelId) || null}
+            models={scene.models}
+            selectedModelIds={scene.selectedModelIds}
+            inBoundsModelIds={inBoundsModelIds}
             numLayers={slicing.numLayers}
             heightMm={slicing.heightMm}
           />

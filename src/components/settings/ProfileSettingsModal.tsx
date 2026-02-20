@@ -75,6 +75,93 @@ function formatNanoDlpMetaLabel(key: string): string {
     .trim();
 }
 
+function firstMetaNumericValue(meta: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    if (!(key in meta)) continue;
+    const value = Number(meta[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function resolveNanodlpMaterialProcessValues(material: NanoDlpMaterial): {
+  layerHeightMm?: number;
+  normalExposureSec?: number;
+  bottomExposureSec?: number;
+  bottomLayerCount?: number;
+} {
+  const meta = material.meta ?? {};
+
+  const rawLayerHeight = firstMetaNumericValue(meta, [
+    'LayerHeight',
+    'layerHeight',
+    'SliceHeight',
+    'sliceHeight',
+    'Depth',
+    'depth',
+  ]);
+
+  const layerHeightMm = rawLayerHeight == null
+    ? undefined
+    : (rawLayerHeight > 1 ? rawLayerHeight / 1000 : rawLayerHeight);
+
+  const normalExposureSec = firstMetaNumericValue(meta, [
+    'CureTime',
+    'cureTime',
+    'Exposure',
+    'exposure',
+    'NormalExposure',
+    'normalExposure',
+    'ExpTime',
+  ]);
+
+  const bottomExposureSec = firstMetaNumericValue(meta, [
+    'SupportCureTime',
+    'supportCureTime',
+    'BottomCureTime',
+    'bottomCureTime',
+    'BottomExposure',
+    'bottomExposure',
+    'BottomExp',
+    'bottomExp',
+  ]);
+
+  const bottomLayerCount = firstMetaNumericValue(meta, [
+    'SupportLayerNumber',
+    'supportLayerNumber',
+    'BottomLayerCount',
+    'bottomLayerCount',
+    'BottomLayers',
+    'bottomLayers',
+  ]);
+
+  return {
+    layerHeightMm: layerHeightMm != null && layerHeightMm > 0 ? layerHeightMm : undefined,
+    normalExposureSec: normalExposureSec != null && normalExposureSec > 0 ? normalExposureSec : undefined,
+    bottomExposureSec: bottomExposureSec != null && bottomExposureSec > 0 ? bottomExposureSec : undefined,
+    bottomLayerCount: bottomLayerCount != null && bottomLayerCount > 0 ? bottomLayerCount : undefined,
+  };
+}
+
+function buildNanoDlpMaterialSubtitle(material: NanoDlpMaterial): string | null {
+  const processValues = resolveNanodlpMaterialProcessValues(material);
+  const parts: string[] = [];
+
+  if (processValues.bottomLayerCount != null) {
+    parts.push(`Burn-In: ${processValues.bottomLayerCount}L`);
+  }
+
+  if (processValues.bottomExposureSec != null) {
+    parts.push(`${processValues.bottomExposureSec.toFixed(1)}s`);
+  }
+
+  if (processValues.normalExposureSec != null) {
+    parts.push(`Cure: ${processValues.normalExposureSec.toFixed(1)}s`);
+  }
+
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
 function buildNanoDlpDetailRows(material: NanoDlpMaterial): NanoDlpDetailRow[] {
   const meta = material.meta ?? {};
   const rows: NanoDlpDetailRow[] = [];
@@ -490,10 +577,15 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
         ?? null;
 
       if (nextSelected) {
+        const processValues = resolveNanodlpMaterialProcessValues(nextSelected as NanoDlpMaterial);
         setSelectedNanodlpMaterialId(nextSelected.id);
         updatePrinterNetworkConnectionStatus(selectedPrinterResolvedId, {
           selectedMaterialId: nextSelected.id,
           selectedMaterialName: nextSelected.name,
+          selectedMaterialLayerHeightMm: processValues.layerHeightMm,
+          selectedMaterialNormalExposureSec: processValues.normalExposureSec,
+          selectedMaterialBottomExposureSec: processValues.bottomExposureSec,
+          selectedMaterialBottomLayerCount: processValues.bottomLayerCount,
         });
       } else {
         setSelectedNanodlpMaterialId('');
@@ -526,10 +618,15 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
 
   const handleSelectNanodlpMaterial = React.useCallback((material: NanoDlpMaterial) => {
     if (!selectedPrinter) return;
+    const processValues = resolveNanodlpMaterialProcessValues(material);
     setSelectedNanodlpMaterialId(material.id);
     updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
       selectedMaterialId: material.id,
       selectedMaterialName: material.name,
+      selectedMaterialLayerHeightMm: processValues.layerHeightMm,
+      selectedMaterialNormalExposureSec: processValues.normalExposureSec,
+      selectedMaterialBottomExposureSec: processValues.bottomExposureSec,
+      selectedMaterialBottomLayerCount: processValues.bottomLayerCount,
     });
   }, [selectedPrinter]);
 
@@ -1342,6 +1439,7 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                       ) : (
                         nanodlpMaterials.map((material) => {
                           const active = selectedNanodlpMaterialId === material.id;
+                          const subtitle = buildNanoDlpMaterialSubtitle(material);
                           return (
                             <button
                               key={material.id}
@@ -1361,7 +1459,12 @@ export function ProfileSettingsModal({ isOpen, onClose }: ProfileSettingsModalPr
                                   }}
                             >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="truncate text-sm font-semibold">{material.name}</span>
+                                <div className="flex-1">
+                                  <span className="truncate text-sm font-semibold block">{material.name}</span>
+                                  {subtitle && (
+                                    <span className="truncate text-[11px] opacity-75 block mt-0.5">{subtitle}</span>
+                                  )}
+                                </div>
                                 <span className="text-[10px]" style={{ color: material.locked ? '#fbbf24' : 'var(--text-muted)' }}>
                                   {material.locked ? 'Locked' : 'On device'}
                                 </span>

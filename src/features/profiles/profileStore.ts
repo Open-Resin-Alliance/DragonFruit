@@ -19,6 +19,10 @@ export type PrinterNetworkConnectionState = {
   statusText?: string;
   selectedMaterialId?: string;
   selectedMaterialName?: string;
+  selectedMaterialLayerHeightMm?: number;
+  selectedMaterialNormalExposureSec?: number;
+  selectedMaterialBottomExposureSec?: number;
+  selectedMaterialBottomLayerCount?: number;
 };
 
 export type PrinterPreset = {
@@ -125,6 +129,10 @@ function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddr
     statusText: '',
     selectedMaterialId: '',
     selectedMaterialName: '',
+    selectedMaterialLayerHeightMm: undefined,
+    selectedMaterialNormalExposureSec: undefined,
+    selectedMaterialBottomExposureSec: undefined,
+    selectedMaterialBottomLayerCount: undefined,
   };
 }
 
@@ -147,6 +155,18 @@ function sanitizePrinterNetworkConnectionState(
     statusText: typeof source.statusText === 'string' ? source.statusText : '',
     selectedMaterialId: typeof source.selectedMaterialId === 'string' ? source.selectedMaterialId.trim() : '',
     selectedMaterialName: typeof source.selectedMaterialName === 'string' ? source.selectedMaterialName.trim() : '',
+    selectedMaterialLayerHeightMm: Number.isFinite(Number(source.selectedMaterialLayerHeightMm))
+      ? Number(source.selectedMaterialLayerHeightMm)
+      : undefined,
+    selectedMaterialNormalExposureSec: Number.isFinite(Number(source.selectedMaterialNormalExposureSec))
+      ? Number(source.selectedMaterialNormalExposureSec)
+      : undefined,
+    selectedMaterialBottomExposureSec: Number.isFinite(Number(source.selectedMaterialBottomExposureSec))
+      ? Number(source.selectedMaterialBottomExposureSec)
+      : undefined,
+    selectedMaterialBottomLayerCount: Number.isFinite(Number(source.selectedMaterialBottomLayerCount))
+      ? Number(source.selectedMaterialBottomLayerCount)
+      : undefined,
   };
 }
 
@@ -811,6 +831,9 @@ export function updatePrinterNetworkConnectionStatus(
       && next.statusText === base.statusText
       && next.selectedMaterialId === base.selectedMaterialId
       && next.selectedMaterialName === base.selectedMaterialName
+      && next.selectedMaterialLayerHeightMm === base.selectedMaterialLayerHeightMm
+      && next.selectedMaterialNormalExposureSec === base.selectedMaterialNormalExposureSec
+      && next.selectedMaterialBottomExposureSec === base.selectedMaterialBottomExposureSec
     ) {
       return profile;
     }
