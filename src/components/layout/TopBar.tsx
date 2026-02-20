@@ -208,7 +208,7 @@ export function TopBar({
 
   return (
     <div className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative">
-      <div className="flex w-[280px] items-center gap-2.5 pl-3 pr-4 py-1.5">
+      <div className="flex w-[280px] items-center gap-2.5 pl-2 pr-4 py-1.5">
         <img
           src="/textonlyupdate.png"
           alt="Dragonfruit Slicer"
