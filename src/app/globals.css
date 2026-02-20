@@ -17,9 +17,11 @@
   --indicator: #c3c7cf;
 
   --accent: #ec2a77;
+  --primary-button-surface: #c11f61;
   --accent-hover: #d81d67;
   --accent-contrast: #fff6ff;
   --accent-secondary: #baf72e;
+  --secondary-button-surface: #9bcc26;
   --accent-secondary-hover: #a6df29;
   --accent-secondary-contrast: #182106;
   --topbar-accent: #ec2a77;
@@ -93,9 +95,11 @@
   --text-muted: #5d6b7d;
 
   --accent: #2f6fe8;
+  --primary-button-surface: #2458bc;
   --accent-hover: #275fca;
   --accent-contrast: #f6f9ff;
   --accent-secondary: #baf72e;
+  --secondary-button-surface: #95c425;
   --accent-secondary-hover: #a6df29;
   --accent-secondary-contrast: #182106;
   --topbar-accent: #2f6fe8;
@@ -124,9 +128,11 @@
     --text-muted: #5d6b7d;
 
     --accent: #2f6fe8;
+    --primary-button-surface: #2458bc;
     --accent-hover: #275fca;
     --accent-contrast: #f6f9ff;
     --accent-secondary: #baf72e;
+    --secondary-button-surface: #95c425;
     --accent-secondary-hover: #a6df29;
     --accent-secondary-contrast: #182106;
     --topbar-accent: #2f6fe8;
@@ -227,13 +233,13 @@ body {
 }
 
 .ui-button-primary {
-  background: var(--accent);
+  background: var(--primary-button-surface);
   color: var(--accent-contrast);
-  border-color: color-mix(in srgb, var(--accent), white 14%);
+  border-color: color-mix(in srgb, var(--primary-button-surface), white 14%);
 }
 
 .ui-button-primary:hover {
-  background: var(--accent-hover);
+  background: color-mix(in srgb, var(--primary-button-surface), black 12%);
 }
 
 .ui-button-secondary {
@@ -247,13 +253,13 @@ body {
 }
 
 .ui-button-accent {
-  background: var(--accent-secondary);
+  background: var(--secondary-button-surface);
   color: var(--accent-secondary-contrast);
-  border-color: color-mix(in srgb, var(--accent-secondary), white 14%);
+  border-color: color-mix(in srgb, var(--secondary-button-surface), white 14%);
 }
 
 .ui-button-accent:hover {
-  background: var(--accent-secondary-hover);
+  background: color-mix(in srgb, var(--secondary-button-surface), black 9%);
 }
 
 .ui-shell {
