@@ -18,6 +18,7 @@ interface SliceSatBoundingMeshRendererProps {
 
 const HULL_MARGIN_MM = 0.05;
 const HULL_MAX_INPUT_VERTICES = 200_000;
+const HULL_CACHE_MAX_ENTRIES = 8;
 
 const BASE_SLICE_COUNT = 24;
 const MAX_SLICE_COUNT = 96;
@@ -661,6 +662,48 @@ export default function SliceSatBoundingMeshRenderer({
     hullEdgeGeometry: THREE.BufferGeometry;
   }>>(new Map());
 
+  const ensureHullCacheEntry = React.useCallback((geometry: GeometryWithBounds): {
+    hullGeometry: THREE.BufferGeometry;
+    hullEdgeGeometry: THREE.BufferGeometry;
+  } | null => {
+    const sourceId = geometry.geometry.uuid;
+    const existing = hullGeometryCacheRef.current.get(sourceId);
+    if (existing) return existing;
+
+    const positionAttr = geometry.geometry.getAttribute('position') as THREE.BufferAttribute;
+    if (!positionAttr || positionAttr.count < 4) return null;
+
+    const localVertices: THREE.Vector3[] = new Array(positionAttr.count);
+    for (let i = 0; i < positionAttr.count; i++) {
+      localVertices[i] = new THREE.Vector3(
+        positionAttr.getX(i),
+        positionAttr.getY(i),
+        positionAttr.getZ(i),
+      );
+    }
+
+    const hullResult = buildHullMeshGeometry(localVertices, HULL_MARGIN_MM);
+    if (!hullResult) return null;
+
+    const nextEntry = {
+      hullGeometry: hullResult.hullMesh,
+      hullEdgeGeometry: hullResult.hullEdges,
+    };
+    hullGeometryCacheRef.current.set(sourceId, nextEntry);
+
+    // Keep cache bounded; evict oldest entry when above cap.
+    while (hullGeometryCacheRef.current.size > HULL_CACHE_MAX_ENTRIES) {
+      const oldestKey = hullGeometryCacheRef.current.keys().next().value as string | undefined;
+      if (!oldestKey || oldestKey === sourceId) break;
+      const oldest = hullGeometryCacheRef.current.get(oldestKey);
+      oldest?.hullGeometry.dispose();
+      oldest?.hullEdgeGeometry.dispose();
+      hullGeometryCacheRef.current.delete(oldestKey);
+    }
+
+    return nextEntry;
+  }, []);
+
   const hullLocalCenter = React.useMemo(() => {
     if (!modelGeometry) return null;
     const bbox = modelGeometry.geometry.boundingBox
@@ -670,6 +713,40 @@ export default function SliceSatBoundingMeshRenderer({
     return bbox.getCenter(new THREE.Vector3());
   }, [modelGeometry]);
 
+  React.useEffect(() => {
+    if (!modelGeometry) return;
+
+    let cancelled = false;
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    let idleHandle: number | null = null;
+    let timeoutHandle: number | null = null;
+
+    const warmup = () => {
+      if (cancelled) return;
+      ensureHullCacheEntry(modelGeometry);
+    };
+
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      idleHandle = idleWindow.requestIdleCallback(() => warmup(), { timeout: 350 });
+    } else {
+      timeoutHandle = window.setTimeout(warmup, 40);
+    }
+
+    return () => {
+      cancelled = true;
+      if (idleHandle !== null && typeof idleWindow.cancelIdleCallback === 'function') {
+        idleWindow.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle !== null) {
+        window.clearTimeout(timeoutHandle);
+      }
+    };
+  }, [ensureHullCacheEntry, modelGeometry]);
+
   const satGeometries = React.useMemo(() => {
     if (!enabled || !modelGeometry || !modelTransform) return null;
 
@@ -678,34 +755,8 @@ export default function SliceSatBoundingMeshRenderer({
     // ── Hull mode: compute once in local space, then reuse via cache. ───────
     // This avoids re-running quickhull during transform drags/rotations.
     if (renderMode === 'hull') {
-      const cachedHull = hullGeometryCacheRef.current.get(sourceId);
-      if (cachedHull) {
-        return {
-          meshGeometry: null,
-          wireGeometry: null,
-          hullGeometry: cachedHull.hullGeometry,
-          hullEdgeGeometry: cachedHull.hullEdgeGeometry,
-        };
-      }
-
-      const positionAttr = modelGeometry.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const localVertices: THREE.Vector3[] = new Array(positionAttr.count);
-      for (let i = 0; i < positionAttr.count; i++) {
-        localVertices[i] = new THREE.Vector3(
-          positionAttr.getX(i),
-          positionAttr.getY(i),
-          positionAttr.getZ(i),
-        );
-      }
-
-      const hullResult = buildHullMeshGeometry(localVertices, HULL_MARGIN_MM);
-      if (!hullResult) return null;
-
-      const cachedEntry = {
-        hullGeometry: hullResult.hullMesh,
-        hullEdgeGeometry: hullResult.hullEdges,
-      };
-      hullGeometryCacheRef.current.set(sourceId, cachedEntry);
+      const cachedEntry = ensureHullCacheEntry(modelGeometry);
+      if (!cachedEntry) return null;
 
       return {
         meshGeometry: null,
@@ -918,7 +969,7 @@ export default function SliceSatBoundingMeshRenderer({
     cachedSourceIdRef.current = sourceId;
     cachedRenderModeRef.current = renderMode;
     return next;
-  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin, interactionActive, renderMode]);
+  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin, interactionActive, renderMode, ensureHullCacheEntry]);
 
   React.useEffect(() => {
     return () => {
