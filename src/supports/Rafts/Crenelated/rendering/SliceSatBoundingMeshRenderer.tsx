@@ -532,12 +532,18 @@ function buildHullMeshGeometry(
   worldVertices: THREE.Vector3[],
   margin: number,
 ): { hullMesh: THREE.BufferGeometry; hullEdges: THREE.BufferGeometry } | null {
-  if (worldVertices.length < 4) return null;
+  const finiteWorldVertices = worldVertices.filter((v) => (
+    Number.isFinite(v.x)
+    && Number.isFinite(v.y)
+    && Number.isFinite(v.z)
+  ));
+
+  if (finiteWorldVertices.length < 4) return null;
 
   // Subsample if the vertex count is very large — the convex hull only needs
   // the extreme points, and Quickhull is efficient, but we cap input size
   // to avoid spending time on interior vertices that can't contribute.
-  let inputPoints = worldVertices;
+  let inputPoints = finiteWorldVertices;
   if (inputPoints.length > HULL_MAX_INPUT_VERTICES) {
     const stride = Math.ceil(inputPoints.length / HULL_MAX_INPUT_VERTICES);
     const sampled: THREE.Vector3[] = [];
@@ -575,6 +581,16 @@ function buildHullMeshGeometry(
   if (!posAttr || posAttr.count < 3) {
     hullGeo.dispose();
     return null;
+  }
+
+  for (let i = 0; i < posAttr.count; i++) {
+    const x = posAttr.getX(i);
+    const y = posAttr.getY(i);
+    const z = posAttr.getZ(i);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      hullGeo.dispose();
+      return null;
+    }
   }
 
   // ConvexGeometry produces non-indexed geometry (per-face vertices).

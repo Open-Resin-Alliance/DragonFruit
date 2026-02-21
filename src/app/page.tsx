@@ -159,6 +159,10 @@ export default function Home() {
     points: THREE.Vector2[];
     halfW: number;
     halfD: number;
+    localMinX: number;
+    localMaxX: number;
+    localMinY: number;
+    localMaxY: number;
   }>>(new Map());
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
@@ -398,6 +402,24 @@ export default function Home() {
     };
   }, []);
 
+  const isFiniteNumber = React.useCallback((n: number) => Number.isFinite(n) && !Number.isNaN(n), []);
+
+  const isFiniteTransform = React.useCallback((t: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }) => (
+    isFiniteNumber(t.position.x)
+    && isFiniteNumber(t.position.y)
+    && isFiniteNumber(t.position.z)
+    && isFiniteNumber(t.rotation.x)
+    && isFiniteNumber(t.rotation.y)
+    && isFiniteNumber(t.rotation.z)
+    && isFiniteNumber(t.scale.x)
+    && isFiniteNumber(t.scale.y)
+    && isFiniteNumber(t.scale.z)
+  ), [isFiniteNumber]);
+
   // Sync transform manager when active model changes
   useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
@@ -409,6 +431,31 @@ export default function Home() {
       }
 
       const t = scene.activeModel.transform;
+
+      if (!isFiniteTransform(t)) {
+        const fallback = isFiniteTransform(transformMgr.transform)
+          ? {
+            position: transformMgr.transform.position.clone(),
+            rotation: transformMgr.transform.rotation.clone(),
+            scale: transformMgr.transform.scale.clone(),
+          }
+          : {
+            position: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Euler(0, 0, 0),
+            scale: new THREE.Vector3(1, 1, 1),
+          };
+
+        console.warn('[TransformSync] Active model had non-finite transform. Auto-recovering.', {
+          id: scene.activeModelId,
+        });
+
+        scene.updateModelTransform(scene.activeModelId, fallback);
+        transformMgr.transformHook.setPosition(fallback.position.x, fallback.position.y, fallback.position.z);
+        transformMgr.transformHook.setRotation(fallback.rotation.x, fallback.rotation.y, fallback.rotation.z);
+        transformMgr.transformHook.setScale(fallback.scale.x, fallback.scale.y, fallback.scale.z);
+        setDisplayActiveModelId(scene.activeModelId);
+        return;
+      }
 
       console.log('[Home] Syncing transform from model:', {
         id: scene.activeModelId,
@@ -446,7 +493,7 @@ export default function Home() {
     } else {
       setDisplayActiveModelId(null);
     }
-  }, [scene.activeModelId, scene.activeModel, displayActiveModelId]);
+  }, [displayActiveModelId, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
@@ -456,6 +503,21 @@ export default function Home() {
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
       const modelTransform = scene.activeModel?.transform;
       if (!modelTransform) return;
+
+      if (!isFiniteTransform(modelTransform)) {
+        if (isFiniteTransform(transformMgr.transform)) {
+          scene.updateModelTransform(scene.activeModelId, {
+            position: transformMgr.transform.position.clone(),
+            rotation: transformMgr.transform.rotation.clone(),
+            scale: transformMgr.transform.scale.clone(),
+          });
+        }
+        return;
+      }
+
+      if (!isFiniteTransform(transformMgr.transform)) {
+        return;
+      }
 
       const current = transformMgr.transform;
       const EPSILON = 0.0001;
@@ -483,6 +545,7 @@ export default function Home() {
     transformMgr.transform.scale.x,
     transformMgr.transform.scale.y,
     transformMgr.transform.scale.z,
+    isFiniteTransform,
   ]);
 
   // Wrap transform change to update local state
@@ -688,13 +751,39 @@ export default function Home() {
   }>) => {
     if (updates.length === 0) return;
 
-    scene.updateModelTransforms(updates);
+    const isFiniteNumber = (n: number) => Number.isFinite(n) && !Number.isNaN(n);
+    const sanitizedUpdates = updates.filter((update) => {
+      const { position, rotation, scale } = update.transform;
+      return isFiniteNumber(position.x)
+        && isFiniteNumber(position.y)
+        && isFiniteNumber(position.z)
+        && isFiniteNumber(rotation.x)
+        && isFiniteNumber(rotation.y)
+        && isFiniteNumber(rotation.z)
+        && isFiniteNumber(scale.x)
+        && isFiniteNumber(scale.y)
+        && isFiniteNumber(scale.z);
+    });
+
+    if (sanitizedUpdates.length === 0) {
+      console.warn('[Arrange][HighPrecision] Skipping apply: all computed transforms were non-finite.');
+      return;
+    }
+
+    if (sanitizedUpdates.length !== updates.length) {
+      console.warn('[Arrange][HighPrecision] Dropped non-finite transforms:', {
+        dropped: updates.length - sanitizedUpdates.length,
+        total: updates.length,
+      });
+    }
+
+    scene.updateModelTransforms(sanitizedUpdates);
 
     if (!scene.activeModelId || displayActiveModelId !== scene.activeModelId) {
       return;
     }
 
-    const activeUpdate = updates.find((update) => update.id === scene.activeModelId);
+    const activeUpdate = sanitizedUpdates.find((update) => update.id === scene.activeModelId);
     if (!activeUpdate) return;
 
     const { position, rotation, scale } = activeUpdate.transform;
@@ -1115,7 +1204,6 @@ export default function Home() {
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
-
     if (visibleModels.length <= 1) return;
 
     const minSpinnerMs = 220;
@@ -1124,25 +1212,50 @@ export default function Home() {
     await sleep(0);
 
     try {
-      const SAT_CLEARANCE_BIAS_MM = 0.2;
-      const SAT_VOLUME_GUARD_MM = 0.2;
-
-      const modelTransformById = new Map(
-        scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
-      );
+      const SAT_EPS_MM = 0.001;
+      const spacing = Math.max(0, arrangeSpacingMm);
+      // minSpacing is the SAT hull-to-hull gap enforcing the requested spacing.
+      const minSpacing = spacing + SAT_EPS_MM;
 
       const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
       const maxX = minX + scene.view3dSettings.widthMm;
       const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
       const maxY = minY + scene.view3dSettings.depthMm;
 
+      const modelTransformById = new Map(
+        scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
+      );
+
       const quant = (n: number) => Math.round(n * 1e4) / 1e4;
 
-      const getHullAtRotation = (model: (typeof visibleModels)[number], rotationZ: number) => {
+      type HullData = {
+        points: THREE.Vector2[];
+        halfW: number;
+        halfD: number;
+        localMinX: number;
+        localMaxX: number;
+        localMinY: number;
+        localMaxY: number;
+      };
+
+      const getHullAtRotation = (model: (typeof visibleModels)[number], rotationZ: number): HullData => {
         const t = modelTransformById.get(model.id) ?? model.transform;
         const positionAttr = model.geometry.geometry.getAttribute('position') as THREE.BufferAttribute;
         if (!positionAttr || positionAttr.count < 3) {
-          return { points: [new THREE.Vector2(0, 0)], halfW: 1, halfD: 1 };
+          return {
+            points: [
+              new THREE.Vector2(-1, -1),
+              new THREE.Vector2(1, -1),
+              new THREE.Vector2(1, 1),
+              new THREE.Vector2(-1, 1),
+            ],
+            halfW: 1,
+            halfD: 1,
+            localMinX: -1,
+            localMaxX: 1,
+            localMinY: -1,
+            localMaxY: 1,
+          };
         }
 
         const key = [
@@ -1170,43 +1283,76 @@ export default function Home() {
         );
 
         const center = model.geometry.center;
-        // High-precision mode: sample much more densely to avoid missing
-        // thin/wide extremities that can cause slight overlap/volume clipping.
-        const targetSamples = 20000;
-        const stride = Math.max(1, Math.floor(positionAttr.count / targetSamples));
+        // Single pass: collect strided sample AND guaranteed extremal vertices in 8 directions.
+        // Extremal coverage prevents the hull from underestimating the true geometry boundary.
+        const targetSamplesBase = 8000;
+        const stride = Math.max(1, Math.floor(positionAttr.count / targetSamplesBase));
         const points2d: THREE.Vector2[] = [];
         const tmp = new THREE.Vector3();
-        for (let i = 0; i < positionAttr.count; i += stride) {
+        const nE = 8;
+        const eDx = [1, -1, 0, 0, 0.7071068, 0.7071068, -0.7071068, -0.7071068];
+        const eDy = [0, 0, 1, -1, 0.7071068, -0.7071068, 0.7071068, -0.7071068];
+        const eDot = new Float64Array(nE).fill(-Infinity);
+        const eXArr = new Float32Array(nE);
+        const eYArr = new Float32Array(nE);
+        for (let i = 0; i < positionAttr.count; i++) {
           tmp.set(
             positionAttr.getX(i) - center.x,
             positionAttr.getY(i) - center.y,
             positionAttr.getZ(i) - center.z,
           ).applyMatrix4(matrix);
-          points2d.push(new THREE.Vector2(tmp.x, tmp.y));
+          const tx = tmp.x;
+          const ty = tmp.y;
+          if (i % stride === 0) points2d.push(new THREE.Vector2(tx, ty));
+          for (let d = 0; d < nE; d++) {
+            const dot = tx * eDx[d] + ty * eDy[d];
+            if (dot > eDot[d]) { eDot[d] = dot; eXArr[d] = tx; eYArr[d] = ty; }
+          }
+        }
+        for (let d = 0; d < nE; d++) {
+          if (Number.isFinite(eXArr[d]) && Number.isFinite(eYArr[d])) {
+            points2d.push(new THREE.Vector2(eXArr[d], eYArr[d]));
+          }
         }
 
         const hull = convexHull2d(points2d);
-        let minHX = Infinity;
-        let maxHX = -Infinity;
-        let minHY = Infinity;
-        let maxHY = -Infinity;
-        for (const p of hull) {
-          minHX = Math.min(minHX, p.x);
-          maxHX = Math.max(maxHX, p.x);
-          minHY = Math.min(minHY, p.y);
-          maxHY = Math.max(maxHY, p.y);
-        }
-
-        const next = {
-          points: hull.length >= 3 ? hull : [
+        const points = hull.length >= 3
+          ? hull
+          : [
             new THREE.Vector2(-1, -1),
             new THREE.Vector2(1, -1),
             new THREE.Vector2(1, 1),
             new THREE.Vector2(-1, 1),
-          ],
-          halfW: Math.max(1, (maxHX - minHX) * 0.5),
-          halfD: Math.max(1, (maxHY - minHY) * 0.5),
+          ];
+
+        let localMinX = Infinity;
+        let localMaxX = -Infinity;
+        let localMinY = Infinity;
+        let localMaxY = -Infinity;
+        for (const p of points) {
+          localMinX = Math.min(localMinX, p.x);
+          localMaxX = Math.max(localMaxX, p.x);
+          localMinY = Math.min(localMinY, p.y);
+          localMaxY = Math.max(localMaxY, p.y);
+        }
+
+        if (!Number.isFinite(localMinX) || !Number.isFinite(localMaxX) || !Number.isFinite(localMinY) || !Number.isFinite(localMaxY)) {
+          localMinX = -1;
+          localMaxX = 1;
+          localMinY = -1;
+          localMaxY = 1;
+        }
+
+        const next: HullData = {
+          points,
+          halfW: Math.max(1, (localMaxX - localMinX) * 0.5),
+          halfD: Math.max(1, (localMaxY - localMinY) * 0.5),
+          localMinX,
+          localMaxX,
+          localMinY,
+          localMaxY,
         };
+
         arrangeHullFootprintCacheRef.current.set(key, next);
         return next;
       };
@@ -1218,8 +1364,7 @@ export default function Home() {
           const b = poly[(i + 1) % poly.length];
           const edge = new THREE.Vector2(b.x - a.x, b.y - a.y);
           if (edge.lengthSq() <= 1e-10) continue;
-          const axis = new THREE.Vector2(-edge.y, edge.x).normalize();
-          axes.push(axis);
+          axes.push(new THREE.Vector2(-edge.y, edge.x).normalize());
         }
         return axes;
       };
@@ -1228,9 +1373,7 @@ export default function Home() {
         let min = Infinity;
         let max = -Infinity;
         for (const p of poly) {
-          const worldX = p.x + center.x;
-          const worldY = p.y + center.y;
-          const dot = (worldX * axis.x) + (worldY * axis.y);
+          const dot = (p.x + center.x) * axis.x + (p.y + center.y) * axis.y;
           min = Math.min(min, dot);
           max = Math.max(max, dot);
         }
@@ -1242,13 +1385,13 @@ export default function Home() {
         centerA: THREE.Vector2,
         polyB: THREE.Vector2[],
         centerB: THREE.Vector2,
-        spacing: number,
+        minSpacing: number,
       ) => {
         const axes = [...axesFromPolygon(polyA), ...axesFromPolygon(polyB)];
         for (const axis of axes) {
-          const ia = projectPolygon(polyA, centerA, axis);
-          const ib = projectPolygon(polyB, centerB, axis);
-          if ((ia.max + spacing) <= ib.min || (ib.max + spacing) <= ia.min) {
+          const pa = projectPolygon(polyA, centerA, axis);
+          const pb = projectPolygon(polyB, centerB, axis);
+          if ((pa.max + minSpacing) <= pb.min || (pb.max + minSpacing) <= pa.min) {
             return false;
           }
         }
@@ -1260,6 +1403,10 @@ export default function Home() {
         hull: THREE.Vector2[];
         halfW: number;
         halfD: number;
+        localMinX: number;
+        localMaxX: number;
+        localMinY: number;
+        localMaxY: number;
       };
 
       type Placed = CollisionProxy & {
@@ -1267,19 +1414,44 @@ export default function Home() {
         rotationZ: number;
       };
 
-      const targetIdSet = new Set(visibleModels.map((m) => m.id));
-      const blockers: CollisionProxy[] = scene.models
-        .filter((m) => m.visible && !targetIdSet.has(m.id))
-        .map((m) => {
-          const t = modelTransformById.get(m.id) ?? m.transform;
-          const hull = getHullAtRotation(m, t.rotation.z);
-          return {
-            center: new THREE.Vector2(t.position.x, t.position.y),
-            hull: hull.points,
-            halfW: hull.halfW,
-            halfD: hull.halfD,
-          };
-        });
+      const worldBoundsAt = (proxy: CollisionProxy, center: THREE.Vector2) => ({
+        minX: center.x + proxy.localMinX,
+        maxX: center.x + proxy.localMaxX,
+        minY: center.y + proxy.localMinY,
+        maxY: center.y + proxy.localMaxY,
+      });
+
+      const intersectsBroadphase = (
+        a: CollisionProxy,
+        centerA: THREE.Vector2,
+        b: CollisionProxy,
+        centerB: THREE.Vector2,
+        pad: number,
+      ) => {
+        const ba = worldBoundsAt(a, centerA);
+        const bb = worldBoundsAt(b, centerB);
+        if (ba.maxX + pad <= bb.minX) return false;
+        if (bb.maxX + pad <= ba.minX) return false;
+        if (ba.maxY + pad <= bb.minY) return false;
+        if (bb.maxY + pad <= ba.minY) return false;
+        return true;
+      };
+
+      const withinPlateAt = (proxy: CollisionProxy, center: THREE.Vector2) => {
+        const wb = worldBoundsAt(proxy, center);
+        return wb.minX >= minX && wb.maxX <= maxX && wb.minY >= minY && wb.maxY <= maxY;
+      };
+
+      const canPlaceAt = (candidate: CollisionProxy, center: THREE.Vector2, others: CollisionProxy[]) => {
+        if (!withinPlateAt(candidate, center)) return false;
+        for (const other of others) {
+          if (!intersectsBroadphase(candidate, center, other, other.center, minSpacing)) continue;
+          if (polygonsOverlapWithSpacing(candidate.hull, center, other.hull, other.center, minSpacing)) {
+            return false;
+          }
+        }
+        return true;
+      };
 
       const anchor = (() => {
         if (arrangeAnchorMode === 'front_left') return new THREE.Vector2(minX, minY);
@@ -1289,154 +1461,314 @@ export default function Home() {
         return new THREE.Vector2((minX + maxX) * 0.5, (minY + maxY) * 0.5);
       })();
 
-      const modelOrder = [...visibleModels].sort((a, b) => {
-        const at = modelTransformById.get(a.id) ?? a.transform;
-        const bt = modelTransformById.get(b.id) ?? b.transform;
-        const ah = getHullAtRotation(a, at.rotation.z);
-        const bh = getHullAtRotation(b, bt.rotation.z);
-        return (bh.halfW * bh.halfD) - (ah.halfW * ah.halfD);
-      });
+      const targetIdSet = new Set(visibleModels.map((m) => m.id));
+      const blockers: CollisionProxy[] = scene.models
+        .filter((m) => m.visible && !targetIdSet.has(m.id))
+        .map((m) => {
+          const t = modelTransformById.get(m.id) ?? m.transform;
+          const h = getHullAtRotation(m, t.rotation.z);
+          return {
+            center: new THREE.Vector2(t.position.x, t.position.y),
+            hull: h.points,
+            halfW: h.halfW,
+            halfD: h.halfD,
+            localMinX: h.localMinX,
+            localMaxX: h.localMaxX,
+            localMinY: h.localMinY,
+            localMaxY: h.localMaxY,
+          };
+        });
+
+      const makeRotationOptions = (currentZ: number) => {
+        if (!arrangeAllowRotateOnZ) return [currentZ];
+        const options: number[] = [];
+        const seen = new Set<number>();
+        const push = (angle: number) => {
+          const twoPi = Math.PI * 2;
+          let a = angle % twoPi;
+          if (a < 0) a += twoPi;
+          const k = Number(a.toFixed(5));
+          if (seen.has(k)) return;
+          seen.add(k);
+          options.push(a);
+        };
+
+        push(currentZ);
+        for (let deg = 0; deg < 360; deg += 15) push(THREE.MathUtils.degToRad(deg));
+        return options;
+      };
+
+      const allShareSameGeometry = visibleModels.length > 0
+        && visibleModels.every((m) => m.geometry.geometry.uuid === visibleModels[0].geometry.geometry.uuid);
+
+      const sharedBestRotation = (() => {
+        if (!allShareSameGeometry || visibleModels.length === 0) return null as number | null;
+
+        const probe = visibleModels[0];
+        const probeT = modelTransformById.get(probe.id) ?? probe.transform;
+        const rotOpts = makeRotationOptions(probeT.rotation.z);
+        if (rotOpts.length === 1) return rotOpts[0];
+
+        let bestAngle = rotOpts[0];
+        let bestCount = -1;
+
+        // Simulate BLF packing at each rotation angle and pick the one that fits the most models.
+        for (const angle of rotOpts) {
+          const simPlaced: CollisionProxy[] = [...blockers];
+          let simCount = 0;
+
+          for (const model of visibleModels) {
+            const h = getHullAtRotation(model, angle);
+            const proxy: CollisionProxy = {
+              center: new THREE.Vector2(),
+              hull: h.points, halfW: h.halfW, halfD: h.halfD,
+              localMinX: h.localMinX, localMaxX: h.localMaxX,
+              localMinY: h.localMinY, localMaxY: h.localMaxY,
+            };
+            const minCX = minX - h.localMinX;
+            const maxCX = maxX - h.localMaxX;
+            const minCY = minY - h.localMinY;
+            const maxCY = maxY - h.localMaxY;
+            if (minCX > maxCX || minCY > maxCY) continue;
+
+            const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
+            const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
+            const colsX = Math.ceil((maxCX - minCX) / pitchX) + 1;
+            const rowsY = Math.ceil((maxCY - minCY) / pitchY) + 1;
+
+            const cands: { cx: number; cy: number; d: number }[] = [];
+            const addSim = (x: number, y: number) => {
+              const cx = Math.min(maxCX, Math.max(minCX, x));
+              const cy = Math.min(maxCY, Math.max(minCY, y));
+              const dx = cx - anchor.x; const dy = cy - anchor.y;
+              cands.push({ cx, cy, d: dx * dx + dy * dy });
+            };
+            for (let ix = 0; ix <= colsX; ix++) {
+              for (let iy = 0; iy <= rowsY; iy++) {
+                addSim(minCX + ix * pitchX, minCY + iy * pitchY);
+              }
+            }
+            for (const other of simPlaced) {
+              const ob = worldBoundsAt(other, other.center);
+              addSim(ob.maxX + minSpacing - h.localMinX, other.center.y);
+              addSim(ob.minX - minSpacing - h.localMaxX, other.center.y);
+              addSim(other.center.x, ob.maxY + minSpacing - h.localMinY);
+              addSim(other.center.x, ob.minY - minSpacing - h.localMaxY);
+            }
+            cands.sort((a, b) => a.d - b.d);
+
+            for (const c of cands) {
+              const center = new THREE.Vector2(c.cx, c.cy);
+              if (canPlaceAt(proxy, center, simPlaced)) {
+                simCount++;
+                simPlaced.push({ ...proxy, center });
+                break;
+              }
+            }
+          }
+
+          if (simCount > bestCount) {
+            bestCount = simCount;
+            bestAngle = angle;
+          }
+        }
+
+        return bestAngle;
+      })();
+
+      const areaAtCurrent = (model: (typeof visibleModels)[number]) => {
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const h = getHullAtRotation(model, t.rotation.z);
+        return Math.max(1, (h.localMaxX - h.localMinX) * (h.localMaxY - h.localMinY));
+      };
+
+      const modelOrder = [...visibleModels].sort((a, b) => areaAtCurrent(b) - areaAtCurrent(a));
 
       const placed: Placed[] = [];
       const spills: Placed[] = [];
-      const spacing = Math.max(2, arrangeSpacingMm);
 
       for (const model of modelOrder) {
         const t = modelTransformById.get(model.id) ?? model.transform;
-        const currentZ = t.rotation.z;
-        const options = arrangeAllowRotateOnZ
-          ? [currentZ, currentZ + Math.PI * 0.5]
-          : [currentZ];
+        const angleOptions = sharedBestRotation == null
+          ? makeRotationOptions(t.rotation.z)
+          : [sharedBestRotation];
 
-        let selected: { center: THREE.Vector2; rotationZ: number; hull: THREE.Vector2[]; halfW: number; halfD: number } | null = null;
+        let best: { proxy: CollisionProxy; center: THREE.Vector2; rotationZ: number; score: number } | null = null;
 
-        for (const optionZ of options) {
-          const hullData = getHullAtRotation(model, optionZ);
-          const xSet = new Set<number>();
-          const ySet = new Set<number>();
-
-          const addX = (x: number) => {
-            const clamped = Math.min(maxX - hullData.halfW, Math.max(minX + hullData.halfW, x));
-            xSet.add(Number(clamped.toFixed(3)));
-          };
-          const addY = (y: number) => {
-            const clamped = Math.min(maxY - hullData.halfD, Math.max(minY + hullData.halfD, y));
-            ySet.add(Number(clamped.toFixed(3)));
+        for (const rotationZ of angleOptions) {
+          const h = getHullAtRotation(model, rotationZ);
+          const candidateProxy: CollisionProxy = {
+            center: new THREE.Vector2(),
+            hull: h.points,
+            halfW: h.halfW,
+            halfD: h.halfD,
+            localMinX: h.localMinX,
+            localMaxX: h.localMaxX,
+            localMinY: h.localMinY,
+            localMaxY: h.localMaxY,
           };
 
-          addX(anchor.x);
-          addY(anchor.y);
-          addX(minX + hullData.halfW);
-          addX(maxX - hullData.halfW);
-          addY(minY + hullData.halfD);
-          addY(maxY - hullData.halfD);
+          const minCenterX = minX - h.localMinX;
+          const maxCenterX = maxX - h.localMaxX;
+          const minCenterY = minY - h.localMinY;
+          const maxCenterY = maxY - h.localMaxY;
+          if (minCenterX > maxCenterX || minCenterY > maxCenterY) continue;
 
-          for (const p of placed) {
-            addX(p.center.x - (p.halfW + hullData.halfW + spacing));
-            addX(p.center.x + (p.halfW + hullData.halfW + spacing));
-            addY(p.center.y - (p.halfD + hullData.halfD + spacing));
-            addY(p.center.y + (p.halfD + hullData.halfD + spacing));
+          const candidateMap = new Map<string, { x: number; y: number; sortKey: number }>();
+          const addCandidate = (x: number, y: number) => {
+            const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
+            const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
+            const k = `${cx.toFixed(3)}:${cy.toFixed(3)}`;
+            if (candidateMap.has(k)) return;
+            const dx = cx - anchor.x;
+            const dy = cy - anchor.y;
+            candidateMap.set(k, { x: cx, y: cy, sortKey: dx * dx + dy * dy });
+          };
+
+          addCandidate(anchor.x, anchor.y);
+          addCandidate(minCenterX, minCenterY);
+          addCandidate(maxCenterX, minCenterY);
+          addCandidate(minCenterX, maxCenterY);
+          addCandidate(maxCenterX, maxCenterY);
+
+          const neighborPool: CollisionProxy[] = [...placed, ...blockers];
+          for (const other of neighborPool) {
+            const ob = worldBoundsAt(other, other.center);
+            addCandidate(ob.maxX + minSpacing - h.localMinX, other.center.y);
+            addCandidate(ob.minX - minSpacing - h.localMaxX, other.center.y);
+            addCandidate(other.center.x, ob.maxY + minSpacing - h.localMinY);
+            addCandidate(other.center.x, ob.minY - minSpacing - h.localMaxY);
+            addCandidate(ob.maxX + minSpacing - h.localMinX, anchor.y);
+            addCandidate(ob.minX - minSpacing - h.localMaxX, anchor.y);
+            addCandidate(anchor.x, ob.maxY + minSpacing - h.localMinY);
+            addCandidate(anchor.x, ob.minY - minSpacing - h.localMaxY);
           }
 
-          const candidates: Array<{ x: number; y: number; score: number }> = [];
-          for (const x of xSet) {
-            for (const y of ySet) {
-              const dx = x - anchor.x;
-              const dy = y - anchor.y;
-              candidates.push({ x, y, score: dx * dx + dy * dy });
-            }
-          }
-          candidates.sort((a, b) => a.score - b.score);
-
-          for (let i = 0; i < candidates.length && i < 900; i++) {
-            const candidate = candidates[i];
-            const center = new THREE.Vector2(candidate.x, candidate.y);
-
-            const fullyInsideVolume =
-              (center.x - hullData.halfW) >= (minX + SAT_VOLUME_GUARD_MM)
-              && (center.x + hullData.halfW) <= (maxX - SAT_VOLUME_GUARD_MM)
-              && (center.y - hullData.halfD) >= (minY + SAT_VOLUME_GUARD_MM)
-              && (center.y + hullData.halfD) <= (maxY - SAT_VOLUME_GUARD_MM);
-
-            if (!fullyInsideVolume) continue;
-
-            const collisionPool: CollisionProxy[] = [...placed, ...blockers];
-            const bboxOverlap = collisionPool.filter((p) => (
-              Math.abs(p.center.x - center.x) <= (p.halfW + hullData.halfW + spacing + SAT_CLEARANCE_BIAS_MM)
-              && Math.abs(p.center.y - center.y) <= (p.halfD + hullData.halfD + spacing + SAT_CLEARANCE_BIAS_MM)
-            ));
-
-            const collides = bboxOverlap.some((p) => polygonsOverlapWithSpacing(
-              hullData.points,
-              center,
-              p.hull,
-              p.center,
-              spacing + SAT_CLEARANCE_BIAS_MM,
-            ));
-
-            if (!collides) {
-              selected = {
-                center,
-                rotationZ: optionZ,
-                hull: hullData.points,
-                halfW: hullData.halfW,
-                halfD: hullData.halfD,
-              };
-              break;
+          // Dense lattice anchored at plate corner (minCenterX, minCenterY) at exact SAT-clearance pitch.
+          // pitch = hull-dimension + minSpacing guarantees every grid point passes the SAT check.
+          const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
+          const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
+          const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
+          const rowsY = Math.ceil((maxCenterY - minCenterY) / pitchY) + 1;
+          for (let ix = 0; ix <= colsX; ix++) {
+            for (let iy = 0; iy <= rowsY; iy++) {
+              addCandidate(minCenterX + ix * pitchX, minCenterY + iy * pitchY);
             }
           }
 
-          if (selected) break;
+          // BLF: sort by anchor distance, take first valid candidate (greedy bottom-left fill).
+          const candidates = [...candidateMap.values()].sort((a, b) => a.sortKey - b.sortKey);
+          const collisionPool = [...placed, ...blockers];
+
+          let localBest: { center: THREE.Vector2; anchorDistSq: number } | null = null;
+          for (const c of candidates) {
+            const center = new THREE.Vector2(c.x, c.y);
+            if (canPlaceAt(candidateProxy, center, collisionPool)) {
+              localBest = { center, anchorDistSq: c.sortKey };
+              break; // BLF: first valid is anchor-optimal
+            }
+          }
+
+          if (!localBest) continue;
+
+          if (!best || localBest.anchorDistSq < best.score) {
+            best = {
+              proxy: candidateProxy,
+              center: localBest.center,
+              rotationZ,
+              score: localBest.anchorDistSq,
+            };
+          }
         }
 
-        if (selected) {
+        if (best) {
           placed.push({
             model,
-            center: selected.center,
-            rotationZ: selected.rotationZ,
-            hull: selected.hull,
-            halfW: selected.halfW,
-            halfD: selected.halfD,
+            center: best.center,
+            rotationZ: best.rotationZ,
+            hull: best.proxy.hull,
+            halfW: best.proxy.halfW,
+            halfD: best.proxy.halfD,
+            localMinX: best.proxy.localMinX,
+            localMaxX: best.proxy.localMaxX,
+            localMinY: best.proxy.localMinY,
+            localMaxY: best.proxy.localMaxY,
           });
           continue;
         }
 
-        const fallbackHull = getHullAtRotation(model, t.rotation.z);
+        const fallback = getHullAtRotation(model, t.rotation.z);
         const outsideGap = Math.max(8, spacing);
         const spillIndex = spills.length;
-        // Fully outside placement: push entire footprint beyond maxX
-        // so it cannot clip inside build volume.
         const spillCenter = new THREE.Vector2(
-          maxX + outsideGap + fallbackHull.halfW + SAT_VOLUME_GUARD_MM,
-          minY + fallbackHull.halfD + spillIndex * ((fallbackHull.halfD * 2) + spacing),
+          maxX + outsideGap - fallback.localMinX,
+          minY - fallback.localMinY + spillIndex * ((fallback.localMaxY - fallback.localMinY) + spacing),
         );
 
         spills.push({
           model,
           center: spillCenter,
           rotationZ: t.rotation.z,
-          hull: fallbackHull.points,
-          halfW: fallbackHull.halfW,
-          halfD: fallbackHull.halfD,
+          hull: fallback.points,
+          halfW: fallback.halfW,
+          halfD: fallback.halfD,
+          localMinX: fallback.localMinX,
+          localMaxX: fallback.localMaxX,
+          localMinY: fallback.localMinY,
+          localMaxY: fallback.localMaxY,
         });
       }
 
-      const updates = [...placed, ...spills].map((entry) => ({
-        transform: (() => {
-          const t = modelTransformById.get(entry.model.id) ?? entry.model.transform;
-          return {
+      const COMPACTION_PASSES = 5;
+      const COMPACTION_BINARY_STEPS = 14;
+
+      for (let pass = 0; pass < COMPACTION_PASSES; pass++) {
+        let moved = false;
+        const order = placed
+          .map((_, i) => i)
+          .sort((a, b) => placed[b].center.distanceToSquared(anchor) - placed[a].center.distanceToSquared(anchor));
+
+        for (const idx of order) {
+          const entry = placed[idx];
+          const start = entry.center.clone();
+          const toAnchor = new THREE.Vector2(anchor.x - start.x, anchor.y - start.y);
+          if (toAnchor.lengthSq() <= 1e-8) continue;
+
+          const others = [
+            ...blockers,
+            ...placed.filter((_, i) => i !== idx),
+          ];
+
+          let lo = 0;
+          let hi = 1;
+
+          for (let step = 0; step < COMPACTION_BINARY_STEPS; step++) {
+            const mid = (lo + hi) * 0.5;
+            const c = new THREE.Vector2(start.x + toAnchor.x * mid, start.y + toAnchor.y * mid);
+            if (canPlaceAt(entry, c, others)) lo = mid;
+            else hi = mid;
+          }
+
+          if (lo > 1e-3) {
+            entry.center.set(start.x + toAnchor.x * lo, start.y + toAnchor.y * lo);
+            moved = true;
+          }
+        }
+
+        if (!moved) break;
+      }
+
+      const updates = [...placed, ...spills].map((entry) => {
+        const t = modelTransformById.get(entry.model.id) ?? entry.model.transform;
+        return {
+          id: entry.model.id,
+          transform: {
             position: new THREE.Vector3(entry.center.x, entry.center.y, t.position.z),
-            rotation: new THREE.Euler(
-              t.rotation.x,
-              t.rotation.y,
-              entry.rotationZ,
-              t.rotation.order,
-            ),
+            rotation: new THREE.Euler(t.rotation.x, t.rotation.y, entry.rotationZ, t.rotation.order),
             scale: t.scale.clone(),
-          };
-        })(),
-        id: entry.model.id,
-      }));
+          },
+        };
+      });
 
       if (updates.length > 1) {
         applyArrangeTransforms(updates);
