@@ -86,11 +86,21 @@ function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCache
 }
 
 export function shouldUsePreciseBoundsForTransform(transform: TransformLike, angleEpsilon = 1e-4): boolean {
-  const ax = Math.abs(transform.rotation.x);
-  const ay = Math.abs(transform.rotation.y);
-  const az = Math.abs(transform.rotation.z);
-  const rotationAxisCount = Number(ax > angleEpsilon) + Number(ay > angleEpsilon) + Number(az > angleEpsilon);
-  return rotationAxisCount > 1;
+  const snapStep = Math.PI * 0.5;
+  const isNearRightAngle = (angle: number) => {
+    const nearest = Math.round(angle / snapStep) * snapStep;
+    return Math.abs(angle - nearest) <= angleEpsilon;
+  };
+
+  // Fast approximate bounds are exact when orientation is axis-aligned
+  // (rotations near multiples of 90°), but can significantly overestimate
+  // irregular meshes at arbitrary angles. Use precise bounds in those cases.
+  const orthogonalRotation =
+    isNearRightAngle(transform.rotation.x)
+    && isNearRightAngle(transform.rotation.y)
+    && isNearRightAngle(transform.rotation.z);
+
+  return !orthogonalRotation;
 }
 
 export function computeApproxModelWorldBounds(
