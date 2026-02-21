@@ -3,15 +3,28 @@
 import React, { useState } from 'react';
 import { ViewTypeDropdown } from '@/components/controls/ViewTypeDropdown';
 import { SettingsModal } from '@/components/settings/SettingsModal';
+import { ProfileSettingsModal } from '@/components/settings/ProfileSettingsModal';
 import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
+import { Printer } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
   getSavedThemePreference,
 } from '@/components/settings/themeCustomizations';
+import {
+  OPEN_PROFILE_SETTINGS_MODAL_EVENT,
+  type ProfileSettingsTab,
+} from '@/components/settings/profileModalEvents';
+import {
+  getActivePrinterProfile,
+  getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
+  hydrateProfilesFromStorage,
+  subscribeToProfileStore,
+} from '@/features/profiles/profileStore';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 interface TopBarProps {
@@ -87,6 +100,9 @@ export function TopBar({
   onViewTypeOverrideChange,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
+  const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
   const [windowMetrics, setWindowMetrics] = useState(() => ({
     innerWidth: 0,
     innerHeight: 0,
@@ -107,6 +123,39 @@ export function TopBar({
 
     applyThemeCustomColors(getSavedThemeCustomColors());
   }, []);
+
+  React.useEffect(() => {
+    hydrateProfilesFromStorage();
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleOpenProfileModal = (event: Event) => {
+      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean }>;
+      const requestedTab = customEvent.detail?.tab;
+      const shouldOpenPrinterLibrary = customEvent.detail?.openPrinterLibrary === true;
+      if (requestedTab === 'printer' || requestedTab === 'material') {
+        setProfileModalTab(requestedTab);
+      } else {
+        setProfileModalTab('printer');
+      }
+
+      if (shouldOpenPrinterLibrary) {
+        setProfileModalOpenPrinterLibraryToken((prev) => prev + 1);
+      }
+
+      setIsProfileModalOpen(true);
+    };
+
+    window.addEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
+    return () => {
+      window.removeEventListener(OPEN_PROFILE_SETTINGS_MODAL_EVENT, handleOpenProfileModal as EventListener);
+    };
+  }, []);
+
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -152,16 +201,46 @@ export function TopBar({
       ? `${windowMetrics.innerWidth}×${windowMetrics.innerHeight}`
       : 'detecting…';
 
-  const steps: Array<{ mode: SupportMode; label: string; step: 1 | 2 | 3 | 4; hint: string }> = [
-    { mode: 'prepare', label: 'Prepare', step: 1, hint: 'Arrange model and transforms' },
-    { mode: 'analysis', label: 'Analysis', step: 2, hint: 'Inspect islands and diagnostics' },
-    { mode: 'support', label: 'Support', step: 3, hint: 'Build and tune supports' },
-    { mode: 'export', label: 'Export', step: 4, hint: 'Finalize and export output' },
+  const steps: Array<{
+    mode: SupportMode;
+    label: string;
+    step: number;
+    hint: string;
+    locked: boolean;
+  }> = [
+    {
+      mode: 'prepare',
+      label: 'Prepare',
+      step: 1,
+      hint: 'Arrange model and transforms',
+      locked: false,
+    },
+    {
+      mode: 'analysis',
+      label: 'Analysis',
+      step: 2,
+      hint: 'Inspect islands and diagnostics',
+      locked: !hasModels,
+    },
+    {
+      mode: 'support',
+      label: 'Support',
+      step: 3,
+      hint: 'Build and tune supports',
+      locked: !hasModels,
+    },
+    {
+      mode: 'export',
+      label: 'Export',
+      step: 4,
+      hint: 'Finalize and export output',
+      locked: !hasModels,
+    },
   ];
 
   return (
     <div className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative">
-      <div className="flex w-[220px] items-center pl-3 pr-6 py-1.5">
+      <div className="flex w-[280px] items-center gap-2.5 pl-2 pr-4 py-1.5">
         <img
           src="/textonlyupdate.png"
           alt="Dragonfruit Slicer"
@@ -179,7 +258,7 @@ export function TopBar({
           <div className="relative grid grid-cols-4 gap-2 pointer-events-auto">
             {steps.map((item) => {
               const active = mode === item.mode;
-              const locked = !hasModels && item.mode !== 'prepare';
+              const locked = item.locked;
 
               return (
                 <button
@@ -251,6 +330,21 @@ export function TopBar({
             <span>{metricsLabel} • for best fit use ≥ {MIN_GOOD_WIDTH}×{MIN_GOOD_HEIGHT} maximized</span>
           </div>
         )}
+        <Button
+          onClick={() => {
+            setProfileModalTab('printer');
+            setIsProfileModalOpen(true);
+          }}
+          variant="secondary"
+          className="!h-8 !px-2.5 !py-0 max-w-[200px] inline-flex items-center gap-1.5"
+          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile'}
+          aria-label={activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile'}
+        >
+          <Printer className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate text-[11px] font-semibold leading-none">
+            {activePrinterProfile?.name ?? 'Select Printer'}
+          </span>
+        </Button>
         <ViewTypeDropdown
           value={viewTypeOverride}
           onChange={onViewTypeOverrideChange}
@@ -307,6 +401,13 @@ export function TopBar({
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
         onView3dSettingsChange={onView3dSettingsChange}
+      />
+
+      <ProfileSettingsModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        initialTab={profileModalTab}
+        openPrinterLibraryToken={profileModalOpenPrinterLibraryToken}
       />
     </div>
   );

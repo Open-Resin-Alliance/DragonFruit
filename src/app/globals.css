@@ -17,9 +17,11 @@
   --indicator: #c3c7cf;
 
   --accent: #ec2a77;
+  --primary-button-surface: #c11f61;
   --accent-hover: #d81d67;
   --accent-contrast: #fff6ff;
   --accent-secondary: #baf72e;
+  --secondary-button-surface: #bdf435;
   --accent-secondary-hover: #a6df29;
   --accent-secondary-contrast: #182106;
   --topbar-accent: #ec2a77;
@@ -38,11 +40,11 @@
   --space-5: 20px;
   --space-6: 24px;
 
-  --font-size-xs: 13px;
-  --font-size-sm: 14px;
-  --font-size-md: 15px;
-  --font-size-lg: 19px;
-  --font-size-xl: 26px;
+  --font-size-xs: 15px;
+  --font-size-sm: 16px;
+  --font-size-md: 17px;
+  --font-size-lg: 21px;
+  --font-size-xl: 28px;
 
   --line-height-tight: 1.2;
   --line-height-normal: 1.45;
@@ -93,9 +95,11 @@
   --text-muted: #5d6b7d;
 
   --accent: #2f6fe8;
+  --primary-button-surface: #2458bc;
   --accent-hover: #275fca;
   --accent-contrast: #f6f9ff;
   --accent-secondary: #baf72e;
+  --secondary-button-surface: #95c425;
   --accent-secondary-hover: #a6df29;
   --accent-secondary-contrast: #182106;
   --topbar-accent: #2f6fe8;
@@ -124,9 +128,11 @@
     --text-muted: #5d6b7d;
 
     --accent: #2f6fe8;
+    --primary-button-surface: #2458bc;
     --accent-hover: #275fca;
     --accent-contrast: #f6f9ff;
     --accent-secondary: #baf72e;
+    --secondary-button-surface: #95c425;
     --accent-secondary-hover: #a6df29;
     --accent-secondary-contrast: #182106;
     --topbar-accent: #2f6fe8;
@@ -227,13 +233,13 @@ body {
 }
 
 .ui-button-primary {
-  background: var(--accent);
+  background: var(--primary-button-surface);
   color: var(--accent-contrast);
-  border-color: color-mix(in srgb, var(--accent), white 14%);
+  border-color: color-mix(in srgb, var(--primary-button-surface), white 14%);
 }
 
 .ui-button-primary:hover {
-  background: var(--accent-hover);
+  background: color-mix(in srgb, var(--primary-button-surface), black 12%);
 }
 
 .ui-button-secondary {
@@ -247,13 +253,13 @@ body {
 }
 
 .ui-button-accent {
-  background: var(--accent-secondary);
+  background: var(--secondary-button-surface);
   color: var(--accent-secondary-contrast);
-  border-color: color-mix(in srgb, var(--accent-secondary), white 14%);
+  border-color: color-mix(in srgb, var(--secondary-button-surface), white 14%);
 }
 
 .ui-button-accent:hover {
-  background: var(--accent-secondary-hover);
+  background: color-mix(in srgb, var(--secondary-button-surface), black 9%);
 }
 
 .ui-shell {
@@ -301,12 +307,12 @@ button:disabled,
 
 .ui-label {
   color: var(--indicator);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .ui-meta {
   color: var(--indicator);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .ui-checkbox {
@@ -483,6 +489,26 @@ input[type="number"].no-spinners {
   }
 }
 
+@keyframes uiModalBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes uiModalPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes uiLoadingLoop {
   0% {
     transform: translateX(-130%);
@@ -505,6 +531,22 @@ input[type="number"].no-spinners {
   width: 32%;
   border-radius: 9999px;
   animation: uiLoadingLoop 1.15s linear infinite;
+}
+
+.ui-modal-backdrop-enter {
+  animation: uiModalBackdropIn 140ms ease-out;
+}
+
+.ui-modal-panel-enter {
+  animation: uiModalPanelIn 180ms ease-out;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-modal-backdrop-enter,
+  .ui-modal-panel-enter {
+    animation: none !important;
+  }
 }
 
 /* Themed custom scrollbar */
@@ -539,4 +581,25 @@ input[type="number"].no-spinners {
     color-mix(in srgb, var(--accent), white 16%),
     color-mix(in srgb, var(--accent), var(--surface-2) 34%)
   );
+}
+
+/* Themed number stepper controls */
+.ui-number-input {
+  accent-color: var(--accent);
+}
+
+.ui-number-input::-webkit-inner-spin-button,
+.ui-number-input::-webkit-outer-spin-button {
+  opacity: 1;
+  width: 14px;
+  margin: 0;
+  background: color-mix(in srgb, var(--surface-2), var(--accent) 10%);
+  border-left: 1px solid color-mix(in srgb, var(--border-subtle), var(--accent) 24%);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ui-number-input:hover::-webkit-inner-spin-button,
+.ui-number-input:hover::-webkit-outer-spin-button {
+  background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
 }

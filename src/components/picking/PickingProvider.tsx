@@ -252,7 +252,19 @@ export function PickingProvider({
   return (
     <PickingContext.Provider value={contextValue}>
       {/* Pointer move handler to track mouse position */}
-      <PointerTracker mouseNDCRef={mouseNDCRef} gl={gl} />
+      <PointerTracker
+        mouseNDCRef={mouseNDCRef}
+        gl={gl}
+        onPointerLeave={() => {
+          setHit({
+            pickId: 0,
+            category: 'none',
+            objectId: null,
+            screenPosition: { x: 0, y: 0 },
+            timestamp: performance.now(),
+          });
+        }}
+      />
       
       {/* The picking renderer (invisible, runs in background) */}
       <PickingRenderer
@@ -275,10 +287,12 @@ export function PickingProvider({
  */
 function PointerTracker({ 
   mouseNDCRef, 
-  gl 
+  gl,
+  onPointerLeave,
 }: { 
   mouseNDCRef: React.MutableRefObject<{ x: number; y: number } | null>;
   gl: THREE.WebGLRenderer;
+  onPointerLeave?: () => void;
 }) {
   React.useEffect(() => {
     const canvas = gl.domElement;
@@ -302,6 +316,7 @@ function PointerTracker({
     
     const handlePointerLeave = () => {
       mouseNDCRef.current = null;
+      onPointerLeave?.();
     };
     
     canvas.addEventListener('pointermove', handlePointerMove);
@@ -315,7 +330,7 @@ function PointerTracker({
       canvas.removeEventListener('pointerdown', focusCanvas);
       canvas.removeEventListener('pointerleave', handlePointerLeave);
     };
-  }, [gl, mouseNDCRef]);
+  }, [gl, mouseNDCRef, onPointerLeave]);
   
   return null;
 }

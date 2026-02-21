@@ -55,6 +55,8 @@ function createMatcapTexture(variant: MatcapVariant): THREE.Texture {
 export function MatcapMaterial({
   isSelected,
   isHovered,
+  useVertexColors,
+  meshColor,
   hoverTintColor,
   hoverTintStrength,
   selectedTintStrength,
@@ -63,6 +65,8 @@ export function MatcapMaterial({
 }: {
   isSelected: boolean;
   isHovered: boolean;
+  useVertexColors?: boolean;
+  meshColor?: string;
   hoverTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
@@ -77,22 +81,23 @@ export function MatcapMaterial({
     };
   }, [matcap]);
 
+  const baseColor = useVertexColors ? '#ffffff' : (meshColor ?? '#a3a3a3');
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
-    ? blendTintColor('#ffffff', hoverTintColor, selectedStrength)
+    ? blendTintColor(baseColor, hoverTintColor, selectedStrength)
     : isHovered
-      ? blendTintColor('#ffffff', hoverTintColor, hoverStrength)
-      : '#ffffff';
+      ? blendTintColor(baseColor, hoverTintColor, hoverStrength)
+      : baseColor;
 
   return (
     <meshMatcapMaterial
-      vertexColors
+      vertexColors={useVertexColors ?? true}
       color={tintColor}
       matcap={matcap}
       clippingPlanes={clippingPlanes}
       clipIntersection
-      side={THREE.DoubleSide}
+      side={THREE.FrontSide}
     />
   );
 }

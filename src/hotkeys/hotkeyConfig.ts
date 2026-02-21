@@ -58,6 +58,10 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
         SUPPORT_BRACE_PLACEMENT: {
             key: 'Control',
             description: 'Hold to enter Support Brace Placement Mode'
+        },
+        TEMP_SPOTLIGHT_HOLD: {
+            key: 'p',
+            description: 'Hold to temporarily enable Spotlight highlight in Support mode'
         }
     },
     CAMERA: {

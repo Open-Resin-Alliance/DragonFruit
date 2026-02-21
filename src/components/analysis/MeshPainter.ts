@@ -8,23 +8,62 @@ export type XZLoopPrism = {
   y1: number;               // inclusive top
 };
 
+type ColorStorageArray = Float32Array | Uint8Array | Uint8ClampedArray;
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function isByteColorBuffer(attribute: THREE.BufferAttribute): boolean {
+  return attribute.array instanceof Uint8Array || attribute.array instanceof Uint8ClampedArray;
+}
+
+function encodeColorComponent(value: number, useBytes: boolean): number {
+  return useBytes ? Math.round(clamp01(value) * 255) : value;
+}
+
+function decodeColorComponent(value: number, useBytes: boolean): number {
+  return useBytes ? value / 255 : value;
+}
+
+function writeColorAt(
+  arr: ColorStorageArray,
+  vertexIndex: number,
+  r: number,
+  g: number,
+  b: number,
+  useBytes: boolean,
+) {
+  arr[vertexIndex * 3 + 0] = encodeColorComponent(r, useBytes);
+  arr[vertexIndex * 3 + 1] = encodeColorComponent(g, useBytes);
+  arr[vertexIndex * 3 + 2] = encodeColorComponent(b, useBytes);
+}
+
+function readColorAt(arr: ColorStorageArray, vertexIndex: number, useBytes: boolean) {
+  return {
+    r: decodeColorComponent(arr[vertexIndex * 3 + 0], useBytes),
+    g: decodeColorComponent(arr[vertexIndex * 3 + 1], useBytes),
+    b: decodeColorComponent(arr[vertexIndex * 3 + 2], useBytes),
+  };
+}
+
 function ensureColorAttribute(geometry: THREE.BufferGeometry, base: THREE.Color) {
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
   if (!pos) return;
   const n = pos.count;
   let color = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!color || color.count !== n) {
-    const arr = new Float32Array(n * 3);
-    color = new THREE.BufferAttribute(arr, 3);
+    const arr = new Uint8Array(n * 3);
+    color = new THREE.BufferAttribute(arr, 3, true);
     geometry.setAttribute('color', color);
   }
-  const arr = (geometry.getAttribute('color') as THREE.BufferAttribute).array as Float32Array;
+  const resolvedColor = geometry.getAttribute('color') as THREE.BufferAttribute;
+  const arr = resolvedColor.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(resolvedColor);
   for (let i = 0; i < n; i++) {
-    arr[i * 3 + 0] = base.r;
-    arr[i * 3 + 1] = base.g;
-    arr[i * 3 + 2] = base.b;
+    writeColorAt(arr, i, base.r, base.g, base.b, useByteColors);
   }
-  (geometry.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
+  resolvedColor.needsUpdate = true;
 }
 
 // Soft-brush variant: for each island label, treat its base pixels as seed points and
@@ -41,12 +80,15 @@ export function applyIslandSoftBrushByLabel(
   brushRadiusMm: number,
   tint: THREE.Color,
 ) {
+  ensureColorAttribute(geometry, baseColor);
+
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
   const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!pos || !col) return 0;
 
   const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as Float32Array;
+  const arrCol = col.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
   const { width, height, originX, originZ, px_mm } = grid;
@@ -137,9 +179,7 @@ export function applyIslandSoftBrushByLabel(
         lerp(bg, tint.g, s),
         lerp(bb, tint.b, s)
       );
-      arrCol[vi * 3 + 0] = tmpColor.r;
-      arrCol[vi * 3 + 1] = tmpColor.g;
-      arrCol[vi * 3 + 2] = tmpColor.b;
+      writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
     painted++;
   }
@@ -161,12 +201,15 @@ export function applyIslandGradientByLabel(
   fadeSpanLayers: number,
   tint: THREE.Color,
 ) {
+  ensureColorAttribute(geometry, baseColor);
+
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
   const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!pos || !col) return 0;
 
   const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as Float32Array;
+  const arrCol = col.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -221,9 +264,7 @@ export function applyIslandGradientByLabel(
         lerp(bg, tint.g, s),
         lerp(bb, tint.b, s)
       );
-      arrCol[vi * 3 + 0] = tmpColor.r;
-      arrCol[vi * 3 + 1] = tmpColor.g;
-      arrCol[vi * 3 + 2] = tmpColor.b;
+      writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
     painted++;
   }
@@ -253,12 +294,15 @@ export function applyIslandGradientSinglePass(
   fadeSpanLayers: number,
   tint: THREE.Color,
 ) {
+  ensureColorAttribute(geometry, baseColor);
+
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
   const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!pos || !col) return 0;
 
   const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as Float32Array;
+  const arrCol = col.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -308,9 +352,7 @@ export function applyIslandGradientSinglePass(
         lerp(bg, tint.g, s),
         lerp(bb, tint.b, s)
       );
-      arrCol[vi * 3 + 0] = tmpColor.r;
-      arrCol[vi * 3 + 1] = tmpColor.g;
-      arrCol[vi * 3 + 2] = tmpColor.b;
+      writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
     painted++;
   }
@@ -356,7 +398,8 @@ export function applyTintPrisms(
   if (!pos || !col) return;
 
   const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as Float32Array;
+  const arrCol = col.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
 
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -383,17 +426,13 @@ export function applyTintPrisms(
     // Tint all three vertices of this triangle
     for (let k = 0; k < 3; k++) {
       const idx = i + k;
-      const r = arrCol[idx * 3 + 0];
-      const g = arrCol[idx * 3 + 1];
-      const b = arrCol[idx * 3 + 2];
+      const { r, g, b } = readColorAt(arrCol, idx, useByteColors);
       tmpColor.setRGB(
         lerp(r, tint.r, strength),
         lerp(g, tint.g, strength),
         lerp(b, tint.b, strength)
       );
-      arrCol[idx * 3 + 0] = tmpColor.r;
-      arrCol[idx * 3 + 1] = tmpColor.g;
-      arrCol[idx * 3 + 2] = tmpColor.b;
+      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
   }
 
@@ -409,12 +448,15 @@ export function applyTintMaskBandVariableStrength(
   tint: THREE.Color,
   sampleStrength: (colIdx: number, rowIdx: number) => number,
 ) {
+  ensureColorAttribute(geometry, baseColor);
+
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
   const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!pos || !col) return;
 
   const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as Float32Array;
+  const arrCol = col.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -457,9 +499,7 @@ export function applyTintMaskBandVariableStrength(
         lerp(bg, tint.g, s),
         lerp(bb, tint.b, s)
       );
-      arrCol[idx * 3 + 0] = tmpColor.r;
-      arrCol[idx * 3 + 1] = tmpColor.g;
-      arrCol[idx * 3 + 2] = tmpColor.b;
+      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
   }
 
@@ -478,7 +518,8 @@ export function applyTintAll(
   const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!pos || !col) return;
   const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as Float32Array;
+  const arrCol = col.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
   let painted = 0;
@@ -486,17 +527,13 @@ export function applyTintAll(
     painted++;
     for (let k = 0; k < 3; k++) {
       const idx = i + k;
-      const r = arrCol[idx * 3 + 0];
-      const g = arrCol[idx * 3 + 1];
-      const b = arrCol[idx * 3 + 2];
+      const { r, g, b } = readColorAt(arrCol, idx, useByteColors);
       tmpColor.setRGB(
         lerp(r, tint.r, strength),
         lerp(g, tint.g, strength),
         lerp(b, tint.b, strength)
       );
-      arrCol[idx * 3 + 0] = tmpColor.r;
-      arrCol[idx * 3 + 1] = tmpColor.g;
-      arrCol[idx * 3 + 2] = tmpColor.b;
+      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
   }
   col.needsUpdate = true;
@@ -521,12 +558,15 @@ export function applyTintMaskBand(
   tint: THREE.Color,
   strength: number,
 ) {
+  ensureColorAttribute(geometry, baseColor);
+
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
   const col = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
   if (!pos || !col) return;
 
   const arrPos = pos.array as Float32Array;
-  const arrCol = col.array as Float32Array;
+  const arrCol = col.array as ColorStorageArray;
+  const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
 
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -559,17 +599,13 @@ export function applyTintMaskBand(
 
     for (let k = 0; k < 3; k++) {
       const idx = i + k;
-      const r = arrCol[idx * 3 + 0];
-      const g = arrCol[idx * 3 + 1];
-      const b = arrCol[idx * 3 + 2];
+      const { r, g, b } = readColorAt(arrCol, idx, useByteColors);
       tmpColor.setRGB(
         lerp(r, tint.r, strength),
         lerp(g, tint.g, strength),
         lerp(b, tint.b, strength)
       );
-      arrCol[idx * 3 + 0] = tmpColor.r;
-      arrCol[idx * 3 + 1] = tmpColor.g;
-      arrCol[idx * 3 + 2] = tmpColor.b;
+      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
   }
 

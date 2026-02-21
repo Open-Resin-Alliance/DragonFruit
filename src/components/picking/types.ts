@@ -96,6 +96,8 @@ export interface PickingConfig {
   hoverUpdateRate: number;
   /** Update rate in Hz during drag operations */
   dragUpdateRate: number;
+  /** Optional category allow-list. Null/empty allows all categories. */
+  allowedCategories?: PickableCategory[] | null;
   /** Whether to include gizmo handles in picking */
   includeGizmo: boolean;
   /** Debug mode - renders pick buffer to screen */

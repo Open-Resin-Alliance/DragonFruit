@@ -14,6 +14,7 @@ export const DEFAULT_PICKING_CONFIG: PickingConfig = {
   patchSize: 3,           // 3x3 majority vote for stability
   hoverUpdateRate: 30,    // 30 Hz during normal hover
   dragUpdateRate: 60,     // 60 Hz during drags
+  allowedCategories: null,
   includeGizmo: true,     // Include gizmo handles when visible
   debug: false,           // Don't show debug overlay by default
 };

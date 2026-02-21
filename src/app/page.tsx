@@ -26,6 +26,7 @@ import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmooth
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
+import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -44,8 +45,17 @@ import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
 import { usePrepareTransformHotkeys } from '@/hotkeys/usePrepareTransformHotkeys';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
+import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import {
+  getActivePrinterProfile,
+  getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
+  subscribeToProfileStore,
+} from '@/features/profiles/profileStore';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 
@@ -61,6 +71,9 @@ if (typeof window !== 'undefined') {
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom });
@@ -75,10 +88,13 @@ export default function Home() {
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
+  const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
+  const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [supportSettingsExpanded, setSupportSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(5);
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
@@ -128,6 +144,8 @@ export default function Home() {
   const dragDepthRef = React.useRef(0);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
+  const { getHotkey } = useHotkeyConfig();
+  const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
     if (scene.mode !== 'prepare') return;
@@ -305,6 +323,23 @@ export default function Home() {
   }, [arrangeSpacingMm, closeEditorContextMenu, scene]);
 
   React.useEffect(() => {
+    const handleDiagnosticsHotkey = (event: KeyboardEvent) => {
+      const isCtrlShiftD = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd';
+      if (!isCtrlShiftD) return;
+
+      // Important: block browser default (e.g. "Bookmark all tabs").
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDiagnosticsOpen((prev) => !prev);
+    };
+
+    window.addEventListener('keydown', handleDiagnosticsHotkey, true);
+    return () => {
+      window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
+    };
+  }, []);
+
+  React.useEffect(() => {
     if (!editorContextMenuPos) return;
 
     const handlePointerDown = () => closeEditorContextMenu();
@@ -466,6 +501,14 @@ export default function Home() {
     scene.setMode(nextMode);
   }, [scene]);
 
+  const handleAddPrinterFromOnboarding = React.useCallback(() => {
+    openProfileSettingsModal('printer', { openPrinterLibrary: true });
+  }, []);
+
+  const handleUseWithoutPrinter = React.useCallback(() => {
+    setAllowPrepareWithoutPrinter(true);
+  }, []);
+
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
@@ -576,6 +619,26 @@ export default function Home() {
     scene.models,
     transformMgr.transform,
   ]);
+
+  const inBoundsModelIds = React.useMemo(() => {
+    const outsideSet = new Set(outsidePlateModelIds);
+    return scene.models
+      .filter((model) => model.visible)
+      .filter((model) => !outsideSet.has(model.id))
+      .map((model) => model.id);
+  }, [outsidePlateModelIds, scene.models]);
+
+  const totalPolygons = React.useMemo(() => {
+    return scene.models.reduce((sum, model) => sum + (model.polygonCount || 0), 0);
+  }, [scene.models]);
+
+  const selectedPolygons = React.useMemo(() => {
+    if (scene.selectedModelIds.length === 0) return 0;
+    const selectedIdSet = new Set(scene.selectedModelIds);
+    return scene.models
+      .filter((model) => selectedIdSet.has(model.id))
+      .reduce((sum, model) => sum + (model.polygonCount || 0), 0);
+  }, [scene.models, scene.selectedModelIds]);
 
   const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
     const size = model.geometry.size;
@@ -1228,6 +1291,12 @@ export default function Home() {
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
 
   React.useEffect(() => {
+    if (!hasActivePrinterProfile) return;
+    if (!allowPrepareWithoutPrinter) return;
+    setAllowPrepareWithoutPrinter(false);
+  }, [allowPrepareWithoutPrinter, hasActivePrinterProfile]);
+
+  React.useEffect(() => {
     const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
     const currentProjectionMode = getSavedCameraProjectionSettings().mode;
 
@@ -1242,6 +1311,51 @@ export default function Home() {
       scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
     }
   }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'support') {
+      setIsSupportSpotlightHoldActive(false);
+      return;
+    }
+
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const binding = { key: supportSpotlightHoldHotkey.key, modifier: supportSpotlightHoldHotkey.modifier };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+      if (!matchesConfiguredHotkeyDown(event, binding)) return;
+      setIsSupportSpotlightHoldActive(true);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (!matchesConfiguredHotkeyUp(event, binding)) return;
+      setIsSupportSpotlightHoldActive(false);
+    };
+
+    const handleBlur = () => {
+      setIsSupportSpotlightHoldActive(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [scene.mode, supportSpotlightHoldHotkey.key, supportSpotlightHoldHotkey.modifier]);
+
+  const effectiveSelectionHighlightMode = React.useMemo(() => {
+    if (scene.mode !== 'support') return scene.selectionHighlightMode;
+    if (isSupportSpotlightHoldActive) return 'spotlight';
+    return scene.selectionHighlightMode === 'spotlight' ? 'tint' : scene.selectionHighlightMode;
+  }, [isSupportSpotlightHoldActive, scene.mode, scene.selectionHighlightMode]);
 
   React.useEffect(() => {
     if (scene.mode !== 'support') return;
@@ -2291,6 +2405,9 @@ export default function Home() {
               isLoading={showInlineEmptyLoading}
               loadingLabel={importOverlayState.label}
               loadingDetail={importOverlayState.detail}
+              showFirstTimeOnboarding={!hasActivePrinterProfile && !allowPrepareWithoutPrinter}
+              onAddPrinter={handleAddPrinterFromOnboarding}
+              onUseWithoutPrinter={handleUseWithoutPrinter}
             />
           )}
 
@@ -2373,7 +2490,7 @@ export default function Home() {
             leafTipPosition={supports.leafPlacement.tipPosition}
             leafHoverPosition={supports.leafPlacement.hoverPosition}
             gpuPickingTest={false}
-            selectionHighlightMode={scene.selectionHighlightMode}
+            selectionHighlightMode={effectiveSelectionHighlightMode}
             hoverTintStrength={scene.hoverTintStrength}
             selectedTintStrength={scene.selectedTintStrength}
             crossSectionMode={slicing.crossSectionMode}
@@ -2413,6 +2530,9 @@ export default function Home() {
           {/* Model Info Overlay Card */}
           <ModelStatsCard
             model={scene.models.find(m => m.id === displayActiveModelId) || null}
+            models={scene.models}
+            selectedModelIds={scene.selectedModelIds}
+            inBoundsModelIds={inBoundsModelIds}
             numLayers={slicing.numLayers}
             heightMm={slicing.heightMm}
           />
@@ -2461,6 +2581,18 @@ export default function Home() {
           'arrange',
           'repair',
         ]}
+      />
+
+      <DiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
+        appMode={scene.mode}
+        cameraProjectionMode={getSavedCameraProjectionSettings().mode}
+        modelCount={scene.models.length}
+        visibleModelCount={scene.models.filter((m) => m.visible).length}
+        selectedModelCount={scene.selectedModelIds.length}
+        totalPolygons={totalPolygons}
+        selectedPolygons={selectedPolygons}
       />
 
     </div>
