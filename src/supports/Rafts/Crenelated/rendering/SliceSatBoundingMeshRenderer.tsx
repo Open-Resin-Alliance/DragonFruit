@@ -450,27 +450,8 @@ function buildSliceWireframeGeometry(rings: SliceRing[], pointCapHeight = 0): TH
     }
   }
 
-  // Terminal cap spokes (point closure visualization)
-  const bottomRing = stitchedRings[0];
-  const topRing = stitchedRings[stitchedRings.length - 1];
-
-  const bottomCenter = new THREE.Vector2();
-  for (const p of bottomRing.points) bottomCenter.add(p);
-  bottomCenter.multiplyScalar(1 / ringSize);
-
-  const topCenter = new THREE.Vector2();
-  for (const p of topRing.points) topCenter.add(p);
-  topCenter.multiplyScalar(1 / ringSize);
-
-  const bottomApex = new THREE.Vector3(bottomCenter.x, bottomCenter.y, bottomRing.z - Math.max(0, pointCapHeight));
-  const topApex = new THREE.Vector3(topCenter.x, topCenter.y, topRing.z + Math.max(0, pointCapHeight));
-
-  for (let i = 0; i < ringSize; i++) {
-    const b = new THREE.Vector3(bottomRing.points[i].x, bottomRing.points[i].y, bottomRing.z);
-    const t = new THREE.Vector3(topRing.points[i].x, topRing.points[i].y, topRing.z);
-    pushSegment(b, bottomApex);
-    pushSegment(t, topApex);
-  }
+  // Intentionally omit cap spokes in wireframe mode to avoid starburst clutter.
+  // Point-cap closure is still present in shaded mesh geometry.
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
