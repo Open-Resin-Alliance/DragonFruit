@@ -1,12 +1,15 @@
 import React from 'react';
-import { ChevronDown, ChevronUp, LayoutGrid, Loader2, RotateCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, LayoutGrid, Loader2, Minus, Plus, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
 
 export type ArrangeAnchorMode = 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
 export type ArrangeLayoutMode = 'auto' | 'array';
+export type ArrangePrecisionMode = 'standard' | 'high_precision';
 
 interface ArrangePanelProps {
+  precisionMode: ArrangePrecisionMode;
+  onPrecisionModeChange: (value: ArrangePrecisionMode) => void;
   layoutMode: ArrangeLayoutMode;
   onLayoutModeChange: (value: ArrangeLayoutMode) => void;
   spacingMm: number;
@@ -95,6 +98,8 @@ function MiniStepperField({ value, onChange, min, max, disabled = false }: MiniS
 }
 
 export function ArrangePanel({
+  precisionMode,
+  onPrecisionModeChange,
   layoutMode,
   onLayoutModeChange,
   spacingMm,
@@ -122,6 +127,13 @@ export function ArrangePanel({
   isApplying = false,
 }: ArrangePanelProps) {
   const [expanded, setExpanded] = React.useState(true);
+  const sanitizeNumber = React.useCallback((value: number, fallback: number) => (
+    Number.isFinite(value) ? value : fallback
+  ), []);
+  const setClampedSpacing = React.useCallback((value: number) => {
+    const next = sanitizeNumber(value, 2);
+    onSpacingMmChange(Math.min(120, Math.max(2, Math.round(next))));
+  }, [onSpacingMmChange, sanitizeNumber]);
 
   const clampCount = React.useCallback((value: number) => Math.min(64, Math.max(1, Math.round(value))), []);
   const clampGap = React.useCallback((value: number) => Math.min(120, Math.max(0, Math.round(value))), []);
@@ -164,6 +176,52 @@ export function ArrangePanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange mode</div>
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                onClick={() => onPrecisionModeChange('standard')}
+                disabled={isApplying}
+                style={precisionMode === 'standard'
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+                      color: 'var(--text-strong)',
+                    }
+                  : undefined}
+                title="Current arrange algorithm"
+              >
+                Standard
+              </button>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                onClick={() => onPrecisionModeChange('high_precision')}
+                disabled={isApplying}
+                style={precisionMode === 'high_precision'
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+                      color: 'var(--text-strong)',
+                    }
+                  : undefined}
+                title="Hull-based SAT packing for tighter fit"
+              >
+                High-Precision
+              </button>
+            </div>
+            <div className="mt-1.5 grid grid-cols-2 gap-1 text-[10px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 35%)' }}>
+                Fast rectangle packing
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 35%)' }}>
+                Hull SAT packing (tighter, slower)
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
             <div className="grid grid-cols-2 gap-1">
               <button
@@ -201,17 +259,38 @@ export function ArrangePanel({
 
           {layoutMode === 'auto' ? (
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Spacing (mm)</label>
-            <NumberInput
-              value={spacingMm}
-              onChange={(next) => {
-                if (next >= 2 && next <= 120) {
-                  onSpacingMmChange(next);
-                }
-              }}
-              disabled={isApplying}
-              className="ui-input mt-1 w-full min-w-0 !h-8 px-2 text-xs sm:text-sm no-spinners"
-            />
+            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
+            <div className="mt-1 flex min-w-0 items-center gap-1">
+              <IconButton
+                className="!h-8 !w-8 shrink-0 !p-0"
+                onClick={() => setClampedSpacing(spacingMm - 1)}
+                disabled={spacingMm <= 2 || isApplying}
+                title="Decrease spacing"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </IconButton>
+
+              <NumberInput
+                value={spacingMm}
+                onChange={setClampedSpacing}
+                onWheel={(e) => {
+                  if (isApplying) return;
+                  e.preventDefault();
+                  setClampedSpacing(spacingMm + (e.deltaY < 0 ? 1 : -1));
+                }}
+                disabled={isApplying}
+                className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
+              />
+
+              <IconButton
+                className="!h-8 !w-8 shrink-0 !p-0"
+                onClick={() => setClampedSpacing(spacingMm + 1)}
+                disabled={spacingMm >= 120 || isApplying}
+                title="Increase spacing"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </IconButton>
+            </div>
           </div>
 
           ) : (

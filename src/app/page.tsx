@@ -16,7 +16,12 @@ import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
-import { ArrangePanel, type ArrangeAnchorMode, type ArrangeLayoutMode } from '@/components/controls/ArrangePanel';
+import {
+  ArrangePanel,
+  type ArrangeAnchorMode,
+  type ArrangeLayoutMode,
+  type ArrangePrecisionMode,
+} from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
@@ -39,7 +44,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
-import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
+import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d';
 
 // Domain Features
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -104,6 +109,7 @@ export default function Home() {
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(5);
+  const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeLayoutMode, setArrangeLayoutMode] = React.useState<ArrangeLayoutMode>('auto');
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
@@ -149,6 +155,11 @@ export default function Home() {
     scale: THREE.Vector3;
   } | null>(null);
   const dragDepthRef = React.useRef(0);
+  const arrangeHullFootprintCacheRef = React.useRef<Map<string, {
+    points: THREE.Vector2[];
+    halfW: number;
+    halfD: number;
+  }>>(new Map());
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
@@ -607,27 +618,95 @@ export default function Home() {
       .reduce((sum, model) => sum + (model.polygonCount || 0), 0);
   }, [scene.models, scene.selectedModelIds]);
 
-  const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
-    return computeProjectedFootprintSize(
-      model.geometry,
-      model.transform.rotation,
-      model.transform.scale,
+  const getArrangeTransform = React.useCallback((model: (typeof scene.models)[number]) => {
+    if (
+      scene.activeModelId
+      && model.id === scene.activeModelId
+      && displayActiveModelId === scene.activeModelId
+    ) {
+      return transformMgr.transform;
+    }
+    return model.transform;
+  }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
+
+  const getModelBoundingFootprintMm = React.useCallback((
+    model: (typeof scene.models)[number],
+    rotationZOverride?: number,
+    transformOverride?: (typeof scene.models)[number]['transform'],
+  ) => {
+    const t = transformOverride ?? getArrangeTransform(model);
+    const rotation = new THREE.Euler(
+      t.rotation.x,
+      t.rotation.y,
+      rotationZOverride ?? t.rotation.z,
+      t.rotation.order,
     );
-  }, []);
+
+    const bounds = computeApproxModelWorldBounds(
+      model.geometry,
+      {
+        position: new THREE.Vector3(0, 0, 0),
+        rotation,
+        scale: t.scale,
+      },
+    );
+
+    return {
+      width: Math.max(2, bounds.max.x - bounds.min.x),
+      depth: Math.max(2, bounds.max.y - bounds.min.y),
+    };
+  }, [computeApproxModelWorldBounds, getArrangeTransform]);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
   }), []);
 
+  const resolveArrangeVisibleModels = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+    if (scope === 'all') {
+      return scene.models.filter((m) => m.visible);
+    }
+
+    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
+
+    // Guard against transient selection desync: ensure active model participates
+    // when user arranges selected models and the active model is visible.
+    if (scene.activeModelId) {
+      const activeVisible = scene.models.some((m) => m.id === scene.activeModelId && m.visible);
+      if (activeVisible) selectedIdSet.add(scene.activeModelId);
+    }
+
+    return scene.models.filter((m) => m.visible && selectedIdSet.has(m.id));
+  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+  const applyArrangeTransforms = React.useCallback((updates: Array<{
+    id: string;
+    transform: {
+      position: THREE.Vector3;
+      rotation: THREE.Euler;
+      scale: THREE.Vector3;
+    };
+  }>) => {
+    if (updates.length === 0) return;
+
+    scene.updateModelTransforms(updates);
+
+    if (!scene.activeModelId || displayActiveModelId !== scene.activeModelId) {
+      return;
+    }
+
+    const activeUpdate = updates.find((update) => update.id === scene.activeModelId);
+    if (!activeUpdate) return;
+
+    const { position, rotation, scale } = activeUpdate.transform;
+    transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+    transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+    transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+  }, [displayActiveModelId, scene, transformMgr.transformHook]);
+
   const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
 
-    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
-    const visibleModels = scene.models.filter((m) => {
-      if (!m.visible) return false;
-      if (scope === 'selected') return selectedIdSet.has(m.id);
-      return true;
-    });
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
 
     if (visibleModels.length <= 1) return;
 
@@ -637,8 +716,13 @@ export default function Home() {
     await sleep(0);
 
     try {
+      const modelTransformById = new Map(
+        visibleModels.map((model) => [model.id, getArrangeTransform(model)] as const),
+      );
+
       const modelsWithFootprints = visibleModels.map((model) => {
-        const baseFootprint = getModelFootprintMm(model);
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const baseFootprint = getModelBoundingFootprintMm(model, undefined, t);
         return {
           model,
           baseWidth: baseFootprint.width,
@@ -702,29 +786,20 @@ export default function Home() {
         };
 
         const footprintAtAngle = (model: (typeof visibleModels)[number], angleZ: number) => {
-          const key = `${model.id}|${angleZ.toFixed(5)}|${model.transform.scale.x.toFixed(5)}|${model.transform.scale.y.toFixed(5)}|${model.transform.scale.z.toFixed(5)}|${model.transform.rotation.x.toFixed(5)}|${model.transform.rotation.y.toFixed(5)}`;
+          const t = modelTransformById.get(model.id) ?? model.transform;
+          const key = `${model.id}|${angleZ.toFixed(5)}|${t.scale.x.toFixed(5)}|${t.scale.y.toFixed(5)}|${t.scale.z.toFixed(5)}|${t.rotation.x.toFixed(5)}|${t.rotation.y.toFixed(5)}`;
           const cached = placementSizeCache.get(key);
           if (cached) return cached;
 
-          const rotationForPlacement = new THREE.Euler(
-            model.transform.rotation.x,
-            model.transform.rotation.y,
-            angleZ,
-            model.transform.rotation.order,
-          );
-
-          const dims = computeProjectedFootprintSize(
-            model.geometry,
-            rotationForPlacement,
-            model.transform.scale,
-          );
+          const dims = getModelBoundingFootprintMm(model, angleZ, t);
 
           placementSizeCache.set(key, dims);
           return dims;
         };
 
         const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => {
-          const currentZ = current.model.transform.rotation.z;
+          const t = modelTransformById.get(current.model.id) ?? current.model.transform;
+          const currentZ = t.rotation.z;
           const currentCanonical = normalizeToPi(currentZ);
 
           if (!arrangeAllowRotateOnZ) {
@@ -989,35 +1064,37 @@ export default function Home() {
         });
       }
 
-      scene.updateModelTransforms(
+      applyArrangeTransforms(
         [
           ...packedWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
+            const t = modelTransformById.get(model.id) ?? model.transform;
             return {
               id: model.id,
               transform: {
-                position: new THREE.Vector3(positionX, positionY, model.transform.position.z),
+                position: new THREE.Vector3(positionX, positionY, t.position.z),
                 rotation: new THREE.Euler(
-                  model.transform.rotation.x,
-                  model.transform.rotation.y,
+                  t.rotation.x,
+                  t.rotation.y,
                   rotationZ,
-                  model.transform.rotation.order,
+                  t.rotation.order,
                 ),
-                scale: model.transform.scale.clone(),
+                scale: t.scale.clone(),
               },
             };
           }),
           ...spillWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
+            const t = modelTransformById.get(model.id) ?? model.transform;
             return {
               id: model.id,
               transform: {
-                position: new THREE.Vector3(positionX, positionY, model.transform.position.z),
+                position: new THREE.Vector3(positionX, positionY, t.position.z),
                 rotation: new THREE.Euler(
-                  model.transform.rotation.x,
-                  model.transform.rotation.y,
+                  t.rotation.x,
+                  t.rotation.y,
                   rotationZ,
-                  model.transform.rotation.order,
+                  t.rotation.order,
                 ),
-                scale: model.transform.scale.clone(),
+                scale: t.scale.clone(),
               },
             };
           }),
@@ -1032,15 +1109,365 @@ export default function Home() {
       }
       setIsAutoArranging(false);
     }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelBoundingFootprintMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
+
+  const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+    if (isAutoArranging) return;
+
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+
+    if (visibleModels.length <= 1) return;
+
+    const minSpinnerMs = 220;
+    const startedAt = performance.now();
+    setIsAutoArranging(true);
+    await sleep(0);
+
+    try {
+      const SAT_CLEARANCE_BIAS_MM = 0.2;
+      const SAT_VOLUME_GUARD_MM = 0.2;
+
+      const modelTransformById = new Map(
+        scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
+      );
+
+      const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
+      const maxX = minX + scene.view3dSettings.widthMm;
+      const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
+      const maxY = minY + scene.view3dSettings.depthMm;
+
+      const quant = (n: number) => Math.round(n * 1e4) / 1e4;
+
+      const getHullAtRotation = (model: (typeof visibleModels)[number], rotationZ: number) => {
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const positionAttr = model.geometry.geometry.getAttribute('position') as THREE.BufferAttribute;
+        if (!positionAttr || positionAttr.count < 3) {
+          return { points: [new THREE.Vector2(0, 0)], halfW: 1, halfD: 1 };
+        }
+
+        const key = [
+          model.geometry.geometry.uuid,
+          quant(t.rotation.x),
+          quant(t.rotation.y),
+          quant(rotationZ),
+          quant(t.scale.x),
+          quant(t.scale.y),
+          quant(t.scale.z),
+        ].join('|');
+
+        const cached = arrangeHullFootprintCacheRef.current.get(key);
+        if (cached) return cached;
+
+        const matrix = new THREE.Matrix4().compose(
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(
+            t.rotation.x,
+            t.rotation.y,
+            rotationZ,
+            t.rotation.order,
+          )),
+          t.scale,
+        );
+
+        const center = model.geometry.center;
+        // High-precision mode: sample much more densely to avoid missing
+        // thin/wide extremities that can cause slight overlap/volume clipping.
+        const targetSamples = 20000;
+        const stride = Math.max(1, Math.floor(positionAttr.count / targetSamples));
+        const points2d: THREE.Vector2[] = [];
+        const tmp = new THREE.Vector3();
+        for (let i = 0; i < positionAttr.count; i += stride) {
+          tmp.set(
+            positionAttr.getX(i) - center.x,
+            positionAttr.getY(i) - center.y,
+            positionAttr.getZ(i) - center.z,
+          ).applyMatrix4(matrix);
+          points2d.push(new THREE.Vector2(tmp.x, tmp.y));
+        }
+
+        const hull = convexHull2d(points2d);
+        let minHX = Infinity;
+        let maxHX = -Infinity;
+        let minHY = Infinity;
+        let maxHY = -Infinity;
+        for (const p of hull) {
+          minHX = Math.min(minHX, p.x);
+          maxHX = Math.max(maxHX, p.x);
+          minHY = Math.min(minHY, p.y);
+          maxHY = Math.max(maxHY, p.y);
+        }
+
+        const next = {
+          points: hull.length >= 3 ? hull : [
+            new THREE.Vector2(-1, -1),
+            new THREE.Vector2(1, -1),
+            new THREE.Vector2(1, 1),
+            new THREE.Vector2(-1, 1),
+          ],
+          halfW: Math.max(1, (maxHX - minHX) * 0.5),
+          halfD: Math.max(1, (maxHY - minHY) * 0.5),
+        };
+        arrangeHullFootprintCacheRef.current.set(key, next);
+        return next;
+      };
+
+      const axesFromPolygon = (poly: THREE.Vector2[]) => {
+        const axes: THREE.Vector2[] = [];
+        for (let i = 0; i < poly.length; i++) {
+          const a = poly[i];
+          const b = poly[(i + 1) % poly.length];
+          const edge = new THREE.Vector2(b.x - a.x, b.y - a.y);
+          if (edge.lengthSq() <= 1e-10) continue;
+          const axis = new THREE.Vector2(-edge.y, edge.x).normalize();
+          axes.push(axis);
+        }
+        return axes;
+      };
+
+      const projectPolygon = (poly: THREE.Vector2[], center: THREE.Vector2, axis: THREE.Vector2) => {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const p of poly) {
+          const worldX = p.x + center.x;
+          const worldY = p.y + center.y;
+          const dot = (worldX * axis.x) + (worldY * axis.y);
+          min = Math.min(min, dot);
+          max = Math.max(max, dot);
+        }
+        return { min, max };
+      };
+
+      const polygonsOverlapWithSpacing = (
+        polyA: THREE.Vector2[],
+        centerA: THREE.Vector2,
+        polyB: THREE.Vector2[],
+        centerB: THREE.Vector2,
+        spacing: number,
+      ) => {
+        const axes = [...axesFromPolygon(polyA), ...axesFromPolygon(polyB)];
+        for (const axis of axes) {
+          const ia = projectPolygon(polyA, centerA, axis);
+          const ib = projectPolygon(polyB, centerB, axis);
+          if ((ia.max + spacing) <= ib.min || (ib.max + spacing) <= ia.min) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      type CollisionProxy = {
+        center: THREE.Vector2;
+        hull: THREE.Vector2[];
+        halfW: number;
+        halfD: number;
+      };
+
+      type Placed = CollisionProxy & {
+        model: (typeof visibleModels)[number];
+        rotationZ: number;
+      };
+
+      const targetIdSet = new Set(visibleModels.map((m) => m.id));
+      const blockers: CollisionProxy[] = scene.models
+        .filter((m) => m.visible && !targetIdSet.has(m.id))
+        .map((m) => {
+          const t = modelTransformById.get(m.id) ?? m.transform;
+          const hull = getHullAtRotation(m, t.rotation.z);
+          return {
+            center: new THREE.Vector2(t.position.x, t.position.y),
+            hull: hull.points,
+            halfW: hull.halfW,
+            halfD: hull.halfD,
+          };
+        });
+
+      const anchor = (() => {
+        if (arrangeAnchorMode === 'front_left') return new THREE.Vector2(minX, minY);
+        if (arrangeAnchorMode === 'front_right') return new THREE.Vector2(maxX, minY);
+        if (arrangeAnchorMode === 'back_left') return new THREE.Vector2(minX, maxY);
+        if (arrangeAnchorMode === 'back_right') return new THREE.Vector2(maxX, maxY);
+        return new THREE.Vector2((minX + maxX) * 0.5, (minY + maxY) * 0.5);
+      })();
+
+      const modelOrder = [...visibleModels].sort((a, b) => {
+        const at = modelTransformById.get(a.id) ?? a.transform;
+        const bt = modelTransformById.get(b.id) ?? b.transform;
+        const ah = getHullAtRotation(a, at.rotation.z);
+        const bh = getHullAtRotation(b, bt.rotation.z);
+        return (bh.halfW * bh.halfD) - (ah.halfW * ah.halfD);
+      });
+
+      const placed: Placed[] = [];
+      const spills: Placed[] = [];
+      const spacing = Math.max(2, arrangeSpacingMm);
+
+      for (const model of modelOrder) {
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const currentZ = t.rotation.z;
+        const options = arrangeAllowRotateOnZ
+          ? [currentZ, currentZ + Math.PI * 0.5]
+          : [currentZ];
+
+        let selected: { center: THREE.Vector2; rotationZ: number; hull: THREE.Vector2[]; halfW: number; halfD: number } | null = null;
+
+        for (const optionZ of options) {
+          const hullData = getHullAtRotation(model, optionZ);
+          const xSet = new Set<number>();
+          const ySet = new Set<number>();
+
+          const addX = (x: number) => {
+            const clamped = Math.min(maxX - hullData.halfW, Math.max(minX + hullData.halfW, x));
+            xSet.add(Number(clamped.toFixed(3)));
+          };
+          const addY = (y: number) => {
+            const clamped = Math.min(maxY - hullData.halfD, Math.max(minY + hullData.halfD, y));
+            ySet.add(Number(clamped.toFixed(3)));
+          };
+
+          addX(anchor.x);
+          addY(anchor.y);
+          addX(minX + hullData.halfW);
+          addX(maxX - hullData.halfW);
+          addY(minY + hullData.halfD);
+          addY(maxY - hullData.halfD);
+
+          for (const p of placed) {
+            addX(p.center.x - (p.halfW + hullData.halfW + spacing));
+            addX(p.center.x + (p.halfW + hullData.halfW + spacing));
+            addY(p.center.y - (p.halfD + hullData.halfD + spacing));
+            addY(p.center.y + (p.halfD + hullData.halfD + spacing));
+          }
+
+          const candidates: Array<{ x: number; y: number; score: number }> = [];
+          for (const x of xSet) {
+            for (const y of ySet) {
+              const dx = x - anchor.x;
+              const dy = y - anchor.y;
+              candidates.push({ x, y, score: dx * dx + dy * dy });
+            }
+          }
+          candidates.sort((a, b) => a.score - b.score);
+
+          for (let i = 0; i < candidates.length && i < 900; i++) {
+            const candidate = candidates[i];
+            const center = new THREE.Vector2(candidate.x, candidate.y);
+
+            const fullyInsideVolume =
+              (center.x - hullData.halfW) >= (minX + SAT_VOLUME_GUARD_MM)
+              && (center.x + hullData.halfW) <= (maxX - SAT_VOLUME_GUARD_MM)
+              && (center.y - hullData.halfD) >= (minY + SAT_VOLUME_GUARD_MM)
+              && (center.y + hullData.halfD) <= (maxY - SAT_VOLUME_GUARD_MM);
+
+            if (!fullyInsideVolume) continue;
+
+            const collisionPool: CollisionProxy[] = [...placed, ...blockers];
+            const bboxOverlap = collisionPool.filter((p) => (
+              Math.abs(p.center.x - center.x) <= (p.halfW + hullData.halfW + spacing + SAT_CLEARANCE_BIAS_MM)
+              && Math.abs(p.center.y - center.y) <= (p.halfD + hullData.halfD + spacing + SAT_CLEARANCE_BIAS_MM)
+            ));
+
+            const collides = bboxOverlap.some((p) => polygonsOverlapWithSpacing(
+              hullData.points,
+              center,
+              p.hull,
+              p.center,
+              spacing + SAT_CLEARANCE_BIAS_MM,
+            ));
+
+            if (!collides) {
+              selected = {
+                center,
+                rotationZ: optionZ,
+                hull: hullData.points,
+                halfW: hullData.halfW,
+                halfD: hullData.halfD,
+              };
+              break;
+            }
+          }
+
+          if (selected) break;
+        }
+
+        if (selected) {
+          placed.push({
+            model,
+            center: selected.center,
+            rotationZ: selected.rotationZ,
+            hull: selected.hull,
+            halfW: selected.halfW,
+            halfD: selected.halfD,
+          });
+          continue;
+        }
+
+        const fallbackHull = getHullAtRotation(model, t.rotation.z);
+        const outsideGap = Math.max(8, spacing);
+        const spillIndex = spills.length;
+        // Fully outside placement: push entire footprint beyond maxX
+        // so it cannot clip inside build volume.
+        const spillCenter = new THREE.Vector2(
+          maxX + outsideGap + fallbackHull.halfW + SAT_VOLUME_GUARD_MM,
+          minY + fallbackHull.halfD + spillIndex * ((fallbackHull.halfD * 2) + spacing),
+        );
+
+        spills.push({
+          model,
+          center: spillCenter,
+          rotationZ: t.rotation.z,
+          hull: fallbackHull.points,
+          halfW: fallbackHull.halfW,
+          halfD: fallbackHull.halfD,
+        });
+      }
+
+      const updates = [...placed, ...spills].map((entry) => ({
+        transform: (() => {
+          const t = modelTransformById.get(entry.model.id) ?? entry.model.transform;
+          return {
+            position: new THREE.Vector3(entry.center.x, entry.center.y, t.position.z),
+            rotation: new THREE.Euler(
+              t.rotation.x,
+              t.rotation.y,
+              entry.rotationZ,
+              t.rotation.order,
+            ),
+            scale: t.scale.clone(),
+          };
+        })(),
+        id: entry.model.id,
+      }));
+
+      if (updates.length > 1) {
+        applyArrangeTransforms(updates);
+        transformMgr.setTransformMode('select');
+      }
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < minSpinnerMs) {
+        await sleep(minSpinnerMs - elapsed);
+      }
+      setIsAutoArranging(false);
+    }
+  }, [
+    arrangeAllowRotateOnZ,
+    arrangeAnchorMode,
+    arrangeSpacingMm,
+    getArrangeTransform,
+    isAutoArranging,
+    resolveArrangeVisibleModels,
+    scene,
+    sleep,
+    transformMgr,
+    applyArrangeTransforms,
+  ]);
 
   const computeManualArrayArrangeUpdates = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
-    const visibleModels = scene.models.filter((m) => {
-      if (!m.visible) return false;
-      if (scope === 'selected') return selectedIdSet.has(m.id);
-      return true;
-    });
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+
+    const modelTransformById = new Map(
+      visibleModels.map((model) => [model.id, getArrangeTransform(model)] as const),
+    );
 
     if (visibleModels.length <= 1) return { models: visibleModels, updates: [] as Array<{ id: string; transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } }> };
 
@@ -1053,13 +1480,10 @@ export default function Home() {
     const gapZ = Math.max(0, arrangeArrayGapZ);
 
     const baseDims = visibleModels.map((model) => {
-      const projected = computeProjectedFootprintSize(
-        model.geometry,
-        model.transform.rotation,
-        model.transform.scale,
-      );
+      const t = modelTransformById.get(model.id) ?? model.transform;
+      const projected = getModelBoundingFootprintMm(model, undefined, t);
       const size = model.geometry.size;
-      const scaledHeight = Math.max(2, Math.abs(size.z * model.transform.scale.z));
+      const scaledHeight = Math.max(2, Math.abs(size.z * t.scale.z));
 
       return {
         width: projected.width,
@@ -1105,9 +1529,10 @@ export default function Home() {
       startY = maxY - (maxDepth * 0.5) - totalDepth;
     }
 
-    const baseZ = Math.min(...visibleModels.map((model) => model.transform.position.z));
+    const baseZ = Math.min(...visibleModels.map((model) => (modelTransformById.get(model.id) ?? model.transform).position.z));
 
     const updates = visibleModels.map((model, index) => {
+      const t = modelTransformById.get(model.id) ?? model.transform;
       const xIndex = index % countX;
       const yIndex = Math.floor(index / countX) % countY;
       const zIndex = Math.floor(index / (countX * countY)) % usedCountZ;
@@ -1120,8 +1545,8 @@ export default function Home() {
             startY + (yIndex * stepY),
             baseZ + (zIndex * stepZ),
           ),
-          rotation: model.transform.rotation.clone(),
-          scale: model.transform.scale.clone(),
+          rotation: t.rotation.clone(),
+          scale: t.scale.clone(),
         },
       };
     });
@@ -1140,6 +1565,9 @@ export default function Home() {
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
     scene.view3dSettings.widthMm,
+    getArrangeTransform,
+    getModelBoundingFootprintMm,
+    resolveArrangeVisibleModels,
   ]);
 
   const handleManualArrayArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
@@ -1154,7 +1582,7 @@ export default function Home() {
       const { updates } = computeManualArrayArrangeUpdates(scope, explicitSelectedIds);
       if (updates.length <= 1) return;
 
-      scene.updateModelTransforms(updates);
+      applyArrangeTransforms(updates);
       transformMgr.setTransformMode('select');
     } finally {
       const elapsed = performance.now() - startedAt;
@@ -1176,6 +1604,7 @@ export default function Home() {
     scene,
     sleep,
     transformMgr,
+    applyArrangeTransforms,
   ]);
 
   React.useEffect(() => {
@@ -1245,7 +1674,9 @@ export default function Home() {
     onArrangeAll: () => {
       void (arrangeLayoutMode === 'array'
         ? handleManualArrayArrangeModels('all')
-        : handleAutoArrangeModels('all'));
+        : (arrangePrecisionMode === 'high_precision'
+          ? handleHighPrecisionArrangeModels('all')
+          : handleAutoArrangeModels('all')));
     },
   });
 
@@ -1853,7 +2284,6 @@ export default function Home() {
     duplicateLayoutMode,
     duplicateSpacingMm,
     duplicateTotalCopies,
-    getModelFootprintMm,
     scene.activeModel,
     scene.models,
     scene.mode,
@@ -2143,6 +2573,8 @@ export default function Home() {
             {scene.geom && transformMgr.transformMode === 'arrange' && (
               <ArrangePanel
                 key="prepare-arrange-panel"
+                precisionMode={arrangePrecisionMode}
+                onPrecisionModeChange={setArrangePrecisionMode}
                 layoutMode={arrangeLayoutMode}
                 onLayoutModeChange={setArrangeLayoutMode}
                 spacingMm={arrangeSpacingMm}
@@ -2166,12 +2598,16 @@ export default function Home() {
                 onApplyAll={() => {
                   void (arrangeLayoutMode === 'array'
                     ? handleManualArrayArrangeModels('all')
-                    : handleAutoArrangeModels('all'));
+                    : (arrangePrecisionMode === 'high_precision'
+                      ? handleHighPrecisionArrangeModels('all')
+                      : handleAutoArrangeModels('all')));
                 }}
                 onApplySelected={() => {
                   void (arrangeLayoutMode === 'array'
                     ? handleManualArrayArrangeModels('selected')
-                    : handleAutoArrangeModels('selected'));
+                    : (arrangePrecisionMode === 'high_precision'
+                      ? handleHighPrecisionArrangeModels('selected')
+                      : handleAutoArrangeModels('selected')));
                 }}
                 modelCount={scene.models.filter((m) => m.visible).length}
                 selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
