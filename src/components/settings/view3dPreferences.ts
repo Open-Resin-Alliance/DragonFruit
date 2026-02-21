@@ -8,6 +8,8 @@ export type View3DSettings = {
   screenHeightPx: number;
   showViolationWarning: boolean;
   showModelBoundingBoxes: boolean;
+  showSliceSatBoundingMesh: boolean;
+  sliceSatBoundingMeshRenderMode: 'shaded' | 'wireframe';
 };
 
 export const VIEW3D_SETTINGS_STORAGE_KEY = 'app-3d-view-settings';
@@ -23,6 +25,8 @@ export const DEFAULT_VIEW3D_SETTINGS: View3DSettings = {
   screenHeightPx: 1440,
   showViolationWarning: true,
   showModelBoundingBoxes: false,
+  showSliceSatBoundingMesh: false,
+  sliceSatBoundingMeshRenderMode: 'shaded',
 };
 
 function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
@@ -43,6 +47,13 @@ function clampOriginMode(input: unknown, fallback: View3DSettings['originMode'])
   return input === 'front_left' || input === 'center' ? input : fallback;
 }
 
+function clampSliceSatRenderMode(
+  input: unknown,
+  fallback: View3DSettings['sliceSatBoundingMeshRenderMode'],
+): View3DSettings['sliceSatBoundingMeshRenderMode'] {
+  return input === 'wireframe' || input === 'shaded' ? input : fallback;
+}
+
 export function normalizeView3DSettings(input: unknown): View3DSettings {
   if (!input || typeof input !== 'object') return DEFAULT_VIEW3D_SETTINGS;
 
@@ -57,6 +68,11 @@ export function normalizeView3DSettings(input: unknown): View3DSettings {
     screenHeightPx: clampInteger(candidate.screenHeightPx, 200, 16384, DEFAULT_VIEW3D_SETTINGS.screenHeightPx),
     showViolationWarning: clampBoolean(candidate.showViolationWarning, DEFAULT_VIEW3D_SETTINGS.showViolationWarning),
     showModelBoundingBoxes: clampBoolean(candidate.showModelBoundingBoxes, DEFAULT_VIEW3D_SETTINGS.showModelBoundingBoxes),
+    showSliceSatBoundingMesh: clampBoolean(candidate.showSliceSatBoundingMesh, DEFAULT_VIEW3D_SETTINGS.showSliceSatBoundingMesh),
+    sliceSatBoundingMeshRenderMode: clampSliceSatRenderMode(
+      candidate.sliceSatBoundingMeshRenderMode,
+      DEFAULT_VIEW3D_SETTINGS.sliceSatBoundingMeshRenderMode,
+    ),
   };
 }
 

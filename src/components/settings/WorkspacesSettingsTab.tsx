@@ -301,6 +301,86 @@ export function WorkspacesSettingsTab({
               {view3dSettings.showModelBoundingBoxes ? 'ON' : 'OFF'}
             </button>
           </div>
+
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Show slice SAT bounding mesh
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Experimental overlay: builds a slice-derived SAT mesh volume around the active model.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => patchView3dSettings({ showSliceSatBoundingMesh: !view3dSettings.showSliceSatBoundingMesh })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={view3dSettings.showSliceSatBoundingMesh
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent-contrast)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {view3dSettings.showSliceSatBoundingMesh ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          {view3dSettings.showSliceSatBoundingMesh && (
+            <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  SAT mesh display mode
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Choose between filled shading and wireframe-only debugging.
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshRenderMode: 'shaded' })}
+                  className="h-10 min-w-[110px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={view3dSettings.sliceSatBoundingMeshRenderMode === 'shaded'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  Shaded
+                </button>
+                <button
+                  type="button"
+                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshRenderMode: 'wireframe' })}
+                  className="h-10 min-w-[110px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={view3dSettings.sliceSatBoundingMeshRenderMode === 'wireframe'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  Wireframe
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
