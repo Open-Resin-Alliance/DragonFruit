@@ -33,6 +33,11 @@ import {
 } from '@/components/layout/floatingLayoutPreferences';
 
 import { initializeBVH } from '@/utils/bvh';
+import {
+  computeApproxModelWorldBounds,
+  computePreciseModelWorldBounds,
+  isBoundsOutsideVolume,
+} from '@/utils/modelBounds';
 
 // Domain Features
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -512,62 +517,24 @@ export default function Home() {
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
-  const computeModelWorldBounds = React.useCallback((model: (typeof scene.models)[number], transformOverride?: typeof model.transform) => {
-    const modelBox = model.geometry.bbox.clone();
-    const center = model.geometry.center;
-    modelBox.translate(new THREE.Vector3(-center.x, -center.y, -center.z));
-
+  const computeModelWorldBounds = React.useCallback((
+    model: (typeof scene.models)[number],
+    transformOverride?: typeof model.transform,
+    volumeBounds?: THREE.Box3 | null,
+  ) => {
     const t = transformOverride ?? model.transform;
+    const approxBounds = computeApproxModelWorldBounds(model.geometry, t);
 
-    const ax = Math.abs(t.rotation.x);
-    const ay = Math.abs(t.rotation.y);
-    const az = Math.abs(t.rotation.z);
-    const rotationAxisCount = Number(ax > 1e-4) + Number(ay > 1e-4) + Number(az > 1e-4);
-    const usePreciseMultiAxisBounds = rotationAxisCount > 1;
-
-    const transformMatrix = new THREE.Matrix4().compose(
-      t.position,
-      new THREE.Quaternion().setFromEuler(t.rotation),
-      t.scale,
-    );
-
-    if (!usePreciseMultiAxisBounds) {
-      modelBox.applyMatrix4(transformMatrix);
-      return modelBox;
+    if (!volumeBounds) {
+      return approxBounds;
     }
 
-    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    const finalMatrix = transformMatrix.multiply(offsetMatrix);
-    const positionAttribute = model.geometry.geometry.getAttribute('position');
-    if (!positionAttribute || positionAttribute.count === 0) {
-      modelBox.applyMatrix4(finalMatrix);
-      return modelBox;
+    if (!isBoundsOutsideVolume(approxBounds, volumeBounds, 0.01)) {
+      return approxBounds;
     }
 
-    const preciseBounds = new THREE.Box3();
-    preciseBounds.makeEmpty();
-    const point = new THREE.Vector3();
-
-    if (positionAttribute instanceof THREE.BufferAttribute) {
-      const array = positionAttribute.array;
-      const itemSize = positionAttribute.itemSize;
-
-      for (let i = 0; i < positionAttribute.count; i++) {
-        const idx = i * itemSize;
-        point.set(array[idx], array[idx + 1], array[idx + 2]).applyMatrix4(finalMatrix);
-        preciseBounds.expandByPoint(point);
-      }
-    } else {
-      for (let i = 0; i < positionAttribute.count; i++) {
-        point
-          .set(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i))
-          .applyMatrix4(finalMatrix);
-        preciseBounds.expandByPoint(point);
-      }
-    }
-
-    return preciseBounds.isEmpty() ? modelBox.applyMatrix4(finalMatrix) : preciseBounds;
-  }, [scene.models]);
+    return computePreciseModelWorldBounds(model.geometry, t);
+  }, []);
 
   const buildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
@@ -600,15 +567,8 @@ export default function Home() {
           (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
             ? transformMgr.transform
             : model.transform;
-        const bounds = computeModelWorldBounds(model, effectiveTransform);
-        return (
-          bounds.min.x < (buildVolumeBounds.min.x - BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.max.x > (buildVolumeBounds.max.x + BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.min.y < (buildVolumeBounds.min.y - BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.max.y > (buildVolumeBounds.max.y + BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.min.z < (buildVolumeBounds.min.z - BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.max.z > (buildVolumeBounds.max.z + BUILD_VOLUME_BOUNDS_EPS_MM)
-        );
+        const bounds = computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
+        return isBoundsOutsideVolume(bounds, buildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM);
       })
       .map((model) => model.id);
   }, [
