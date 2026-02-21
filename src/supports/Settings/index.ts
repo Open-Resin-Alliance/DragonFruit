@@ -15,6 +15,7 @@ export type {
     PresetCollection,
 } from './types';
 export { createDefaultSettings } from './types';
+export type { AutoBracingSettings, AutoBracingPattern } from '../autoBracing/settings';
 
 // State
 export {
@@ -26,6 +27,7 @@ export {
     getJointProfile,
     getGridSettings,
     getMeshToMeshSettings,
+    getAutoBracingSettings,
     setSettings,
     updateTipProfile,
     updateShaftProfile,
@@ -34,6 +36,7 @@ export {
     updateJointProfile,
     updateGridSettings,
     updateMeshToMeshSettings,
+    updateAutoBracingSettings,
     subscribeToSettings,
     getSettingsSnapshot,
 } from './state';

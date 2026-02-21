@@ -6,6 +6,7 @@
 
 import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
 import { getSettings, setSettings } from './state';
+import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
 
 // --- Built-in Presets ---
 
@@ -60,6 +61,7 @@ const DETAIL_PRESET: SupportPreset = {
         meshToMesh: {
             stickVsTwigCutoffMm: 5.0,
         },
+        autoBracing: createDefaultAutoBracingSettings(),
     },
 };
 
@@ -124,6 +126,7 @@ const ANCHOR_PRESET: SupportPreset = {
         meshToMesh: {
             stickVsTwigCutoffMm: 5.0,
         },
+        autoBracing: createDefaultAutoBracingSettings(),
     },
 };
 
@@ -330,6 +333,10 @@ export function setActivePreset(id: string | null): void {
             adaptiveConeAngleOffsetDeg: current.tip.adaptiveConeAngleOffsetDeg,
             coneAngleDeg: current.tip.coneAngleDeg,
         },
+        // Preserve current Auto Bracing settings
+        autoBracing: {
+            ...current.autoBracing,
+        },
     });
 
     savePresetsToStorage();
@@ -360,7 +367,10 @@ export function savePreset(id: string): void {
             coneAngleMode: existingPreset.settings.tip.coneAngleMode,
             adaptiveConeAngleOffsetDeg: existingPreset.settings.tip.adaptiveConeAngleOffsetDeg,
             coneAngleDeg: existingPreset.settings.tip.coneAngleDeg,
-        }
+        },
+        autoBracing: {
+            ...existingPreset.settings.autoBracing,
+        },
     };
 
     presets.byId[id] = {

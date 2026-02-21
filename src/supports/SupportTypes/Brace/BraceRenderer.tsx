@@ -9,6 +9,12 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { usePicking } from '@/components/picking';
 import { setSelectedId } from '../../state';
 
+const DEBUG_SECTION_COLORS: Record<string, string> = {
+    top: '#00e5ff',
+    middle: '#76ff03',
+    bottom: '#ff6d00',
+};
+
 interface BraceRendererProps {
     brace: Brace;
     startKnot: Knot;
@@ -19,6 +25,7 @@ interface BraceRendererProps {
     isHovered?: boolean;
     suppressHover?: boolean;
     isInteractable?: boolean;
+    debugSectionColors?: boolean;
 }
 
 export function BraceRenderer({
@@ -31,10 +38,15 @@ export function BraceRenderer({
     isHovered: propHovered,
     suppressHover,
     isInteractable = true,
+    debugSectionColors = false,
 }: BraceRendererProps) {
     const segmentId = `braceSegment:${brace.id}`;
 
     const isBezierSelected = !!isSelected && brace.curve?.type === 'bezier';
+
+    const debugColor = debugSectionColors && brace.debugSection
+        ? DEBUG_SECTION_COLORS[brace.debugSection] ?? '#ff8800'
+        : null;
 
     const { pickRef, visuals } = useHighlight({
         id: brace.id,
@@ -42,7 +54,7 @@ export function BraceRenderer({
         isSelected,
         suppressHover,
         externalHover: propHovered,
-        baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
+        baseColor: debugColor ?? (dimNonSelected && !isSelected ? '#666666' : '#ff8800'),
         selectedColor: '#80fffd',
     });
 

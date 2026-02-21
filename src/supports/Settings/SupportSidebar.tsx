@@ -1,7 +1,7 @@
 "use client";
 
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useSyncExternalStore } from 'react';
 import { Save, RotateCcw } from 'lucide-react';
 import { usePresetHotkeys } from '@/hotkeys/usePresetHotkeys';
 import {
@@ -14,6 +14,8 @@ import {
     updateShaftProfile,
     updateRootsProfile,
     updateJointProfile,
+    updateGridSettings,
+    updateAutoBracingSettings,
 } from './state';
 import { checkPresetDrift } from './presets';
 import { createDefaultSettings } from './types';
@@ -26,6 +28,8 @@ import {
 import { Button } from '@/components/ui/primitives';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SupportAnatomyPreviewSlot } from './AnatomyPreview/SupportAnatomyPreviewSlot';
+import { AutoBracingSettingsCard } from '../autoBracing/AutoBracingSettingsCard';
+import { runAutoBracing } from '../autoBracing/autoBrace';
 import { setAnatomyPreviewActiveSettingKey, setAnatomyPreviewShowTuner, subscribeToAnatomyPreviewState, getAnatomyPreviewState } from './AnatomyPreview/previewState';
 import {
     getSupportKindSnapshot,
@@ -38,7 +42,6 @@ import {
     setRaftSettings,
     updateRaftSettings,
 } from '../Rafts/Crenelated/RaftState';
-import { updateGridSettings } from './state';
 import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
 
 /**
@@ -49,8 +52,9 @@ import { DEFAULT_RAFT_SETTINGS } from '../Rafts/Crenelated/RaftDefaults';
  */
 export function SupportSidebar() {
     usePresetHotkeys();
-    const [settings, setLocalSettings] = useState(() => getSettings());
+    const settings = useSyncExternalStore(subscribeToSettings, getSettings, getSettings);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle');
+    const [autoBraceStatus, setAutoBraceStatus] = useState<{ kind: 'success' | 'warning' | 'error'; message: string } | null>(null);
     const [baseViewportScale, setBaseViewportScale] = useState(1);
     const [appliedCompactScale, setAppliedCompactScale] = useState(1);
     const [isCompactLayout, setIsCompactLayout] = useState(false);
@@ -126,12 +130,10 @@ export function SupportSidebar() {
             console.error('[SupportSidebar] Failed to load raft settings:', err);
         }
 
-        setLocalSettings(getSettings());
+        checkPresetDrift(getSettings());
 
         const unsubscribeSettings = subscribeToSettings(() => {
-            const current = getSettings();
-            setLocalSettings(current);
-            checkPresetDrift(current);
+            checkPresetDrift(getSettings());
         });
         return () => {
             unsubscribeSettings();
@@ -230,6 +232,26 @@ export function SupportSidebar() {
         setAnatomyPreviewActiveSettingKey(null);
     }, []);
 
+    const handleAutoBrace = React.useCallback(() => {
+        try {
+            const result = runAutoBracing();
+            if (!result.changed) {
+                setAutoBraceStatus({ kind: 'warning', message: result.message });
+            } else if (result.underQualifiedSupportCount > 0) {
+                setAutoBraceStatus({ kind: 'warning', message: result.message });
+            } else {
+                setAutoBraceStatus({ kind: 'success', message: result.message });
+            }
+        } catch (err) {
+            console.error('[SupportSidebar] Auto Brace failed:', err);
+            setAutoBraceStatus({ kind: 'error', message: 'Auto Brace failed. Check console for details.' });
+        }
+
+        window.setTimeout(() => {
+            setAutoBraceStatus(null);
+        }, 2800);
+    }, []);
+
     const getInputProps = (key: string, baseClass: string) => {
         const isActive = activeKey === key;
         if (isActive) {
@@ -315,16 +337,28 @@ export function SupportSidebar() {
                             />
                         </div>
                     </div>
+                ) : activeKind === 'stick' ? (
+                    <div className="space-y-2.5">
+                        {renderPreviewBox('h-[240px]')}
+                        <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                            <AutoBracingSettingsCard
+                                settings={settings.autoBracing}
+                                onChange={(partial) => updateAutoBracingSettings(partial)}
+                                onAutoBrace={handleAutoBrace}
+                                status={autoBraceStatus}
+                            />
+                        </div>
+                    </div>
                 ) : (
                     <div className="space-y-2.5">
-                        <div className={activeKind === 'stick' ? 'space-y-2.5' : 'flex gap-2.5'}>
+                        <div className="flex gap-2.5">
                             {renderPreviewBox(
-                                activeKind === 'stick' ? 'h-[212px]' : 'h-auto min-h-[340px]',
-                                activeKind === 'stick' ? 'w-full' : 'flex-1 min-w-0'
+                                'h-auto min-h-[340px]',
+                                'flex-1 min-w-0'
                             )}
 
                             <div
-                                className={activeKind === 'stick' ? 'w-full rounded-md border p-2.5' : 'flex-1 min-w-0 rounded-md border p-2.5'}
+                                className="flex-1 min-w-0 rounded-md border p-2.5"
                                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
                             >
                             <div className="space-y-2">
@@ -345,7 +379,7 @@ export function SupportSidebar() {
                                         />
                                     </div>
 
-                                    {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf' || activeKind === 'stick') && (
+                                    {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
                                         <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.lengthMm')}>
                                             <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Contact cone length</div>
                                             <NumberInput
@@ -359,7 +393,7 @@ export function SupportSidebar() {
                                         </div>
                                     )}
 
-                                    {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf' || activeKind === 'stick') && (
+                                    {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'leaf') && (
                                         <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('tip.coneAngleMode')}>
                                             <div
                                                 className={
@@ -403,10 +437,10 @@ export function SupportSidebar() {
                                         </div>
                                     )}
 
-                                    {(activeKind === 'trunk' || activeKind === 'branch' || activeKind === 'stick') && (
+                                    {(activeKind === 'trunk' || activeKind === 'branch') && (
                                         <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
                                             <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                                                {activeKind === 'stick' ? 'Stick diameter' : 'Trunk diameter'}
+                                                Trunk diameter
                                             </div>
                                             <NumberInput
                                                 value={settings.shaft.diameterMm}
