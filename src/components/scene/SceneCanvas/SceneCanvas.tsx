@@ -27,6 +27,7 @@ import type { SupportData } from '@/supports/rendering';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
+import SliceSatBoundingMeshRenderer from '@/supports/Rafts/Crenelated/rendering/SliceSatBoundingMeshRenderer';
 import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
@@ -1947,6 +1948,13 @@ export function SceneCanvas({
                   <FootprintBorderRenderer modelGeometry={activeModel ? activeModel.geometry : null} modelTransform={activeModelTransform} />
                 </>
               )}
+
+              <SliceSatBoundingMeshRenderer
+                modelGeometry={activeModel ? activeModel.geometry : null}
+                modelTransform={activeModelTransform}
+                enabled={Boolean(activeBuildVolumeSettings.showSliceSatBoundingMesh)}
+                renderMode={activeBuildVolumeSettings.sliceSatBoundingMeshRenderMode}
+              />
 
               {/* Gizmo attached to active model */}
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && isModelSelected && (
