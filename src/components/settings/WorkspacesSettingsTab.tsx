@@ -297,6 +297,10 @@ export function WorkspacesSettingsTab({
               {view3dSettings.showModelBoundingBoxes ? 'ON' : 'OFF'}
             </button>
           </div>
+          </>
+          )}
+        </>
+          )}
         </div>
       </section>
 
