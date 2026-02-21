@@ -1498,100 +1498,156 @@ export default function Home() {
         return options;
       };
 
+      // ── Candidate generation helper ─────────────────────────────────────────
+      // For every edge of each placed polygon, project the candidate hull flush
+      // against that edge (at exactly minSpacing separation) to generate nestling
+      // candidates.  This lets irregular hulls fill concavities left by neighbours.
+      const buildContactCandidates = (
+        h: HullData,
+        pool: CollisionProxy[],
+        minCX: number,
+        maxCX: number,
+        minCY: number,
+        maxCY: number,
+        out: Array<{ x: number; y: number }>,
+      ) => {
+        for (const other of pool) {
+          const otherPoly = other.hull;
+          for (let ei = 0; ei < otherPoly.length; ei++) {
+            const vA = otherPoly[ei];
+            const vB = otherPoly[(ei + 1) % otherPoly.length];
+            const ex = vB.x - vA.x;
+            const ey = vB.y - vA.y;
+            const len = Math.sqrt(ex * ex + ey * ey);
+            if (len < 1e-8) continue;
+            const nx = -ey / len;
+            const ny = ex / len;
+
+            // Extreme of candidate hull in -normal direction
+            let minDot = Infinity;
+            for (const p of h.points) {
+              const d = p.x * nx + p.y * ny;
+              if (d < minDot) minDot = d;
+            }
+            // Extreme of other hull in +normal direction
+            let maxOther = -Infinity;
+            for (const p of otherPoly) {
+              const d = (p.x + other.center.x) * nx + (p.y + other.center.y) * ny;
+              if (d > maxOther) maxOther = d;
+            }
+
+            // For each vertex of the other hull, compute the candidate center that
+            // places the candidate hull flush against this edge at that vertex.
+            // candidate_center · n = (vO + other.center) · n + minSpacing - minDot
+            for (const vO of otherPoly) {
+              const targetDot = (vO.x + other.center.x) * nx + (vO.y + other.center.y) * ny + minSpacing - minDot;
+              if (Math.abs(ny) > 0.1) {
+                for (const cx of [other.center.x, minCX, maxCX, anchor.x]) {
+                  const cy = (targetDot - cx * nx) / ny;
+                  out.push({ x: Math.min(maxCX, Math.max(minCX, cx)), y: Math.min(maxCY, Math.max(minCY, cy)) });
+                }
+              }
+              if (Math.abs(nx) > 0.1) {
+                for (const cy of [other.center.y, minCY, maxCY, anchor.y]) {
+                  const cx = (targetDot - cy * ny) / nx;
+                  out.push({ x: Math.min(maxCX, Math.max(minCX, cx)), y: Math.min(maxCY, Math.max(minCY, cy)) });
+                }
+              }
+            }
+            void maxOther; // used for context; direct offset not needed with vertex iteration
+          }
+        }
+      };
+
       const allShareSameGeometry = visibleModels.length > 0
         && visibleModels.every((m) => m.geometry.geometry.uuid === visibleModels[0].geometry.geometry.uuid);
 
+      // ── Pre-select best rotation for identical-geometry batches ─────────────
+      // Run a fast BLF simulation at each angle and keep the angle that fits most.
+      const simPackAtAngle = (angle: number): number => {
+        const simPlaced: CollisionProxy[] = [...blockers];
+        let count = 0;
+        for (const model of visibleModels) {
+          const h = getHullAtRotation(model, angle);
+          const proxy: CollisionProxy = {
+            center: new THREE.Vector2(),
+            hull: h.points, halfW: h.halfW, halfD: h.halfD,
+            localMinX: h.localMinX, localMaxX: h.localMaxX,
+            localMinY: h.localMinY, localMaxY: h.localMaxY,
+          };
+          const minCX = minX - h.localMinX;
+          const maxCX = maxX - h.localMaxX;
+          const minCY = minY - h.localMinY;
+          const maxCY = maxY - h.localMaxY;
+          if (minCX > maxCX || minCY > maxCY) continue;
+
+          const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
+          const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
+          const colsX = Math.ceil((maxCX - minCX) / pitchX) + 1;
+          const rowsY = Math.ceil((maxCY - minCY) / pitchY) + 1;
+          const cands: Array<{ cx: number; cy: number; d: number }> = [];
+          const addSim = (x: number, y: number) => {
+            const cx = Math.min(maxCX, Math.max(minCX, x));
+            const cy = Math.min(maxCY, Math.max(minCY, y));
+            const dx = cx - anchor.x; const dy = cy - anchor.y;
+            cands.push({ cx, cy, d: dx * dx + dy * dy });
+          };
+          for (let ix = 0; ix <= colsX; ix++) {
+            for (let iy = 0; iy <= rowsY; iy++) addSim(minCX + ix * pitchX, minCY + iy * pitchY);
+          }
+          for (const other of simPlaced) {
+            const ob = worldBoundsAt(other, other.center);
+            addSim(ob.maxX + minSpacing - h.localMinX, other.center.y);
+            addSim(other.center.x, ob.maxY + minSpacing - h.localMinY);
+          }
+          cands.sort((a, b) => a.d - b.d);
+          for (const c of cands) {
+            const ctr = new THREE.Vector2(c.cx, c.cy);
+            if (canPlaceAt(proxy, ctr, simPlaced)) {
+              count++;
+              simPlaced.push({ ...proxy, center: ctr });
+              break;
+            }
+          }
+        }
+        return count;
+      };
+
       const sharedBestRotation = (() => {
         if (!allShareSameGeometry || visibleModels.length === 0) return null as number | null;
-
         const probe = visibleModels[0];
         const probeT = modelTransformById.get(probe.id) ?? probe.transform;
         const rotOpts = makeRotationOptions(probeT.rotation.z);
         if (rotOpts.length === 1) return rotOpts[0];
-
         let bestAngle = rotOpts[0];
         let bestCount = -1;
-
-        // Simulate BLF packing at each rotation angle and pick the one that fits the most models.
         for (const angle of rotOpts) {
-          const simPlaced: CollisionProxy[] = [...blockers];
-          let simCount = 0;
-
-          for (const model of visibleModels) {
-            const h = getHullAtRotation(model, angle);
-            const proxy: CollisionProxy = {
-              center: new THREE.Vector2(),
-              hull: h.points, halfW: h.halfW, halfD: h.halfD,
-              localMinX: h.localMinX, localMaxX: h.localMaxX,
-              localMinY: h.localMinY, localMaxY: h.localMaxY,
-            };
-            const minCX = minX - h.localMinX;
-            const maxCX = maxX - h.localMaxX;
-            const minCY = minY - h.localMinY;
-            const maxCY = maxY - h.localMaxY;
-            if (minCX > maxCX || minCY > maxCY) continue;
-
-            const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
-            const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
-            const colsX = Math.ceil((maxCX - minCX) / pitchX) + 1;
-            const rowsY = Math.ceil((maxCY - minCY) / pitchY) + 1;
-
-            const cands: { cx: number; cy: number; d: number }[] = [];
-            const addSim = (x: number, y: number) => {
-              const cx = Math.min(maxCX, Math.max(minCX, x));
-              const cy = Math.min(maxCY, Math.max(minCY, y));
-              const dx = cx - anchor.x; const dy = cy - anchor.y;
-              cands.push({ cx, cy, d: dx * dx + dy * dy });
-            };
-            for (let ix = 0; ix <= colsX; ix++) {
-              for (let iy = 0; iy <= rowsY; iy++) {
-                addSim(minCX + ix * pitchX, minCY + iy * pitchY);
-              }
-            }
-            for (const other of simPlaced) {
-              const ob = worldBoundsAt(other, other.center);
-              addSim(ob.maxX + minSpacing - h.localMinX, other.center.y);
-              addSim(ob.minX - minSpacing - h.localMaxX, other.center.y);
-              addSim(other.center.x, ob.maxY + minSpacing - h.localMinY);
-              addSim(other.center.x, ob.minY - minSpacing - h.localMaxY);
-            }
-            cands.sort((a, b) => a.d - b.d);
-
-            for (const c of cands) {
-              const center = new THREE.Vector2(c.cx, c.cy);
-              if (canPlaceAt(proxy, center, simPlaced)) {
-                simCount++;
-                simPlaced.push({ ...proxy, center });
-                break;
-              }
-            }
-          }
-
-          if (simCount > bestCount) {
-            bestCount = simCount;
-            bestAngle = angle;
-          }
+          const n = simPackAtAngle(angle);
+          if (n > bestCount) { bestCount = n; bestAngle = angle; }
         }
-
         return bestAngle;
       })();
 
-      const areaAtCurrent = (model: (typeof visibleModels)[number]) => {
-        const t = modelTransformById.get(model.id) ?? model.transform;
-        const h = getHullAtRotation(model, t.rotation.z);
+      // ── Model ordering ───────────────────────────────────────────────────────
+      const areaAtBestAngle = (model: (typeof visibleModels)[number]) => {
+        const angle = sharedBestRotation ?? (modelTransformById.get(model.id) ?? model.transform).rotation.z;
+        const h = getHullAtRotation(model, angle);
         return Math.max(1, (h.localMaxX - h.localMinX) * (h.localMaxY - h.localMinY));
       };
-
-      const modelOrder = [...visibleModels].sort((a, b) => areaAtCurrent(b) - areaAtCurrent(a));
+      const modelOrder = [...visibleModels].sort((a, b) => areaAtBestAngle(b) - areaAtBestAngle(a));
 
       const placed: Placed[] = [];
-      const spills: Placed[] = [];
+      let spills: Placed[] = [];
 
+      // ── Per-model placement ──────────────────────────────────────────────────
       for (const model of modelOrder) {
         const t = modelTransformById.get(model.id) ?? model.transform;
-        const angleOptions = sharedBestRotation == null
-          ? makeRotationOptions(t.rotation.z)
-          : [sharedBestRotation];
+        const angleOptions = (() => {
+          const base = makeRotationOptions(t.rotation.z);
+          if (sharedBestRotation == null) return base;
+          const prioritized = [sharedBestRotation, ...base.filter((a) => Math.abs(a - sharedBestRotation) > 1e-5)];
+          return prioritized;
+        })();
 
         let best: { proxy: CollisionProxy; center: THREE.Vector2; rotationZ: number; score: number } | null = null;
 
@@ -1599,13 +1655,9 @@ export default function Home() {
           const h = getHullAtRotation(model, rotationZ);
           const candidateProxy: CollisionProxy = {
             center: new THREE.Vector2(),
-            hull: h.points,
-            halfW: h.halfW,
-            halfD: h.halfD,
-            localMinX: h.localMinX,
-            localMaxX: h.localMaxX,
-            localMinY: h.localMinY,
-            localMaxY: h.localMaxY,
+            hull: h.points, halfW: h.halfW, halfD: h.halfD,
+            localMinX: h.localMinX, localMaxX: h.localMaxX,
+            localMinY: h.localMinY, localMaxY: h.localMaxY,
           };
 
           const minCenterX = minX - h.localMinX;
@@ -1614,17 +1666,19 @@ export default function Home() {
           const maxCenterY = maxY - h.localMaxY;
           if (minCenterX > maxCenterX || minCenterY > maxCenterY) continue;
 
-          const candidateMap = new Map<string, { x: number; y: number; sortKey: number }>();
+          const seen = new Set<string>();
+          const cands: Array<{ x: number; y: number; sortKey: number }> = [];
           const addCandidate = (x: number, y: number) => {
             const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
             const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
-            const k = `${cx.toFixed(3)}:${cy.toFixed(3)}`;
-            if (candidateMap.has(k)) return;
-            const dx = cx - anchor.x;
-            const dy = cy - anchor.y;
-            candidateMap.set(k, { x: cx, y: cy, sortKey: dx * dx + dy * dy });
+            const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
+            if (seen.has(k)) return;
+            seen.add(k);
+            const dx = cx - anchor.x; const dy = cy - anchor.y;
+            cands.push({ x: cx, y: cy, sortKey: dx * dx + dy * dy });
           };
 
+          // Plate corners / anchor seed
           addCandidate(anchor.x, anchor.y);
           addCandidate(minCenterX, minCenterY);
           addCandidate(maxCenterX, minCenterY);
@@ -1632,20 +1686,38 @@ export default function Home() {
           addCandidate(maxCenterX, maxCenterY);
 
           const neighborPool: CollisionProxy[] = [...placed, ...blockers];
+
+          // AABB touch positions — fast coverage for axis-aligned shapes
           for (const other of neighborPool) {
             const ob = worldBoundsAt(other, other.center);
+            // Right of / left of / above / below neighbour
             addCandidate(ob.maxX + minSpacing - h.localMinX, other.center.y);
             addCandidate(ob.minX - minSpacing - h.localMaxX, other.center.y);
             addCandidate(other.center.x, ob.maxY + minSpacing - h.localMinY);
             addCandidate(other.center.x, ob.minY - minSpacing - h.localMaxY);
+            // Cross — align to anchor row/col
             addCandidate(ob.maxX + minSpacing - h.localMinX, anchor.y);
-            addCandidate(ob.minX - minSpacing - h.localMaxX, anchor.y);
             addCandidate(anchor.x, ob.maxY + minSpacing - h.localMinY);
-            addCandidate(anchor.x, ob.minY - minSpacing - h.localMaxY);
+            // Vertex-to-vertex nestling: place candidate hull so vertex vC aligns
+            // with placed vertex vO, offset by minSpacing along each axis.
+            for (const vO of other.hull) {
+              for (const vC of h.points) {
+                const wx = other.center.x + vO.x;
+                const wy = other.center.y + vO.y;
+                addCandidate(wx - vC.x + minSpacing, wy - vC.y);
+                addCandidate(wx - vC.x - minSpacing, wy - vC.y);
+                addCandidate(wx - vC.x, wy - vC.y + minSpacing);
+                addCandidate(wx - vC.x, wy - vC.y - minSpacing);
+              }
+            }
           }
 
-          // Dense lattice anchored at plate corner (minCenterX, minCenterY) at exact SAT-clearance pitch.
-          // pitch = hull-dimension + minSpacing guarantees every grid point passes the SAT check.
+          // SAT-contact edge candidates — places new hull flush against each placed edge
+          const contactRaw: Array<{ x: number; y: number }> = [];
+          buildContactCandidates(h, neighborPool, minCenterX, maxCenterX, minCenterY, maxCenterY, contactRaw);
+          for (const c of contactRaw) addCandidate(c.x, c.y);
+
+          // Dense regular lattice — ensures we always match axis-aligned packing capacity
           const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
           const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
           const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
@@ -1656,28 +1728,23 @@ export default function Home() {
             }
           }
 
-          // BLF: sort by anchor distance, take first valid candidate (greedy bottom-left fill).
-          const candidates = [...candidateMap.values()].sort((a, b) => a.sortKey - b.sortKey);
+          // Sort by anchor proximity and take first valid (BLF)
+          cands.sort((a, b) => a.sortKey - b.sortKey);
           const collisionPool = [...placed, ...blockers];
 
           let localBest: { center: THREE.Vector2; anchorDistSq: number } | null = null;
-          for (const c of candidates) {
+          for (const c of cands) {
             const center = new THREE.Vector2(c.x, c.y);
             if (canPlaceAt(candidateProxy, center, collisionPool)) {
               localBest = { center, anchorDistSq: c.sortKey };
-              break; // BLF: first valid is anchor-optimal
+              break;
             }
           }
 
           if (!localBest) continue;
 
           if (!best || localBest.anchorDistSq < best.score) {
-            best = {
-              proxy: candidateProxy,
-              center: localBest.center,
-              rotationZ,
-              score: localBest.anchorDistSq,
-            };
+            best = { proxy: candidateProxy, center: localBest.center, rotationZ, score: localBest.anchorDistSq };
           }
         }
 
@@ -1704,55 +1771,175 @@ export default function Home() {
           maxX + outsideGap - fallback.localMinX,
           minY - fallback.localMinY + spillIndex * ((fallback.localMaxY - fallback.localMinY) + spacing),
         );
-
         spills.push({
           model,
           center: spillCenter,
           rotationZ: t.rotation.z,
-          hull: fallback.points,
-          halfW: fallback.halfW,
-          halfD: fallback.halfD,
-          localMinX: fallback.localMinX,
-          localMaxX: fallback.localMaxX,
-          localMinY: fallback.localMinY,
-          localMaxY: fallback.localMaxY,
+          hull: fallback.points, halfW: fallback.halfW, halfD: fallback.halfD,
+          localMinX: fallback.localMinX, localMaxX: fallback.localMaxX,
+          localMinY: fallback.localMinY, localMaxY: fallback.localMaxY,
         });
       }
 
-      const COMPACTION_PASSES = 5;
-      const COMPACTION_BINARY_STEPS = 14;
+      // Second chance pass: after initial fill, try to fit spills into gaps again
+      // using all rotation options while the plate context is now richer.
+      if (spills.length > 0) {
+        const remainingSpills: Placed[] = [];
+        const retryOrder = [...spills].sort((a, b) => {
+          const aw = a.localMaxX - a.localMinX;
+          const ad = a.localMaxY - a.localMinY;
+          const bw = b.localMaxX - b.localMinX;
+          const bd = b.localMaxY - b.localMinY;
+          return (aw * ad) - (bw * bd);
+        });
+
+        for (const spill of retryOrder) {
+          const model = spill.model;
+          const t = modelTransformById.get(model.id) ?? model.transform;
+          const angleOptions = (() => {
+            const base = makeRotationOptions(t.rotation.z);
+            if (sharedBestRotation == null) return base;
+            return [sharedBestRotation, ...base.filter((a) => Math.abs(a - sharedBestRotation) > 1e-5)];
+          })();
+
+          let best: { proxy: CollisionProxy; center: THREE.Vector2; rotationZ: number; score: number } | null = null;
+
+          for (const rotationZ of angleOptions) {
+            const h = getHullAtRotation(model, rotationZ);
+            const candidateProxy: CollisionProxy = {
+              center: new THREE.Vector2(),
+              hull: h.points, halfW: h.halfW, halfD: h.halfD,
+              localMinX: h.localMinX, localMaxX: h.localMaxX,
+              localMinY: h.localMinY, localMaxY: h.localMaxY,
+            };
+
+            const minCenterX = minX - h.localMinX;
+            const maxCenterX = maxX - h.localMaxX;
+            const minCenterY = minY - h.localMinY;
+            const maxCenterY = maxY - h.localMaxY;
+            if (minCenterX > maxCenterX || minCenterY > maxCenterY) continue;
+
+            const seen = new Set<string>();
+            const cands: Array<{ x: number; y: number; sortKey: number }> = [];
+            const addCandidate = (x: number, y: number) => {
+              const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
+              const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
+              const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
+              if (seen.has(k)) return;
+              seen.add(k);
+              const dx = cx - anchor.x;
+              const dy = cy - anchor.y;
+              cands.push({ x: cx, y: cy, sortKey: dx * dx + dy * dy });
+            };
+
+            addCandidate(anchor.x, anchor.y);
+            addCandidate(minCenterX, minCenterY);
+            addCandidate(maxCenterX, minCenterY);
+            addCandidate(minCenterX, maxCenterY);
+            addCandidate(maxCenterX, maxCenterY);
+
+            const neighborPool: CollisionProxy[] = [...placed, ...blockers];
+            for (const other of neighborPool) {
+              const ob = worldBoundsAt(other, other.center);
+              addCandidate(ob.maxX + minSpacing - h.localMinX, other.center.y);
+              addCandidate(ob.minX - minSpacing - h.localMaxX, other.center.y);
+              addCandidate(other.center.x, ob.maxY + minSpacing - h.localMinY);
+              addCandidate(other.center.x, ob.minY - minSpacing - h.localMaxY);
+              addCandidate(ob.maxX + minSpacing - h.localMinX, anchor.y);
+              addCandidate(anchor.x, ob.maxY + minSpacing - h.localMinY);
+            }
+
+            const contactRaw: Array<{ x: number; y: number }> = [];
+            buildContactCandidates(h, neighborPool, minCenterX, maxCenterX, minCenterY, maxCenterY, contactRaw);
+            for (const c of contactRaw) addCandidate(c.x, c.y);
+
+            const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
+            const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
+            const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
+            const rowsY = Math.ceil((maxCenterY - minCenterY) / pitchY) + 1;
+            for (let ix = 0; ix <= colsX; ix++) {
+              for (let iy = 0; iy <= rowsY; iy++) {
+                addCandidate(minCenterX + ix * pitchX, minCenterY + iy * pitchY);
+              }
+            }
+
+            cands.sort((a, b) => a.sortKey - b.sortKey);
+            const collisionPool = [...placed, ...blockers];
+
+            for (const c of cands) {
+              const center = new THREE.Vector2(c.x, c.y);
+              if (canPlaceAt(candidateProxy, center, collisionPool)) {
+                if (!best || c.sortKey < best.score) {
+                  best = { proxy: candidateProxy, center, rotationZ, score: c.sortKey };
+                }
+                break;
+              }
+            }
+          }
+
+          if (best) {
+            placed.push({
+              model,
+              center: best.center,
+              rotationZ: best.rotationZ,
+              hull: best.proxy.hull,
+              halfW: best.proxy.halfW,
+              halfD: best.proxy.halfD,
+              localMinX: best.proxy.localMinX,
+              localMaxX: best.proxy.localMaxX,
+              localMinY: best.proxy.localMinY,
+              localMaxY: best.proxy.localMaxY,
+            });
+          } else {
+            remainingSpills.push(spill);
+          }
+        }
+
+        spills = remainingSpills;
+      }
+
+      // ── Multi-axis compaction ────────────────────────────────────────────────
+      // Move each model toward the anchor, then independently squeeze it along
+      // pure X and pure Y.  Multiple passes let models ripple into the gaps
+      // opened by their neighbours.
+      const COMPACTION_PASSES = 8;
+      const COMPACTION_STEPS = 16;
+
+      const binarySlide = (entry: Placed, dir: THREE.Vector2, others: CollisionProxy[]) => {
+        const start = entry.center.clone();
+        if (dir.lengthSq() <= 1e-10) return false;
+        let lo = 0; let hi = 1;
+        for (let s = 0; s < COMPACTION_STEPS; s++) {
+          const mid = (lo + hi) * 0.5;
+          const c = new THREE.Vector2(start.x + dir.x * mid, start.y + dir.y * mid);
+          if (canPlaceAt(entry, c, others)) lo = mid; else hi = mid;
+        }
+        if (lo > 1e-4) {
+          entry.center.set(start.x + dir.x * lo, start.y + dir.y * lo);
+          return true;
+        }
+        return false;
+      };
 
       for (let pass = 0; pass < COMPACTION_PASSES; pass++) {
         let moved = false;
+        // Process farthest-from-anchor first so inner models don't block outer ones
         const order = placed
           .map((_, i) => i)
           .sort((a, b) => placed[b].center.distanceToSquared(anchor) - placed[a].center.distanceToSquared(anchor));
 
         for (const idx of order) {
           const entry = placed[idx];
-          const start = entry.center.clone();
-          const toAnchor = new THREE.Vector2(anchor.x - start.x, anchor.y - start.y);
-          if (toAnchor.lengthSq() <= 1e-8) continue;
-
-          const others = [
-            ...blockers,
-            ...placed.filter((_, i) => i !== idx),
-          ];
-
-          let lo = 0;
-          let hi = 1;
-
-          for (let step = 0; step < COMPACTION_BINARY_STEPS; step++) {
-            const mid = (lo + hi) * 0.5;
-            const c = new THREE.Vector2(start.x + toAnchor.x * mid, start.y + toAnchor.y * mid);
-            if (canPlaceAt(entry, c, others)) lo = mid;
-            else hi = mid;
-          }
-
-          if (lo > 1e-3) {
-            entry.center.set(start.x + toAnchor.x * lo, start.y + toAnchor.y * lo);
-            moved = true;
-          }
+          const others = [...blockers, ...placed.filter((_, i) => i !== idx)];
+          // Diagonal toward anchor
+          const toAnchor = new THREE.Vector2(anchor.x - entry.center.x, anchor.y - entry.center.y);
+          if (binarySlide(entry, toAnchor, others)) moved = true;
+          // Pure X toward anchor
+          const toAnchorX = new THREE.Vector2(anchor.x - entry.center.x, 0);
+          if (binarySlide(entry, toAnchorX, others)) moved = true;
+          // Pure Y toward anchor
+          const toAnchorY = new THREE.Vector2(0, anchor.y - entry.center.y);
+          if (binarySlide(entry, toAnchorY, others)) moved = true;
         }
 
         if (!moved) break;
