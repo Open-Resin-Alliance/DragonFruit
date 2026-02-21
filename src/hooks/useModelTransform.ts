@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import * as THREE from 'three';
 
 const EPSILON = 1e-5;
+const PLATFORM_SNAP_CLEARANCE_MM = 0.001;
 
 const approxEqual = (a: number, b: number) => Math.abs(a - b) <= EPSILON;
 
@@ -109,9 +110,9 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
 
   const snapToPlatform = useCallback((currentLowestWorldZ: number) => {
     // Current lowest point is at currentLowestWorldZ
-    // We want it at 0
+    // We want it slightly above 0 to avoid micro-clipping from floating-point drift
     // So adjust position by the difference
-    const offset = 0 - currentLowestWorldZ;
+    const offset = PLATFORM_SNAP_CLEARANCE_MM - currentLowestWorldZ;
 
     if (Math.abs(offset) <= EPSILON) {
       return;
