@@ -46,6 +46,13 @@ import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
 import { usePrepareTransformHotkeys } from '@/hotkeys/usePrepareTransformHotkeys';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
+import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import {
+  getActivePrinterProfile,
+  getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
+  subscribeToProfileStore,
+} from '@/features/profiles/profileStore';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 
@@ -61,6 +68,9 @@ if (typeof window !== 'undefined') {
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
+  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom });
@@ -75,6 +85,7 @@ export default function Home() {
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
+  const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [supportSettingsExpanded, setSupportSettingsExpanded] = React.useState(true);
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
@@ -432,6 +443,14 @@ export default function Home() {
     scene.setMode(nextMode);
   }, [scene]);
 
+  const handleAddPrinterFromOnboarding = React.useCallback(() => {
+    openProfileSettingsModal('printer', { openPrinterLibrary: true });
+  }, []);
+
+  const handleUseWithoutPrinter = React.useCallback(() => {
+    setAllowPrepareWithoutPrinter(true);
+  }, []);
+
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
@@ -488,6 +507,14 @@ export default function Home() {
       })
       .map((model) => model.id);
   }, [buildVolumeBounds, computeModelWorldBounds, scene.models]);
+
+  const inBoundsModelIds = React.useMemo(() => {
+    const outsideSet = new Set(outsidePlateModelIds);
+    return scene.models
+      .filter((model) => model.visible)
+      .filter((model) => !outsideSet.has(model.id))
+      .map((model) => model.id);
+  }, [outsidePlateModelIds, scene.models]);
 
   const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
     const size = model.geometry.size;
@@ -1138,6 +1165,12 @@ export default function Home() {
       scene.setActiveModelId(firstVisible.id);
     }
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
+
+  React.useEffect(() => {
+    if (!hasActivePrinterProfile) return;
+    if (!allowPrepareWithoutPrinter) return;
+    setAllowPrepareWithoutPrinter(false);
+  }, [allowPrepareWithoutPrinter, hasActivePrinterProfile]);
 
   React.useEffect(() => {
     const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
@@ -2188,6 +2221,9 @@ export default function Home() {
               isLoading={showInlineEmptyLoading}
               loadingLabel={importOverlayState.label}
               loadingDetail={importOverlayState.detail}
+              showFirstTimeOnboarding={!hasActivePrinterProfile && !allowPrepareWithoutPrinter}
+              onAddPrinter={handleAddPrinterFromOnboarding}
+              onUseWithoutPrinter={handleUseWithoutPrinter}
             />
           )}
 
@@ -2310,6 +2346,9 @@ export default function Home() {
           {/* Model Info Overlay Card */}
           <ModelStatsCard
             model={scene.models.find(m => m.id === displayActiveModelId) || null}
+            models={scene.models}
+            selectedModelIds={scene.selectedModelIds}
+            inBoundsModelIds={inBoundsModelIds}
             numLayers={slicing.numLayers}
             heightMm={slicing.heightMm}
           />

@@ -1,0 +1,9 @@
+[
+  {
+    "presetId": "generic-machine",
+    "manufacturer": "Generic",
+    "name": "Generic Machine",
+    "buildVolumeMm": { "width": 143, "depth": 89, "height": 175 },
+    "display": { "resolutionX": 2560, "resolutionY": 1620, "outputFormat": ".lumen" }
+  }
+]

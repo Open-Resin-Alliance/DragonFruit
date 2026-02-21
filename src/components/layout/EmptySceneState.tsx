@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import { FolderInput, Loader2, Sparkles, Upload } from 'lucide-react';
+import { FolderInput, Loader2, Sparkles, Upload, Printer, Wrench } from 'lucide-react';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
 
 type EmptySceneStateProps = {
@@ -13,6 +13,9 @@ type EmptySceneStateProps = {
   isLoading?: boolean;
   loadingLabel?: string;
   loadingDetail?: string;
+  showFirstTimeOnboarding?: boolean;
+  onAddPrinter?: () => void;
+  onUseWithoutPrinter?: () => void;
 };
 
 function formatRecentOpenedAt(openedAt: number): string {
@@ -60,6 +63,9 @@ export function EmptySceneState({
   isLoading = false,
   loadingLabel,
   loadingDetail,
+  showFirstTimeOnboarding = false,
+  onAddPrinter,
+  onUseWithoutPrinter,
 }: EmptySceneStateProps) {
   const [isDropActive, setIsDropActive] = React.useState(false);
   const [reopeningEntryId, setReopeningEntryId] = React.useState<string | null>(null);
@@ -105,6 +111,8 @@ export function EmptySceneState({
       setReopeningEntryId(null);
     }
   }, [onReopenRecentFile]);
+
+  const shouldShowFirstTimeOnboarding = showFirstTimeOnboarding && !isLoading;
 
   return (
     <div className="absolute inset-0 top-14 z-30 flex items-center justify-center pointer-events-none">
@@ -153,6 +161,52 @@ export function EmptySceneState({
               />
             </div>
           </div>
+        ) : shouldShowFirstTimeOnboarding ? (
+          <>
+            <div className="grid gap-3 grid-cols-1">
+              <button
+                type="button"
+                onClick={onAddPrinter}
+                className="group rounded-md border px-3 py-3 text-left transition-colors"
+                style={{
+                  background: 'var(--primary-button-surface)',
+                  borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
+                  color: 'var(--accent-contrast)',
+                }}
+              >
+                <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
+                  <Printer className="w-4 h-4" />
+                  <span>Add Printer</span>
+                </div>
+                <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
+                  Open printer library and add one now.
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={onUseWithoutPrinter}
+                className="group rounded-md border px-3 py-3 text-left transition-colors"
+                style={{
+                  background: 'var(--secondary-button-surface)',
+                  borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
+                  color: 'var(--accent-secondary-contrast)',
+                }}
+              >
+                <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
+                  <Wrench className="w-4 h-4" />
+                  <span>Use without Printer</span>
+                </div>
+                <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
+                  Keep going without a printer. You can add one later.
+                </div>
+              </button>
+            </div>
+
+            <div className="mt-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Add or switch printer anytime from the top bar.
+            </div>
+          </>
         ) : (
           <>
             <div className={`grid gap-3 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
@@ -160,8 +214,8 @@ export function EmptySceneState({
                 htmlFor="empty-state-stl-file-input"
                 className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
                 style={{
-                  background: 'var(--accent)',
-                  borderColor: 'color-mix(in srgb, var(--accent), white 16%)',
+                  background: 'var(--primary-button-surface)',
+                  borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
                 }}
               >
                 <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-contrast)' }}>
@@ -178,8 +232,8 @@ export function EmptySceneState({
                   htmlFor="empty-state-scene-file-input"
                   className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
                   style={{
-                    background: 'var(--accent-secondary)',
-                    borderColor: 'color-mix(in srgb, var(--accent-secondary), white 16%)',
+                    background: 'var(--secondary-button-surface)',
+                    borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
                   }}
                 >
                   <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-secondary-contrast)' }}>
