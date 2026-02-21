@@ -469,19 +469,61 @@ export default function Home() {
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
-  const computeModelWorldBounds = React.useCallback((model: (typeof scene.models)[number]) => {
+  const computeModelWorldBounds = React.useCallback((model: (typeof scene.models)[number], transformOverride?: typeof model.transform) => {
     const modelBox = model.geometry.bbox.clone();
     const center = model.geometry.center;
     modelBox.translate(new THREE.Vector3(-center.x, -center.y, -center.z));
 
-    const t = model.transform;
-    const matrix = new THREE.Matrix4().compose(
+    const t = transformOverride ?? model.transform;
+
+    const ax = Math.abs(t.rotation.x);
+    const ay = Math.abs(t.rotation.y);
+    const az = Math.abs(t.rotation.z);
+    const rotationAxisCount = Number(ax > 1e-4) + Number(ay > 1e-4) + Number(az > 1e-4);
+    const usePreciseMultiAxisBounds = rotationAxisCount > 1;
+
+    const transformMatrix = new THREE.Matrix4().compose(
       t.position,
       new THREE.Quaternion().setFromEuler(t.rotation),
       t.scale,
     );
-    modelBox.applyMatrix4(matrix);
-    return modelBox;
+
+    if (!usePreciseMultiAxisBounds) {
+      modelBox.applyMatrix4(transformMatrix);
+      return modelBox;
+    }
+
+    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+    const finalMatrix = transformMatrix.multiply(offsetMatrix);
+    const positionAttribute = model.geometry.geometry.getAttribute('position');
+    if (!positionAttribute || positionAttribute.count === 0) {
+      modelBox.applyMatrix4(finalMatrix);
+      return modelBox;
+    }
+
+    const preciseBounds = new THREE.Box3();
+    preciseBounds.makeEmpty();
+    const point = new THREE.Vector3();
+
+    if (positionAttribute instanceof THREE.BufferAttribute) {
+      const array = positionAttribute.array;
+      const itemSize = positionAttribute.itemSize;
+
+      for (let i = 0; i < positionAttribute.count; i++) {
+        const idx = i * itemSize;
+        point.set(array[idx], array[idx + 1], array[idx + 2]).applyMatrix4(finalMatrix);
+        preciseBounds.expandByPoint(point);
+      }
+    } else {
+      for (let i = 0; i < positionAttribute.count; i++) {
+        point
+          .set(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i))
+          .applyMatrix4(finalMatrix);
+        preciseBounds.expandByPoint(point);
+      }
+    }
+
+    return preciseBounds.isEmpty() ? modelBox.applyMatrix4(finalMatrix) : preciseBounds;
   }, [scene.models]);
 
   const buildVolumeBounds = React.useMemo(() => {
@@ -506,22 +548,34 @@ export default function Home() {
 
   const outsidePlateModelIds = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as string[];
+    const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
 
     return scene.models
       .filter((model) => model.visible)
       .filter((model) => {
-        const bounds = computeModelWorldBounds(model);
+        const effectiveTransform =
+          (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
+            ? transformMgr.transform
+            : model.transform;
+        const bounds = computeModelWorldBounds(model, effectiveTransform);
         return (
-          bounds.min.x < buildVolumeBounds.min.x
-          || bounds.max.x > buildVolumeBounds.max.x
-          || bounds.min.y < buildVolumeBounds.min.y
-          || bounds.max.y > buildVolumeBounds.max.y
-          || bounds.min.z < buildVolumeBounds.min.z
-          || bounds.max.z > buildVolumeBounds.max.z
+          bounds.min.x < (buildVolumeBounds.min.x - BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.max.x > (buildVolumeBounds.max.x + BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.min.y < (buildVolumeBounds.min.y - BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.max.y > (buildVolumeBounds.max.y + BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.min.z < (buildVolumeBounds.min.z - BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.max.z > (buildVolumeBounds.max.z + BUILD_VOLUME_BOUNDS_EPS_MM)
         );
       })
       .map((model) => model.id);
-  }, [buildVolumeBounds, computeModelWorldBounds, scene.models]);
+  }, [
+    buildVolumeBounds,
+    computeModelWorldBounds,
+    displayActiveModelId,
+    scene.activeModelId,
+    scene.models,
+    transformMgr.transform,
+  ]);
 
   const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
     const size = model.geometry.size;
@@ -1322,11 +1376,13 @@ export default function Home() {
     }
     postRotateLiftScheduledRef.current = true;
 
-    // Defer to end of current tick so transform state/store sync settles first.
-    setTimeout(() => {
+    // Run immediately: onRotateEnd already writes the latest transform into
+    // pendingTransformRef, so performAutoSnap can safely use current values.
+    try {
       transformMgr.performAutoSnap();
+    } finally {
       postRotateLiftScheduledRef.current = false;
-    }, 0);
+    }
   };
 
   const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
