@@ -1954,6 +1954,7 @@ export function SceneCanvas({
                 modelTransform={activeModelTransform}
                 enabled={Boolean(activeBuildVolumeSettings.showSliceSatBoundingMesh)}
                 renderMode={activeBuildVolumeSettings.sliceSatBoundingMeshRenderMode}
+                interactionActive={isGizmoDragging}
               />
 
               {/* Gizmo attached to active model */}

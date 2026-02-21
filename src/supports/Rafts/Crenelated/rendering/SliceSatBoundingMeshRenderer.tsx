@@ -12,6 +12,7 @@ interface SliceSatBoundingMeshRendererProps {
   modelTransform: ModelTransform | null | undefined;
   enabled: boolean;
   renderMode?: 'shaded' | 'wireframe';
+  interactionActive?: boolean;
 }
 
 const BASE_SLICE_COUNT = 24;
@@ -38,14 +39,31 @@ function pushUniquePoint(points: THREE.Vector2[], point: THREE.Vector2, eps: num
   points.push(point);
 }
 
-function collectTrianglePlaneIntersections2D(
+function pushUniquePointHashed(
+  points: THREE.Vector2[],
+  keys: Set<string>,
+  x: number,
+  y: number,
+  quant: number,
+) {
+  const qx = Math.round(x / quant);
+  const qy = Math.round(y / quant);
+  const key = `${qx}:${qy}`;
+  if (keys.has(key)) return;
+  keys.add(key);
+  points.push(new THREE.Vector2(x, y));
+}
+
+function addTrianglePlaneIntersections2D(
   va: THREE.Vector3,
   vb: THREE.Vector3,
   vc: THREE.Vector3,
   planeZ: number,
   epsilon: number,
-): THREE.Vector2[] {
-  const out: THREE.Vector2[] = [];
+  points: THREE.Vector2[],
+  keys: Set<string>,
+) {
+  const quant = Math.max(SLICE_DEDUPE_EPS_MM, epsilon * 0.5);
 
   const processEdge = (p0: THREE.Vector3, p1: THREE.Vector3) => {
     const d0 = p0.z - planeZ;
@@ -54,18 +72,18 @@ function collectTrianglePlaneIntersections2D(
     const on1 = Math.abs(d1) <= epsilon;
 
     if (on0 && on1) {
-      pushUniquePoint(out, new THREE.Vector2(p0.x, p0.y), SLICE_DEDUPE_EPS_MM);
-      pushUniquePoint(out, new THREE.Vector2(p1.x, p1.y), SLICE_DEDUPE_EPS_MM);
+      pushUniquePointHashed(points, keys, p0.x, p0.y, quant);
+      pushUniquePointHashed(points, keys, p1.x, p1.y, quant);
       return;
     }
 
     if (on0) {
-      pushUniquePoint(out, new THREE.Vector2(p0.x, p0.y), SLICE_DEDUPE_EPS_MM);
+      pushUniquePointHashed(points, keys, p0.x, p0.y, quant);
       return;
     }
 
     if (on1) {
-      pushUniquePoint(out, new THREE.Vector2(p1.x, p1.y), SLICE_DEDUPE_EPS_MM);
+      pushUniquePointHashed(points, keys, p1.x, p1.y, quant);
       return;
     }
 
@@ -73,15 +91,56 @@ function collectTrianglePlaneIntersections2D(
       const t = d0 / (d0 - d1);
       const x = p0.x + (p1.x - p0.x) * t;
       const y = p0.y + (p1.y - p0.y) * t;
-      pushUniquePoint(out, new THREE.Vector2(x, y), SLICE_DEDUPE_EPS_MM);
+      pushUniquePointHashed(points, keys, x, y, quant);
     }
   };
 
   processEdge(va, vb);
   processEdge(vb, vc);
   processEdge(vc, va);
+}
 
-  return out;
+function lowerBound(arr: number[], value: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] < value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function upperBound(arr: number[], value: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arr[mid] <= value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function buildTriangleBucketsForSlices(
+  triangleProxies: TriangleSliceProxy[],
+  sliceLevels: number[],
+): number[][] {
+  const buckets: number[][] = Array.from({ length: sliceLevels.length }, () => []);
+  if (sliceLevels.length === 0) return buckets;
+
+  for (let triIdx = 0; triIdx < triangleProxies.length; triIdx++) {
+    const tri = triangleProxies[triIdx];
+    const start = lowerBound(sliceLevels, tri.minZ - SLICE_INTERSECTION_EPS_MM);
+    const endExclusive = upperBound(sliceLevels, tri.maxZ + SLICE_INTERSECTION_EPS_MM);
+    const s = Math.max(0, start);
+    const e = Math.min(sliceLevels.length, endExclusive);
+    for (let i = s; i < e; i++) {
+      buckets[i].push(triIdx);
+    }
+  }
+
+  return buckets;
 }
 
 function buildAdaptiveSliceLevels(
@@ -463,11 +522,23 @@ export default function SliceSatBoundingMeshRenderer({
   modelTransform,
   enabled,
   renderMode = 'shaded',
+  interactionActive = false,
 }: SliceSatBoundingMeshRendererProps) {
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  const cachedGeometriesRef = React.useRef<{ meshGeometry: THREE.BufferGeometry; wireGeometry: THREE.BufferGeometry | null } | null>(null);
+  const cachedSourceIdRef = React.useRef<string | null>(null);
 
   const satGeometries = React.useMemo(() => {
     if (!enabled || !modelGeometry || !modelTransform) return null;
+
+    const sourceId = modelGeometry.geometry.uuid;
+    if (
+      interactionActive
+      && cachedGeometriesRef.current
+      && cachedSourceIdRef.current === sourceId
+    ) {
+      return cachedGeometriesRef.current;
+    }
 
     const bbox = modelGeometry.geometry.boundingBox
       ?? new THREE.Box3().setFromBufferAttribute(
@@ -551,6 +622,7 @@ export default function SliceSatBoundingMeshRenderer({
 
     {
       const sliceLevels = buildAdaptiveSliceLevels(minZ, maxZ, worldVertices);
+      const triangleBuckets = buildTriangleBucketsForSlices(triangleProxies, sliceLevels);
 
       for (let sliceIndex = 0; sliceIndex < sliceLevels.length; sliceIndex++) {
         const z = sliceLevels[sliceIndex];
@@ -559,8 +631,11 @@ export default function SliceSatBoundingMeshRenderer({
         const localStep = Math.max(MIN_SLICE_SPACING_MM, 0.5 * (nextZ - prevZ));
         const localEps = Math.max(SLICE_INTERSECTION_EPS_MM, 0.18 * localStep);
         const slicePoints: THREE.Vector2[] = [];
+        const slicePointKeys = new Set<string>();
 
-        for (const tri of triangleProxies) {
+        const candidateTriIndices = triangleBuckets[sliceIndex] ?? [];
+        for (const triIdx of candidateTriIndices) {
+          const tri = triangleProxies[triIdx];
           if (tri.maxZ < z - localEps || tri.minZ > z + localEps) {
             continue;
           }
@@ -569,17 +644,15 @@ export default function SliceSatBoundingMeshRenderer({
           const vb = worldVertices[tri.b];
           const vc = worldVertices[tri.c];
 
-          const triIntersections = collectTrianglePlaneIntersections2D(
+          addTrianglePlaneIntersections2D(
             va,
             vb,
             vc,
             z,
             localEps,
+            slicePoints,
+            slicePointKeys,
           );
-
-          for (const p of triIntersections) {
-            pushUniquePoint(slicePoints, p, SLICE_DEDUPE_EPS_MM);
-          }
         }
 
         // If this exact plane is sparse (common around local peaks), probe nearby
@@ -587,24 +660,26 @@ export default function SliceSatBoundingMeshRenderer({
         if (slicePoints.length < MIN_POINTS_PER_SLICE) {
           const probe = Math.max(localEps * 2, 0.35 * localStep);
           for (const sampleZ of [z - probe, z + probe]) {
-            for (const tri of triangleProxies) {
+            const probeIdx = THREE.MathUtils.clamp(lowerBound(sliceLevels, sampleZ), 0, sliceLevels.length - 1);
+            const probeCandidateTriIndices = triangleBuckets[probeIdx] ?? [];
+
+            for (const triIdx of probeCandidateTriIndices) {
+              const tri = triangleProxies[triIdx];
               if (tri.maxZ < sampleZ - localEps || tri.minZ > sampleZ + localEps) continue;
 
               const va = worldVertices[tri.a];
               const vb = worldVertices[tri.b];
               const vc = worldVertices[tri.c];
 
-              const triIntersections = collectTrianglePlaneIntersections2D(
+              addTrianglePlaneIntersections2D(
                 va,
                 vb,
                 vc,
                 sampleZ,
                 localEps,
+                slicePoints,
+                slicePointKeys,
               );
-
-              for (const p of triIntersections) {
-                pushUniquePoint(slicePoints, p, SLICE_DEDUPE_EPS_MM);
-              }
             }
           }
         }
@@ -647,8 +722,11 @@ export default function SliceSatBoundingMeshRenderer({
     const meshGeometry = buildSliceMeshGeometry(finalRings, zPadding);
     if (!meshGeometry) return null;
     const wireGeometry = buildSliceWireframeGeometry(finalRings, zPadding);
-    return { meshGeometry, wireGeometry };
-  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin]);
+    const next = { meshGeometry, wireGeometry };
+    cachedGeometriesRef.current = next;
+    cachedSourceIdRef.current = sourceId;
+    return next;
+  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin, interactionActive]);
 
   React.useEffect(() => {
     return () => {
