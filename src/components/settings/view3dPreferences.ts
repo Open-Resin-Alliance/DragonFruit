@@ -7,6 +7,7 @@ export type View3DSettings = {
   screenWidthPx: number;
   screenHeightPx: number;
   showViolationWarning: boolean;
+  showModelBoundingBoxes: boolean;
 };
 
 export const VIEW3D_SETTINGS_STORAGE_KEY = 'app-3d-view-settings';
@@ -21,6 +22,7 @@ export const DEFAULT_VIEW3D_SETTINGS: View3DSettings = {
   screenWidthPx: 2560,
   screenHeightPx: 1440,
   showViolationWarning: true,
+  showModelBoundingBoxes: false,
 };
 
 function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
@@ -54,6 +56,7 @@ export function normalizeView3DSettings(input: unknown): View3DSettings {
     screenWidthPx: clampInteger(candidate.screenWidthPx, 320, 16384, DEFAULT_VIEW3D_SETTINGS.screenWidthPx),
     screenHeightPx: clampInteger(candidate.screenHeightPx, 200, 16384, DEFAULT_VIEW3D_SETTINGS.screenHeightPx),
     showViolationWarning: clampBoolean(candidate.showViolationWarning, DEFAULT_VIEW3D_SETTINGS.showViolationWarning),
+    showModelBoundingBoxes: clampBoolean(candidate.showModelBoundingBoxes, DEFAULT_VIEW3D_SETTINGS.showModelBoundingBoxes),
   };
 }
 
