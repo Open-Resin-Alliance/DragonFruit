@@ -656,11 +656,65 @@ export default function SliceSatBoundingMeshRenderer({
   } | null>(null);
   const cachedSourceIdRef = React.useRef<string | null>(null);
   const cachedRenderModeRef = React.useRef<string | null>(null);
+  const hullGeometryCacheRef = React.useRef<Map<string, {
+    hullGeometry: THREE.BufferGeometry;
+    hullEdgeGeometry: THREE.BufferGeometry;
+  }>>(new Map());
+
+  const hullLocalCenter = React.useMemo(() => {
+    if (!modelGeometry) return null;
+    const bbox = modelGeometry.geometry.boundingBox
+      ?? new THREE.Box3().setFromBufferAttribute(
+        modelGeometry.geometry.getAttribute('position') as THREE.BufferAttribute,
+      );
+    return bbox.getCenter(new THREE.Vector3());
+  }, [modelGeometry]);
 
   const satGeometries = React.useMemo(() => {
     if (!enabled || !modelGeometry || !modelTransform) return null;
 
     const sourceId = modelGeometry.geometry.uuid;
+
+    // ── Hull mode: compute once in local space, then reuse via cache. ───────
+    // This avoids re-running quickhull during transform drags/rotations.
+    if (renderMode === 'hull') {
+      const cachedHull = hullGeometryCacheRef.current.get(sourceId);
+      if (cachedHull) {
+        return {
+          meshGeometry: null,
+          wireGeometry: null,
+          hullGeometry: cachedHull.hullGeometry,
+          hullEdgeGeometry: cachedHull.hullEdgeGeometry,
+        };
+      }
+
+      const positionAttr = modelGeometry.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const localVertices: THREE.Vector3[] = new Array(positionAttr.count);
+      for (let i = 0; i < positionAttr.count; i++) {
+        localVertices[i] = new THREE.Vector3(
+          positionAttr.getX(i),
+          positionAttr.getY(i),
+          positionAttr.getZ(i),
+        );
+      }
+
+      const hullResult = buildHullMeshGeometry(localVertices, HULL_MARGIN_MM);
+      if (!hullResult) return null;
+
+      const cachedEntry = {
+        hullGeometry: hullResult.hullMesh,
+        hullEdgeGeometry: hullResult.hullEdges,
+      };
+      hullGeometryCacheRef.current.set(sourceId, cachedEntry);
+
+      return {
+        meshGeometry: null,
+        wireGeometry: null,
+        hullGeometry: cachedEntry.hullGeometry,
+        hullEdgeGeometry: cachedEntry.hullEdgeGeometry,
+      };
+    }
+
     if (
       interactionActive
       && cachedGeometriesRef.current
@@ -691,22 +745,6 @@ export default function SliceSatBoundingMeshRenderer({
       const v = new THREE.Vector3(positionAttr.getX(i), positionAttr.getY(i), positionAttr.getZ(i));
       v.applyMatrix4(transformMatrix);
       worldVertices[i] = v;
-    }
-
-    // ── Hull mode ──────────────────────────────────────────────────────
-    if (renderMode === 'hull') {
-      const hullResult = buildHullMeshGeometry(worldVertices, HULL_MARGIN_MM);
-      if (!hullResult) return null;
-      const next = {
-        meshGeometry: null,
-        wireGeometry: null,
-        hullGeometry: hullResult.hullMesh,
-        hullEdgeGeometry: hullResult.hullEdges,
-      };
-      cachedGeometriesRef.current = next;
-      cachedSourceIdRef.current = sourceId;
-      cachedRenderModeRef.current = renderMode;
-      return next;
     }
 
     // ── Slice mode (shaded / wireframe) ────────────────────────────────
@@ -886,18 +924,36 @@ export default function SliceSatBoundingMeshRenderer({
     return () => {
       satGeometries?.meshGeometry?.dispose();
       satGeometries?.wireGeometry?.dispose();
-      satGeometries?.hullGeometry?.dispose();
-      satGeometries?.hullEdgeGeometry?.dispose();
     };
   }, [satGeometries]);
+
+  React.useEffect(() => {
+    return () => {
+      for (const cached of hullGeometryCacheRef.current.values()) {
+        cached.hullGeometry.dispose();
+        cached.hullEdgeGeometry.dispose();
+      }
+      hullGeometryCacheRef.current.clear();
+    };
+  }, []);
 
   if (!enabled || !satGeometries) return null;
 
   // ── Hull mode rendering ──────────────────────────────────────────────
-  if (renderMode === 'hull' && satGeometries.hullGeometry) {
+  if (renderMode === 'hull' && satGeometries.hullGeometry && hullLocalCenter && modelTransform) {
     return (
-      <group renderOrder={7}>
-        <mesh geometry={satGeometries.hullGeometry} raycast={() => null} renderOrder={7}>
+      <group
+        position={modelTransform.position}
+        rotation={modelTransform.rotation}
+        scale={modelTransform.scale}
+        renderOrder={7}
+      >
+        <mesh
+          geometry={satGeometries.hullGeometry}
+          position={[-hullLocalCenter.x, -hullLocalCenter.y, -hullLocalCenter.z]}
+          raycast={() => null}
+          renderOrder={7}
+        >
           <meshStandardMaterial
             color="#baf72e"
             transparent
@@ -909,7 +965,12 @@ export default function SliceSatBoundingMeshRenderer({
           />
         </mesh>
         {satGeometries.hullEdgeGeometry && (
-          <lineSegments geometry={satGeometries.hullEdgeGeometry} raycast={() => null} renderOrder={8}>
+          <lineSegments
+            geometry={satGeometries.hullEdgeGeometry}
+            position={[-hullLocalCenter.x, -hullLocalCenter.y, -hullLocalCenter.z]}
+            raycast={() => null}
+            renderOrder={8}
+          >
             <lineBasicMaterial color="#baf72e" transparent opacity={0.7} depthWrite={false} depthTest />
           </lineSegments>
         )}
