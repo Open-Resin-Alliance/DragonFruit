@@ -657,6 +657,7 @@ export default function SliceSatBoundingMeshRenderer({
   } | null>(null);
   const cachedSourceIdRef = React.useRef<string | null>(null);
   const cachedRenderModeRef = React.useRef<string | null>(null);
+  const [hullCacheRevision, setHullCacheRevision] = React.useState(0);
   const hullGeometryCacheRef = React.useRef<Map<string, {
     hullGeometry: THREE.BufferGeometry;
     hullEdgeGeometry: THREE.BufferGeometry;
@@ -715,6 +716,12 @@ export default function SliceSatBoundingMeshRenderer({
 
   React.useEffect(() => {
     if (!modelGeometry) return;
+    if (!enabled) return;
+    if (renderMode !== 'hull') return;
+    if (interactionActive) return;
+
+    const sourceId = modelGeometry.geometry.uuid;
+    if (hullGeometryCacheRef.current.has(sourceId)) return;
 
     let cancelled = false;
     const idleWindow = window as Window & {
@@ -727,17 +734,28 @@ export default function SliceSatBoundingMeshRenderer({
 
     const warmup = () => {
       if (cancelled) return;
-      ensureHullCacheEntry(modelGeometry);
+      const created = ensureHullCacheEntry(modelGeometry);
+      if (created && !cancelled) {
+        setHullCacheRevision((v) => v + 1);
+      }
     };
 
-    if (typeof idleWindow.requestIdleCallback === 'function') {
-      idleHandle = idleWindow.requestIdleCallback(() => warmup(), { timeout: 350 });
-    } else {
-      timeoutHandle = window.setTimeout(warmup, 40);
-    }
+    // Small delay lets model-import/main-thread settle before heavy quickhull work.
+    let kickoffHandle: number | null = window.setTimeout(() => {
+      kickoffHandle = null;
+
+      if (typeof idleWindow.requestIdleCallback === 'function') {
+        idleHandle = idleWindow.requestIdleCallback(() => warmup(), { timeout: 900 });
+      } else {
+        timeoutHandle = window.setTimeout(warmup, 60);
+      }
+    }, 220);
 
     return () => {
       cancelled = true;
+      if (kickoffHandle !== null) {
+        window.clearTimeout(kickoffHandle);
+      }
       if (idleHandle !== null && typeof idleWindow.cancelIdleCallback === 'function') {
         idleWindow.cancelIdleCallback(idleHandle);
       }
@@ -745,17 +763,16 @@ export default function SliceSatBoundingMeshRenderer({
         window.clearTimeout(timeoutHandle);
       }
     };
-  }, [ensureHullCacheEntry, modelGeometry]);
+  }, [enabled, ensureHullCacheEntry, interactionActive, modelGeometry, renderMode]);
 
   const satGeometries = React.useMemo(() => {
     if (!enabled || !modelGeometry || !modelTransform) return null;
 
     const sourceId = modelGeometry.geometry.uuid;
 
-    // ── Hull mode: compute once in local space, then reuse via cache. ───────
-    // This avoids re-running quickhull during transform drags/rotations.
+    // ── Hull mode: cache-only on render path (build happens in idle effect). ─
     if (renderMode === 'hull') {
-      const cachedEntry = ensureHullCacheEntry(modelGeometry);
+      const cachedEntry = hullGeometryCacheRef.current.get(sourceId);
       if (!cachedEntry) return null;
 
       return {
@@ -969,7 +986,7 @@ export default function SliceSatBoundingMeshRenderer({
     cachedSourceIdRef.current = sourceId;
     cachedRenderModeRef.current = renderMode;
     return next;
-  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin, interactionActive, renderMode, ensureHullCacheEntry]);
+  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin, interactionActive, renderMode, hullCacheRevision]);
 
   React.useEffect(() => {
     return () => {
