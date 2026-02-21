@@ -1216,6 +1216,12 @@ export default function Home() {
       const spacing = Math.max(0, arrangeSpacingMm);
       // minSpacing is the SAT hull-to-hull gap enforcing the requested spacing.
       const minSpacing = spacing + SAT_EPS_MM;
+      const PERF_COMPLEX_SCENE = visibleModels.length >= 18;
+      const MAX_CANDIDATE_NEIGHBORS = PERF_COMPLEX_SCENE ? 20 : 36;
+      const MAX_VERTEX_PAIR_CANDIDATES = PERF_COMPLEX_SCENE ? 180 : 420;
+      const MAX_CONTACT_CANDIDATES = PERF_COMPLEX_SCENE ? 360 : 900;
+      const MAX_LATTICE_CANDIDATES = PERF_COMPLEX_SCENE ? 320 : 900;
+      const MAX_EVALUATED_CANDIDATES = PERF_COMPLEX_SCENE ? 420 : 1200;
 
       const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
       const maxX = minX + scene.view3dSettings.widthMm;
@@ -1510,10 +1516,14 @@ export default function Home() {
         minCY: number,
         maxCY: number,
         out: Array<{ x: number; y: number }>,
+        maxOut: number,
       ) => {
+        if (maxOut <= 0) return;
         for (const other of pool) {
+          if (out.length >= maxOut) break;
           const otherPoly = other.hull;
           for (let ei = 0; ei < otherPoly.length; ei++) {
+            if (out.length >= maxOut) break;
             const vA = otherPoly[ei];
             const vB = otherPoly[(ei + 1) % otherPoly.length];
             const ex = vB.x - vA.x;
@@ -1540,17 +1550,20 @@ export default function Home() {
             // places the candidate hull flush against this edge at that vertex.
             // candidate_center · n = (vO + other.center) · n + minSpacing - minDot
             for (const vO of otherPoly) {
+              if (out.length >= maxOut) break;
               const targetDot = (vO.x + other.center.x) * nx + (vO.y + other.center.y) * ny + minSpacing - minDot;
               if (Math.abs(ny) > 0.1) {
                 for (const cx of [other.center.x, minCX, maxCX, anchor.x]) {
                   const cy = (targetDot - cx * nx) / ny;
                   out.push({ x: Math.min(maxCX, Math.max(minCX, cx)), y: Math.min(maxCY, Math.max(minCY, cy)) });
+                  if (out.length >= maxOut) break;
                 }
               }
               if (Math.abs(nx) > 0.1) {
                 for (const cy of [other.center.y, minCY, maxCY, anchor.y]) {
                   const cx = (targetDot - cy * ny) / nx;
                   out.push({ x: Math.min(maxCX, Math.max(minCX, cx)), y: Math.min(maxCY, Math.max(minCY, cy)) });
+                  if (out.length >= maxOut) break;
                 }
               }
             }
@@ -1669,6 +1682,7 @@ export default function Home() {
           const seen = new Set<string>();
           const cands: Array<{ x: number; y: number; sortKey: number }> = [];
           const addCandidate = (x: number, y: number) => {
+            if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) return;
             const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
             const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
             const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
@@ -1686,9 +1700,17 @@ export default function Home() {
           addCandidate(maxCenterX, maxCenterY);
 
           const neighborPool: CollisionProxy[] = [...placed, ...blockers];
+          const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
+            ? neighborPool
+              .slice()
+              .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
+              .slice(0, MAX_CANDIDATE_NEIGHBORS)
+            : neighborPool;
 
           // AABB touch positions — fast coverage for axis-aligned shapes
-          for (const other of neighborPool) {
+          let vertexPairCount = 0;
+          for (const other of candidateNeighbors) {
+            if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) break;
             const ob = worldBoundsAt(other, other.center);
             // Right of / left of / above / below neighbour
             addCandidate(ob.maxX + minSpacing - h.localMinX, other.center.y);
@@ -1701,20 +1723,32 @@ export default function Home() {
             // Vertex-to-vertex nestling: place candidate hull so vertex vC aligns
             // with placed vertex vO, offset by minSpacing along each axis.
             for (const vO of other.hull) {
+              if (vertexPairCount >= MAX_VERTEX_PAIR_CANDIDATES) break;
               for (const vC of h.points) {
+                if (vertexPairCount >= MAX_VERTEX_PAIR_CANDIDATES) break;
                 const wx = other.center.x + vO.x;
                 const wy = other.center.y + vO.y;
                 addCandidate(wx - vC.x + minSpacing, wy - vC.y);
                 addCandidate(wx - vC.x - minSpacing, wy - vC.y);
                 addCandidate(wx - vC.x, wy - vC.y + minSpacing);
                 addCandidate(wx - vC.x, wy - vC.y - minSpacing);
+                vertexPairCount++;
               }
             }
           }
 
           // SAT-contact edge candidates — places new hull flush against each placed edge
           const contactRaw: Array<{ x: number; y: number }> = [];
-          buildContactCandidates(h, neighborPool, minCenterX, maxCenterX, minCenterY, maxCenterY, contactRaw);
+          buildContactCandidates(
+            h,
+            candidateNeighbors,
+            minCenterX,
+            maxCenterX,
+            minCenterY,
+            maxCenterY,
+            contactRaw,
+            MAX_CONTACT_CANDIDATES,
+          );
           for (const c of contactRaw) addCandidate(c.x, c.y);
 
           // Dense regular lattice — ensures we always match axis-aligned packing capacity
@@ -1722,8 +1756,12 @@ export default function Home() {
           const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
           const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
           const rowsY = Math.ceil((maxCenterY - minCenterY) / pitchY) + 1;
+          const totalLatticeCells = (colsX + 1) * (rowsY + 1);
+          const latticeStride = Math.max(1, Math.ceil(totalLatticeCells / Math.max(1, MAX_LATTICE_CANDIDATES)));
+          let latticeCounter = 0;
           for (let ix = 0; ix <= colsX; ix++) {
             for (let iy = 0; iy <= rowsY; iy++) {
+              if ((latticeCounter++ % latticeStride) !== 0) continue;
               addCandidate(minCenterX + ix * pitchX, minCenterY + iy * pitchY);
             }
           }
@@ -1733,7 +1771,8 @@ export default function Home() {
           const collisionPool = [...placed, ...blockers];
 
           let localBest: { center: THREE.Vector2; anchorDistSq: number } | null = null;
-          for (const c of cands) {
+          for (let ci = 0; ci < cands.length && ci < MAX_EVALUATED_CANDIDATES; ci++) {
+            const c = cands[ci];
             const center = new THREE.Vector2(c.x, c.y);
             if (canPlaceAt(candidateProxy, center, collisionPool)) {
               localBest = { center, anchorDistSq: c.sortKey };
@@ -1822,6 +1861,7 @@ export default function Home() {
             const seen = new Set<string>();
             const cands: Array<{ x: number; y: number; sortKey: number }> = [];
             const addCandidate = (x: number, y: number) => {
+              if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) return;
               const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
               const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
               const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
@@ -1839,7 +1879,14 @@ export default function Home() {
             addCandidate(maxCenterX, maxCenterY);
 
             const neighborPool: CollisionProxy[] = [...placed, ...blockers];
-            for (const other of neighborPool) {
+            const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
+              ? neighborPool
+                .slice()
+                .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
+                .slice(0, MAX_CANDIDATE_NEIGHBORS)
+              : neighborPool;
+            for (const other of candidateNeighbors) {
+              if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) break;
               const ob = worldBoundsAt(other, other.center);
               addCandidate(ob.maxX + minSpacing - h.localMinX, other.center.y);
               addCandidate(ob.minX - minSpacing - h.localMaxX, other.center.y);
@@ -1850,15 +1897,28 @@ export default function Home() {
             }
 
             const contactRaw: Array<{ x: number; y: number }> = [];
-            buildContactCandidates(h, neighborPool, minCenterX, maxCenterX, minCenterY, maxCenterY, contactRaw);
+            buildContactCandidates(
+              h,
+              candidateNeighbors,
+              minCenterX,
+              maxCenterX,
+              minCenterY,
+              maxCenterY,
+              contactRaw,
+              MAX_CONTACT_CANDIDATES,
+            );
             for (const c of contactRaw) addCandidate(c.x, c.y);
 
             const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
             const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
             const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
             const rowsY = Math.ceil((maxCenterY - minCenterY) / pitchY) + 1;
+            const totalLatticeCells = (colsX + 1) * (rowsY + 1);
+            const latticeStride = Math.max(1, Math.ceil(totalLatticeCells / Math.max(1, MAX_LATTICE_CANDIDATES)));
+            let latticeCounter = 0;
             for (let ix = 0; ix <= colsX; ix++) {
               for (let iy = 0; iy <= rowsY; iy++) {
+                if ((latticeCounter++ % latticeStride) !== 0) continue;
                 addCandidate(minCenterX + ix * pitchX, minCenterY + iy * pitchY);
               }
             }
@@ -1866,7 +1926,8 @@ export default function Home() {
             cands.sort((a, b) => a.sortKey - b.sortKey);
             const collisionPool = [...placed, ...blockers];
 
-            for (const c of cands) {
+            for (let ci = 0; ci < cands.length && ci < MAX_EVALUATED_CANDIDATES; ci++) {
+              const c = cands[ci];
               const center = new THREE.Vector2(c.x, c.y);
               if (canPlaceAt(candidateProxy, center, collisionPool)) {
                 if (!best || c.sortKey < best.score) {
@@ -1902,8 +1963,8 @@ export default function Home() {
       // Move each model toward the anchor, then independently squeeze it along
       // pure X and pure Y.  Multiple passes let models ripple into the gaps
       // opened by their neighbours.
-      const COMPACTION_PASSES = 8;
-      const COMPACTION_STEPS = 16;
+      const COMPACTION_PASSES = PERF_COMPLEX_SCENE ? 6 : 8;
+      const COMPACTION_STEPS = PERF_COMPLEX_SCENE ? 12 : 16;
 
       const binarySlide = (entry: Placed, dir: THREE.Vector2, others: CollisionProxy[]) => {
         const start = entry.center.clone();
@@ -1930,7 +1991,10 @@ export default function Home() {
 
         for (const idx of order) {
           const entry = placed[idx];
-          const others = [...blockers, ...placed.filter((_, i) => i !== idx)];
+          const others: CollisionProxy[] = [...blockers];
+          for (let oi = 0; oi < placed.length; oi++) {
+            if (oi !== idx) others.push(placed[oi]);
+          }
           // Diagonal toward anchor
           const toAnchor = new THREE.Vector2(anchor.x - entry.center.x, anchor.y - entry.center.y);
           if (binarySlide(entry, toAnchor, others)) moved = true;
