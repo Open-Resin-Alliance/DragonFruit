@@ -4,6 +4,7 @@ import React, { useEffect } from 'react';
 import { PickingProvider, usePicking } from '@/components/picking';
 import { useSelection } from '@/components/selection';
 import { subscribe, getSnapshot } from '@/supports/state';
+import type { SupportMode } from '@/supports/types';
 
 export function SelectionSync({ activeModelId }: { activeModelId: string | null }) {
   const { select, deselect, state } = useSelection();
@@ -70,10 +71,33 @@ export function PickingOrbitPauser() {
   return null;
 }
 
+function PickingModeConfigSync({ mode }: { mode?: SupportMode }) {
+  const { setConfig } = usePicking();
+
+  useEffect(() => {
+    const nextMode = mode ?? 'prepare';
+
+    if (nextMode === 'support') {
+      setConfig({
+        includeGizmo: false,
+        allowedCategories: ['support', 'joint', 'knot', 'segment', 'raft', 'model'],
+      });
+      return;
+    }
+
+    setConfig({
+      includeGizmo: true,
+      allowedCategories: ['model', 'gizmo'],
+    });
+  }, [mode, setConfig]);
+
+  return null;
+}
+
 /**
  * Wrapper that always applies PickingProvider, but conditionally enables debug mode.
  */
-export function PickingProviderWrapper({ enabled, children }: { enabled?: boolean; children: React.ReactNode }) {
+export function PickingProviderWrapper({ enabled, mode, children }: { enabled?: boolean; mode?: SupportMode; children: React.ReactNode }) {
   // Always render PickingProvider, pass enabled as debug flag
-  return <PickingProvider debug={enabled}><PickingOrbitPauser />{children}</PickingProvider>;
+  return <PickingProvider debug={enabled}><PickingOrbitPauser /><PickingModeConfigSync mode={mode} />{children}</PickingProvider>;
 }

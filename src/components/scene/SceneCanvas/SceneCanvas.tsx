@@ -851,12 +851,15 @@ export function SceneCanvas({
   // across all modes (prepare/support/analysis/export).
   const effectiveModelSelected = isModelSelected || !!activeModelId;
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
+  const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
+  const postGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
 
   const cameraRef = React.useRef<THREE.Camera | null>(null);
   const suppressNextCanvasClickRef = React.useRef(false);
   const orbitInteractionActiveRef = React.useRef(false);
   const orbitInteractionMovedRef = React.useRef(false);
+  const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
   const [mouseOrbitDragRunId, setMouseOrbitDragRunId] = React.useState(0);
   const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
@@ -1478,6 +1481,7 @@ export function SceneCanvas({
   const handleOrbitStart = React.useCallback(() => {
     orbitInteractionActiveRef.current = true;
     orbitInteractionMovedRef.current = false;
+    setIsOrbitInteracting(true);
     setMouseOrbitDragRunId((id) => id + 1);
   }, []);
 
@@ -1487,11 +1491,37 @@ export function SceneCanvas({
     }
     orbitInteractionActiveRef.current = false;
     orbitInteractionMovedRef.current = false;
+    setIsOrbitInteracting(false);
 
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
     window.dispatchEvent(new Event('picking-orbit-end'));
   }, [onCameraEnd, updateCameraBelowBuildPlate]);
+
+  const markGizmoDragEnded = React.useCallback(() => {
+    window.__gizmoDragEndedThisFrame = true;
+    suppressNextCanvasClickRef.current = true;
+    setIsPostGizmoInteractionGuardActive(true);
+
+    if (postGizmoInteractionTimeoutRef.current !== null) {
+      window.clearTimeout(postGizmoInteractionTimeoutRef.current);
+      postGizmoInteractionTimeoutRef.current = null;
+    }
+
+    postGizmoInteractionTimeoutRef.current = window.setTimeout(() => {
+      window.__gizmoDragEndedThisFrame = false;
+      setIsPostGizmoInteractionGuardActive(false);
+      postGizmoInteractionTimeoutRef.current = null;
+    }, 160);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (postGizmoInteractionTimeoutRef.current !== null) {
+        window.clearTimeout(postGizmoInteractionTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }} onClick={handleCanvasClick} ref={containerRef}>
@@ -1500,7 +1530,7 @@ export function SceneCanvas({
         camera={defaultCamera}
         shadows
         dpr={dynamicDpr}
-        gl={{ stencil: true, logarithmicDepthBuffer: true }}
+        gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
       >
         <LoggingHelper mode={mode} />
         <Lights
@@ -1515,12 +1545,12 @@ export function SceneCanvas({
           originMinY={buildVolumeBounds?.min.y}
           buildPlateOpacity={buildPlateOpacity}
         />
-        <EnableLocalClipping />
+        <EnableLocalClipping enabled={clipLower != null || clipUpper != null} />
         <CameraProvider cameraRef={cameraRef} />
         <CameraProjectionController mode={cameraProjectionMode} />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
-        <PickingProviderWrapper enabled={gpuPickingTest}>
+        <PickingProviderWrapper enabled={gpuPickingTest} mode={mode}>
           <PickingStateSyncer />
 
           {/* Selection Provider - manages model selection state */}
@@ -1533,7 +1563,9 @@ export function SceneCanvas({
               {models.map((model) => {
                 const isActive = model.id === activeModelId;
                 const isSelectedModel = selectedModelIdSet.has(model.id);
-                const supportNonSelectedOpacity = mode === 'support' && !isSelectedModel ? 0.5 : undefined;
+                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive;
+                const interactionLodEnabled = (isOrbitInteracting || spaceMouseNavigationActive) && !isActive;
+                const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
                   hideDuplicateSourceDuringApply
                   && duplicatePreviewModel
@@ -1551,7 +1583,9 @@ export function SceneCanvas({
                     scale: transformToUse.scale,
                   }
                   : transformToUse;
-                const showOutOfBoundsOverlay = !!activeBuildVolumeSettings?.enabled;
+                const showOutOfBoundsOverlay = !!activeBuildVolumeSettings?.enabled
+                  && outOfBoundsModelIds.has(model.id)
+                  && !interactionLodEnabled;
                 // Use per-model visibility
                 if (!model.visible) return null;
                 if (shouldHideDuplicateSourceModel) return null;
@@ -1601,10 +1635,12 @@ export function SceneCanvas({
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}
+                      interactionLodActive={interactionLodEnabled}
                       showOutOfBoundsOverlay={showOutOfBoundsOverlay}
                       outOfBoundsMin={buildVolumeBounds?.min ?? null}
                       outOfBoundsMax={buildVolumeBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
+                      suppressModelInteraction={suppressModelInteraction}
                     />
 
                     {/* Cross-section cap (fill) at the cut plane - Render per model */}
@@ -1788,7 +1824,7 @@ export function SceneCanvas({
                     }
                   }}
                   onMoveEnd={() => {
-                    window.__gizmoDragEndedThisFrame = true;
+                    markGizmoDragEnded();
                     if (activeGroupRef.current && onTransformChange) {
                       onTransformChange(
                         activeGroupRef.current.position.clone(),
@@ -1805,7 +1841,7 @@ export function SceneCanvas({
                     }
                   }}
                   onRotateEnd={() => {
-                    window.__gizmoDragEndedThisFrame = true;
+                    markGizmoDragEnded();
                     if (activeGroupRef.current && onTransformChange) {
                       onTransformChange(
                         activeGroupRef.current.position.clone(),
@@ -1833,7 +1869,7 @@ export function SceneCanvas({
                     }
                   }}
                   onScaleEnd={() => {
-                    window.__gizmoDragEndedThisFrame = true;
+                    markGizmoDragEnded();
                     if (activeGroupRef.current && onTransformChange) {
                       onTransformChange(
                         activeGroupRef.current.position.clone(),
