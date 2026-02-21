@@ -83,43 +83,43 @@ export function WorkspacesSettingsTab({
           {isBuildVolumeManagedByPrinter ? (
             <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 94%)' }}>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Bounding box settings are handled by the selected printer profile (<span style={{ color: 'var(--text-strong)' }}>{activePrinterProfile?.name}</span>).
+                Bounding box dimensions are handled by the selected printer profile (<span style={{ color: 'var(--text-strong)' }}>{activePrinterProfile?.name}</span>).
               </div>
             </div>
           ) : (
             <>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Enable build volume bounds
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Enable build volume bounds
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Shows a faint printer volume outline and enables out-of-bounds checks.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => patchView3dSettings({ enabled: !view3dSettings.enabled })}
+                  className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={view3dSettings.enabled
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  {view3dSettings.enabled ? 'ON' : 'OFF'}
+                </button>
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Shows a faint printer volume outline and enables out-of-bounds checks.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => patchView3dSettings({ enabled: !view3dSettings.enabled })}
-              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-              style={view3dSettings.enabled
-                ? {
-                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                    color: 'var(--accent-contrast)',
-                  }
-                : {
-                    borderColor: 'var(--border-subtle)',
-                    background: 'var(--surface-1)',
-                    color: 'var(--text-muted)',
-                  }}
-            >
-              {view3dSettings.enabled ? 'ON' : 'OFF'}
-            </button>
-          </div>
 
-          {view3dSettings.enabled && (
-          <>
-          <div className="mt-2 grid grid-cols-2 gap-2">
+              {view3dSettings.enabled && (
+                <>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Build Width (mm)
               <input
@@ -238,7 +238,11 @@ export function WorkspacesSettingsTab({
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
               />
             </label>
-          </div>
+                  </div>
+                </>
+              )}
+            </>
+          )}
 
           <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div>
@@ -297,10 +301,6 @@ export function WorkspacesSettingsTab({
               {view3dSettings.showModelBoundingBoxes ? 'ON' : 'OFF'}
             </button>
           </div>
-          </>
-          )}
-        </>
-          )}
         </div>
       </section>
 
