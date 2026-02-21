@@ -37,7 +37,9 @@ import {
   computeApproxModelWorldBounds,
   computePreciseModelWorldBounds,
   isBoundsOutsideVolume,
+  shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
+import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 
 // Domain Features
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -523,6 +525,11 @@ export default function Home() {
     volumeBounds?: THREE.Box3 | null,
   ) => {
     const t = transformOverride ?? model.transform;
+
+    if (shouldUsePreciseBoundsForTransform(t)) {
+      return computePreciseModelWorldBounds(model.geometry, t);
+    }
+
     const approxBounds = computeApproxModelWorldBounds(model.geometry, t);
 
     if (!volumeBounds) {
@@ -601,11 +608,11 @@ export default function Home() {
   }, [scene.models, scene.selectedModelIds]);
 
   const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
-    const size = model.geometry.size;
-    return {
-      width: Math.max(2, Math.abs(size.x * model.transform.scale.x)),
-      depth: Math.max(2, Math.abs(size.y * model.transform.scale.y)),
-    };
+    return computeProjectedFootprintSize(
+      model.geometry,
+      model.transform.rotation,
+      model.transform.scale,
+    );
   }, []);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
@@ -671,6 +678,7 @@ export default function Home() {
       const evaluatePacking = (ordered: typeof modelsWithFootprints, targetRowWidth: number) => {
         const rows: Row[] = [];
         const spills: SpillEntry[] = [];
+        const placementSizeCache = new Map<string, { width: number; depth: number }>();
 
         let occupiedArea = 0;
         let totalDepthUsed = 0;
@@ -693,13 +701,26 @@ export default function Home() {
           return canonical + k * twoPi;
         };
 
-        const footprintAtAngle = (baseWidth: number, baseDepth: number, angleZ: number) => {
-          const c = Math.abs(Math.cos(angleZ));
-          const s = Math.abs(Math.sin(angleZ));
-          return {
-            width: baseWidth * c + baseDepth * s,
-            depth: baseWidth * s + baseDepth * c,
-          };
+        const footprintAtAngle = (model: (typeof visibleModels)[number], angleZ: number) => {
+          const key = `${model.id}|${angleZ.toFixed(5)}|${model.transform.scale.x.toFixed(5)}|${model.transform.scale.y.toFixed(5)}|${model.transform.scale.z.toFixed(5)}|${model.transform.rotation.x.toFixed(5)}|${model.transform.rotation.y.toFixed(5)}`;
+          const cached = placementSizeCache.get(key);
+          if (cached) return cached;
+
+          const rotationForPlacement = new THREE.Euler(
+            model.transform.rotation.x,
+            model.transform.rotation.y,
+            angleZ,
+            model.transform.rotation.order,
+          );
+
+          const dims = computeProjectedFootprintSize(
+            model.geometry,
+            rotationForPlacement,
+            model.transform.scale,
+          );
+
+          placementSizeCache.set(key, dims);
+          return dims;
         };
 
         const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => {
@@ -707,7 +728,7 @@ export default function Home() {
           const currentCanonical = normalizeToPi(currentZ);
 
           if (!arrangeAllowRotateOnZ) {
-            const dims = footprintAtAngle(current.baseWidth, current.baseDepth, currentCanonical);
+            const dims = footprintAtAngle(current.model, currentCanonical);
             return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
           }
 
@@ -725,7 +746,7 @@ export default function Home() {
 
           for (const rawCanonical of candidateCanonicals) {
             const canonical = normalizeToPi(rawCanonical);
-            const dims = footprintAtAngle(current.baseWidth, current.baseDepth, canonical);
+            const dims = footprintAtAngle(current.model, canonical);
             const key = `${dims.width.toFixed(3)}:${dims.depth.toFixed(3)}`;
             if (seenFootprints.has(key)) continue;
             seenFootprints.add(key);
@@ -1032,17 +1053,17 @@ export default function Home() {
     const gapZ = Math.max(0, arrangeArrayGapZ);
 
     const baseDims = visibleModels.map((model) => {
+      const projected = computeProjectedFootprintSize(
+        model.geometry,
+        model.transform.rotation,
+        model.transform.scale,
+      );
       const size = model.geometry.size;
-      const scaledWidth = Math.max(2, Math.abs(size.x * model.transform.scale.x));
-      const scaledDepth = Math.max(2, Math.abs(size.y * model.transform.scale.y));
       const scaledHeight = Math.max(2, Math.abs(size.z * model.transform.scale.z));
-      const rz = model.transform.rotation.z;
-      const c = Math.abs(Math.cos(rz));
-      const s = Math.abs(Math.sin(rz));
 
       return {
-        width: (scaledWidth * c) + (scaledDepth * s),
-        depth: (scaledWidth * s) + (scaledDepth * c),
+        width: projected.width,
+        depth: projected.depth,
         height: scaledHeight,
       };
     });

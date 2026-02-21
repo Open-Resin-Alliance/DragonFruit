@@ -42,7 +42,9 @@ function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCache
   const positionAttribute = geometry.getAttribute('position');
   if (!positionAttribute || positionAttribute.count === 0) return null;
 
-  const attrVersion = positionAttribute.version ?? 0;
+  const attrVersion = positionAttribute instanceof THREE.BufferAttribute
+    ? positionAttribute.version
+    : (positionAttribute.data?.version ?? 0);
   const cached = geometryCache.get(geometry);
   if (cached && cached.attributeVersion === attrVersion && cached.vertexCount === positionAttribute.count) {
     return cached;
@@ -81,6 +83,14 @@ function ensureCenteredPositionBuffer(geometryData: GeometryLike): GeometryCache
 
   geometryCache.set(geometry, next);
   return next;
+}
+
+export function shouldUsePreciseBoundsForTransform(transform: TransformLike, angleEpsilon = 1e-4): boolean {
+  const ax = Math.abs(transform.rotation.x);
+  const ay = Math.abs(transform.rotation.y);
+  const az = Math.abs(transform.rotation.z);
+  const rotationAxisCount = Number(ax > angleEpsilon) + Number(ay > angleEpsilon) + Number(az > angleEpsilon);
+  return rotationAxisCount > 1;
 }
 
 export function computeApproxModelWorldBounds(
