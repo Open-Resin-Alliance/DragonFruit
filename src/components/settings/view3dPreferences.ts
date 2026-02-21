@@ -9,7 +9,8 @@ export type View3DSettings = {
   showViolationWarning: boolean;
   showModelBoundingBoxes: boolean;
   showSliceSatBoundingMesh: boolean;
-  sliceSatBoundingMeshRenderMode: 'shaded' | 'wireframe';
+  sliceSatBoundingMeshMode: 'accurate_hull' | 'experimental_slice';
+  experimentalSliceSatBoundingMeshRenderMode: 'shaded' | 'wireframe';
 };
 
 export const VIEW3D_SETTINGS_STORAGE_KEY = 'app-3d-view-settings';
@@ -26,7 +27,8 @@ export const DEFAULT_VIEW3D_SETTINGS: View3DSettings = {
   showViolationWarning: true,
   showModelBoundingBoxes: false,
   showSliceSatBoundingMesh: false,
-  sliceSatBoundingMeshRenderMode: 'shaded',
+  sliceSatBoundingMeshMode: 'accurate_hull',
+  experimentalSliceSatBoundingMeshRenderMode: 'shaded',
 };
 
 function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
@@ -47,17 +49,41 @@ function clampOriginMode(input: unknown, fallback: View3DSettings['originMode'])
   return input === 'front_left' || input === 'center' ? input : fallback;
 }
 
-function clampSliceSatRenderMode(
+function clampSliceSatMode(
   input: unknown,
-  fallback: View3DSettings['sliceSatBoundingMeshRenderMode'],
-): View3DSettings['sliceSatBoundingMeshRenderMode'] {
+  fallback: View3DSettings['sliceSatBoundingMeshMode'],
+): View3DSettings['sliceSatBoundingMeshMode'] {
+  return input === 'accurate_hull' || input === 'experimental_slice' ? input : fallback;
+}
+
+function clampExperimentalSliceSatRenderMode(
+  input: unknown,
+  fallback: View3DSettings['experimentalSliceSatBoundingMeshRenderMode'],
+): View3DSettings['experimentalSliceSatBoundingMeshRenderMode'] {
   return input === 'wireframe' || input === 'shaded' ? input : fallback;
 }
 
 export function normalizeView3DSettings(input: unknown): View3DSettings {
   if (!input || typeof input !== 'object') return DEFAULT_VIEW3D_SETTINGS;
 
-  const candidate = input as Partial<View3DSettings>;
+  const candidate = input as Partial<View3DSettings> & {
+    // Legacy field kept for migration from previous versions.
+    sliceSatBoundingMeshRenderMode?: 'shaded' | 'wireframe' | 'hull';
+  };
+
+  const legacyRenderMode = candidate.sliceSatBoundingMeshRenderMode;
+  const inferredModeFromLegacy: View3DSettings['sliceSatBoundingMeshMode'] | null =
+    legacyRenderMode === 'hull'
+      ? 'accurate_hull'
+      : legacyRenderMode === 'shaded' || legacyRenderMode === 'wireframe'
+        ? 'experimental_slice'
+        : null;
+
+  const inferredExperimentalRenderFromLegacy: View3DSettings['experimentalSliceSatBoundingMeshRenderMode'] | null =
+    legacyRenderMode === 'shaded' || legacyRenderMode === 'wireframe'
+      ? legacyRenderMode
+      : null;
+
   return {
     enabled: clampBoolean(candidate.enabled, DEFAULT_VIEW3D_SETTINGS.enabled),
     widthMm: clampNumber(candidate.widthMm, 10, 2000, DEFAULT_VIEW3D_SETTINGS.widthMm),
@@ -69,9 +95,13 @@ export function normalizeView3DSettings(input: unknown): View3DSettings {
     showViolationWarning: clampBoolean(candidate.showViolationWarning, DEFAULT_VIEW3D_SETTINGS.showViolationWarning),
     showModelBoundingBoxes: clampBoolean(candidate.showModelBoundingBoxes, DEFAULT_VIEW3D_SETTINGS.showModelBoundingBoxes),
     showSliceSatBoundingMesh: clampBoolean(candidate.showSliceSatBoundingMesh, DEFAULT_VIEW3D_SETTINGS.showSliceSatBoundingMesh),
-    sliceSatBoundingMeshRenderMode: clampSliceSatRenderMode(
-      candidate.sliceSatBoundingMeshRenderMode,
-      DEFAULT_VIEW3D_SETTINGS.sliceSatBoundingMeshRenderMode,
+    sliceSatBoundingMeshMode: clampSliceSatMode(
+      candidate.sliceSatBoundingMeshMode ?? inferredModeFromLegacy,
+      DEFAULT_VIEW3D_SETTINGS.sliceSatBoundingMeshMode,
+    ),
+    experimentalSliceSatBoundingMeshRenderMode: clampExperimentalSliceSatRenderMode(
+      candidate.experimentalSliceSatBoundingMeshRenderMode ?? inferredExperimentalRenderFromLegacy,
+      DEFAULT_VIEW3D_SETTINGS.experimentalSliceSatBoundingMeshRenderMode,
     ),
   };
 }

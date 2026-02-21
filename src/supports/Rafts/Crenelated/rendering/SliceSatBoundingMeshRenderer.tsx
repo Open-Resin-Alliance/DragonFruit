@@ -2,6 +2,7 @@
 
 import React from 'react';
 import * as THREE from 'three';
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { useSyncExternalStore } from 'react';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
@@ -11,9 +12,12 @@ interface SliceSatBoundingMeshRendererProps {
   modelGeometry: GeometryWithBounds | null;
   modelTransform: ModelTransform | null | undefined;
   enabled: boolean;
-  renderMode?: 'shaded' | 'wireframe';
+  renderMode?: 'shaded' | 'wireframe' | 'hull';
   interactionActive?: boolean;
 }
+
+const HULL_MARGIN_MM = 0.05;
+const HULL_MAX_INPUT_VERTICES = 200_000;
 
 const BASE_SLICE_COUNT = 24;
 const MAX_SLICE_COUNT = 96;
@@ -517,6 +521,125 @@ function buildSliceWireframeGeometry(rings: SliceRing[], pointCapHeight = 0): TH
   return geometry;
 }
 
+/**
+ * Builds a 3D convex hull mesh around the given world-space vertices,
+ * then uniformly expands it outward by `margin` mm along averaged vertex normals.
+ * Handles non-manifold geometry, merged bodies, and tiny details robustly
+ * since the convex hull only considers vertex positions, not mesh topology.
+ */
+function buildHullMeshGeometry(
+  worldVertices: THREE.Vector3[],
+  margin: number,
+): { hullMesh: THREE.BufferGeometry; hullEdges: THREE.BufferGeometry } | null {
+  if (worldVertices.length < 4) return null;
+
+  // Subsample if the vertex count is very large — the convex hull only needs
+  // the extreme points, and Quickhull is efficient, but we cap input size
+  // to avoid spending time on interior vertices that can't contribute.
+  let inputPoints = worldVertices;
+  if (inputPoints.length > HULL_MAX_INPUT_VERTICES) {
+    const stride = Math.ceil(inputPoints.length / HULL_MAX_INPUT_VERTICES);
+    const sampled: THREE.Vector3[] = [];
+    for (let i = 0; i < inputPoints.length; i += stride) {
+      sampled.push(inputPoints[i]);
+    }
+    // Always include the last vertex to keep bounding extremes.
+    if (sampled.length > 0 && sampled[sampled.length - 1] !== inputPoints[inputPoints.length - 1]) {
+      sampled.push(inputPoints[inputPoints.length - 1]);
+    }
+    inputPoints = sampled;
+  }
+
+  // Quick degeneracy check: need at least 4 non-coplanar points.
+  // Compute bounding box span to detect degenerate extents.
+  const bbMin = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const bbMax = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  for (const v of inputPoints) {
+    bbMin.min(v);
+    bbMax.max(v);
+  }
+  const span = new THREE.Vector3().subVectors(bbMax, bbMin);
+  // If all points are essentially coplanar/colinear, bail out.
+  const axes = [span.x, span.y, span.z].sort((a, b) => a - b);
+  if (axes[0] < 1e-4 && axes[1] < 1e-4) return null; // colinear/point
+
+  let hullGeo: THREE.BufferGeometry;
+  try {
+    hullGeo = new ConvexGeometry(inputPoints);
+  } catch {
+    return null;
+  }
+
+  const posAttr = hullGeo.getAttribute('position') as THREE.BufferAttribute;
+  if (!posAttr || posAttr.count < 3) {
+    hullGeo.dispose();
+    return null;
+  }
+
+  // ConvexGeometry produces non-indexed geometry (per-face vertices).
+  // To expand uniformly we need averaged normals at shared positions.
+  hullGeo.computeVertexNormals(); // gives flat face normals for non-indexed geo
+  const normalAttr = hullGeo.getAttribute('normal') as THREE.BufferAttribute;
+
+  if (margin > 0) {
+    // Quantize positions to group duplicates.
+    const QUANT = 1e-5;
+    const vertexGroups = new Map<string, { indices: number[]; nx: number; ny: number; nz: number }>();
+
+    for (let i = 0; i < posAttr.count; i++) {
+      const qx = Math.round(posAttr.getX(i) / QUANT);
+      const qy = Math.round(posAttr.getY(i) / QUANT);
+      const qz = Math.round(posAttr.getZ(i) / QUANT);
+      const key = `${qx}:${qy}:${qz}`;
+
+      const existing = vertexGroups.get(key);
+      if (existing) {
+        existing.indices.push(i);
+        existing.nx += normalAttr.getX(i);
+        existing.ny += normalAttr.getY(i);
+        existing.nz += normalAttr.getZ(i);
+      } else {
+        vertexGroups.set(key, {
+          indices: [i],
+          nx: normalAttr.getX(i),
+          ny: normalAttr.getY(i),
+          nz: normalAttr.getZ(i),
+        });
+      }
+    }
+
+    // Push each vertex outward along its averaged normal.
+    for (const group of vertexGroups.values()) {
+      const len = Math.sqrt(group.nx * group.nx + group.ny * group.ny + group.nz * group.nz);
+      if (len < 1e-10) continue;
+      const nx = group.nx / len;
+      const ny = group.ny / len;
+      const nz = group.nz / len;
+
+      for (const idx of group.indices) {
+        posAttr.setXYZ(
+          idx,
+          posAttr.getX(idx) + nx * margin,
+          posAttr.getY(idx) + ny * margin,
+          posAttr.getZ(idx) + nz * margin,
+        );
+      }
+    }
+
+    posAttr.needsUpdate = true;
+    hullGeo.computeVertexNormals();
+  }
+
+  hullGeo.computeBoundingBox();
+  hullGeo.computeBoundingSphere();
+
+  // EdgesGeometry extracts only the hard silhouette edges (angle > threshold),
+  // giving a clean wireframe like game-engine collision hulls.
+  const edgeGeo = new THREE.EdgesGeometry(hullGeo, 15);
+
+  return { hullMesh: hullGeo, hullEdges: edgeGeo };
+}
+
 export default function SliceSatBoundingMeshRenderer({
   modelGeometry,
   modelTransform,
@@ -525,8 +648,14 @@ export default function SliceSatBoundingMeshRenderer({
   interactionActive = false,
 }: SliceSatBoundingMeshRendererProps) {
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
-  const cachedGeometriesRef = React.useRef<{ meshGeometry: THREE.BufferGeometry; wireGeometry: THREE.BufferGeometry | null } | null>(null);
+  const cachedGeometriesRef = React.useRef<{
+    meshGeometry: THREE.BufferGeometry | null;
+    wireGeometry: THREE.BufferGeometry | null;
+    hullGeometry: THREE.BufferGeometry | null;
+    hullEdgeGeometry: THREE.BufferGeometry | null;
+  } | null>(null);
   const cachedSourceIdRef = React.useRef<string | null>(null);
+  const cachedRenderModeRef = React.useRef<string | null>(null);
 
   const satGeometries = React.useMemo(() => {
     if (!enabled || !modelGeometry || !modelTransform) return null;
@@ -536,6 +665,7 @@ export default function SliceSatBoundingMeshRenderer({
       interactionActive
       && cachedGeometriesRef.current
       && cachedSourceIdRef.current === sourceId
+      && cachedRenderModeRef.current === renderMode
     ) {
       return cachedGeometriesRef.current;
     }
@@ -554,6 +684,32 @@ export default function SliceSatBoundingMeshRenderer({
     );
     transformMatrix.multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
 
+    const positionAttr = modelGeometry.geometry.getAttribute('position') as THREE.BufferAttribute;
+
+    const worldVertices: THREE.Vector3[] = new Array(positionAttr.count);
+    for (let i = 0; i < positionAttr.count; i++) {
+      const v = new THREE.Vector3(positionAttr.getX(i), positionAttr.getY(i), positionAttr.getZ(i));
+      v.applyMatrix4(transformMatrix);
+      worldVertices[i] = v;
+    }
+
+    // ── Hull mode ──────────────────────────────────────────────────────
+    if (renderMode === 'hull') {
+      const hullResult = buildHullMeshGeometry(worldVertices, HULL_MARGIN_MM);
+      if (!hullResult) return null;
+      const next = {
+        meshGeometry: null,
+        wireGeometry: null,
+        hullGeometry: hullResult.hullMesh,
+        hullEdgeGeometry: hullResult.hullEdges,
+      };
+      cachedGeometriesRef.current = next;
+      cachedSourceIdRef.current = sourceId;
+      cachedRenderModeRef.current = renderMode;
+      return next;
+    }
+
+    // ── Slice mode (shaded / wireframe) ────────────────────────────────
     const corners = [
       new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.min.z),
       new THREE.Vector3(bbox.min.x, bbox.min.y, bbox.max.z),
@@ -586,15 +742,7 @@ export default function SliceSatBoundingMeshRenderer({
     const zPadding = margin;
     const rings: SliceRing[] = [];
 
-    const positionAttr = modelGeometry.geometry.getAttribute('position') as THREE.BufferAttribute;
     const indexAttr = modelGeometry.geometry.getIndex();
-
-    const worldVertices: THREE.Vector3[] = new Array(positionAttr.count);
-    for (let i = 0; i < positionAttr.count; i++) {
-      const v = new THREE.Vector3(positionAttr.getX(i), positionAttr.getY(i), positionAttr.getZ(i));
-      v.applyMatrix4(transformMatrix);
-      worldVertices[i] = v;
-    }
 
     const triangleProxies: TriangleSliceProxy[] = [];
     const pushTriangleProxy = (a: number, b: number, c: number) => {
@@ -722,20 +870,54 @@ export default function SliceSatBoundingMeshRenderer({
     const meshGeometry = buildSliceMeshGeometry(finalRings, zPadding);
     if (!meshGeometry) return null;
     const wireGeometry = buildSliceWireframeGeometry(finalRings, zPadding);
-    const next = { meshGeometry, wireGeometry };
+    const next = {
+      meshGeometry,
+      wireGeometry,
+      hullGeometry: null as THREE.BufferGeometry | null,
+      hullEdgeGeometry: null as THREE.BufferGeometry | null,
+    };
     cachedGeometriesRef.current = next;
     cachedSourceIdRef.current = sourceId;
+    cachedRenderModeRef.current = renderMode;
     return next;
-  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin, interactionActive]);
+  }, [enabled, modelGeometry, modelTransform, raft.footprintBorderMargin, interactionActive, renderMode]);
 
   React.useEffect(() => {
     return () => {
-      satGeometries?.meshGeometry.dispose();
+      satGeometries?.meshGeometry?.dispose();
       satGeometries?.wireGeometry?.dispose();
+      satGeometries?.hullGeometry?.dispose();
+      satGeometries?.hullEdgeGeometry?.dispose();
     };
   }, [satGeometries]);
 
-  if (!enabled || !satGeometries?.meshGeometry) return null;
+  if (!enabled || !satGeometries) return null;
+
+  // ── Hull mode rendering ──────────────────────────────────────────────
+  if (renderMode === 'hull' && satGeometries.hullGeometry) {
+    return (
+      <group renderOrder={7}>
+        <mesh geometry={satGeometries.hullGeometry} raycast={() => null} renderOrder={7}>
+          <meshStandardMaterial
+            color="#baf72e"
+            transparent
+            opacity={0.14}
+            side={THREE.DoubleSide}
+            roughness={0.6}
+            metalness={0.02}
+            depthWrite={false}
+          />
+        </mesh>
+        {satGeometries.hullEdgeGeometry && (
+          <lineSegments geometry={satGeometries.hullEdgeGeometry} raycast={() => null} renderOrder={8}>
+            <lineBasicMaterial color="#baf72e" transparent opacity={0.7} depthWrite={false} depthTest />
+          </lineSegments>
+        )}
+      </group>
+    );
+  }
+
+  if (!satGeometries.meshGeometry) return null;
 
   if (renderMode === 'wireframe') {
     return (

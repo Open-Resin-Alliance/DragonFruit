@@ -308,7 +308,7 @@ export function WorkspacesSettingsTab({
                 Show slice SAT bounding mesh
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Experimental overlay: builds a slice-derived SAT mesh volume around the active model.
+                SAT debug overlay around the active model for nesting and diagnostics.
               </div>
             </div>
             <button
@@ -332,21 +332,20 @@ export function WorkspacesSettingsTab({
           </div>
 
           {view3dSettings.showSliceSatBoundingMesh && (
-            <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  SAT mesh display mode
-                </div>
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Choose between filled shading and wireframe-only debugging.
-                </div>
+            <div className="mt-2 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                SAT mode
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Choose accurate convex-hull SAT for nesting, or experimental slice-derived SAT for diagnostics.
+              </div>
+
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshRenderMode: 'shaded' })}
-                  className="h-10 min-w-[110px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={view3dSettings.sliceSatBoundingMeshRenderMode === 'shaded'
+                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshMode: 'accurate_hull' })}
+                  className="h-10 min-w-[180px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={view3dSettings.sliceSatBoundingMeshMode === 'accurate_hull'
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
@@ -358,13 +357,13 @@ export function WorkspacesSettingsTab({
                         color: 'var(--text-muted)',
                       }}
                 >
-                  Shaded
+                  Accurate Hull-based SAT
                 </button>
                 <button
                   type="button"
-                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshRenderMode: 'wireframe' })}
-                  className="h-10 min-w-[110px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={view3dSettings.sliceSatBoundingMeshRenderMode === 'wireframe'
+                  onClick={() => patchView3dSettings({ sliceSatBoundingMeshMode: 'experimental_slice' })}
+                  className="h-10 min-w-[200px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={view3dSettings.sliceSatBoundingMeshMode === 'experimental_slice'
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
@@ -376,9 +375,60 @@ export function WorkspacesSettingsTab({
                         color: 'var(--text-muted)',
                       }}
                 >
-                  Wireframe
+                  Experimental Slice-based SAT
                 </button>
               </div>
+
+              {view3dSettings.sliceSatBoundingMeshMode === 'experimental_slice' && (
+                <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                  <div>
+                    <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      Experimental slice display
+                    </div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      Pick how the experimental slice-derived SAT is visualized.
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => patchView3dSettings({ experimentalSliceSatBoundingMeshRenderMode: 'shaded' })}
+                      className="h-10 min-w-[90px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                      style={view3dSettings.experimentalSliceSatBoundingMeshRenderMode === 'shaded'
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                            color: 'var(--accent-contrast)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                            color: 'var(--text-muted)',
+                          }}
+                    >
+                      Shaded
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => patchView3dSettings({ experimentalSliceSatBoundingMeshRenderMode: 'wireframe' })}
+                      className="h-10 min-w-[90px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                      style={view3dSettings.experimentalSliceSatBoundingMeshRenderMode === 'wireframe'
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                            color: 'var(--accent-contrast)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                            color: 'var(--text-muted)',
+                          }}
+                    >
+                      Wireframe
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

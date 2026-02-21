@@ -1953,7 +1953,9 @@ export function SceneCanvas({
                 modelGeometry={activeModel ? activeModel.geometry : null}
                 modelTransform={activeModelTransform}
                 enabled={Boolean(activeBuildVolumeSettings.showSliceSatBoundingMesh)}
-                renderMode={activeBuildVolumeSettings.sliceSatBoundingMeshRenderMode}
+                renderMode={activeBuildVolumeSettings.sliceSatBoundingMeshMode === 'accurate_hull'
+                  ? 'hull'
+                  : activeBuildVolumeSettings.experimentalSliceSatBoundingMeshRenderMode}
                 interactionActive={isGizmoDragging}
               />
 
