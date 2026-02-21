@@ -65,6 +65,35 @@ import { DEFAULT_VIEW3D_SETTINGS, type View3DSettings } from '@/components/setti
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
+function buildBoxWireframePositions(bounds: THREE.Box3): Float32Array {
+  const min = bounds.min;
+  const max = bounds.max;
+
+  const a = [min.x, min.y, min.z];
+  const b = [max.x, min.y, min.z];
+  const c = [max.x, max.y, min.z];
+  const d = [min.x, max.y, min.z];
+  const e = [min.x, min.y, max.z];
+  const f = [max.x, min.y, max.z];
+  const g = [max.x, max.y, max.z];
+  const h = [min.x, max.y, max.z];
+
+  return new Float32Array([
+    ...a, ...b,
+    ...b, ...c,
+    ...c, ...d,
+    ...d, ...a,
+    ...e, ...f,
+    ...f, ...g,
+    ...g, ...h,
+    ...h, ...e,
+    ...a, ...e,
+    ...b, ...f,
+    ...c, ...g,
+    ...d, ...h,
+  ]);
+}
+
 function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
   const { camera, controls, set, size } = useThree();
   const ORTHO_NEAR = -20000;
@@ -782,6 +811,8 @@ export function SceneCanvas({
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
+  const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
+  const OUT_OF_BOUNDS_ROTATE_GRACE_MS = 320;
   const cameraProjectionMode = React.useSyncExternalStore(
     subscribeToCameraProjectionSettings,
     () => getSavedCameraProjectionSettings().mode,
@@ -851,9 +882,34 @@ export function SceneCanvas({
   // across all modes (prepare/support/analysis/export).
   const effectiveModelSelected = isModelSelected || !!activeModelId;
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
+  const [outOfBoundsRotateGraceActive, setOutOfBoundsRotateGraceActive] = React.useState(false);
+  const outOfBoundsRotateGraceTimeoutRef = React.useRef<number | null>(null);
   const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
   const postGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
+
+  const startOutOfBoundsRotateGrace = React.useCallback(() => {
+    setOutOfBoundsRotateGraceActive(true);
+
+    if (typeof window === 'undefined') return;
+    if (outOfBoundsRotateGraceTimeoutRef.current !== null) {
+      window.clearTimeout(outOfBoundsRotateGraceTimeoutRef.current);
+    }
+
+    outOfBoundsRotateGraceTimeoutRef.current = window.setTimeout(() => {
+      setOutOfBoundsRotateGraceActive(false);
+      outOfBoundsRotateGraceTimeoutRef.current = null;
+    }, OUT_OF_BOUNDS_ROTATE_GRACE_MS);
+  }, [OUT_OF_BOUNDS_ROTATE_GRACE_MS]);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window === 'undefined') return;
+      if (outOfBoundsRotateGraceTimeoutRef.current !== null) {
+        window.clearTimeout(outOfBoundsRotateGraceTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const cameraRef = React.useRef<THREE.Camera | null>(null);
   const suppressNextCanvasClickRef = React.useRef(false);
@@ -908,19 +964,61 @@ export function SceneCanvas({
   const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
 
-  const computeModelWorldBounds = React.useCallback((model: LoadedModel) => {
+  const computeModelWorldBounds = React.useCallback((model: LoadedModel, modelTransformOverride?: ModelTransform) => {
     const modelBox = model.geometry.bbox.clone();
     const center = model.geometry.center;
     modelBox.translate(new THREE.Vector3(-center.x, -center.y, -center.z));
 
-    const t = model.transform;
-    const matrix = new THREE.Matrix4().compose(
+    const t = modelTransformOverride ?? model.transform;
+
+    const ax = Math.abs(t.rotation.x);
+    const ay = Math.abs(t.rotation.y);
+    const az = Math.abs(t.rotation.z);
+    const rotationAxisCount = Number(ax > 1e-4) + Number(ay > 1e-4) + Number(az > 1e-4);
+    const usePreciseMultiAxisBounds = rotationAxisCount > 1;
+
+    const transformMatrix = new THREE.Matrix4().compose(
       t.position,
       new THREE.Quaternion().setFromEuler(t.rotation),
       t.scale,
     );
-    modelBox.applyMatrix4(matrix);
-    return modelBox;
+
+    if (!usePreciseMultiAxisBounds) {
+      modelBox.applyMatrix4(transformMatrix);
+      return modelBox;
+    }
+
+    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+    const finalMatrix = transformMatrix.multiply(offsetMatrix);
+    const positionAttribute = model.geometry.geometry.getAttribute('position');
+    if (!positionAttribute || positionAttribute.count === 0) {
+      modelBox.applyMatrix4(finalMatrix);
+      return modelBox;
+    }
+
+    const preciseBounds = new THREE.Box3();
+    preciseBounds.makeEmpty();
+
+    const point = new THREE.Vector3();
+    if (positionAttribute instanceof THREE.BufferAttribute) {
+      const array = positionAttribute.array;
+      const itemSize = positionAttribute.itemSize;
+
+      for (let i = 0; i < positionAttribute.count; i++) {
+        const idx = i * itemSize;
+        point.set(array[idx], array[idx + 1], array[idx + 2]).applyMatrix4(finalMatrix);
+        preciseBounds.expandByPoint(point);
+      }
+    } else {
+      for (let i = 0; i < positionAttribute.count; i++) {
+        point
+          .set(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i))
+          .applyMatrix4(finalMatrix);
+        preciseBounds.expandByPoint(point);
+      }
+    }
+
+    return preciseBounds.isEmpty() ? modelBox.applyMatrix4(finalMatrix) : preciseBounds;
   }, []);
 
   const buildVolumeBounds = React.useMemo(() => {
@@ -939,27 +1037,76 @@ export function SceneCanvas({
 
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
+    if (isGizmoDragging || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
 
     return models
       .filter((model) => model.visible)
-      .map((model) => ({
+      .map((model) => {
+        const effectiveTransform =
+          (model.id === activeModelId && transform)
+            ? transform
+            : model.transform;
+
+        return {
         id: model.id,
         name: model.name,
-        bounds: computeModelWorldBounds(model),
-      }))
+          bounds: computeModelWorldBounds(model, effectiveTransform),
+        };
+      })
       .filter(({ bounds }) => (
-        bounds.min.x < buildVolumeBounds.min.x
-        || bounds.max.x > buildVolumeBounds.max.x
-        || bounds.min.y < buildVolumeBounds.min.y
-        || bounds.max.y > buildVolumeBounds.max.y
-        || bounds.min.z < buildVolumeBounds.min.z
-        || bounds.max.z > buildVolumeBounds.max.z
+        bounds.min.x < (buildVolumeBounds.min.x - BUILD_VOLUME_BOUNDS_EPS_MM)
+        || bounds.max.x > (buildVolumeBounds.max.x + BUILD_VOLUME_BOUNDS_EPS_MM)
+        || bounds.min.y < (buildVolumeBounds.min.y - BUILD_VOLUME_BOUNDS_EPS_MM)
+        || bounds.max.y > (buildVolumeBounds.max.y + BUILD_VOLUME_BOUNDS_EPS_MM)
+        || bounds.min.z < (buildVolumeBounds.min.z - BUILD_VOLUME_BOUNDS_EPS_MM)
+        || bounds.max.z > (buildVolumeBounds.max.z + BUILD_VOLUME_BOUNDS_EPS_MM)
       ));
-  }, [buildVolumeBounds, computeModelWorldBounds, models]);
+  }, [
+    BUILD_VOLUME_BOUNDS_EPS_MM,
+    activeModelId,
+    buildVolumeBounds,
+    computeModelWorldBounds,
+    isGizmoDragging,
+    models,
+    outOfBoundsRotateGraceActive,
+    transform,
+  ]);
+
+  const shaderOutOfBoundsBounds = React.useMemo(() => {
+    if (!buildVolumeBounds) return null;
+
+    return {
+      min: buildVolumeBounds.min.clone().addScalar(-BUILD_VOLUME_BOUNDS_EPS_MM),
+      max: buildVolumeBounds.max.clone().addScalar(BUILD_VOLUME_BOUNDS_EPS_MM),
+    };
+  }, [BUILD_VOLUME_BOUNDS_EPS_MM, buildVolumeBounds]);
 
   const outOfBoundsModelIds = React.useMemo(() => {
     return new Set(outOfBoundsModels.map((m) => m.id));
   }, [outOfBoundsModels]);
+
+  const modelBoundingBoxDebugData = React.useMemo(() => {
+    if (!activeBuildVolumeSettings.showModelBoundingBoxes) return [] as Array<{
+      id: string;
+      positions: Float32Array;
+      color: string;
+    }>;
+
+    return models
+      .filter((model) => model.visible)
+      .map((model) => {
+        const effectiveTransform =
+          (model.id === activeModelId && transform)
+            ? transform
+            : model.transform;
+        const bounds = computeModelWorldBounds(model, effectiveTransform);
+        return {
+          id: model.id,
+          positions: buildBoxWireframePositions(bounds),
+          color: outOfBoundsModelIds.has(model.id) ? '#ff5b6f' : '#5aaeff',
+        };
+      });
+  }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeModelId, computeModelWorldBounds, models, outOfBoundsModelIds, transform]);
 
   const buildVolumeBoxGeometry = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled) return null;
@@ -1637,8 +1784,8 @@ export function SceneCanvas({
                       supportNonSelectedOpacity={supportNonSelectedOpacity}
                       interactionLodActive={interactionLodEnabled}
                       showOutOfBoundsOverlay={showOutOfBoundsOverlay}
-                      outOfBoundsMin={buildVolumeBounds?.min ?? null}
-                      outOfBoundsMax={buildVolumeBounds?.max ?? null}
+                      outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
+                      outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
                       suppressModelInteraction={suppressModelInteraction}
                     />
@@ -1767,6 +1914,26 @@ export function SceneCanvas({
                       </group>
                     );
                   })
+                : null}
+
+              {activeBuildVolumeSettings.showModelBoundingBoxes
+                ? modelBoundingBoxDebugData.map((entry) => (
+                    <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={8} raycast={() => null}>
+                      <bufferGeometry>
+                        <bufferAttribute
+                          attach="attributes-position"
+                          args={[entry.positions, 3]}
+                        />
+                      </bufferGeometry>
+                      <lineBasicMaterial
+                        color={entry.color}
+                        transparent
+                        opacity={0.9}
+                        depthWrite={false}
+                        depthTest={false}
+                      />
+                    </lineSegments>
+                  ))
                 : null}
 
               {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (

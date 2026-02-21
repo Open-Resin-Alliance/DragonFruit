@@ -112,7 +112,6 @@ export function TransformControls({
     const newRot = rotation.clone();
     newRot[axis] = radians;
     onRotationChange(newRot.x, newRot.y, newRot.z);
-    onRotationComplete?.();
   };
 
   // Scale handlers
@@ -325,6 +324,7 @@ export function TransformControls({
                 <NumberInput
                   value={parseFloat(toDegrees(rotation.x).toFixed(2))}
                   onChange={(val) => handleRotationChange('x', val)}
+                  onBlur={() => onRotationComplete?.()}
                   className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
@@ -333,6 +333,7 @@ export function TransformControls({
                 <NumberInput
                   value={parseFloat(toDegrees(rotation.y).toFixed(2))}
                   onChange={(val) => handleRotationChange('y', val)}
+                  onBlur={() => onRotationComplete?.()}
                   className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>
@@ -341,6 +342,7 @@ export function TransformControls({
                 <NumberInput
                   value={parseFloat(toDegrees(rotation.z).toFixed(2))}
                   onChange={(val) => handleRotationChange('z', val)}
+                  onBlur={() => onRotationComplete?.()}
                   className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
                 />
               </div>

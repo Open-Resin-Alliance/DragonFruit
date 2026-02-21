@@ -102,6 +102,7 @@ export default function FootprintBorderRenderer({
   modelGeometry,
   modelTransform
 }: FootprintBorderRendererProps) {
+  const FOOTPRINT_BORDER_Z = 0.001;
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
@@ -232,12 +233,12 @@ export default function FootprintBorderRenderer({
     // 5. Create line geometry
     const points: THREE.Vector3[] = [];
     for (const p of borderProfile) {
-      points.push(new THREE.Vector3(p.x, p.y, -1.0));
+      points.push(new THREE.Vector3(p.x, p.y, FOOTPRINT_BORDER_Z));
     }
-    points.push(new THREE.Vector3(borderProfile[0].x, borderProfile[0].y, -1.0));
+    points.push(new THREE.Vector3(borderProfile[0].x, borderProfile[0].y, FOOTPRINT_BORDER_Z));
 
     return new THREE.BufferGeometry().setFromPoints(points);
-  }, [modelGeometry, modelTransform, supportState, raft]);
+  }, [FOOTPRINT_BORDER_Z, modelGeometry, modelTransform, supportState, raft]);
 
   if (raft.bottomMode === 'off' || !raft.showFootprintBorder || !borderLine) {
     return null;

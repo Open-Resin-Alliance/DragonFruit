@@ -268,10 +268,38 @@ export function WorkspacesSettingsTab({
               {view3dSettings.showViolationWarning ? 'ON' : 'OFF'}
             </button>
           </div>
+
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Show model bounding boxes
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Debug overlay: draws world-space bounds for each visible model (red if out-of-bounds).
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => patchView3dSettings({ showModelBoundingBoxes: !view3dSettings.showModelBoundingBoxes })}
+              className="h-10 min-w-[92px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+              style={view3dSettings.showModelBoundingBoxes
+                ? {
+                    borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                    color: 'var(--accent-contrast)',
+                  }
+                : {
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-1)',
+                    color: 'var(--text-muted)',
+                  }}
+            >
+              {view3dSettings.showModelBoundingBoxes ? 'ON' : 'OFF'}
+            </button>
+          </div>
           </>
           )}
-
-            </>
+        </>
           )}
         </div>
       </section>

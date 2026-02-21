@@ -47,10 +47,7 @@ tsc_output.txt
 todo_list
 
 # backups
-2. Backup/
-
-# lys conversion artifacts
-/3. LysConversion/
+2_Backup/
 
 # proprietary local notes
-/Scratch/
+Scratch/

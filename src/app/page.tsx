@@ -383,6 +383,13 @@ export default function Home() {
   // Sync transform manager when active model changes
   useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
+      // Only run this sync when selection changes.
+      // If we re-run on every activeModel object mutation, it can fight
+      // with local transform/autolift updates and create feedback loops.
+      if (displayActiveModelId === scene.activeModelId) {
+        return;
+      }
+
       const t = scene.activeModel.transform;
 
       console.log('[Home] Syncing transform from model:', {
@@ -421,7 +428,7 @@ export default function Home() {
     } else {
       setDisplayActiveModelId(null);
     }
-  }, [scene.activeModelId, scene.activeModel]);
+  }, [scene.activeModelId, scene.activeModel, displayActiveModelId]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
@@ -429,9 +436,36 @@ export default function Home() {
     // Only update if the local transform state has been synchronized with the new model
     // This prevents overwriting the new model's transform with the old transform state on load
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
-      scene.updateModelTransform(scene.activeModelId, transformMgr.transform);
+      const modelTransform = scene.activeModel?.transform;
+      if (!modelTransform) return;
+
+      const current = transformMgr.transform;
+      const EPSILON = 0.0001;
+      const posChanged = current.position.distanceToSquared(modelTransform.position) > EPSILON;
+      const rotChanged =
+        Math.abs(current.rotation.x - modelTransform.rotation.x) > EPSILON ||
+        Math.abs(current.rotation.y - modelTransform.rotation.y) > EPSILON ||
+        Math.abs(current.rotation.z - modelTransform.rotation.z) > EPSILON;
+      const scaleChanged = current.scale.distanceToSquared(modelTransform.scale) > EPSILON;
+
+      if (posChanged || rotChanged || scaleChanged) {
+        scene.updateModelTransform(scene.activeModelId, current);
+      }
     }
-  }, [transformMgr.transform, scene.activeModelId, displayActiveModelId]);
+  }, [
+    scene.activeModelId,
+    scene.activeModel,
+    displayActiveModelId,
+    transformMgr.transform.position.x,
+    transformMgr.transform.position.y,
+    transformMgr.transform.position.z,
+    transformMgr.transform.rotation.x,
+    transformMgr.transform.rotation.y,
+    transformMgr.transform.rotation.z,
+    transformMgr.transform.scale.x,
+    transformMgr.transform.scale.y,
+    transformMgr.transform.scale.z,
+  ]);
 
   // Wrap transform change to update local state
   const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
@@ -478,19 +512,61 @@ export default function Home() {
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
-  const computeModelWorldBounds = React.useCallback((model: (typeof scene.models)[number]) => {
+  const computeModelWorldBounds = React.useCallback((model: (typeof scene.models)[number], transformOverride?: typeof model.transform) => {
     const modelBox = model.geometry.bbox.clone();
     const center = model.geometry.center;
     modelBox.translate(new THREE.Vector3(-center.x, -center.y, -center.z));
 
-    const t = model.transform;
-    const matrix = new THREE.Matrix4().compose(
+    const t = transformOverride ?? model.transform;
+
+    const ax = Math.abs(t.rotation.x);
+    const ay = Math.abs(t.rotation.y);
+    const az = Math.abs(t.rotation.z);
+    const rotationAxisCount = Number(ax > 1e-4) + Number(ay > 1e-4) + Number(az > 1e-4);
+    const usePreciseMultiAxisBounds = rotationAxisCount > 1;
+
+    const transformMatrix = new THREE.Matrix4().compose(
       t.position,
       new THREE.Quaternion().setFromEuler(t.rotation),
       t.scale,
     );
-    modelBox.applyMatrix4(matrix);
-    return modelBox;
+
+    if (!usePreciseMultiAxisBounds) {
+      modelBox.applyMatrix4(transformMatrix);
+      return modelBox;
+    }
+
+    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+    const finalMatrix = transformMatrix.multiply(offsetMatrix);
+    const positionAttribute = model.geometry.geometry.getAttribute('position');
+    if (!positionAttribute || positionAttribute.count === 0) {
+      modelBox.applyMatrix4(finalMatrix);
+      return modelBox;
+    }
+
+    const preciseBounds = new THREE.Box3();
+    preciseBounds.makeEmpty();
+    const point = new THREE.Vector3();
+
+    if (positionAttribute instanceof THREE.BufferAttribute) {
+      const array = positionAttribute.array;
+      const itemSize = positionAttribute.itemSize;
+
+      for (let i = 0; i < positionAttribute.count; i++) {
+        const idx = i * itemSize;
+        point.set(array[idx], array[idx + 1], array[idx + 2]).applyMatrix4(finalMatrix);
+        preciseBounds.expandByPoint(point);
+      }
+    } else {
+      for (let i = 0; i < positionAttribute.count; i++) {
+        point
+          .set(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i))
+          .applyMatrix4(finalMatrix);
+        preciseBounds.expandByPoint(point);
+      }
+    }
+
+    return preciseBounds.isEmpty() ? modelBox.applyMatrix4(finalMatrix) : preciseBounds;
   }, [scene.models]);
 
   const buildVolumeBounds = React.useMemo(() => {
@@ -515,22 +591,34 @@ export default function Home() {
 
   const outsidePlateModelIds = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as string[];
+    const BUILD_VOLUME_BOUNDS_EPS_MM = 0.01;
 
     return scene.models
       .filter((model) => model.visible)
       .filter((model) => {
-        const bounds = computeModelWorldBounds(model);
+        const effectiveTransform =
+          (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
+            ? transformMgr.transform
+            : model.transform;
+        const bounds = computeModelWorldBounds(model, effectiveTransform);
         return (
-          bounds.min.x < buildVolumeBounds.min.x
-          || bounds.max.x > buildVolumeBounds.max.x
-          || bounds.min.y < buildVolumeBounds.min.y
-          || bounds.max.y > buildVolumeBounds.max.y
-          || bounds.min.z < buildVolumeBounds.min.z
-          || bounds.max.z > buildVolumeBounds.max.z
+          bounds.min.x < (buildVolumeBounds.min.x - BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.max.x > (buildVolumeBounds.max.x + BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.min.y < (buildVolumeBounds.min.y - BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.max.y > (buildVolumeBounds.max.y + BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.min.z < (buildVolumeBounds.min.z - BUILD_VOLUME_BOUNDS_EPS_MM)
+          || bounds.max.z > (buildVolumeBounds.max.z + BUILD_VOLUME_BOUNDS_EPS_MM)
         );
       })
       .map((model) => model.id);
-  }, [buildVolumeBounds, computeModelWorldBounds, scene.models]);
+  }, [
+    buildVolumeBounds,
+    computeModelWorldBounds,
+    displayActiveModelId,
+    scene.activeModelId,
+    scene.models,
+    transformMgr.transform,
+  ]);
 
   const inBoundsModelIds = React.useMemo(() => {
     const outsideSet = new Set(outsidePlateModelIds);
@@ -1386,21 +1474,38 @@ export default function Home() {
   const showEmptySceneDialog = scene.models.length === 0;
 
   const renderId = useRef(0);
+  const postRotateLiftScheduledRef = useRef(false);
   renderId.current++;
 
   // Glue Logic: Transform End Hook
   // When rotation ends, we must clear scan data as it invalidates the scan
+  const applyPostRotateLift = () => {
+    if (!scene.activeModelId) {
+      transformMgr.pendingTransformRef.current = null;
+      return;
+    }
+
+    if (postRotateLiftScheduledRef.current) {
+      return;
+    }
+    postRotateLiftScheduledRef.current = true;
+
+    // Run immediately: onRotateEnd already writes the latest transform into
+    // pendingTransformRef, so performAutoSnap can safely use current values.
+    try {
+      transformMgr.performAutoSnap();
+    } finally {
+      postRotateLiftScheduledRef.current = false;
+    }
+  };
+
   const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
     transformMgr.setIsTransforming(false);
 
     if (operation === 'rotate') {
       console.log('[Rotation] Clearing scan data - rotation invalidates island detection');
       islands.clearScanData();
-
-      // Defer auto-snap
-      setTimeout(() => {
-        transformMgr.performAutoSnap();
-      }, 0);
+      applyPostRotateLift();
     } else {
       transformMgr.pendingTransformRef.current = null;
     }
@@ -1408,9 +1513,7 @@ export default function Home() {
 
   const handleRotationComplete = () => {
     islands.clearScanData();
-    setTimeout(() => {
-      transformMgr.performAutoSnap();
-    }, 0);
+    applyPostRotateLift();
   };
 
   const handleCameraChange = React.useCallback(() => {
