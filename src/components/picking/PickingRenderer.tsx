@@ -56,6 +56,9 @@ export function PickingRenderer({
   
   // Picking scene (separate from main scene)
   const pickSceneRef = useRef<THREE.Scene>(new THREE.Scene());
+
+  // Cached pick objects keyed by pick ID (avoids per-pick cloning)
+  const pickObjectCacheRef = useRef<Map<number, { sourceObject: THREE.Object3D; pickObject: THREE.Object3D }>>(new Map());
   
   // Picking camera (will be synced with main camera)
   const pickCameraRef = useRef<THREE.PerspectiveCamera | THREE.OrthographicCamera | null>(null);
@@ -66,6 +69,18 @@ export function PickingRenderer({
   // Timing control
   const lastPickTimeRef = useRef<number>(0);
   const previousWinnerRef = useRef<number>(0);
+  const lastPointerMoveTimeRef = useRef<number>(0);
+  const previousMouseNdcRef = useRef<{ x: number; y: number } | null>(null);
+  const previousCameraWorldMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
+  const previousProjectionMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
+
+  const disposePickObject = useCallback((pickId: number) => {
+    const cached = pickObjectCacheRef.current.get(pickId);
+    if (!cached) return;
+
+    pickSceneRef.current.remove(cached.pickObject);
+    pickObjectCacheRef.current.delete(pickId);
+  }, []);
   
   // Initialize render target
   useEffect(() => {
@@ -114,79 +129,138 @@ export function PickingRenderer({
     }
     return material;
   }, []);
+
+  const clonePickObject = useCallback((registration: PickableRegistration): THREE.Object3D | null => {
+    if (!registration.object) return null;
+
+    const pickId = registration.pickId;
+    const sourceObject = registration.object;
+    const isGizmo = registration.category === 'gizmo';
+    const pickMaterial = getPickingMaterial(pickId, isGizmo);
+
+    const pickObject = sourceObject.clone(true);
+    pickObject.traverse((child) => {
+      child.matrixAutoUpdate = false;
+      if (child instanceof THREE.Mesh) {
+        child.material = pickMaterial;
+      }
+    });
+
+    return pickObject;
+  }, [getPickingMaterial]);
+
+  const syncPickObjectTransforms = useCallback((sourceObject: THREE.Object3D, pickObject: THREE.Object3D) => {
+    sourceObject.updateMatrixWorld(true);
+
+    const queue: Array<{ source: THREE.Object3D; pick: THREE.Object3D }> = [{ source: sourceObject, pick: pickObject }];
+
+    while (queue.length > 0) {
+      const next = queue.pop();
+      if (!next) continue;
+
+      const { source, pick } = next;
+
+      pick.visible = source.visible;
+      pick.matrixAutoUpdate = false;
+      pick.matrix.copy(source.matrix);
+      pick.matrixWorld.copy(source.matrixWorld);
+
+      const sourceChildren = source.children;
+      const pickChildren = pick.children;
+      const childCount = Math.min(sourceChildren.length, pickChildren.length);
+      for (let i = 0; i < childCount; i += 1) {
+        queue.push({ source: sourceChildren[i], pick: pickChildren[i] });
+      }
+    }
+  }, []);
+
+  const syncPickSceneCache = useCallback(() => {
+    // Remove stale cache entries.
+    for (const pickId of pickObjectCacheRef.current.keys()) {
+      if (!registrations.has(pickId)) {
+        disposePickObject(pickId);
+      }
+    }
+
+    // Ensure every registration has a cached pick object.
+    for (const [pickId, registration] of registrations.entries()) {
+      if (!registration.object) {
+        disposePickObject(pickId);
+        continue;
+      }
+
+      const cached = pickObjectCacheRef.current.get(pickId);
+      if (cached && cached.sourceObject === registration.object) {
+        continue;
+      }
+
+      disposePickObject(pickId);
+
+      const pickObject = clonePickObject(registration);
+      if (!pickObject) continue;
+
+      pickObjectCacheRef.current.set(pickId, {
+        sourceObject: registration.object,
+        pickObject,
+      });
+      pickSceneRef.current.add(pickObject);
+    }
+  }, [clonePickObject, disposePickObject, registrations]);
   
   // Perform the pick render
   const performPick = useCallback((ndcX: number, ndcY: number) => {
     if (!renderTargetRef.current || !camera) return;
     
     const pickScene = pickSceneRef.current;
-    
-    // Clear the pick scene
-    while (pickScene.children.length > 0) {
-      pickScene.remove(pickScene.children[0]);
-    }
+
+    // Sync registration cache (add/remove/recreate only when needed).
+    syncPickSceneCache();
     
     // Clone camera for picking (adjusted to render only the area under the mouse)
     // We'll use a small viewport centered on the mouse position
     const pickCamera = camera.clone() as THREE.PerspectiveCamera | THREE.OrthographicCamera;
     
-    // For perspective camera, we need to adjust the projection matrix
-    // to render only a small region around the mouse
-    if (pickCamera instanceof THREE.PerspectiveCamera) {
-      // Calculate the region to render (in pixels)
-      const pixelRatio = gl.getPixelRatio();
-      const width = gl.domElement.width / pixelRatio;
-      const height = gl.domElement.height / pixelRatio;
-      
-      // Convert NDC to pixel coordinates
-      const pixelX = ((ndcX + 1) / 2) * width;
-      const pixelY = ((1 - ndcY) / 2) * height; // Flip Y
-      
-      // Set up a sub-frustum that renders only the 3x3 pixel area
-      const subWidth = RENDER_TARGET.SIZE;
-      const subHeight = RENDER_TARGET.SIZE;
-      
-      // Adjust projection matrix for the sub-region
-      pickCamera.setViewOffset(
-        width, height,
-        pixelX - subWidth / 2, pixelY - subHeight / 2,
-        subWidth, subHeight
+    // Adjust projection matrix to render only a small region around the mouse.
+    // IMPORTANT: setViewOffset expects drawing-buffer pixel coordinates,
+    // not CSS pixel dimensions. Using CSS pixels causes hover offset at
+    // non-1 DPR (especially visible on gizmo handles).
+    const width = gl.domElement.width;
+    const height = gl.domElement.height;
+
+    // Convert NDC to pixel coordinates
+    const pixelX = ((ndcX + 1) / 2) * width;
+    const pixelY = ((1 - ndcY) / 2) * height; // Flip Y
+
+    // Set up a sub-frustum that renders only the 3x3 pixel area
+    const subWidth = RENDER_TARGET.SIZE;
+    const subHeight = RENDER_TARGET.SIZE;
+
+    // Apply sub-view for both perspective and orthographic cameras.
+    if (typeof (pickCamera as any).setViewOffset === 'function') {
+      (pickCamera as any).setViewOffset(
+        width,
+        height,
+        pixelX - subWidth / 2,
+        pixelY - subHeight / 2,
+        subWidth,
+        subHeight,
       );
     }
     
     pickCameraRef.current = pickCamera;
     
-    // Add pickable objects to the pick scene with their pick materials
+    // Sync cached transforms and dynamic visibility.
     for (const [pickId, registration] of registrations.entries()) {
-      if (!registration.object) continue;
-      
-      // Skip gizmo handles if not included in config
-      if (registration.category === 'gizmo' && !config.includeGizmo) continue;
-      
-      // Clone the object for picking
-      const pickObject = registration.object.clone();
-      
-      // Apply picking material to all meshes in the object
-      const isGizmo = registration.category === 'gizmo';
-      const pickMaterial = getPickingMaterial(pickId, isGizmo);
-      
-      pickObject.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.material = pickMaterial;
-        }
-      });
-      
-      // Copy world transform - need to set both matrix and matrixWorld
-      registration.object.updateMatrixWorld(true);
-      pickObject.matrixAutoUpdate = false;
+      const cached = pickObjectCacheRef.current.get(pickId);
+      if (!cached || !registration.object) continue;
 
-      // Copy world matrix directly to preserve full transform (including shear)
-      pickObject.matrix.copy(registration.object.matrixWorld);
-      pickObject.matrixWorld.copy(registration.object.matrixWorld);
+      const hasAllowedCategories = Array.isArray(config.allowedCategories) && config.allowedCategories.length > 0;
+      const categoryAllowed = !hasAllowedCategories || config.allowedCategories!.includes(registration.category);
+      const includeCategory = categoryAllowed && !(registration.category === 'gizmo' && !config.includeGizmo);
+      cached.pickObject.visible = includeCategory;
+      if (!includeCategory) continue;
 
-      // No need to call updateMatrix / updateMatrixWorld since we've set them explicitly
-
-      pickScene.add(pickObject);
+      syncPickObjectTransforms(registration.object, cached.pickObject);
     }
     
     // Render to the pick target
@@ -215,7 +289,7 @@ export function PickingRenderer({
     
     // Report result
     onPick(winnerId, ndcX, ndcY);
-  }, [camera, gl, registrations, config, getPickingMaterial, onPick]);
+  }, [camera, gl, registrations, config, onPick, syncPickObjectTransforms, syncPickSceneCache]);
   
   // Run picking on each frame (throttled)
   useFrame(() => {
@@ -223,13 +297,58 @@ export function PickingRenderer({
     if (!mouseNDC.current) return;
     
     const now = performance.now();
-    const minInterval = isDragging ? TIMING.MIN_DRAG_INTERVAL_MS : TIMING.MIN_HOVER_INTERVAL_MS;
+    const prevMouse = previousMouseNdcRef.current;
+    const nextMouse = mouseNDC.current;
+    const moved = !prevMouse
+      || Math.abs(prevMouse.x - nextMouse.x) > 1e-4
+      || Math.abs(prevMouse.y - nextMouse.y) > 1e-4;
+
+    if (moved) {
+      lastPointerMoveTimeRef.current = now;
+      previousMouseNdcRef.current = { x: nextMouse.x, y: nextMouse.y };
+    }
+
+    const cameraWorldChanged = !previousCameraWorldMatrixRef.current.equals(camera.matrixWorld);
+    const projectionChanged = !previousProjectionMatrixRef.current.equals(camera.projectionMatrix);
+    const sceneMoved = cameraWorldChanged || projectionChanged;
+    if (sceneMoved) {
+      previousCameraWorldMatrixRef.current.copy(camera.matrixWorld);
+      previousProjectionMatrixRef.current.copy(camera.projectionMatrix);
+    }
+
+    const idleMs = now - (lastPointerMoveTimeRef.current || now);
+    const isIdleHover = !isDragging && idleMs >= TIMING.IDLE_THRESHOLD_MS;
+
+    // If pointer is idle and unchanged, keep the last hit result and skip GPU picking work.
+    if (isIdleHover && !moved && !sceneMoved) return;
+
+    const effectiveHoverHz = isIdleHover
+      ? Math.max(6, Math.floor(config.hoverUpdateRate * 0.33))
+      : config.hoverUpdateRate;
+    const minInterval = isDragging
+      ? 1000 / Math.max(1, config.dragUpdateRate)
+      : 1000 / Math.max(1, effectiveHoverHz);
     
     if (now - lastPickTimeRef.current < minInterval) return;
     
     lastPickTimeRef.current = now;
     performPick(mouseNDC.current.x, mouseNDC.current.y);
   });
+
+  // Keep cache in sync even when pointer is idle, so next pick has no setup hitch.
+  useFrame(() => {
+    if (!config.enabled) return;
+    syncPickSceneCache();
+  });
+
+  // Cleanup any cached pick objects on unmount.
+  useEffect(() => {
+    return () => {
+      for (const pickId of Array.from(pickObjectCacheRef.current.keys())) {
+        disposePickObject(pickId);
+      }
+    };
+  }, [disposePickObject]);
   
   // This component doesn't render anything visible
   return null;
