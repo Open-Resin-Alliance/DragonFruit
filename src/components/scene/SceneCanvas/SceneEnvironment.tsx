@@ -12,11 +12,11 @@ export function LoggingHelper({ mode }: { mode?: string }) {
   return null;
 }
 
-export function EnableLocalClipping() {
+export function EnableLocalClipping({ enabled = true }: { enabled?: boolean }) {
   const { gl } = useThree();
   useEffect(() => {
-    gl.localClippingEnabled = true;
-  }, [gl]);
+    gl.localClippingEnabled = enabled;
+  }, [enabled, gl]);
   return null;
 }
 

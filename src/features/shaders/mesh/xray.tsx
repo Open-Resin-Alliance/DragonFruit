@@ -4,6 +4,8 @@ import { blendTintColor, clampTintStrength } from './tint';
 export function XrayMaterial({
   isSelected,
   isHovered,
+  useVertexColors,
+  meshColor,
   hoverTintColor,
   hoverTintStrength,
   selectedTintStrength,
@@ -13,6 +15,8 @@ export function XrayMaterial({
 }: {
   isSelected: boolean;
   isHovered: boolean;
+  useVertexColors?: boolean;
+  meshColor?: string;
   hoverTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
@@ -20,17 +24,18 @@ export function XrayMaterial({
   clippingPlanes: THREE.Plane[];
   opacity?: number;
 }) {
+  const baseColor = useVertexColors ? '#ffffff' : (meshColor ?? '#a3a3a3');
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
-    ? blendTintColor('#ffffff', hoverTintColor, selectedStrength)
+    ? blendTintColor(baseColor, hoverTintColor, selectedStrength)
     : isHovered
-      ? blendTintColor('#ffffff', hoverTintColor, hoverStrength)
-      : '#ffffff';
+      ? blendTintColor(baseColor, hoverTintColor, hoverStrength)
+      : baseColor;
 
   return (
     <meshStandardMaterial
-      vertexColors
+      vertexColors={useVertexColors ?? true}
       color={tintColor}
       emissive="#000000"
       emissiveIntensity={0}
