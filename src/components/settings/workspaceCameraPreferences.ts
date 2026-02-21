@@ -23,7 +23,7 @@ export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
   selectionHighlightDefaults: {
     prepare: 'tint',
     analysis: 'tint',
-    support: 'spotlight',
+    support: 'tint',
     export: 'tint',
   },
 };

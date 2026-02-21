@@ -45,6 +45,8 @@ import { useDeleteHotkey } from '@/features/delete/useDeleteHotkey';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
 import { usePrepareTransformHotkeys } from '@/hotkeys/usePrepareTransformHotkeys';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
@@ -86,6 +88,7 @@ export default function Home() {
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
   const [isPrepareDragActive, setIsPrepareDragActive] = React.useState(false);
+  const [isSupportSpotlightHoldActive, setIsSupportSpotlightHoldActive] = React.useState(false);
   const [allowPrepareWithoutPrinter, setAllowPrepareWithoutPrinter] = React.useState(false);
   const [prepareSmoothingSettingsExpanded, setPrepareSmoothingSettingsExpanded] = React.useState(true);
   const [supportSettingsExpanded, setSupportSettingsExpanded] = React.useState(true);
@@ -141,6 +144,8 @@ export default function Home() {
   const dragDepthRef = React.useRef(0);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
+  const { getHotkey } = useHotkeyConfig();
+  const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
     if (scene.mode !== 'prepare') return;
@@ -1218,6 +1223,51 @@ export default function Home() {
       scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
     }
   }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'support') {
+      setIsSupportSpotlightHoldActive(false);
+      return;
+    }
+
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+    };
+
+    const binding = { key: supportSpotlightHoldHotkey.key, modifier: supportSpotlightHoldHotkey.modifier };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+      if (!matchesConfiguredHotkeyDown(event, binding)) return;
+      setIsSupportSpotlightHoldActive(true);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (!matchesConfiguredHotkeyUp(event, binding)) return;
+      setIsSupportSpotlightHoldActive(false);
+    };
+
+    const handleBlur = () => {
+      setIsSupportSpotlightHoldActive(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [scene.mode, supportSpotlightHoldHotkey.key, supportSpotlightHoldHotkey.modifier]);
+
+  const effectiveSelectionHighlightMode = React.useMemo(() => {
+    if (scene.mode !== 'support') return scene.selectionHighlightMode;
+    if (isSupportSpotlightHoldActive) return 'spotlight';
+    return scene.selectionHighlightMode === 'spotlight' ? 'tint' : scene.selectionHighlightMode;
+  }, [isSupportSpotlightHoldActive, scene.mode, scene.selectionHighlightMode]);
 
   React.useEffect(() => {
     if (scene.mode !== 'support') return;
@@ -2337,7 +2387,7 @@ export default function Home() {
             leafTipPosition={supports.leafPlacement.tipPosition}
             leafHoverPosition={supports.leafPlacement.hoverPosition}
             gpuPickingTest={false}
-            selectionHighlightMode={scene.selectionHighlightMode}
+            selectionHighlightMode={effectiveSelectionHighlightMode}
             hoverTintStrength={scene.hoverTintStrength}
             selectedTintStrength={scene.selectedTintStrength}
             crossSectionMode={slicing.crossSectionMode}
