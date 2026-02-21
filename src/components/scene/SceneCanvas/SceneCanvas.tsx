@@ -66,6 +66,7 @@ import {
   computeApproxModelWorldBounds,
   computePreciseModelWorldBounds,
   isBoundsOutsideVolume,
+  shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
@@ -975,6 +976,10 @@ export function SceneCanvas({
     volumeBounds?: THREE.Box3 | null,
   ) => {
     const t = modelTransformOverride ?? model.transform;
+
+    if (shouldUsePreciseBoundsForTransform(t)) {
+      return computePreciseModelWorldBounds(model.geometry, t);
+    }
 
     const approxBounds = computeApproxModelWorldBounds(model.geometry, t);
     if (!volumeBounds) {
