@@ -40,7 +40,7 @@ export function FlatUnlitMaterial({
       color={useVertexColors ?? true ? tintColor : flatColor}
       clippingPlanes={clippingPlanes}
       clipIntersection
-      side={THREE.DoubleSide}
+      side={THREE.FrontSide}
     />
   );
 }

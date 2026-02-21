@@ -12,6 +12,7 @@ export function MeshShaderMaterial({
   shaderType,
   isSelected,
   isHovered = false,
+  useVertexColors = true,
   hoverTintColor,
   hoverTintStrength,
   selectedTintStrength,
@@ -26,6 +27,7 @@ export function MeshShaderMaterial({
   shaderType: MeshShaderType;
   isSelected: boolean;
   isHovered?: boolean;
+  useVertexColors?: boolean;
   hoverTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
@@ -46,7 +48,7 @@ export function MeshShaderMaterial({
           hoverTintColor={hoverTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
-          useVertexColors={flatUseVertexColors}
+          useVertexColors={useVertexColors && (flatUseVertexColors ?? true)}
           meshColor={meshColor}
           clippingPlanes={clippingPlanes}
         />
@@ -60,6 +62,8 @@ export function MeshShaderMaterial({
           hoverTintColor={hoverTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
+          useVertexColors={useVertexColors}
+          meshColor={meshColor}
           variant={matcapVariant}
           clippingPlanes={clippingPlanes}
         />
@@ -73,6 +77,8 @@ export function MeshShaderMaterial({
           hoverTintColor={hoverTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
+          useVertexColors={useVertexColors}
+          meshColor={meshColor}
           toonSteps={toonSteps}
           clippingPlanes={clippingPlanes}
         />
@@ -101,6 +107,8 @@ export function MeshShaderMaterial({
           hoverTintColor={hoverTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
+          useVertexColors={useVertexColors}
+          meshColor={meshColor}
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
           opacity={xrayOpacity}
@@ -116,6 +124,8 @@ export function MeshShaderMaterial({
           hoverTintColor={hoverTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
+          useVertexColors={useVertexColors}
+          meshColor={meshColor}
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
         />
