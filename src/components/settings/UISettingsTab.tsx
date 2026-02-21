@@ -7,8 +7,10 @@ export type ThemePreset = 'dragonfruit-dark';
 export type ThemeColors = {
 	surface0: string;
 	accent: string;
+	primaryButtonSurface: string;
 	accentContrast: string;
 	accentSecondary: string;
+	secondaryButtonSurface: string;
 	accentSecondaryContrast: string;
 	sceneGradientRadial: string;
 	sceneGradientLinearStart: string;
@@ -46,8 +48,10 @@ export function UISettingsTab({
 	const colorRows: Array<{ key: keyof ThemeColors; label: string; placeholder: string }> = [
 		{ key: 'surface0', label: 'Surface 0', placeholder: '#111216' },
 		{ key: 'accent', label: 'Accent', placeholder: '#ec2a77' },
+		{ key: 'primaryButtonSurface', label: 'Primary button surface', placeholder: '#c11f61' },
 		{ key: 'accentContrast', label: 'Accent contrast', placeholder: '#fff6ff' },
 		{ key: 'accentSecondary', label: 'Accent secondary', placeholder: '#baf72e' },
+		{ key: 'secondaryButtonSurface', label: 'Secondary button surface', placeholder: '#9bcc26' },
 		{ key: 'accentSecondaryContrast', label: 'Accent secondary contrast', placeholder: '#182106' },
 		{ key: 'sceneGradientRadial', label: '3D radial glow', placeholder: '#ff37aa' },
 		{ key: 'sceneGradientLinearStart', label: '3D gradient top', placeholder: '#ff37aa' },

@@ -13,7 +13,7 @@ type DefaultCameraConfig = {
 type StlLoadCameraIntroState = {
   defaultCamera: DefaultCameraConfig;
   orbitTarget: [number, number, number];
-  setOrbitTargetFromPoint: (point: THREE.Vector3) => void;
+  setOrbitTargetFromPoint: (point: THREE.Vector3, options?: { animate?: boolean }) => void;
   introBoundsSnapshot: THREE.Box3 | null;
   cameraIntroRunId: number;
   cameraHomeResetRunId: number;
@@ -129,7 +129,8 @@ export function useStlLoadCameraIntro(models: LoadedModel[], fallbackOrbitTarget
     return hasVisible ? unionBox : null;
   }, [models]);
 
-  const setOrbitTargetFromPoint = React.useCallback((point: THREE.Vector3) => {
+  const setOrbitTargetFromPoint = React.useCallback((point: THREE.Vector3, options?: { animate?: boolean }) => {
+    const shouldAnimate = options?.animate ?? true;
     const start = orbitTargetRef.current.clone();
     const end = point.clone();
 
@@ -138,6 +139,12 @@ export function useStlLoadCameraIntro(models: LoadedModel[], fallbackOrbitTarget
     if (orbitTargetAnimFrameRef.current !== null) {
       cancelAnimationFrame(orbitTargetAnimFrameRef.current);
       orbitTargetAnimFrameRef.current = null;
+    }
+
+    if (!shouldAnimate) {
+      orbitTargetRef.current.copy(end);
+      setOrbitTarget([end.x, end.y, end.z]);
+      return;
     }
 
     const durationMs = 220;

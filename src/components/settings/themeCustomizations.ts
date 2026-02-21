@@ -12,8 +12,10 @@ const NEW_DEFAULT_ACCENT = '#ec2a77';
 export type ThemeCustomColors = {
   surface0: string;
   accent: string;
+  primaryButtonSurface: string;
   accentContrast: string;
   accentSecondary: string;
+  secondaryButtonSurface: string;
   accentSecondaryContrast: string;
   sceneGradientRadial: string;
   sceneGradientLinearStart: string;
@@ -32,8 +34,10 @@ export type ThemeCustomColors = {
 export const DEFAULT_THEME_CUSTOM_COLORS: ThemeCustomColors = {
   surface0: '#111216',
   accent: NEW_DEFAULT_ACCENT,
+  primaryButtonSurface: '#c11f61',
   accentContrast: '#fff6ff',
   accentSecondary: '#baf72e',
+  secondaryButtonSurface: '#9bcc26',
   accentSecondaryContrast: '#182106',
   sceneGradientRadial: '#ff37aa',
   sceneGradientLinearStart: '#ff37aa',
@@ -110,8 +114,10 @@ export function getSavedThemeCustomColors(): ThemeCustomColors {
     const next: ThemeCustomColors = {
       surface0: normalizeHex(parsed.surface0 ?? d.surface0, d.surface0),
       accent,
+      primaryButtonSurface: normalizeHex(parsed.primaryButtonSurface ?? darkenHex(accent, 0.82), d.primaryButtonSurface),
       accentContrast: normalizeHex(parsed.accentContrast ?? d.accentContrast, d.accentContrast),
       accentSecondary: normalizeHex(parsed.accentSecondary ?? d.accentSecondary, d.accentSecondary),
+      secondaryButtonSurface: normalizeHex(parsed.secondaryButtonSurface ?? darkenHex(parsed.accentSecondary ?? d.accentSecondary, 0.84), d.secondaryButtonSurface),
       accentSecondaryContrast: normalizeHex(parsed.accentSecondaryContrast ?? d.accentSecondaryContrast, d.accentSecondaryContrast),
       sceneGradientRadial: normalizeHex(parsed.sceneGradientRadial ?? d.sceneGradientRadial, d.sceneGradientRadial),
       sceneGradientLinearStart: normalizeHex(parsed.sceneGradientLinearStart ?? d.sceneGradientLinearStart, d.sceneGradientLinearStart),
@@ -142,8 +148,10 @@ export function applyThemeCustomColors(themeColors: ThemeCustomColors) {
   const d = DEFAULT_THEME_CUSTOM_COLORS;
   const surface0 = normalizeHex(themeColors.surface0, d.surface0);
   const accent = normalizeHex(themeColors.accent, d.accent);
+  const primaryButtonSurface = normalizeHex(themeColors.primaryButtonSurface, darkenHex(accent, 0.82));
   const accentContrast = normalizeHex(themeColors.accentContrast, d.accentContrast);
   const accentSecondary = normalizeHex(themeColors.accentSecondary, d.accentSecondary);
+  const secondaryButtonSurface = normalizeHex(themeColors.secondaryButtonSurface, darkenHex(accentSecondary, 0.84));
   const accentSecondaryContrast = normalizeHex(themeColors.accentSecondaryContrast, d.accentSecondaryContrast);
   const sceneGradientRadial = normalizeHex(themeColors.sceneGradientRadial, d.sceneGradientRadial);
   const sceneGradientLinearStart = normalizeHex(themeColors.sceneGradientLinearStart, d.sceneGradientLinearStart);
@@ -161,9 +169,11 @@ export function applyThemeCustomColors(themeColors: ThemeCustomColors) {
   const rootStyle = document.documentElement.style;
   rootStyle.setProperty('--surface-0', surface0);
   rootStyle.setProperty('--accent', accent);
+  rootStyle.setProperty('--primary-button-surface', primaryButtonSurface);
   rootStyle.setProperty('--accent-hover', darkenHex(accent, 0.82));
   rootStyle.setProperty('--accent-contrast', accentContrast);
   rootStyle.setProperty('--accent-secondary', accentSecondary);
+  rootStyle.setProperty('--secondary-button-surface', secondaryButtonSurface);
   rootStyle.setProperty('--accent-secondary-hover', darkenHex(accentSecondary, 0.9));
   rootStyle.setProperty('--accent-secondary-contrast', accentSecondaryContrast);
   rootStyle.setProperty('--scene-gradient-radial', sceneGradientRadial);

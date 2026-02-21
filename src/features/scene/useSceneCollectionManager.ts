@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
@@ -13,7 +13,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
-import { accelerateGeometry } from '@/utils/bvh';
+import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   DEFAULT_VIEW3D_SETTINGS,
@@ -22,6 +22,12 @@ import {
   saveView3DSettings,
   type View3DSettings,
 } from '@/components/settings/view3dPreferences';
+import {
+  getActivePrinterProfile,
+  getProfileStoreSnapshot,
+  getProfileStoreServerSnapshot,
+  subscribeToProfileStore,
+} from '@/features/profiles/profileStore';
 
 type PersistedMeshAppearance = {
   v: 1;
@@ -450,6 +456,7 @@ export function useSceneCollectionManager() {
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredAccelerationProcessingRef = useRef(false);
   const deferredAccelerationPausedRef = useRef(false);
+  const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
     if (!url) return;
@@ -652,7 +659,30 @@ export function useSceneCollectionManager() {
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
-  const [view3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
+  const [storedView3dSettings, setView3dSettingsState] = useState<View3DSettings>(() => DEFAULT_VIEW3D_SETTINGS);
+  const profileState = useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+
+  const view3dSettings = useMemo(() => {
+    if (!activePrinterProfile) {
+      // When no printer is selected ("Use without Printer" mode),
+      // disable build volume bounds and out-of-bounds warnings by default
+      return normalizeView3DSettings({
+        ...storedView3dSettings,
+        enabled: false,
+        showViolationWarning: false,
+      });
+    }
+
+    return normalizeView3DSettings({
+      ...storedView3dSettings,
+      widthMm: activePrinterProfile.buildVolumeMm.width,
+      depthMm: activePrinterProfile.buildVolumeMm.depth,
+      maxZMm: activePrinterProfile.buildVolumeMm.height,
+      screenWidthPx: activePrinterProfile.display.resolutionX,
+      screenHeightPx: activePrinterProfile.display.resolutionY,
+    });
+  }, [activePrinterProfile, storedView3dSettings]);
 
   useEffect(() => {
     const persistedAppearance = readMeshAppearanceFromLocalStorage();
@@ -751,8 +781,34 @@ export function useSceneCollectionManager() {
   // Helper to generate IDs
   const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
 
-  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean }): GeometryWithBounds => {
+  const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean; shared?: boolean }): GeometryWithBounds => {
+    if (options?.shared) {
+      const sharedSourceKey = String(source.geometry.userData?.resinVolumeSourceKey ?? source.geometry.uuid);
+      source.geometry.userData = {
+        ...source.geometry.userData,
+        resinVolumeSourceKey: sharedSourceKey,
+      };
+
+      return {
+        geometry: source.geometry,
+        bbox: source.bbox.clone(),
+        center: source.center.clone(),
+        size: source.size.clone(),
+      };
+    }
+
+    const sourceVolumeKey = String(source.geometry.userData?.resinVolumeSourceKey ?? source.geometry.uuid);
+    source.geometry.userData = {
+      ...source.geometry.userData,
+      resinVolumeSourceKey: sourceVolumeKey,
+    };
+
     const clonedGeometry = source.geometry.clone();
+    clonedGeometry.userData = {
+      ...clonedGeometry.userData,
+      resinVolumeSourceKey: sourceVolumeKey,
+    };
+
     if (options?.accelerate ?? true) {
       accelerateGeometry(clonedGeometry);
     }
@@ -978,9 +1034,8 @@ export function useSceneCollectionManager() {
           console.log(`[SceneCollection] Loading ${file.name}...`);
           const geom = await loadStlGeometry(url);
 
-        // Initialize paint
+        // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
         const color = preferredMeshColor;
-        clearPaintToBase(geom.geometry, new THREE.Color(color));
 
         // Calculate initial transform with auto-lift
         // By default, loaded geometry is centered at 0,0,0 but bottom might be < 0 or > 0 depending on normalization.
@@ -1313,7 +1368,7 @@ export function useSceneCollectionManager() {
 
     const first = modelClipboard[0];
 
-    const pastedGeometry = cloneGeometryWithBounds(first.geometry, { accelerate: false });
+    const pastedGeometry = cloneGeometryWithBounds(first.geometry, { shared: true });
 
     const id = generateId();
     const pastedModel: LoadedModel = {
@@ -1340,9 +1395,8 @@ export function useSceneCollectionManager() {
     const after = captureSceneSnapshot(nextModels, id, [id]);
     pushSceneSnapshotHistory(before, after);
 
-    deferAccelerateGeometry([pastedGeometry]);
     return id;
-  }, [activeModelId, cloneGeometryWithBounds, deferAccelerateGeometry, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
+  }, [activeModelId, cloneGeometryWithBounds, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
@@ -1502,13 +1556,11 @@ export function useSceneCollectionManager() {
     });
 
     const createdIds: string[] = [];
-    const pastedGeometries: GeometryWithBounds[] = [];
     const pastedModels: LoadedModel[] = entries.map((entry, index) => {
       const id = generateId();
       createdIds.push(id);
 
-      const geometry = cloneGeometryWithBounds(entry.geometry, { accelerate: false });
-      pastedGeometries.push(geometry);
+      const geometry = cloneGeometryWithBounds(entry.geometry, { shared: true });
 
       const center = assignedCenters[index] ?? { x: centerX, y: centerY };
 
@@ -1539,10 +1591,8 @@ export function useSceneCollectionManager() {
       pushSceneSnapshotHistory(before, after);
     }
 
-    deferAccelerateGeometry(pastedGeometries);
-
     return createdIds;
-  }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, deferAccelerateGeometry, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [activeModelId, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const duplicateModelWithTransforms = useCallback((sourceId: string, transforms: ModelTransform[], sourceTransform?: ModelTransform | null) => {
     if (transforms.length === 0) return [] as string[];
@@ -1556,14 +1606,11 @@ export function useSceneCollectionManager() {
     const resolvedGroupName = source.groupName ?? source.name;
 
     const createdIds: string[] = [];
-    const duplicatedGeometries: GeometryWithBounds[] = [];
-
     const newModels: LoadedModel[] = transforms.map((nextTransform, index) => {
       const id = generateId();
       createdIds.push(id);
 
-      const geometry = cloneGeometryWithBounds(source.geometry, { accelerate: false });
-      duplicatedGeometries.push(geometry);
+      const geometry = cloneGeometryWithBounds(source.geometry, { shared: true });
 
       return {
         id,
@@ -1615,10 +1662,8 @@ export function useSceneCollectionManager() {
       pushSceneSnapshotHistory(before, after);
     }
 
-    deferAccelerateGeometry(duplicatedGeometries);
-
     return createdIds;
-  }, [activeModelId, cloneGeometryWithBounds, deferAccelerateGeometry, generateId, models, pushSceneSnapshotHistory, selectedModelIds]);
+  }, [activeModelId, cloneGeometryWithBounds, generateId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
@@ -1649,9 +1694,8 @@ export function useSceneCollectionManager() {
         // Process geometry (bounds, center, normals, BVH)
         const processed = await processGeometry(rawGeom, { center: false });
 
-        // Initialize paint
+        // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
         const color = '#a3a3a3';
-        clearPaintToBase(processed.geometry, new THREE.Color(color));
 
         const finalPosition = new THREE.Vector3(
           importedTransform.position.x,
@@ -1702,7 +1746,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, clearPaintToBase, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -1771,7 +1815,6 @@ export function useSceneCollectionManager() {
   const handleLycheeModelLoaded = useCallback((result: LycheeImportResult) => {
     // Create model from the import result
     const color = '#a3a3a3';
-    clearPaintToBase(result.geometry.geometry, new THREE.Color(color));
 
     const model: LoadedModel = {
       id: result.modelId,
@@ -1829,10 +1872,13 @@ export function useSceneCollectionManager() {
       setModels(prev => prev.map(m => {
         if (m.id !== activeModelId) return m;
 
-        try {
-          clearPaintToBase(m.geometry.geometry, new THREE.Color(normalizedColor));
-        } catch (err) {
-          console.error('[SceneCollection] Failed to apply mesh color to geometry:', err);
+        const hasColorAttribute = !!m.geometry.geometry.getAttribute('color');
+        if (hasColorAttribute) {
+          try {
+            clearPaintToBase(m.geometry.geometry, new THREE.Color(normalizedColor));
+          } catch (err) {
+            console.error('[SceneCollection] Failed to apply mesh color to geometry:', err);
+          }
         }
 
         return { ...m, color: normalizedColor };
@@ -1867,8 +1913,57 @@ export function useSceneCollectionManager() {
 
   // Cleanup on unmount
   useEffect(() => {
+    const previous = trackedGeometriesRef.current;
+    const next = new Set<THREE.BufferGeometry>(models.map((model) => model.geometry.geometry));
+
+    for (const clipboardEntry of modelClipboard) {
+      next.add(clipboardEntry.geometry.geometry);
+    }
+
+    for (const snapshot of sceneSnapshotRegistry.values()) {
+      for (const model of snapshot.before.models) {
+        next.add(model.geometry.geometry);
+      }
+      for (const model of snapshot.after.models) {
+        next.add(model.geometry.geometry);
+      }
+    }
+
+    for (const geometry of previous) {
+      if (next.has(geometry)) continue;
+      try {
+        disposeGeometryBVH(geometry);
+      } catch {
+        // ignore disposal failures
+      }
+      try {
+        geometry.dispose();
+      } catch {
+        // ignore disposal failures
+      }
+    }
+
+    trackedGeometriesRef.current = next;
+  }, [modelClipboard, models]);
+
+  useEffect(() => {
     return () => {
       models.forEach(m => tryRevokeObjectUrl(m.fileUrl));
+
+      const tracked = trackedGeometriesRef.current;
+      for (const geometry of tracked) {
+        try {
+          disposeGeometryBVH(geometry);
+        } catch {
+          // ignore disposal failures
+        }
+        try {
+          geometry.dispose();
+        } catch {
+          // ignore disposal failures
+        }
+      }
+      tracked.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

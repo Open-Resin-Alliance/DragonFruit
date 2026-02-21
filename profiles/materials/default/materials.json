@@ -1,0 +1,36 @@
+[
+  {
+    "templateId": "standard-405",
+    "name": "Standard 405nm",
+    "brand": "Default",
+    "currencyCode": "USD",
+    "bottlePrice": 24.99,
+    "bottleCapacityMl": 1000,
+    "resinFamily": "standard",
+    "scaleCompensationPct": { "x": 0, "y": 0, "z": 0 },
+    "layerHeightMm": 0.05,
+    "normalExposureSec": 2.4,
+    "bottomExposureSec": 26,
+    "bottomLayerCount": 5,
+    "liftDistanceMm": 6,
+    "liftSpeedMmMin": 65,
+    "retractSpeedMmMin": 150
+  },
+  {
+    "templateId": "abs-like-405",
+    "name": "ABS-like 405nm",
+    "brand": "Default",
+    "currencyCode": "USD",
+    "bottlePrice": 29.99,
+    "bottleCapacityMl": 1000,
+    "resinFamily": "abs-like",
+    "scaleCompensationPct": { "x": 0, "y": 0, "z": 0 },
+    "layerHeightMm": 0.05,
+    "normalExposureSec": 2.8,
+    "bottomExposureSec": 30,
+    "bottomLayerCount": 5,
+    "liftDistanceMm": 6,
+    "liftSpeedMmMin": 55,
+    "retractSpeedMmMin": 140
+  }
+]

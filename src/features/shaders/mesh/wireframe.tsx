@@ -29,7 +29,7 @@ export function WireframeMaterial({
       color={wireColor}
       clippingPlanes={clippingPlanes}
       clipIntersection
-      side={THREE.DoubleSide}
+      side={THREE.FrontSide}
       wireframe
       polygonOffset
       polygonOffsetFactor={-1}

@@ -55,10 +55,12 @@ export function StlMesh({
   hoverTintStrength,
   selectedTintStrength,
   supportNonSelectedOpacity,
+  interactionLodActive,
   showOutOfBoundsOverlay,
   outOfBoundsMin,
   outOfBoundsMax,
   outOfBoundsStripeColor,
+  suppressModelInteraction,
 }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
@@ -100,15 +102,19 @@ export function StlMesh({
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   supportNonSelectedOpacity?: number;
+  interactionLodActive?: boolean;
   showOutOfBoundsOverlay?: boolean;
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
+  suppressModelInteraction?: boolean;
 }) {
   // Access GPU picking state to detect gizmo hover
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
+  const hoverRafRef = React.useRef<number | null>(null);
+  const pendingHoverStateRef = React.useRef<boolean>(false);
   const { camera } = useThree();
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
@@ -165,6 +171,11 @@ export function StlMesh({
     );
   }, [geometry]);
 
+  const hasVertexColorAttribute = React.useMemo(() => {
+    const colorAttr = geometry.getAttribute('color');
+    return !!colorAttr && colorAttr.count > 0;
+  }, [geometry]);
+
   // Internal ref for the mesh element to control raycasting
   const internalMeshRef = React.useRef<THREE.Mesh>(null);
 
@@ -189,11 +200,37 @@ export function StlMesh({
     }
   }, [disableRaycast]);
 
+  const schedulePointerHover = React.useCallback((next: boolean) => {
+    pendingHoverStateRef.current = next;
+    if (hoverRafRef.current != null) return;
+
+    hoverRafRef.current = requestAnimationFrame(() => {
+      hoverRafRef.current = null;
+      setIsPointerHovered((prev) => (prev === pendingHoverStateRef.current ? prev : pendingHoverStateRef.current));
+    });
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverRafRef.current != null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+    };
+  }, []);
+
   // Use a group for proper gizmo positioning
   // Group has the transform, mesh inside is offset to center the geometry
   const baseShaderType: MeshShaderType = shaderType === 'opaque_wire_mesh' ? 'soft_clay' : shaderType;
   const showOpaqueWireOverlay = shaderType === 'opaque_wire_mesh';
-  const isHoveredModel = isPointerHovered || (hit.category === 'model' && hit.objectId === modelId);
+  const hasGpuModelHoverId = hit.category === 'model' && typeof hit.objectId === 'string' && hit.objectId.length > 0;
+  const isBlockingHoverCategory = hit.category === 'gizmo' || hit.category === 'support';
+  const shouldSuppressModelInteraction = !!suppressModelInteraction;
+  const isHoveredModel = !shouldSuppressModelInteraction && (
+    hasGpuModelHoverId
+      ? hit.objectId === modelId
+      : (!isBlockingHoverCategory && isPointerHovered)
+  );
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
   const dimmedBaseOpacity = isSupportDimmed
     ? Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity))
@@ -222,8 +259,6 @@ export function StlMesh({
     );
     const distanceToBoundsMm = localDistanceToBounds * distanceScaleFactor;
 
-    // Fade non-selected support meshes out near the camera to keep line-of-sight clear.
-    // 0mm (inside/touching): fully culled. >= proximityFadeRangeMm: baseline opacity.
     const proximityFadeRangeMm = 24;
     const proximityT = THREE.MathUtils.clamp(1 - (distanceToBoundsMm / proximityFadeRangeMm), 0, 1);
     const targetOpacity = THREE.MathUtils.lerp(dimmedBaseOpacity, dimmedInsideOpacity, proximityT);
@@ -239,6 +274,24 @@ export function StlMesh({
       material.needsUpdate = true;
     }
   });
+
+  const interactionLodColor = React.useMemo(() => {
+    const base = new THREE.Color(hasVertexColorAttribute ? '#ffffff' : (meshColor ?? '#a3a3a3'));
+    const tint = new THREE.Color(hoverTintColor ?? '#ec2a77');
+
+    const selectionStrength = Math.min(1, Math.max(0, selectedTintStrength ?? 0.75));
+    const hoverStrength = Math.min(1, Math.max(0, hoverTintStrength ?? 0.5));
+
+    if (isSelected) {
+      return base.clone().lerp(tint, selectionStrength).getStyle();
+    }
+
+    if (isHoveredModel) {
+      return base.clone().lerp(tint, hoverStrength).getStyle();
+    }
+
+    return base.getStyle();
+  }, [hasVertexColorAttribute, hoverTintColor, hoverTintStrength, isHoveredModel, isSelected, meshColor, selectedTintStrength]);
 
   const outOfBoundsMaterial = React.useMemo(() => {
     if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
@@ -320,6 +373,11 @@ export function StlMesh({
         position={meshLocalOffset}
         renderOrder={isSupportDimmed ? 2 : 0}
         onClick={(e) => {
+          if (shouldSuppressModelInteraction) {
+            e.stopPropagation();
+            return;
+          }
+
           console.log('[SceneCanvas] Mesh clicked, mode:', mode, 'id:', modelId);
 
           // Model selection in prepare mode - dispatch custom event
@@ -361,16 +419,23 @@ export function StlMesh({
           }
         }}
         onPointerMove={(e) => {
-          setIsPointerHovered(true);
-
-          if (hit.category === 'gizmo' || hit.category === 'support') {
+          if (shouldSuppressModelInteraction || isBlockingHoverCategory) {
+            schedulePointerHover(false);
             onModelHoverPointChange?.(null);
-          } else {
-            onModelHoverPointChange?.(e.point.clone());
+            return;
           }
 
+          const isTopMostIntersection = e.intersections[0]?.object === e.object;
+          if (!isTopMostIntersection) {
+            schedulePointerHover(false);
+            return;
+          }
+
+          schedulePointerHover(true);
+          onModelHoverPointChange?.(e.point.clone());
+
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
-            if (hit.category === 'gizmo' || hit.category === 'support') {
+            if (isBlockingHoverCategory) {
               setMeshSmoothingHover(null, null);
             } else {
               const normal = e.face?.normal
@@ -403,17 +468,16 @@ export function StlMesh({
             }
 
             // Mute hover if hovering a gizmo OR support (using GPU picking for accuracy)
-            if (hit.category === 'gizmo' || hit.category === 'support') {
+            if (isBlockingHoverCategory) {
               onSupportHover(null);
               return;
             }
 
-            e.stopPropagation();
             onSupportHover(e);
           }
         }}
         onPointerOut={() => {
-          setIsPointerHovered(false);
+          schedulePointerHover(false);
           onModelHoverPointChange?.(null);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
@@ -447,6 +511,7 @@ export function StlMesh({
             roughness={0.55}
             metalness={0.02}
             clippingPlanes={planes}
+            side={THREE.FrontSide}
             depthWrite={false}
           />
         ) : typeof supportNonSelectedOpacity === 'number' ? (
@@ -458,13 +523,25 @@ export function StlMesh({
             roughness={0.55}
             metalness={0.02}
             clippingPlanes={planes}
+            side={THREE.FrontSide}
             depthWrite
+          />
+        ) : interactionLodActive ? (
+          <meshStandardMaterial
+            vertexColors={hasVertexColorAttribute}
+            color={interactionLodColor}
+            roughness={materialRoughness ?? 0.9}
+            metalness={0.0}
+            clippingPlanes={planes}
+            clipIntersection
+            side={THREE.FrontSide}
           />
         ) : (
           <MeshShaderMaterial
             shaderType={baseShaderType}
             isSelected={!!isSelected}
             isHovered={isHoveredModel}
+            useVertexColors={hasVertexColorAttribute}
             hoverTintColor={hoverTintColor}
             hoverTintStrength={hoverTintStrength}
             selectedTintStrength={selectedTintStrength}

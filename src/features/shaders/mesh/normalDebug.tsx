@@ -9,7 +9,7 @@ export function NormalDebugMaterial({
     <meshNormalMaterial
       clippingPlanes={clippingPlanes}
       clipIntersection
-      side={THREE.DoubleSide}
+      side={THREE.FrontSide}
     />
   );
 }

@@ -31,6 +31,8 @@ function buildGradientMap(steps: number): THREE.DataTexture {
 export function ToonMaterial({
   isSelected,
   isHovered,
+  useVertexColors,
+  meshColor,
   hoverTintColor,
   hoverTintStrength,
   selectedTintStrength,
@@ -39,19 +41,22 @@ export function ToonMaterial({
 }: {
   isSelected: boolean;
   isHovered: boolean;
+  useVertexColors?: boolean;
+  meshColor?: string;
   hoverTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   toonSteps?: number;
   clippingPlanes: THREE.Plane[];
 }) {
+  const baseColor = useVertexColors ? '#ffffff' : (meshColor ?? '#a3a3a3');
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
-    ? blendTintColor('#ffffff', hoverTintColor, selectedStrength)
+    ? blendTintColor(baseColor, hoverTintColor, selectedStrength)
     : isHovered
-      ? blendTintColor('#ffffff', hoverTintColor, hoverStrength)
-      : '#ffffff';
+      ? blendTintColor(baseColor, hoverTintColor, hoverStrength)
+      : baseColor;
 
   const gradientMap = React.useMemo(() => buildGradientMap(toonSteps ?? 5), [toonSteps]);
 
@@ -63,14 +68,14 @@ export function ToonMaterial({
 
   return (
     <meshToonMaterial
-      vertexColors
+      vertexColors={useVertexColors ?? true}
       color={tintColor}
       gradientMap={gradientMap}
       emissive="#000000"
       emissiveIntensity={0}
       clippingPlanes={clippingPlanes}
       clipIntersection
-      side={THREE.DoubleSide}
+      side={THREE.FrontSide}
     />
   );
 }
