@@ -308,7 +308,7 @@ export function WorkspacesSettingsTab({
                 Show slice SAT bounding mesh
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                SAT debug overlay around the active model for nesting and diagnostics.
+                SAT debug overlay for nesting and diagnostics.
               </div>
             </div>
             <button
@@ -330,6 +330,37 @@ export function WorkspacesSettingsTab({
               {view3dSettings.showSliceSatBoundingMesh ? 'ON' : 'OFF'}
             </button>
           </div>
+
+          {view3dSettings.showSliceSatBoundingMesh && (
+            <div className="mt-2 flex items-center justify-between gap-3 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  SAT debug scope
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Show SAT mesh on the active model only, or on all visible models.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => patchView3dSettings({ showSliceSatBoundingMeshForAllModels: !view3dSettings.showSliceSatBoundingMeshForAllModels })}
+                className="h-10 min-w-[130px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={view3dSettings.showSliceSatBoundingMeshForAllModels
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent-contrast)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                {view3dSettings.showSliceSatBoundingMeshForAllModels ? 'ALL MODELS' : 'ACTIVE ONLY'}
+              </button>
+            </div>
+          )}
 
           {view3dSettings.showSliceSatBoundingMesh && (
             <div className="mt-2 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>

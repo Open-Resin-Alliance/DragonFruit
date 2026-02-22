@@ -9,6 +9,7 @@ export type View3DSettings = {
   showViolationWarning: boolean;
   showModelBoundingBoxes: boolean;
   showSliceSatBoundingMesh: boolean;
+  showSliceSatBoundingMeshForAllModels: boolean;
   sliceSatBoundingMeshMode: 'accurate_hull' | 'experimental_slice';
   experimentalSliceSatBoundingMeshRenderMode: 'shaded' | 'wireframe';
 };
@@ -27,6 +28,7 @@ export const DEFAULT_VIEW3D_SETTINGS: View3DSettings = {
   showViolationWarning: true,
   showModelBoundingBoxes: false,
   showSliceSatBoundingMesh: false,
+  showSliceSatBoundingMeshForAllModels: false,
   sliceSatBoundingMeshMode: 'accurate_hull',
   experimentalSliceSatBoundingMeshRenderMode: 'shaded',
 };
@@ -95,6 +97,10 @@ export function normalizeView3DSettings(input: unknown): View3DSettings {
     showViolationWarning: clampBoolean(candidate.showViolationWarning, DEFAULT_VIEW3D_SETTINGS.showViolationWarning),
     showModelBoundingBoxes: clampBoolean(candidate.showModelBoundingBoxes, DEFAULT_VIEW3D_SETTINGS.showModelBoundingBoxes),
     showSliceSatBoundingMesh: clampBoolean(candidate.showSliceSatBoundingMesh, DEFAULT_VIEW3D_SETTINGS.showSliceSatBoundingMesh),
+    showSliceSatBoundingMeshForAllModels: clampBoolean(
+      candidate.showSliceSatBoundingMeshForAllModels,
+      DEFAULT_VIEW3D_SETTINGS.showSliceSatBoundingMeshForAllModels,
+    ),
     sliceSatBoundingMeshMode: clampSliceSatMode(
       candidate.sliceSatBoundingMeshMode ?? inferredModeFromLegacy,
       DEFAULT_VIEW3D_SETTINGS.sliceSatBoundingMeshMode,
