@@ -10,6 +10,7 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import { NumberInput } from '@/components/ui/NumberInput';
 import type {
   WorkspaceCameraDefaults,
   WorkspaceSelectionHighlightDefaults,
@@ -122,39 +123,36 @@ export function WorkspacesSettingsTab({
                   <div className="mt-2 grid grid-cols-2 gap-2">
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Build Width (mm)
-              <input
-                type="number"
+              <NumberInput
                 min={10}
                 step={1}
                 value={view3dSettings.widthMm}
-                onChange={(e) => patchView3dSettings({ widthMm: Number(e.target.value) })}
-                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                onChange={(next) => patchView3dSettings({ widthMm: Math.max(10, Math.round(next)) })}
+                className="mt-1 h-9 w-full rounded-md border pl-2 pr-5 text-[12px]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
               />
             </label>
 
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Build Depth (mm)
-              <input
-                type="number"
+              <NumberInput
                 min={10}
                 step={1}
                 value={view3dSettings.depthMm}
-                onChange={(e) => patchView3dSettings({ depthMm: Number(e.target.value) })}
-                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                onChange={(next) => patchView3dSettings({ depthMm: Math.max(10, Math.round(next)) })}
+                className="mt-1 h-9 w-full rounded-md border pl-2 pr-5 text-[12px]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
               />
             </label>
 
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Max Z Height (mm)
-              <input
-                type="number"
+              <NumberInput
                 min={10}
                 step={1}
                 value={view3dSettings.maxZMm}
-                onChange={(e) => patchView3dSettings({ maxZMm: Number(e.target.value) })}
-                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                onChange={(next) => patchView3dSettings({ maxZMm: Math.max(10, Math.round(next)) })}
+                className="mt-1 h-9 w-full rounded-md border pl-2 pr-5 text-[12px]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
               />
             </label>
@@ -215,26 +213,24 @@ export function WorkspacesSettingsTab({
 
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Screen Width (px)
-              <input
-                type="number"
+              <NumberInput
                 min={320}
                 step={1}
                 value={view3dSettings.screenWidthPx}
-                onChange={(e) => patchView3dSettings({ screenWidthPx: Number(e.target.value) })}
-                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                onChange={(next) => patchView3dSettings({ screenWidthPx: Math.max(320, Math.round(next)) })}
+                className="mt-1 h-9 w-full rounded-md border pl-2 pr-5 text-[12px]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
               />
             </label>
 
             <label className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Screen Height (px)
-              <input
-                type="number"
+              <NumberInput
                 min={200}
                 step={1}
                 value={view3dSettings.screenHeightPx}
-                onChange={(e) => patchView3dSettings({ screenHeightPx: Number(e.target.value) })}
-                className="mt-1 h-9 w-full rounded-md border px-2 text-[12px]"
+                onChange={(next) => patchView3dSettings({ screenHeightPx: Math.max(200, Math.round(next)) })}
+                className="mt-1 h-9 w-full rounded-md border pl-2 pr-5 text-[12px]"
                 style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-strong)' }}
               />
             </label>

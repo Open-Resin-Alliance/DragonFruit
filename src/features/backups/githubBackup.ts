@@ -5,6 +5,7 @@ export const GITHUB_OAUTH_STATE_COOKIE = 'df_github_backup_state';
 export const GITHUB_OAUTH_PKCE_COOKIE = 'df_github_backup_pkce';
 export const BACKUP_REPO_NAME = 'dragonfruit-backups';
 export const BACKUP_FILE_PATH = 'dragonfruit-backups/state.json';
+export const BACKUP_HISTORY_DIR = 'dragonfruit-backups/history';
 export const BACKUP_README_PATH = 'README.md';
 
 const BACKUP_README_MARKER = '<!-- dragonfruit-backups-readme:v1 -->';
@@ -64,6 +65,13 @@ type GithubContentResponse = {
   encoding: 'base64';
 };
 
+type GithubContentListEntry = {
+  name: string;
+  path: string;
+  sha: string;
+  type: 'file' | 'dir';
+};
+
 export type BackupSnapshot = {
   version: number;
   updatedAt: string;
@@ -77,6 +85,13 @@ export type BackupDocument = {
   schemaVersion: 1;
   updatedAt: string;
   snapshot: BackupSnapshot;
+};
+
+export type BackupHistoryEntry = {
+  id: string;
+  path: string;
+  sha: string;
+  createdAt: string;
 };
 
 function isPlaceholderEnv(value: string): boolean {
@@ -415,6 +430,108 @@ async function ensureBackupRepositoryReadme(token: string, owner: string, repo: 
       message: 'docs: add Dragonfruit backup repository warning README',
       content: Buffer.from(BACKUP_README_CONTENT, 'utf8').toString('base64'),
       sha: existing.sha ?? undefined,
+    }),
+  });
+}
+
+export function isValidBackupHistoryId(id: string): boolean {
+  return /^[0-9]{13}$/.test(id);
+}
+
+export function backupHistoryFilePath(id: string): string {
+  return `${BACKUP_HISTORY_DIR}/${id}.json`;
+}
+
+function createBackupHistoryId(): string {
+  return String(Date.now());
+}
+
+export async function writeBackupHistoryDocument(args: {
+  token: string;
+  owner: string;
+  repo: string;
+  document: BackupDocument;
+  historyId?: string;
+}): Promise<{ historyId: string; filePath: string }> {
+  const historyId = args.historyId ?? createBackupHistoryId();
+  const filePath = backupHistoryFilePath(historyId);
+
+  await upsertBackupDocument({
+    token: args.token,
+    owner: args.owner,
+    repo: args.repo,
+    filePath,
+    document: args.document,
+  });
+
+  return { historyId, filePath };
+}
+
+export async function listBackupHistory(args: {
+  token: string;
+  owner: string;
+  repo: string;
+}): Promise<BackupHistoryEntry[]> {
+  const encodedPath = encodeURIComponent(BACKUP_HISTORY_DIR);
+  const response = await fetch(`${GITHUB_API_BASE}/repos/${args.owner}/${args.repo}/contents/${encodedPath}`, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${args.token}`,
+      'User-Agent': 'Dragonfruit-Backups',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+    cache: 'no-store',
+  });
+
+  if (response.status === 404) {
+    return [];
+  }
+
+  if (!response.ok) {
+    const payload = await response.text().catch(() => '');
+    throw new Error(`Failed to list backup history (${response.status}): ${payload}`);
+  }
+
+  const payload = await response.json().catch(() => null) as GithubContentListEntry[] | null;
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  const entries = payload
+    .filter((entry) => entry.type === 'file' && entry.name.endsWith('.json'))
+    .map((entry) => {
+      const id = entry.name.replace(/\.json$/i, '');
+      if (!isValidBackupHistoryId(id)) return null;
+
+      const createdAt = new Date(Number(id)).toISOString();
+      return {
+        id,
+        path: entry.path,
+        sha: entry.sha,
+        createdAt,
+      } satisfies BackupHistoryEntry;
+    })
+    .filter((entry): entry is BackupHistoryEntry => entry !== null)
+    .sort((a, b) => Number(b.id) - Number(a.id));
+
+  return entries;
+}
+
+export async function deleteRepositoryFile(args: {
+  token: string;
+  owner: string;
+  repo: string;
+  filePath: string;
+  sha: string;
+  message: string;
+}): Promise<void> {
+  const encodedPath = encodeURIComponent(args.filePath);
+  await githubRequest(args.token, `/repos/${args.owner}/${args.repo}/contents/${encodedPath}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: args.message,
+      sha: args.sha,
     }),
   });
 }

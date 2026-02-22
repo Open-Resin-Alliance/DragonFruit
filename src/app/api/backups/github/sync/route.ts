@@ -11,6 +11,7 @@ import {
   getGithubViewer,
   isRemoteNewer,
   upsertBackupDocument,
+  writeBackupHistoryDocument,
 } from '@/features/backups/githubBackup';
 
 type SyncPayload = {
@@ -100,6 +101,13 @@ export async function POST(request: NextRequest) {
       repo: BACKUP_REPO_NAME,
       document,
       sha: remote.sha,
+    });
+
+    await writeBackupHistoryDocument({
+      token,
+      owner: viewer.login,
+      repo: BACKUP_REPO_NAME,
+      document,
     });
 
     return NextResponse.json({
