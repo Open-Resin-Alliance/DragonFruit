@@ -1466,13 +1466,16 @@ export default function Home() {
         return true;
       };
 
-      const anchor = (() => {
+      const finalAnchor = (() => {
         if (arrangeAnchorMode === 'front_left') return new THREE.Vector2(minX, minY);
         if (arrangeAnchorMode === 'front_right') return new THREE.Vector2(maxX, minY);
         if (arrangeAnchorMode === 'back_left') return new THREE.Vector2(minX, maxY);
         if (arrangeAnchorMode === 'back_right') return new THREE.Vector2(maxX, maxY);
         return new THREE.Vector2((minX + maxX) * 0.5, (minY + maxY) * 0.5);
       })();
+      // HP packing density objective: always fill from top-left first, then
+      // apply requested anchor as a whole-group post-transform.
+      const packingAnchor = new THREE.Vector2(minX, minY);
 
       const targetIdSet = new Set(visibleModels.map((m) => m.id));
       const blockers: CollisionProxy[] = scene.models
@@ -1561,14 +1564,14 @@ export default function Home() {
               if (out.length >= maxOut) break;
               const targetDot = (vO.x + other.center.x) * nx + (vO.y + other.center.y) * ny + minSpacing - minDot;
               if (Math.abs(ny) > 0.1) {
-                for (const cx of [other.center.x, minCX, maxCX, anchor.x]) {
+                for (const cx of [other.center.x, minCX, maxCX, packingAnchor.x]) {
                   const cy = (targetDot - cx * nx) / ny;
                   out.push({ x: Math.min(maxCX, Math.max(minCX, cx)), y: Math.min(maxCY, Math.max(minCY, cy)) });
                   if (out.length >= maxOut) break;
                 }
               }
               if (Math.abs(nx) > 0.1) {
-                for (const cy of [other.center.y, minCY, maxCY, anchor.y]) {
+                for (const cy of [other.center.y, minCY, maxCY, packingAnchor.y]) {
                   const cx = (targetDot - cy * ny) / nx;
                   out.push({ x: Math.min(maxCX, Math.max(minCX, cx)), y: Math.min(maxCY, Math.max(minCY, cy)) });
                   if (out.length >= maxOut) break;
@@ -1613,7 +1616,7 @@ export default function Home() {
           const addSim = (x: number, y: number) => {
             const cx = Math.min(maxCX, Math.max(minCX, x));
             const cy = Math.min(maxCY, Math.max(minCY, y));
-            const dx = cx - anchor.x; const dy = cy - anchor.y;
+            const dx = cx - packingAnchor.x; const dy = cy - packingAnchor.y;
             cands.push({ cx, cy, d: dx * dx + dy * dy });
           };
           for (let ix = 0; ix <= colsX; ix++) {
@@ -1676,7 +1679,7 @@ export default function Home() {
         const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
           ? neighborPool
             .slice()
-            .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
+            .sort((a, b) => a.center.distanceToSquared(packingAnchor) - b.center.distanceToSquared(packingAnchor))
             .slice(0, MAX_CANDIDATE_NEIGHBORS)
           : neighborPool;
         const collisionPool = [...placed, ...blockers];
@@ -1718,12 +1721,12 @@ export default function Home() {
             const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
             if (seen.has(k)) return;
             seen.add(k);
-            const dx = cx - anchor.x; const dy = cy - anchor.y;
+            const dx = cx - packingAnchor.x; const dy = cy - packingAnchor.y;
             cands.push({ x: cx, y: cy, sortKey: dx * dx + dy * dy });
           };
 
           // Plate corners / anchor seed
-          addCandidate(anchor.x, anchor.y);
+          addCandidate(packingAnchor.x, packingAnchor.y);
           addCandidate(minCenterX, minCenterY);
           addCandidate(maxCenterX, minCenterY);
           addCandidate(minCenterX, maxCenterY);
@@ -1739,9 +1742,9 @@ export default function Home() {
             addCandidate(ob.minX - minSpacing - h.localMaxX, other.center.y);
             addCandidate(other.center.x, ob.maxY + minSpacing - h.localMinY);
             addCandidate(other.center.x, ob.minY - minSpacing - h.localMaxY);
-            // Cross — align to anchor row/col
-            addCandidate(ob.maxX + minSpacing - h.localMinX, anchor.y);
-            addCandidate(anchor.x, ob.maxY + minSpacing - h.localMinY);
+            // Cross — align to packing anchor row/col
+            addCandidate(ob.maxX + minSpacing - h.localMinX, packingAnchor.y);
+            addCandidate(packingAnchor.x, ob.maxY + minSpacing - h.localMinY);
             // Vertex-to-vertex nestling: place candidate hull so vertex vC aligns
             // with placed vertex vO, offset by minSpacing along each axis.
             for (const vO of other.hull) {
@@ -1865,7 +1868,7 @@ export default function Home() {
           const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
             ? neighborPool
               .slice()
-              .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
+              .sort((a, b) => a.center.distanceToSquared(packingAnchor) - b.center.distanceToSquared(packingAnchor))
               .slice(0, MAX_CANDIDATE_NEIGHBORS)
             : neighborPool;
           const collisionPool = [...placed, ...blockers];
@@ -1906,12 +1909,12 @@ export default function Home() {
               const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
               if (seen.has(k)) return;
               seen.add(k);
-              const dx = cx - anchor.x;
-              const dy = cy - anchor.y;
+              const dx = cx - packingAnchor.x;
+              const dy = cy - packingAnchor.y;
               cands.push({ x: cx, y: cy, sortKey: dx * dx + dy * dy });
             };
 
-            addCandidate(anchor.x, anchor.y);
+            addCandidate(packingAnchor.x, packingAnchor.y);
             addCandidate(minCenterX, minCenterY);
             addCandidate(maxCenterX, minCenterY);
             addCandidate(minCenterX, maxCenterY);
@@ -1924,8 +1927,8 @@ export default function Home() {
               addCandidate(ob.minX - minSpacing - h.localMaxX, other.center.y);
               addCandidate(other.center.x, ob.maxY + minSpacing - h.localMinY);
               addCandidate(other.center.x, ob.minY - minSpacing - h.localMaxY);
-              addCandidate(ob.maxX + minSpacing - h.localMinX, anchor.y);
-              addCandidate(anchor.x, ob.maxY + minSpacing - h.localMinY);
+              addCandidate(ob.maxX + minSpacing - h.localMinX, packingAnchor.y);
+              addCandidate(packingAnchor.x, ob.maxY + minSpacing - h.localMinY);
             }
 
             if (USE_CONTACT_CANDIDATES) {
@@ -2035,7 +2038,7 @@ export default function Home() {
       const spills = bestResult.spills;
 
       // ── Multi-axis compaction ────────────────────────────────────────────────
-      // Move each model toward the anchor, then independently squeeze it along
+      // Move each model toward the packing anchor (top-left), then independently squeeze it along
       // pure X and pure Y.  Multiple passes let models ripple into the gaps
       // opened by their neighbours.
       const COMPACTION_PASSES = PERF_COMPLEX_SCENE ? 6 : 8;
@@ -2062,7 +2065,7 @@ export default function Home() {
         // Process farthest-from-anchor first so inner models don't block outer ones
         const order = placed
           .map((_, i) => i)
-          .sort((a, b) => placed[b].center.distanceToSquared(anchor) - placed[a].center.distanceToSquared(anchor));
+          .sort((a, b) => placed[b].center.distanceToSquared(packingAnchor) - placed[a].center.distanceToSquared(packingAnchor));
 
         for (const idx of order) {
           const entry = placed[idx];
@@ -2070,18 +2073,110 @@ export default function Home() {
           for (let oi = 0; oi < placed.length; oi++) {
             if (oi !== idx) others.push(placed[oi]);
           }
-          // Diagonal toward anchor
-          const toAnchor = new THREE.Vector2(anchor.x - entry.center.x, anchor.y - entry.center.y);
+          // Diagonal toward packing anchor
+          const toAnchor = new THREE.Vector2(packingAnchor.x - entry.center.x, packingAnchor.y - entry.center.y);
           if (binarySlide(entry, toAnchor, others)) moved = true;
-          // Pure X toward anchor
-          const toAnchorX = new THREE.Vector2(anchor.x - entry.center.x, 0);
+          // Pure X toward packing anchor
+          const toAnchorX = new THREE.Vector2(packingAnchor.x - entry.center.x, 0);
           if (binarySlide(entry, toAnchorX, others)) moved = true;
-          // Pure Y toward anchor
-          const toAnchorY = new THREE.Vector2(0, anchor.y - entry.center.y);
+          // Pure Y toward packing anchor
+          const toAnchorY = new THREE.Vector2(0, packingAnchor.y - entry.center.y);
           if (binarySlide(entry, toAnchorY, others)) moved = true;
         }
 
         if (!moved) break;
+      }
+
+      // ── Post-pack anchor transform ───────────────────────────────────────────
+      // After dense top-left fill, translate the packed-on-plate group toward
+      // the user-selected anchor while preserving minimum spacing and blocker
+      // avoidance. Internal packed spacing stays unchanged under translation.
+      if (placed.length > 0) {
+        const getPlacedBounds = (entries: Placed[]) => {
+          let bMinX = Infinity;
+          let bMaxX = -Infinity;
+          let bMinY = Infinity;
+          let bMaxY = -Infinity;
+          for (const entry of entries) {
+            const wb = worldBoundsAt(entry, entry.center);
+            bMinX = Math.min(bMinX, wb.minX);
+            bMaxX = Math.max(bMaxX, wb.maxX);
+            bMinY = Math.min(bMinY, wb.minY);
+            bMaxY = Math.max(bMaxY, wb.maxY);
+          }
+          return { minX: bMinX, maxX: bMaxX, minY: bMinY, maxY: bMaxY };
+        };
+
+        const currentBounds = getPlacedBounds(placed);
+        const currentCenterX = (currentBounds.minX + currentBounds.maxX) * 0.5;
+        const currentCenterY = (currentBounds.minY + currentBounds.maxY) * 0.5;
+        const plateCenterX = (minX + maxX) * 0.5;
+        const plateCenterY = (minY + maxY) * 0.5;
+
+        let desiredDx = 0;
+        let desiredDy = 0;
+        if (arrangeAnchorMode === 'front_left') {
+          desiredDx = minX - currentBounds.minX;
+          desiredDy = minY - currentBounds.minY;
+        } else if (arrangeAnchorMode === 'front_right') {
+          desiredDx = maxX - currentBounds.maxX;
+          desiredDy = minY - currentBounds.minY;
+        } else if (arrangeAnchorMode === 'back_left') {
+          desiredDx = minX - currentBounds.minX;
+          desiredDy = maxY - currentBounds.maxY;
+        } else if (arrangeAnchorMode === 'back_right') {
+          desiredDx = maxX - currentBounds.maxX;
+          desiredDy = maxY - currentBounds.maxY;
+        } else {
+          desiredDx = plateCenterX - currentCenterX;
+          desiredDy = plateCenterY - currentCenterY;
+        }
+
+        const canShiftPlaced = (dx: number, dy: number) => {
+          for (const entry of placed) {
+            const shiftedCenter = new THREE.Vector2(entry.center.x + dx, entry.center.y + dy);
+            if (!withinPlateAt(entry, shiftedCenter)) return false;
+            for (const blocker of blockers) {
+              if (!intersectsBroadphase(entry, shiftedCenter, blocker, blocker.center, minSpacing)) continue;
+              if (polygonsOverlapWithSpacing(entry.hull, shiftedCenter, blocker.hull, blocker.center, minSpacing)) {
+                return false;
+              }
+            }
+          }
+          return true;
+        };
+
+        const maxDxLo = minX - currentBounds.minX;
+        const maxDxHi = maxX - currentBounds.maxX;
+        const maxDyLo = minY - currentBounds.minY;
+        const maxDyHi = maxY - currentBounds.maxY;
+        desiredDx = Math.min(maxDxHi, Math.max(maxDxLo, desiredDx));
+        desiredDy = Math.min(maxDyHi, Math.max(maxDyLo, desiredDy));
+
+        let appliedScale = 0;
+        if (canShiftPlaced(desiredDx, desiredDy)) {
+          appliedScale = 1;
+        } else {
+          let lo = 0;
+          let hi = 1;
+          for (let i = 0; i < 16; i++) {
+            const mid = (lo + hi) * 0.5;
+            if (canShiftPlaced(desiredDx * mid, desiredDy * mid)) {
+              lo = mid;
+            } else {
+              hi = mid;
+            }
+          }
+          appliedScale = lo;
+        }
+
+        if (appliedScale > 1e-4) {
+          const dx = desiredDx * appliedScale;
+          const dy = desiredDy * appliedScale;
+          for (const entry of placed) {
+            entry.center.set(entry.center.x + dx, entry.center.y + dy);
+          }
+        }
       }
 
       // ── Re-layout spills using regular column-based packing ──────────────
