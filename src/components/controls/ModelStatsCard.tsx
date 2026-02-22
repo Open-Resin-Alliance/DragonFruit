@@ -361,9 +361,9 @@ export function ModelStatsCard({
   };
 
   return (
-    <div className="absolute bottom-4 left-2 pointer-events-auto select-none w-fit">
+    <div className="pointer-events-auto select-none w-[320px] max-w-[320px]">
       <div
-        className="min-w-[290px] [perspective:1200px]"
+        className="w-full [perspective:1200px]"
       >
         <div
           role="button"
@@ -371,11 +371,11 @@ export function ModelStatsCard({
           aria-label="Flip model stats card"
           onClick={handleToggleFlip}
           onKeyDown={handleCardKeyDown}
-          className="grid transition-transform duration-500 ease-out [transform-style:preserve-3d] focus:outline-none"
+          className="grid w-full min-w-0 transition-transform duration-500 ease-out [transform-style:preserve-3d] focus:outline-none"
           style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
         >
           <div
-            className="[grid-area:1/1] ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
+            className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
             style={{
               background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
               backfaceVisibility: 'hidden',
@@ -385,7 +385,7 @@ export function ModelStatsCard({
               {frontHeader}
             </div>
 
-            <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               <span>Printer:</span>
               <button
                 type="button"
@@ -394,7 +394,7 @@ export function ModelStatsCard({
                   event.stopPropagation();
                   openProfileSettingsModal('printer');
                 }}
-                className="text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
+                className="min-w-0 truncate text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
                 style={{ color: 'var(--text-strong)' }}
                 title="Open printer profiles"
               >
@@ -409,7 +409,7 @@ export function ModelStatsCard({
                   event.stopPropagation();
                   openProfileSettingsModal('material');
                 }}
-                className="text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
+                className="min-w-0 truncate text-left underline decoration-dotted underline-offset-2 hover:opacity-85 transition-opacity"
                 style={{ color: 'var(--text-strong)' }}
                 title="Open material profiles"
               >
@@ -417,12 +417,12 @@ export function ModelStatsCard({
               </button>
 
               <span>Layer profile:</span>
-              <span style={{ color: 'var(--text-strong)' }}>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {effectiveLayerHeightMm != null ? `${Math.round(effectiveLayerHeightMm * 1000)}μm` : '-'}
               </span>
 
               <span>Exposure:</span>
-              <span style={{ color: 'var(--text-strong)' }}>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {effectiveNormalExposureSec != null
                   ? `${effectiveNormalExposureSec.toFixed(1)}s • ${(effectiveBottomExposureSec ?? effectiveNormalExposureSec).toFixed(1)}s`
                   : '-'}
@@ -430,17 +430,17 @@ export function ModelStatsCard({
 
 
               <span>Layers:</span>
-              <span style={{ color: 'var(--text-strong)' }}>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {maxLayerCount != null ? maxLayerCount : '-'}
               </span>
 
               <span>Est. print time:</span>
-              <span style={{ color: 'var(--text-strong)' }}>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {estimatedExposureOnlySeconds != null ? formatDuration(estimatedExposureOnlySeconds) : '-'}
               </span>
 
               <span>Est. resin:</span>
-              <span style={{ color: 'var(--text-strong)' }}>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
                 {estimatedResinMl != null
                   ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
                   : '-'}
@@ -453,26 +453,26 @@ export function ModelStatsCard({
           </div>
 
           <div
-            className="[grid-area:1/1] ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
+            className="[grid-area:1/1] w-full min-w-0 ui-panel rounded-md px-3 py-2.5 shadow-md space-y-1.5 flex flex-col"
             style={{
               background: 'color-mix(in srgb, var(--surface-0), transparent 8%)',
               backfaceVisibility: 'hidden',
               transform: 'rotateY(180deg)',
             }}
           >
-            <div className="font-semibold text-[12px] truncate" style={{ color: 'var(--text-strong)' }}>
+            <div className="w-full min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-semibold text-[12px]" style={{ color: 'var(--text-strong)' }} title={model ? model.name : 'No model selected'}>
               {model ? model.name : 'No model selected'}
             </div>
 
-            <div className="grid grid-cols-[auto_auto] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
               <span>STL size:</span>
-              <span style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model?.fileSizeBytes != null ? formatBytes(model.fileSizeBytes) : '-'}</span>
 
               <span>Polygons:</span>
-              <span style={{ color: 'var(--text-strong)' }}>{model ? model.polygonCount.toLocaleString() : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? model.polygonCount.toLocaleString() : '-'}</span>
 
               <span>Height:</span>
-              <span style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
+              <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>{model ? `${heightMm.toFixed(2)} mm` : '-'}</span>
             </div>
 
             <div className="pt-0.5 text-[10px] mt-auto" style={{ color: 'var(--text-muted)' }}>
