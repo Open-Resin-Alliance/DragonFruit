@@ -966,8 +966,8 @@ export function useSceneCollectionManager() {
   }, []);
 
   const clearModelSelection = useCallback(() => {
-    setSelectedModelIds([]);
-    setActiveModelId(null);
+    setSelectedModelIds((prev) => (prev.length > 0 ? [] : prev));
+    setActiveModelId((prev) => (prev !== null ? null : prev));
   }, []);
 
   // Clear support selection when switching away from support mode

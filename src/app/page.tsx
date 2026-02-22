@@ -389,6 +389,20 @@ export default function Home() {
     scene.selectModel(modelId, options?.selectionMode ?? 'single');
   }, [scene]);
 
+  const handleSceneMarqueeSelection = React.useCallback((ids: string[]) => {
+    const deduped = Array.from(new Set(ids));
+    if (deduped.length === 0) {
+      scene.clearModelSelection();
+      return;
+    }
+
+    scene.setSelectedModelIds(deduped);
+    const preferredActiveId = deduped.includes(scene.activeModelId ?? '')
+      ? scene.activeModelId
+      : deduped[0];
+    scene.setActiveModelId(preferredActiveId);
+  }, [scene]);
+
   const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
     rightClickGestureRef.current = { x: e.clientX, y: e.clientY, moved: false };
@@ -2796,6 +2810,7 @@ export default function Home() {
             onSupportClick={supports.onModelClick}
             onSupportHover={supports.onModelHover}
             onActiveModelChange={handleSceneModelSelection}
+            onMarqueeSelectionChange={handleSceneMarqueeSelection}
             trunkPlacementPreview={supports.trunkPlacementV2.previewData}
             branchPlacementPreview={supports.branchPlacement.previewData}
             leafPlacementPreview={supports.leafPlacement.previewData}
