@@ -127,7 +127,7 @@ export default function Home() {
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
-  const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
+  const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(1);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(0.5);
   const showArrangeBlockingOverlay = isAutoArranging;
 
@@ -189,6 +189,23 @@ export default function Home() {
   const [duplicateArrayGapY, setDuplicateArrayGapY] = React.useState(5);
   const [duplicateArrayGapZ, setDuplicateArrayGapZ] = React.useState(5);
   const [isDuplicating, setIsDuplicating] = React.useState(false);
+  const effectiveDuplicateTotalCopies = React.useMemo(() => {
+    if (duplicateLayoutMode === 'array') {
+      const countX = Math.max(1, Math.round(duplicateArrayCountX));
+      const countY = Math.max(1, Math.round(duplicateArrayCountY));
+      const countZ = Math.max(1, Math.round(duplicateArrayCountZ));
+      return Math.max(1, Math.min(128, countX * countY * countZ));
+    }
+
+    return Math.max(1, Math.round(duplicateTotalCopies));
+  }, [
+    duplicateArrayCountX,
+    duplicateArrayCountY,
+    duplicateArrayCountZ,
+    duplicateLayoutMode,
+    duplicateTotalCopies,
+  ]);
+  const isDuplicateSetupBlockingArrange = Boolean(scene.activeModel) && effectiveDuplicateTotalCopies > 1;
   const [duplicatePreviewTransforms, setDuplicatePreviewTransforms] = React.useState<Array<{
     position: THREE.Vector3;
     rotation: THREE.Euler;
@@ -2212,10 +2229,9 @@ export default function Home() {
             }
           : null,
       );
-      setDuplicateTotalCopies(2);
+      setDuplicateTotalCopies(1);
       setDuplicateSourcePreviewTransform(null);
       setDuplicatePreviewTransforms([]);
-      transformMgr.setTransformMode('select');
     } finally {
       const elapsed = performance.now() - startedAt;
       if (elapsed < minSpinnerMs) {
@@ -2225,7 +2241,7 @@ export default function Home() {
       setDuplicateApplySourceModel(null);
       setDuplicateApplySourceTransform(null);
     }
-  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr]);
+  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep]);
 
   const handleFillPlateDuplicate = React.useCallback(() => {
     if (isDuplicating) return;
@@ -2457,7 +2473,7 @@ export default function Home() {
               </div>
             )}
 
-            {scene.geom && transformMgr.transformMode === 'arrange' && (
+            {scene.models.length > 0 && transformMgr.transformMode === 'arrange' && (
               <>
                 <ArrangePanel
                   key="prepare-arrange-panel"
@@ -2500,6 +2516,7 @@ export default function Home() {
                   modelCount={scene.models.filter((m) => m.visible).length}
                   selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
                   isApplying={isAutoArranging}
+                  disableArrangeActions={isDuplicateSetupBlockingArrange}
                 />
 
                 <DuplicatePanel
@@ -2822,7 +2839,7 @@ export default function Home() {
           </SceneCanvas>
 
           {/* Transform Toolbar */}
-          {scene.geom && scene.mode === 'prepare' && (
+          {scene.models.length > 0 && scene.mode === 'prepare' && (
             <>
               <TransformToolbar
                 mode={transformMgr.transformMode}

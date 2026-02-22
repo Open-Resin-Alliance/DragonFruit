@@ -325,6 +325,11 @@ button:not(:disabled),
 button:disabled,
 .ui-button:disabled {
   cursor: not-allowed;
+  background: color-mix(in srgb, var(--surface-1), black 8%);
+  border-color: color-mix(in srgb, var(--border-subtle), black 10%);
+  color: color-mix(in srgb, var(--text-muted), var(--surface-2) 18%);
+  box-shadow: none;
+  opacity: 1;
 }
 
 .ui-label {

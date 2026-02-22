@@ -35,6 +35,7 @@ interface ArrangePanelProps {
   modelCount: number;
   selectedModelCount: number;
   isApplying?: boolean;
+  disableArrangeActions?: boolean;
 }
 
 type MiniStepperFieldProps = {
@@ -102,11 +103,20 @@ export function ArrangePanel({
   modelCount,
   selectedModelCount,
   isApplying = false,
+  disableArrangeActions = false,
 }: ArrangePanelProps) {
   const [expanded, setExpanded] = React.useState(true);
+  const isArrangeAllDisabled = modelCount <= 1 || isApplying || disableArrangeActions;
+  const isArrangeSelectedDisabled = selectedModelCount === 0 || isApplying || disableArrangeActions;
   const panelCardStyle: React.CSSProperties = {
     borderColor: 'var(--border-subtle)',
     background: 'var(--surface-1)',
+  };
+
+  const disabledActionStyle: React.CSSProperties = {
+    background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+    borderColor: 'color-mix(in srgb, var(--border-subtle), black 10%)',
+    color: 'color-mix(in srgb, var(--text-muted), var(--surface-2) 18%)',
   };
 
   const accentCardStyle: React.CSSProperties = {
@@ -118,6 +128,12 @@ export function ArrangePanel({
     borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
     background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
     color: 'var(--text-strong)',
+  };
+
+  const disabledModeStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--border-subtle), black 10%)',
+    background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+    color: 'color-mix(in srgb, var(--text-muted), var(--surface-2) 18%)',
   };
 
   const sanitizeNumber = React.useCallback((value: number, fallback: number) => (
@@ -177,7 +193,7 @@ export function ArrangePanel({
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={isApplying}
-                style={layoutMode === 'auto' ? activeModeStyle : undefined}
+                style={isApplying ? disabledModeStyle : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
                 Auto
               </button>
@@ -186,7 +202,7 @@ export function ArrangePanel({
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={isApplying}
-                style={layoutMode === 'array' ? activeModeStyle : undefined}
+                style={isApplying ? disabledModeStyle : (layoutMode === 'array' ? activeModeStyle : undefined)}
               >
                 Manual
               </button>
@@ -202,7 +218,7 @@ export function ArrangePanel({
                   className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => onPrecisionModeChange('standard')}
                   disabled={isApplying}
-                  style={precisionMode === 'standard' ? activeModeStyle : undefined}
+                  style={isApplying ? disabledModeStyle : (precisionMode === 'standard' ? activeModeStyle : undefined)}
                   title="Current arrange algorithm"
                 >
                   Standard
@@ -215,7 +231,7 @@ export function ArrangePanel({
                     onAllowRotateOnZChange(true);
                   }}
                   disabled={isApplying}
-                  style={precisionMode === 'high_precision' ? activeModeStyle : undefined}
+                  style={isApplying ? disabledModeStyle : (precisionMode === 'high_precision' ? activeModeStyle : undefined)}
                   title="Hull-based SAT packing for tighter fit"
                 >
                   High-Precision
@@ -347,11 +363,16 @@ export function ArrangePanel({
           <div className="grid grid-cols-2 gap-2">
             <Button
               onClick={onApplyAll}
-              variant="primary"
+              variant={isArrangeAllDisabled ? 'secondary' : 'primary'}
               size="sm"
               className="w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight"
-              disabled={modelCount <= 1 || isApplying}
-              title={modelCount <= 1 ? 'Need at least 2 visible models to arrange' : 'Arrange all visible models'}
+              disabled={isArrangeAllDisabled}
+              style={isArrangeAllDisabled ? disabledActionStyle : undefined}
+              title={disableArrangeActions
+                ? 'Reduce Total Copies to 1 before arranging'
+                : (modelCount <= 1
+                  ? 'Need at least 2 visible models to arrange'
+                  : 'Arrange all visible models')}
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
@@ -365,11 +386,16 @@ export function ArrangePanel({
 
             <Button
               onClick={onApplySelected}
-              variant="accent"
+              variant={isArrangeSelectedDisabled ? 'secondary' : 'accent'}
               size="sm"
               className="w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight"
-              disabled={selectedModelCount <= 1 || isApplying}
-              title={selectedModelCount <= 1 ? 'Select at least 2 visible models to arrange' : 'Arrange selected models only'}
+              disabled={isArrangeSelectedDisabled}
+              style={isArrangeSelectedDisabled ? disabledActionStyle : undefined}
+              title={disableArrangeActions
+                ? 'Reduce Total Copies to 1 before arranging'
+                : (selectedModelCount === 0
+                  ? 'Select a model to arrange selected'
+                  : 'Arrange selected models only')}
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
