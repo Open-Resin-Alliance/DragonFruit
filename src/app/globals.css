@@ -605,11 +605,15 @@ input[type="number"].no-spinners {
   );
 }
 
-/* Themed number stepper controls */
+/* Themed number stepper controls (global) */
+input[type="number"]:not(.no-spinners),
 .ui-number-input {
   accent-color: var(--accent);
+  color-scheme: dark;
 }
 
+input[type="number"]:not(.no-spinners)::-webkit-inner-spin-button,
+input[type="number"]:not(.no-spinners)::-webkit-outer-spin-button,
 .ui-number-input::-webkit-inner-spin-button,
 .ui-number-input::-webkit-outer-spin-button {
   opacity: 1;
@@ -621,6 +625,8 @@ input[type="number"].no-spinners {
   cursor: pointer;
 }
 
+input[type="number"]:not(.no-spinners):hover::-webkit-inner-spin-button,
+input[type="number"]:not(.no-spinners):hover::-webkit-outer-spin-button,
 .ui-number-input:hover::-webkit-inner-spin-button,
 .ui-number-input:hover::-webkit-outer-spin-button {
   background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
