@@ -8,6 +8,7 @@ import {
   getGithubEnv,
   getGithubViewer,
   isValidBackupHistoryId,
+  normalizeBackupRepoName,
   upsertBackupDocument,
   writeBackupHistoryDocument,
 } from '@/features/backups/githubBackup';
@@ -39,13 +40,14 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   try {
     const viewer = await getGithubViewer(token);
+    const repoName = normalizeBackupRepoName(request.nextUrl.searchParams.get('repoName') ?? BACKUP_REPO_NAME);
 
-    const source = await getBackupDocument(token, viewer.login, BACKUP_REPO_NAME, backupHistoryFilePath(id));
+    const source = await getBackupDocument(token, viewer.login, repoName, backupHistoryFilePath(id));
     if (!source.document) {
       return NextResponse.json({ ok: false, error: 'Backup history item not found.' }, { status: 404 });
     }
 
-    const current = await getBackupDocument(token, viewer.login, BACKUP_REPO_NAME);
+    const current = await getBackupDocument(token, viewer.login, repoName);
     const restoredAt = new Date().toISOString();
 
     const restoredDocument = {
@@ -60,7 +62,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     await upsertBackupDocument({
       token,
       owner: viewer.login,
-      repo: BACKUP_REPO_NAME,
+      repo: repoName,
       document: restoredDocument,
       sha: current.sha,
     });
@@ -68,7 +70,7 @@ export async function POST(request: NextRequest, { params }: Params) {
     await writeBackupHistoryDocument({
       token,
       owner: viewer.login,
-      repo: BACKUP_REPO_NAME,
+      repo: repoName,
       document: restoredDocument,
     });
 

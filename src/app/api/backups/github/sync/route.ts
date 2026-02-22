@@ -10,6 +10,7 @@ import {
   getGithubEnv,
   getGithubViewer,
   isRemoteNewer,
+  normalizeBackupRepoName,
   upsertBackupDocument,
   writeBackupHistoryDocument,
 } from '@/features/backups/githubBackup';
@@ -17,6 +18,7 @@ import {
 type SyncPayload = {
   snapshot?: BackupSnapshot;
   forcePush?: boolean;
+  repoName?: string;
 };
 
 function isValidSnapshot(value: unknown): value is BackupSnapshot {
@@ -61,12 +63,13 @@ export async function POST(request: NextRequest) {
   }
 
   const localSnapshot = payload.snapshot;
+  const repoName = normalizeBackupRepoName(payload.repoName ?? BACKUP_REPO_NAME);
 
   try {
     const viewer = await getGithubViewer(token);
-    await ensurePrivateBackupRepo(token, BACKUP_REPO_NAME);
+    await ensurePrivateBackupRepo(token, repoName);
 
-    const remote = await getBackupDocument(token, viewer.login, BACKUP_REPO_NAME);
+    const remote = await getBackupDocument(token, viewer.login, repoName);
     const remoteSnapshot = remote.document?.snapshot;
     const remoteUpdatedAt = remote.document?.updatedAt;
 
@@ -98,7 +101,7 @@ export async function POST(request: NextRequest) {
     await upsertBackupDocument({
       token,
       owner: viewer.login,
-      repo: BACKUP_REPO_NAME,
+      repo: repoName,
       document,
       sha: remote.sha,
     });
@@ -106,7 +109,7 @@ export async function POST(request: NextRequest) {
     await writeBackupHistoryDocument({
       token,
       owner: viewer.login,
-      repo: BACKUP_REPO_NAME,
+      repo: repoName,
       document,
     });
 
@@ -114,7 +117,8 @@ export async function POST(request: NextRequest) {
       ok: true,
       conflict: false,
       syncedAt: nowIso,
-      repositoryUrl: `https://github.com/${viewer.login}/${BACKUP_REPO_NAME}`,
+      repositoryUrl: `https://github.com/${viewer.login}/${repoName}`,
+      repositoryName: repoName,
     });
   } catch (error) {
     return NextResponse.json({
