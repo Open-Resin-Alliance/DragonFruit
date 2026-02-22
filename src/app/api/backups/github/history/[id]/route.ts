@@ -9,6 +9,7 @@ import {
   getGithubEnv,
   getGithubViewer,
   isValidBackupHistoryId,
+  normalizeBackupRepoName,
 } from '@/features/backups/githubBackup';
 
 type Params = {
@@ -47,8 +48,9 @@ export async function GET(request: NextRequest, { params }: Params) {
 
   try {
     const viewer = await getGithubViewer(auth.token);
+    const repoName = normalizeBackupRepoName(request.nextUrl.searchParams.get('repoName') ?? BACKUP_REPO_NAME);
     const filePath = backupHistoryFilePath(id);
-    const { document } = await getBackupDocument(auth.token, viewer.login, BACKUP_REPO_NAME, filePath);
+    const { document } = await getBackupDocument(auth.token, viewer.login, repoName, filePath);
 
     if (!document) {
       return NextResponse.json({ ok: false, error: 'Backup history item not found.' }, { status: 404 });
@@ -83,8 +85,9 @@ export async function DELETE(request: NextRequest, { params }: Params) {
 
   try {
     const viewer = await getGithubViewer(auth.token);
+    const repoName = normalizeBackupRepoName(request.nextUrl.searchParams.get('repoName') ?? BACKUP_REPO_NAME);
     const filePath = backupHistoryFilePath(id);
-    const { sha } = await getBackupDocument(auth.token, viewer.login, BACKUP_REPO_NAME, filePath);
+    const { sha } = await getBackupDocument(auth.token, viewer.login, repoName, filePath);
 
     if (!sha) {
       return NextResponse.json({ ok: false, error: 'Backup history item not found.' }, { status: 404 });
@@ -93,7 +96,7 @@ export async function DELETE(request: NextRequest, { params }: Params) {
     await deleteRepositoryFile({
       token: auth.token,
       owner: viewer.login,
-      repo: BACKUP_REPO_NAME,
+      repo: repoName,
       filePath,
       sha,
       message: `backup: delete history ${id}`,

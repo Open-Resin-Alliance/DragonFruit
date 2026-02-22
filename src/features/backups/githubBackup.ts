@@ -4,6 +4,7 @@ export const GITHUB_OAUTH_COOKIE = 'df_github_backup_token';
 export const GITHUB_OAUTH_STATE_COOKIE = 'df_github_backup_state';
 export const GITHUB_OAUTH_PKCE_COOKIE = 'df_github_backup_pkce';
 export const BACKUP_REPO_NAME = 'dragonfruit-backups';
+export const BACKUP_REPO_PREFIX = 'dragonfruit-backups';
 export const BACKUP_FILE_PATH = 'dragonfruit-backups/state.json';
 export const BACKUP_HISTORY_DIR = 'dragonfruit-backups/history';
 export const BACKUP_README_PATH = 'README.md';
@@ -360,6 +361,31 @@ export async function getRepoIfExists(token: string, owner: string, repo: string
 
   const payload = await response.json().catch(() => null) as { private?: boolean } | null;
   return { exists: true, private: payload?.private === true };
+}
+
+export function normalizeBackupRepoName(input?: string | null): string {
+  const raw = (input ?? '').trim().toLowerCase();
+  if (!raw) return BACKUP_REPO_NAME;
+
+  const normalized = raw
+    .replace(/[^a-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  if (!normalized) return BACKUP_REPO_NAME;
+  if (!normalized.startsWith(BACKUP_REPO_PREFIX)) return BACKUP_REPO_NAME;
+
+  return normalized.slice(0, 100);
+}
+
+export async function suggestNextBackupRepoName(token: string, owner: string, base = BACKUP_REPO_PREFIX): Promise<string> {
+  for (let index = 1; index <= 50; index += 1) {
+    const candidate = `${base}-${index}`;
+    const check = await getRepoIfExists(token, owner, candidate);
+    if (!check.exists) return candidate;
+  }
+
+  return `${base}-${Date.now()}`;
 }
 
 export async function ensurePrivateBackupRepo(token: string, repoName = BACKUP_REPO_NAME): Promise<void> {

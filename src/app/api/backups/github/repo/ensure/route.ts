@@ -6,6 +6,7 @@ import {
   ensurePrivateBackupRepo,
   getGithubEnv,
   getGithubViewer,
+  normalizeBackupRepoName,
 } from '@/features/backups/githubBackup';
 
 export async function POST(request: NextRequest) {
@@ -24,16 +25,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Invalid authentication token.' }, { status: 401 });
   }
 
+  let repoName = BACKUP_REPO_NAME;
   try {
-    await ensurePrivateBackupRepo(token, BACKUP_REPO_NAME);
+    const payload = await request.json().catch(() => null) as { repoName?: string } | null;
+    repoName = normalizeBackupRepoName(payload?.repoName ?? BACKUP_REPO_NAME);
+  } catch {
+    repoName = BACKUP_REPO_NAME;
+  }
+
+  try {
+    await ensurePrivateBackupRepo(token, repoName);
     const viewer = await getGithubViewer(token);
 
     return NextResponse.json({
       ok: true,
       repository: {
         owner: viewer.login,
-        name: BACKUP_REPO_NAME,
-        url: `https://github.com/${viewer.login}/${BACKUP_REPO_NAME}`,
+        name: repoName,
+        url: `https://github.com/${viewer.login}/${repoName}`,
       },
     });
   } catch (error) {

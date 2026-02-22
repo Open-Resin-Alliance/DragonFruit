@@ -6,9 +6,11 @@ import {
   getGithubEnv,
   getGithubViewer,
   listBackupHistory,
+  normalizeBackupRepoName,
 } from '@/features/backups/githubBackup';
 
 export async function GET(request: NextRequest) {
+  const repoName = normalizeBackupRepoName(request.nextUrl.searchParams.get('repoName') ?? BACKUP_REPO_NAME);
   const env = getGithubEnv();
   if (!env.configured) {
     return NextResponse.json({ ok: false, error: 'GitHub backups are not configured.' }, { status: 500 });
@@ -29,7 +31,7 @@ export async function GET(request: NextRequest) {
     const items = await listBackupHistory({
       token,
       owner: viewer.login,
-      repo: BACKUP_REPO_NAME,
+      repo: repoName,
     });
 
     return NextResponse.json({

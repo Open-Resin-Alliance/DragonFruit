@@ -19,6 +19,9 @@ type StatusResponse = {
     name: string;
     exists: boolean;
     private: boolean | null;
+    defaultName?: string;
+    defaultExists?: boolean;
+    suggestedNewName?: string | null;
   };
   remoteUpdatedAt?: string | null;
   error?: string;
@@ -77,6 +80,9 @@ const AUTO_SYNC_MINUTES_KEY = 'dragonfruit-backups:auto-sync-minutes';
 const CLIENT_ID_KEY = 'dragonfruit-backups:client-id';
 const LAST_SYNC_AT_KEY = 'dragonfruit-backups:last-sync-at';
 const BACKUP_STATUS_CACHE_KEY = 'dragonfruit-backups:status-cache-v1';
+const BACKUP_SELECTED_REPO_KEY = 'dragonfruit-backups:selected-repo-name';
+const BACKUP_REPO_CHOICE_RESOLVED_KEY = 'dragonfruit-backups:repo-choice-resolved-v1';
+const DEFAULT_BACKUP_REPO_NAME = 'dragonfruit-backups';
 const BACKUP_STATUS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 
 type SelectedHistoryDocument = NonNullable<HistoryItemResponse['item']>['document'];
@@ -209,7 +215,7 @@ async function fetchStatus(): Promise<StatusResponse> {
   return response.json() as Promise<StatusResponse>;
 }
 
-function readCachedStatus(): StatusResponse | null {
+function readCachedStatus(expectedRepoName?: string): StatusResponse | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(BACKUP_STATUS_CACHE_KEY);
@@ -217,6 +223,7 @@ function readCachedStatus(): StatusResponse | null {
     const parsed = JSON.parse(raw) as { cachedAt: number; status: StatusResponse };
     if (!parsed?.status || typeof parsed.cachedAt !== 'number') return null;
     if (Date.now() - parsed.cachedAt > BACKUP_STATUS_CACHE_MAX_AGE_MS) return null;
+    if (expectedRepoName && parsed.status.repository?.name && parsed.status.repository.name !== expectedRepoName) return null;
     return parsed.status;
   } catch {
     return null;
@@ -407,6 +414,14 @@ export function BackupsSettingsTab() {
   const [snapshotModalTab, setSnapshotModalTab] = React.useState<SnapshotModalTab>('overview');
   const [selectedStorageKey, setSelectedStorageKey] = React.useState<string | null>(null);
   const [selectedProfilesPrinterId, setSelectedProfilesPrinterId] = React.useState<string | null>(null);
+  const [selectedBackupRepoName, setSelectedBackupRepoName] = React.useState<string>(() => {
+    if (typeof window === 'undefined') return DEFAULT_BACKUP_REPO_NAME;
+    return window.localStorage.getItem(BACKUP_SELECTED_REPO_KEY)?.trim() || DEFAULT_BACKUP_REPO_NAME;
+  });
+  const [repoChoiceResolved, setRepoChoiceResolved] = React.useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(BACKUP_REPO_CHOICE_RESOLVED_KEY) === 'true';
+  });
 
   const [autoSyncEnabled, setAutoSyncEnabled] = React.useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
@@ -431,7 +446,8 @@ export function BackupsSettingsTab() {
     }
 
     try {
-      const next = await fetchStatus();
+      const response = await fetch(`/api/backups/github/auth/status?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { cache: 'no-store' });
+      const next = await response.json() as StatusResponse;
       const alignedUrl = shouldAlignToExpectedOrigin(next.expectedOrigin);
       if (alignedUrl) {
         window.location.assign(alignedUrl);
@@ -453,12 +469,12 @@ export function BackupsSettingsTab() {
         setLoadingStatus(false);
       }
     }
-  }, []);
+  }, [selectedBackupRepoName]);
 
   const loadHistory = React.useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const response = await fetch('/api/backups/github/history', { cache: 'no-store' });
+      const response = await fetch(`/api/backups/github/history?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => null) as HistoryListResponse | null;
       if (!response.ok || !payload?.ok || !payload.items) {
         throw new Error(payload?.error || 'Failed to load backup history.');
@@ -469,7 +485,7 @@ export function BackupsSettingsTab() {
     } finally {
       setHistoryLoading(false);
     }
-  }, []);
+  }, [selectedBackupRepoName]);
 
   const runSync = React.useCallback(async (forcePush = false) => {
     setBusy('sync');
@@ -480,7 +496,7 @@ export function BackupsSettingsTab() {
       const response = await fetch('/api/backups/github/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ snapshot, forcePush }),
+        body: JSON.stringify({ snapshot, forcePush, repoName: selectedBackupRepoName }),
       });
 
       const payload = await response.json().catch(() => null) as SyncResponse | null;
@@ -504,7 +520,7 @@ export function BackupsSettingsTab() {
     } finally {
       setBusy('none');
     }
-  }, [loadStatus]);
+  }, [loadStatus, selectedBackupRepoName]);
 
   const handleConnectGithub = React.useCallback(async () => {
     setBusy('auth');
@@ -533,7 +549,11 @@ export function BackupsSettingsTab() {
     setBusy('ensure');
     setMessage({ kind: 'idle', text: '' });
     try {
-      const response = await fetch('/api/backups/github/repo/ensure', { method: 'POST' });
+      const response = await fetch('/api/backups/github/repo/ensure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoName: selectedBackupRepoName }),
+      });
       const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!response.ok || !payload?.ok) throw new Error(payload?.error || 'Failed to ensure repository.');
       setMessage({ kind: 'success', text: 'Backup repository is ready.' });
@@ -543,7 +563,7 @@ export function BackupsSettingsTab() {
     } finally {
       setBusy('none');
     }
-  }, [loadStatus]);
+  }, [loadStatus, selectedBackupRepoName]);
 
   const handleDisconnect = React.useCallback(async () => {
     setBusy('logout');
@@ -566,7 +586,7 @@ export function BackupsSettingsTab() {
     setSnapshotModalTab('overview');
     setShowSnapshotModal(true);
     try {
-      const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}`, { cache: 'no-store' });
+      const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => null) as HistoryItemResponse | null;
       if (!response.ok || !payload?.ok || !payload.item) {
         throw new Error(payload?.error || 'Failed to load backup snapshot.');
@@ -577,13 +597,13 @@ export function BackupsSettingsTab() {
       setShowSnapshotModal(false);
       setSelectedHistoryId(null);
     }
-  }, []);
+  }, [selectedBackupRepoName]);
 
   const handleDeleteHistory = React.useCallback(async (id: string) => {
     if (!window.confirm('Delete this backup snapshot from GitHub history? This cannot be undone.')) return;
 
     try {
-      const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { method: 'DELETE' });
       const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!response.ok || !payload?.ok) {
         throw new Error(payload?.error || 'Failed to delete backup snapshot.');
@@ -600,12 +620,12 @@ export function BackupsSettingsTab() {
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Failed to delete backup snapshot.' });
     }
-  }, [loadHistory, selectedHistoryId]);
+  }, [loadHistory, selectedBackupRepoName, selectedHistoryId]);
 
   const handleRestoreHistory = React.useCallback(async (id: string) => {
     setBusy('restore');
     try {
-      const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}/restore`, { method: 'POST' });
+      const response = await fetch(`/api/backups/github/history/${encodeURIComponent(id)}/restore?repoName=${encodeURIComponent(selectedBackupRepoName)}`, { method: 'POST' });
       const payload = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!response.ok || !payload?.ok) {
         throw new Error(payload?.error || 'Failed to restore backup snapshot.');
@@ -618,10 +638,10 @@ export function BackupsSettingsTab() {
     } finally {
       setBusy('none');
     }
-  }, [loadHistory, loadStatus]);
+  }, [loadHistory, loadStatus, selectedBackupRepoName]);
 
   React.useEffect(() => {
-    const cached = readCachedStatus();
+    const cached = readCachedStatus(selectedBackupRepoName);
     if (cached) {
       setStatus(cached);
       setLoadingStatus(false);
@@ -630,7 +650,7 @@ export function BackupsSettingsTab() {
     }
 
     void loadStatus(true);
-  }, [loadStatus]);
+  }, [loadStatus, selectedBackupRepoName]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -681,6 +701,22 @@ export function BackupsSettingsTab() {
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
+    window.localStorage.setItem(BACKUP_SELECTED_REPO_KEY, selectedBackupRepoName);
+  }, [selectedBackupRepoName]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(BACKUP_REPO_CHOICE_RESOLVED_KEY, repoChoiceResolved ? 'true' : 'false');
+  }, [repoChoiceResolved]);
+
+  React.useEffect(() => {
+    if (!status?.authenticated) {
+      setRepoChoiceResolved(false);
+    }
+  }, [status?.authenticated]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
 
     if (!autoSyncEnabled) return;
     if (!statusRef.current?.authenticated) return;
@@ -696,12 +732,20 @@ export function BackupsSettingsTab() {
   React.useEffect(() => {
     const authenticated = Boolean(status?.authenticated);
     const repoExists = Boolean(status?.repository?.exists);
-    const hasAnySync = Boolean(status?.remoteUpdatedAt || lastLocalSyncAt);
-    const setupComplete = authenticated && repoExists && hasAnySync;
+    const needsChoice = authenticated && Boolean(status?.repository?.defaultExists) && !repoChoiceResolved;
+    const setupComplete = authenticated && repoExists && Boolean(status?.remoteUpdatedAt || lastLocalSyncAt) && !needsChoice;
 
     if (!setupComplete) return;
     void loadHistory();
-  }, [lastLocalSyncAt, loadHistory, status?.authenticated, status?.remoteUpdatedAt, status?.repository?.exists]);
+  }, [lastLocalSyncAt, loadHistory, repoChoiceResolved, status?.authenticated, status?.remoteUpdatedAt, status?.repository?.defaultExists, status?.repository?.exists]);
+
+  React.useEffect(() => {
+    if (!status?.authenticated) return;
+    if (busy !== 'none') return;
+    if (!repoChoiceResolved) return;
+    if (status?.repository?.exists) return;
+    void handleEnsureRepo();
+  }, [busy, handleEnsureRepo, repoChoiceResolved, status?.authenticated, status?.repository?.exists]);
 
   React.useEffect(() => {
     const keys = Object.keys(selectedHistoryDocument?.snapshot.localStorage ?? {});
@@ -717,7 +761,11 @@ export function BackupsSettingsTab() {
   const backupsConfigured = Boolean(status?.configured);
   const repoExists = Boolean(status?.repository?.exists);
   const hasAnySync = Boolean(status?.remoteUpdatedAt || lastLocalSyncAt);
-  const setupComplete = authenticated && repoExists && hasAnySync;
+  const defaultRepoName = status?.repository?.defaultName ?? DEFAULT_BACKUP_REPO_NAME;
+  const defaultRepoExists = Boolean(status?.repository?.defaultExists);
+  const suggestedNewRepoName = status?.repository?.suggestedNewName ?? `${DEFAULT_BACKUP_REPO_NAME}-1`;
+  const needsRepoChoice = authenticated && defaultRepoExists && !repoChoiceResolved;
+  const setupComplete = authenticated && repoExists && hasAnySync && !needsRepoChoice;
   const parsedProfiles = React.useMemo(() => (
     parseProfilesSnapshot(selectedHistoryDocument?.snapshot.profiles)
   ), [selectedHistoryDocument?.snapshot.profiles]);
@@ -757,40 +805,17 @@ export function BackupsSettingsTab() {
     });
   }, [parsedProfiles]);
 
-  const onboardingStep = !authenticated
-    ? 1
-    : !repoExists
-      ? 2
-      : !hasAnySync
-        ? 3
-        : 4;
+  const chooseExistingRepo = React.useCallback(() => {
+    setSelectedBackupRepoName(defaultRepoName);
+    setRepoChoiceResolved(true);
+    setMessage({ kind: 'success', text: `Using existing repository: ${defaultRepoName}` });
+  }, [defaultRepoName]);
 
-  const onboardingTask = onboardingStep === 1
-    ? {
-        title: 'Connect your GitHub account',
-        description: 'Authorize Dragonfruit so backups can be saved into your private repository.',
-        buttonLabel: 'Connect GitHub now',
-        icon: Github,
-        busyState: 'auth' as const,
-        onClick: () => { void handleConnectGithub(); },
-      }
-    : onboardingStep === 2
-      ? {
-          title: 'Prepare your private backup repository',
-          description: 'Create or verify dragonfruit-backups in your GitHub account.',
-          buttonLabel: 'Create private repo now',
-          icon: ArchiveRestore,
-          busyState: 'ensure' as const,
-          onClick: () => { void handleEnsureRepo(); },
-        }
-      : {
-          title: 'Create your first backup snapshot',
-          description: 'Upload your current settings and profiles to complete setup.',
-          buttonLabel: 'Run first backup now',
-          icon: UploadCloud,
-          busyState: 'sync' as const,
-          onClick: () => { void runSync(false); },
-        };
+  const chooseCreateNewRepo = React.useCallback(() => {
+    setSelectedBackupRepoName(suggestedNewRepoName);
+    setRepoChoiceResolved(true);
+    setMessage({ kind: 'success', text: `Creating new repository: ${suggestedNewRepoName}` });
+  }, [suggestedNewRepoName]);
 
   return (
     <div className="space-y-3">
@@ -854,96 +879,87 @@ export function BackupsSettingsTab() {
 
         {!setupComplete && (
           <div className="mt-3 rounded-lg border p-3" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 54%)', background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)' }}>
-            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Getting Started</div>
-            <h4 className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Set up backups in under a minute</h4>
+            <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Onboarding</div>
+            <h4 className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Set up private backups</h4>
             <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-              We’ll walk you through setup one action at a time. Dragonfruit only syncs to your own private GitHub repository.
+              Dragonfruit handles setup automatically and uses only your own private GitHub repository.
             </p>
 
-            <div className="mt-2.5 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>
-                  Progress
-                </div>
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  {Math.min(onboardingStep, 3)} / 3 complete
-                </div>
-              </div>
-              <div className="mt-2 grid grid-cols-3 gap-1.5">
-                {[
-                  { key: 'connect', label: 'Connect', done: authenticated, active: onboardingStep === 1 },
-                  { key: 'repo', label: 'Repo', done: repoExists, active: onboardingStep === 2 },
-                  { key: 'backup', label: 'Backup', done: hasAnySync, active: onboardingStep === 3 },
-                ].map((item) => (
-                  <div
-                    key={item.key}
-                    className="rounded-md border px-2 py-1.5 text-center text-[11px] font-medium"
-                    style={{
-                      borderColor: item.done
-                        ? 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)'
-                        : item.active
-                          ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)'
-                          : 'var(--border-subtle)',
-                      background: item.done
-                        ? 'color-mix(in srgb, #22c55e, var(--surface-1) 92%)'
-                        : item.active
-                          ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
-                          : 'var(--surface-1)',
-                      color: item.done
-                        ? '#86efac'
-                        : item.active
-                          ? 'var(--accent-secondary)'
-                          : 'var(--text-muted)',
-                    }}
-                  >
-                    {item.done ? '✓ ' : ''}{item.label}
+            <div className="mt-3 rounded-md border p-3 text-center" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              {!authenticated ? (
+                <>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Connect your GitHub account</h5>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Authorize Dragonfruit so backups can be saved into your private repository.
+                  </p>
+                  <div className="mt-2.5 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { void handleConnectGithub(); }}
+                      disabled={busy !== 'none' || !status?.configured}
+                      className="ui-button ui-button-primary !h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                      style={{ background: 'linear-gradient(135deg, #8250df, #6f42c1)', borderColor: 'color-mix(in srgb, #8250df, white 14%)', color: '#ffffff' }}
+                    >
+                      {busy === 'auth' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
+                      Connect GitHub now
+                    </button>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-3 rounded-md border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{onboardingTask.title}</h5>
-              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>{onboardingTask.description}</p>
-
-              <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={onboardingTask.onClick}
-                disabled={busy !== 'none' || !status?.configured}
-                className="ui-button ui-button-primary !h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
-                style={{
-                  background: onboardingStep === 1
-                    ? 'linear-gradient(135deg, #8250df, #6f42c1)'
-                    : 'color-mix(in srgb, var(--accent), var(--surface-0) 16%)',
-                  borderColor: onboardingStep === 1
-                    ? 'color-mix(in srgb, #8250df, white 14%)'
-                    : 'color-mix(in srgb, var(--accent), white 10%)',
-                  color: '#ffffff',
-                }}
-              >
-                {busy === onboardingTask.busyState ? <Loader2 className="h-4 w-4 animate-spin" /> : <onboardingTask.icon className="h-4 w-4" />}
-                {onboardingTask.buttonLabel}
-              </button>
-
-              {onboardingStep > 1 && (
-                <button
-                  type="button"
-                  onClick={() => { void handleConnectGithub(); }}
-                  disabled={busy !== 'none' || !status?.configured}
-                  className="ui-button ui-button-secondary !h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
-                  style={{ color: 'var(--accent-secondary)' }}
-                >
-                  <Github className="h-4 w-4" />
-                  Reconnect GitHub
-                </button>
-              )}
-            </div>
-
-              {onboardingStep === 1 && (
-                <div className="mt-2 text-center text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  We’ll open a secure GitHub popup to connect your account.
-                </div>
+                  <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    We’ll open a secure GitHub popup to connect your account.
+                  </div>
+                </>
+              ) : needsRepoChoice ? (
+                <>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Existing backup repository detected</h5>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    We found <span style={{ color: 'var(--text-strong)' }}>{defaultRepoName}</span>. Choose whether to keep using it or create a fresh repository.
+                  </p>
+                  <div className="mt-2.5 grid gap-2 sm:grid-cols-2 text-left">
+                    <button
+                      type="button"
+                      onClick={chooseExistingRepo}
+                      className="ui-button ui-button-secondary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
+                    >
+                      Use existing repo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={chooseCreateNewRepo}
+                      className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center justify-center gap-1.5"
+                    >
+                      Create {suggestedNewRepoName}
+                    </button>
+                  </div>
+                </>
+              ) : !repoExists ? (
+                <>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Preparing things…</h5>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Preparing your repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span>. This usually takes a moment.
+                  </p>
+                  <div className="mt-2 inline-flex items-center justify-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {busy === 'ensure' ? 'Creating and configuring repository…' : 'Waiting for repository check…'}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Create your first backup snapshot</h5>
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Repository <span style={{ color: 'var(--text-strong)' }}>{selectedBackupRepoName}</span> is ready. Run your first backup to finish onboarding.
+                  </p>
+                  <div className="mt-2.5 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { void runSync(false); }}
+                      disabled={busy !== 'none' || !status?.configured}
+                      className="ui-button ui-button-primary !h-9 !px-3 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+                    >
+                      {busy === 'sync' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                      Run first backup now
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           </div>

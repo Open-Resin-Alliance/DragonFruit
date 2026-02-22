@@ -8,9 +8,12 @@ import {
   getGithubEnv,
   getGithubViewer,
   getRepoIfExists,
+  normalizeBackupRepoName,
+  suggestNextBackupRepoName,
 } from '@/features/backups/githubBackup';
 
 export async function GET(request: NextRequest) {
+  const requestedRepoName = normalizeBackupRepoName(request.nextUrl.searchParams.get('repoName'));
   const env = getGithubEnv();
   const expectedOrigin = (() => {
     try {
@@ -39,13 +42,20 @@ export async function GET(request: NextRequest) {
 
   try {
     const viewer = await getGithubViewer(token);
-    const repo = await getRepoIfExists(token, viewer.login, BACKUP_REPO_NAME);
+    const repo = await getRepoIfExists(token, viewer.login, requestedRepoName);
+    const defaultRepo = requestedRepoName === BACKUP_REPO_NAME
+      ? repo
+      : await getRepoIfExists(token, viewer.login, BACKUP_REPO_NAME);
 
     let remoteUpdatedAt: string | null = null;
     if (repo.exists) {
-      const remote = await getBackupDocument(token, viewer.login, BACKUP_REPO_NAME);
+      const remote = await getBackupDocument(token, viewer.login, requestedRepoName);
       remoteUpdatedAt = remote.document?.updatedAt ?? null;
     }
+
+    const suggestedNewName = defaultRepo.exists
+      ? await suggestNextBackupRepoName(token, viewer.login)
+      : null;
 
     return NextResponse.json({
       ok: true,
@@ -57,9 +67,12 @@ export async function GET(request: NextRequest) {
         avatarUrl: viewer.avatar_url,
       },
       repository: {
-        name: BACKUP_REPO_NAME,
+        name: requestedRepoName,
         exists: repo.exists,
         private: repo.private ?? null,
+        defaultName: BACKUP_REPO_NAME,
+        defaultExists: defaultRepo.exists,
+        suggestedNewName,
       },
       remoteUpdatedAt,
       expectedOrigin,
