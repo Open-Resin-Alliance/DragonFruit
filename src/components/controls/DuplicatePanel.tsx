@@ -95,6 +95,40 @@ export function DuplicatePanel({
 }: DuplicatePanelProps) {
   const [expanded, setExpanded] = React.useState(true);
   const hasSelection = !!activeModelName;
+  const panelDisabled = !hasSelection || isApplying;
+
+  const panelCardStyle: React.CSSProperties = {
+    borderColor: 'var(--border-subtle)',
+    background: 'var(--surface-1)',
+  };
+
+  const panelCardStyleDisabled: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--border-subtle), black 10%)',
+    background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+  };
+
+  const accentCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 76%)',
+    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)',
+  };
+
+  const accentCardStyleDisabled: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--border-subtle), black 10%)',
+    background: 'color-mix(in srgb, var(--surface-1), black 6%)',
+  };
+
+  const activeModeStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+    color: 'var(--text-strong)',
+  };
+
+  const disabledButtonStyle: React.CSSProperties = {
+    background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+    borderColor: 'color-mix(in srgb, var(--border-subtle), black 10%)',
+    color: 'color-mix(in srgb, var(--text-muted), var(--surface-2) 18%)',
+    boxShadow: 'none',
+  };
 
   const sanitizeNumber = React.useCallback((value: number, fallback: number) => {
     return Number.isFinite(value) ? value : fallback;
@@ -125,8 +159,19 @@ export function DuplicatePanel({
     ? (Math.max(1, Math.round(arrayCountX)) * Math.max(1, Math.round(arrayCountY)) * Math.max(1, Math.round(arrayCountZ)))
     : Math.max(1, Math.round(totalCopies)));
 
+  const isConfirmDuplicateDisabled = panelDisabled || previewCount <= 0 || displayTotalCopies <= 1;
+  const isFillPlateDisabled = panelDisabled || layoutMode !== 'auto';
+
   return (
-    <Card>
+    <Card
+      className={!hasSelection ? 'opacity-70' : undefined}
+      style={!hasSelection
+        ? {
+            borderColor: 'color-mix(in srgb, var(--border-subtle), black 8%)',
+            background: 'color-mix(in srgb, var(--surface-0), black 8%)',
+          }
+        : undefined}
+    >
       <CardHeader
         left={(
           <>
@@ -162,28 +207,22 @@ export function DuplicatePanel({
 
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
             <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Selected model</div>
             <div className="mt-0.5 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
               {activeModelName ?? 'Select a model first'}
             </div>
           </div>
 
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
             <div className="grid grid-cols-2 gap-1 min-w-0">
               <button
                 type="button"
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
-                disabled={isApplying}
-                style={layoutMode === 'auto'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
+                disabled={panelDisabled}
+                style={panelDisabled ? undefined : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
                 Auto layout
               </button>
@@ -191,14 +230,8 @@ export function DuplicatePanel({
                 type="button"
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
-                disabled={isApplying}
-                style={layoutMode === 'array'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
+                disabled={panelDisabled}
+                style={panelDisabled ? undefined : (layoutMode === 'array' ? activeModeStyle : undefined)}
               >
                 Array
               </button>
@@ -207,13 +240,13 @@ export function DuplicatePanel({
 
           {layoutMode === 'auto' ? (
             <>
-              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
                 <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total copies</label>
                 <div className="mt-1 flex min-w-0 items-center gap-1">
                   <IconButton
                     className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedCopies(totalCopies - 1)}
-                    disabled={totalCopies <= 1 || isApplying}
+                    disabled={totalCopies <= 1 || panelDisabled}
                     title="Decrease total copies"
                   >
                     <Minus className="h-3.5 w-3.5" />
@@ -224,18 +257,18 @@ export function DuplicatePanel({
                     onChange={setClampedCopies}
                     showStepper={false}
                     onWheel={(e) => {
-                      if (isApplying) return;
+                      if (panelDisabled) return;
                       e.preventDefault();
                       setClampedCopies(totalCopies + (e.deltaY < 0 ? 1 : -1));
                     }}
-                    disabled={isApplying}
+                    disabled={panelDisabled}
                     className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
                   />
 
                   <IconButton
                     className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedCopies(totalCopies + 1)}
-                    disabled={totalCopies >= 128 || isApplying}
+                    disabled={totalCopies >= 128 || panelDisabled}
                     title="Increase total copies"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -243,13 +276,13 @@ export function DuplicatePanel({
                 </div>
               </div>
 
-              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
                 <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
                 <div className="mt-1 flex min-w-0 items-center gap-1">
                   <IconButton
                     className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedSpacing(spacingMm - 0.1)}
-                    disabled={spacingMm <= 0 || isApplying}
+                    disabled={spacingMm <= 0 || panelDisabled}
                     title="Decrease spacing"
                   >
                     <Minus className="h-3.5 w-3.5" />
@@ -260,18 +293,18 @@ export function DuplicatePanel({
                     onChange={setClampedSpacing}
                     showStepper={false}
                     onWheel={(e) => {
-                      if (isApplying) return;
+                      if (panelDisabled) return;
                       e.preventDefault();
                       setClampedSpacing(spacingMm + (e.deltaY < 0 ? 0.1 : -0.1));
                     }}
-                    disabled={isApplying}
+                    disabled={panelDisabled}
                     className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
                   />
 
                   <IconButton
                     className="!h-8 !w-8 shrink-0 !p-0"
                     onClick={() => setClampedSpacing(spacingMm + 0.1)}
-                    disabled={spacingMm >= 5 || isApplying}
+                    disabled={spacingMm >= 5 || panelDisabled}
                     title="Increase spacing"
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -280,7 +313,7 @@ export function DuplicatePanel({
               </div>
             </>
           ) : (
-            <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="rounded-md border p-2" style={panelDisabled ? panelCardStyleDisabled : panelCardStyle}>
               <div className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center text-[10px] uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>
                 <span />
                 <span className="text-center">Count</span>
@@ -299,21 +332,21 @@ export function DuplicatePanel({
                     onChange={(next) => setClampedArrayCount(onCountChange, next)}
                     min={1}
                     max={32}
-                    disabled={isApplying}
+                    disabled={panelDisabled}
                   />
                   <MiniStepperField
                     value={gapValue}
                     onChange={(next) => setClampedArrayGap(onGapChange, next)}
                     min={0}
                     max={120}
-                    disabled={isApplying}
+                    disabled={panelDisabled}
                   />
                 </div>
               ))}
             </div>
           )}
 
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={panelDisabled ? accentCardStyleDisabled : accentCardStyle}>
             <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total copies</label>
             <div className="mt-0.5 text-center text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
               {displayTotalCopies}
@@ -322,10 +355,11 @@ export function DuplicatePanel({
 
           <Button
             onClick={onConfirm}
-            variant="accent"
+            variant={isConfirmDuplicateDisabled ? 'secondary' : 'primary'}
             size="sm"
             className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-            disabled={!hasSelection || previewCount <= 0 || isApplying}
+            disabled={isConfirmDuplicateDisabled}
+            style={isConfirmDuplicateDisabled ? disabledButtonStyle : undefined}
             title={!hasSelection ? 'Select a model to duplicate' : 'Generate duplicates from preview'}
           >
             {isApplying ? (
@@ -340,10 +374,11 @@ export function DuplicatePanel({
 
           <Button
             onClick={onFillPlate}
-            variant="secondary"
+            variant={isFillPlateDisabled ? 'secondary' : 'accent'}
             size="sm"
             className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-            disabled={!hasSelection || isApplying || layoutMode !== 'auto'}
+            disabled={isFillPlateDisabled}
+            style={isFillPlateDisabled ? disabledButtonStyle : undefined}
             title={
               layoutMode !== 'auto'
                 ? 'Fill Plate is available in Auto layout mode'
