@@ -1412,8 +1412,8 @@ export function SceneCanvas({
 
   React.useEffect(() => {
     const prevMode = prevTransformModeRef.current;
-    const prevIsPresentationMode = prevMode === 'arrange' || prevMode === 'duplicate';
-    const nextIsPresentationMode = transformMode === 'arrange' || transformMode === 'duplicate';
+    const prevIsPresentationMode = prevMode === 'arrange';
+    const nextIsPresentationMode = transformMode === 'arrange';
     const enteringArrangeOrDuplicate = mode === 'prepare' && nextIsPresentationMode && !prevIsPresentationMode;
     const leavingArrangeOrDuplicate = mode === 'prepare' && prevIsPresentationMode && !nextIsPresentationMode;
 

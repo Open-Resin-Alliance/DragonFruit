@@ -1964,7 +1964,7 @@ export default function Home() {
   }, [arrangeSpacingMm, scene]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'duplicate') {
+    if (scene.mode !== 'prepare' || transformMgr.transformMode !== 'arrange') {
       setDuplicatePreviewTransforms([]);
       setDuplicateSourcePreviewTransform(null);
       return;
@@ -2458,77 +2458,77 @@ export default function Home() {
             )}
 
             {scene.geom && transformMgr.transformMode === 'arrange' && (
-              <ArrangePanel
-                key="prepare-arrange-panel"
-                precisionMode={arrangePrecisionMode}
-                onPrecisionModeChange={setArrangePrecisionMode}
-                layoutMode={arrangeLayoutMode}
-                onLayoutModeChange={setArrangeLayoutMode}
-                spacingMm={arrangeSpacingMm}
-                onSpacingMmChange={setArrangeSpacingMm}
-                allowRotateOnZ={arrangeAllowRotateOnZ}
-                onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
-                arrayCountX={arrangeArrayCountX}
-                arrayCountY={arrangeArrayCountY}
-                arrayCountZ={arrangeArrayCountZ}
-                onArrayCountXChange={setArrangeArrayCountX}
-                onArrayCountYChange={setArrangeArrayCountY}
-                onArrayCountZChange={setArrangeArrayCountZ}
-                arrayGapX={arrangeArrayGapX}
-                arrayGapY={arrangeArrayGapY}
-                arrayGapZ={arrangeArrayGapZ}
-                onArrayGapXChange={setArrangeArrayGapX}
-                onArrayGapYChange={setArrangeArrayGapY}
-                onArrayGapZChange={setArrangeArrayGapZ}
-                anchorMode={arrangeAnchorMode}
-                onAnchorModeChange={setArrangeAnchorMode}
-                onApplyAll={() => {
-                  void (arrangeLayoutMode === 'array'
-                    ? handleManualArrayArrangeModels('all')
-                    : (arrangePrecisionMode === 'high_precision'
-                      ? handleHighPrecisionArrangeModels('all')
-                      : handleAutoArrangeModels('all')));
-                }}
-                onApplySelected={() => {
-                  void (arrangeLayoutMode === 'array'
-                    ? handleManualArrayArrangeModels('selected')
-                    : (arrangePrecisionMode === 'high_precision'
-                      ? handleHighPrecisionArrangeModels('selected')
-                      : handleAutoArrangeModels('selected')));
-                }}
-                modelCount={scene.models.filter((m) => m.visible).length}
-                selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
-                isApplying={isAutoArranging}
-              />
-            )}
+              <>
+                <ArrangePanel
+                  key="prepare-arrange-panel"
+                  precisionMode={arrangePrecisionMode}
+                  onPrecisionModeChange={setArrangePrecisionMode}
+                  layoutMode={arrangeLayoutMode}
+                  onLayoutModeChange={setArrangeLayoutMode}
+                  spacingMm={arrangeSpacingMm}
+                  onSpacingMmChange={setArrangeSpacingMm}
+                  allowRotateOnZ={arrangeAllowRotateOnZ}
+                  onAllowRotateOnZChange={setArrangeAllowRotateOnZ}
+                  arrayCountX={arrangeArrayCountX}
+                  arrayCountY={arrangeArrayCountY}
+                  arrayCountZ={arrangeArrayCountZ}
+                  onArrayCountXChange={setArrangeArrayCountX}
+                  onArrayCountYChange={setArrangeArrayCountY}
+                  onArrayCountZChange={setArrangeArrayCountZ}
+                  arrayGapX={arrangeArrayGapX}
+                  arrayGapY={arrangeArrayGapY}
+                  arrayGapZ={arrangeArrayGapZ}
+                  onArrayGapXChange={setArrangeArrayGapX}
+                  onArrayGapYChange={setArrangeArrayGapY}
+                  onArrayGapZChange={setArrangeArrayGapZ}
+                  anchorMode={arrangeAnchorMode}
+                  onAnchorModeChange={setArrangeAnchorMode}
+                  onApplyAll={() => {
+                    void (arrangeLayoutMode === 'array'
+                      ? handleManualArrayArrangeModels('all')
+                      : (arrangePrecisionMode === 'high_precision'
+                        ? handleHighPrecisionArrangeModels('all')
+                        : handleAutoArrangeModels('all')));
+                  }}
+                  onApplySelected={() => {
+                    void (arrangeLayoutMode === 'array'
+                      ? handleManualArrayArrangeModels('selected')
+                      : (arrangePrecisionMode === 'high_precision'
+                        ? handleHighPrecisionArrangeModels('selected')
+                        : handleAutoArrangeModels('selected')));
+                  }}
+                  modelCount={scene.models.filter((m) => m.visible).length}
+                  selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
+                  isApplying={isAutoArranging}
+                />
 
-            {scene.geom && transformMgr.transformMode === 'duplicate' && (
-              <DuplicatePanel
-                key="prepare-duplicate-panel"
-                activeModelName={scene.activeModel?.name ?? null}
-                layoutMode={duplicateLayoutMode}
-                onLayoutModeChange={setDuplicateLayoutMode}
-                totalCopies={duplicateTotalCopies}
-                onTotalCopiesChange={setDuplicateTotalCopies}
-                spacingMm={duplicateSpacingMm}
-                onSpacingMmChange={setDuplicateSpacingMm}
-                arrayCountX={duplicateArrayCountX}
-                arrayCountY={duplicateArrayCountY}
-                arrayCountZ={duplicateArrayCountZ}
-                onArrayCountXChange={setDuplicateArrayCountX}
-                onArrayCountYChange={setDuplicateArrayCountY}
-                onArrayCountZChange={setDuplicateArrayCountZ}
-                arrayGapX={duplicateArrayGapX}
-                arrayGapY={duplicateArrayGapY}
-                arrayGapZ={duplicateArrayGapZ}
-                onArrayGapXChange={setDuplicateArrayGapX}
-                onArrayGapYChange={setDuplicateArrayGapY}
-                onArrayGapZChange={setDuplicateArrayGapZ}
-                onConfirm={handleConfirmDuplicate}
-                onFillPlate={handleFillPlateDuplicate}
-                previewCount={duplicatePreviewTransforms.length}
-                isApplying={isDuplicating}
-              />
+                <DuplicatePanel
+                  key="prepare-duplicate-panel"
+                  activeModelName={scene.activeModel?.name ?? null}
+                  layoutMode={duplicateLayoutMode}
+                  onLayoutModeChange={setDuplicateLayoutMode}
+                  totalCopies={duplicateTotalCopies}
+                  onTotalCopiesChange={setDuplicateTotalCopies}
+                  spacingMm={duplicateSpacingMm}
+                  onSpacingMmChange={setDuplicateSpacingMm}
+                  arrayCountX={duplicateArrayCountX}
+                  arrayCountY={duplicateArrayCountY}
+                  arrayCountZ={duplicateArrayCountZ}
+                  onArrayCountXChange={setDuplicateArrayCountX}
+                  onArrayCountYChange={setDuplicateArrayCountY}
+                  onArrayCountZChange={setDuplicateArrayCountZ}
+                  arrayGapX={duplicateArrayGapX}
+                  arrayGapY={duplicateArrayGapY}
+                  arrayGapZ={duplicateArrayGapZ}
+                  onArrayGapXChange={setDuplicateArrayGapX}
+                  onArrayGapYChange={setDuplicateArrayGapY}
+                  onArrayGapZChange={setDuplicateArrayGapZ}
+                  onConfirm={handleConfirmDuplicate}
+                  onFillPlate={handleFillPlateDuplicate}
+                  previewCount={duplicatePreviewTransforms.length}
+                  isApplying={isDuplicating}
+                />
+              </>
             )}
           </>
         ) : scene.mode === 'analysis' ? (
@@ -2804,7 +2804,7 @@ export default function Home() {
             duplicatePreviewModel={
               isDuplicating
                 ? duplicateApplySourceModel
-                : (transformMgr.transformMode === 'duplicate' ? scene.activeModel : null)
+                : (transformMgr.transformMode === 'arrange' ? scene.activeModel : null)
             }
             duplicatePreviewTransforms={duplicatePreviewTransforms}
             duplicateActivePreviewTransform={

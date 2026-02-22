@@ -72,7 +72,7 @@ export function usePrepareTransformHotkeys({
 
       if (matchesConfiguredHotkeyDown(event, { key: duplicateKey.key, modifier: duplicateKey.modifier })) {
         event.preventDefault();
-        setTransformMode('duplicate');
+        setTransformMode('arrange');
       }
     };
 
