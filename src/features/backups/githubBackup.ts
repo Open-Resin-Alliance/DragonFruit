@@ -10,18 +10,18 @@ export const BACKUP_HISTORY_DIR = 'dragonfruit-backups/history';
 export const BACKUP_README_PATH = 'README.md';
 
 const BACKUP_README_MARKER = '<!-- dragonfruit-backups-readme:v1 -->';
-const BACKUP_README_CONTENT = `# Dragonfruit Backups Repository
+const BACKUP_README_CONTENT = `# DragonFruit Backups Repository
 
 ${BACKUP_README_MARKER}
 
 > [!WARNING]
 > **Do not manually edit or delete files in this repository unless you fully understand the recovery implications.**
 >
-> Dragonfruit uses this repository as machine-managed backup storage. Manual edits can corrupt backup history or cause restore/sync conflicts.
+> DragonFruit uses this repository as machine-managed backup storage. Manual edits can corrupt backup history or cause restore/sync conflicts.
 
 ## What this repository is
 
-This private repository stores backup snapshots created by Dragonfruit for settings/profile recovery and cross-device sync.
+This private repository stores backup snapshots created by DragonFruit for settings/profile recovery and cross-device sync.
 
 ## What you should not do
 
@@ -31,19 +31,19 @@ This private repository stores backup snapshots created by Dragonfruit for setti
 
 ## Consequences of deletion or destructive changes
 
-- If this repository is deleted, your remote Dragonfruit backups are permanently lost unless you have another copy.
-- If backup files are manually modified, Dragonfruit may detect conflicts, fail sync, or restore malformed data.
+- If this repository is deleted, your remote DragonFruit backups are permanently lost unless you have another copy.
+- If backup files are manually modified, DragonFruit may detect conflicts, fail sync, or restore malformed data.
 - If commit history is rewritten, expected backup continuity is broken and conflict resolution may become unreliable.
 
 ## Safe actions
 
 - Keep this repository private.
-- Let Dragonfruit manage file updates.
-- If something looks wrong, use Dragonfruit's backup conflict tools instead of editing files manually.
+- Let DragonFruit manage file updates.
+- If something looks wrong, use DragonFruit's backup conflict tools instead of editing files manually.
 
 ## Need to reset backups intentionally?
 
-If you intentionally want a clean slate, do it from Dragonfruit controls (or by creating a fresh backup repository and reconnecting) rather than editing backup files directly.
+If you intentionally want a clean slate, do it from DragonFruit controls (or by creating a fresh backup repository and reconnecting) rather than editing backup files directly.
 `;
 
 const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
@@ -323,7 +323,7 @@ async function githubRequest<T>(token: string, path: string, init?: RequestInit)
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
-      'User-Agent': 'Dragonfruit-Backups',
+      'User-Agent': 'DragonFruit-Backups',
       'X-GitHub-Api-Version': '2022-11-28',
       ...(init?.headers ?? {}),
     },
@@ -347,7 +347,7 @@ export async function getRepoIfExists(token: string, owner: string, repo: string
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
-      'User-Agent': 'Dragonfruit-Backups',
+      'User-Agent': 'DragonFruit-Backups',
       'X-GitHub-Api-Version': '2022-11-28',
     },
     cache: 'no-store',
@@ -399,7 +399,7 @@ export async function ensurePrivateBackupRepo(token: string, repoName = BACKUP_R
         name: repoName,
         private: true,
         auto_init: true,
-        description: 'Encrypted-ish Dragonfruit settings and profile backups.',
+        description: 'Encrypted-ish DragonFruit settings and profile backups.',
       }),
     });
   }
@@ -418,7 +418,7 @@ async function getRepositoryTextFile(args: {
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${args.token}`,
-      'User-Agent': 'Dragonfruit-Backups',
+      'User-Agent': 'DragonFruit-Backups',
       'X-GitHub-Api-Version': '2022-11-28',
     },
     cache: 'no-store',
@@ -453,7 +453,7 @@ async function ensureBackupRepositoryReadme(token: string, owner: string, repo: 
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      message: 'docs: add Dragonfruit backup repository warning README',
+      message: 'docs: add DragonFruit backup repository warning README',
       content: Buffer.from(BACKUP_README_CONTENT, 'utf8').toString('base64'),
       sha: existing.sha ?? undefined,
     }),
@@ -503,7 +503,7 @@ export async function listBackupHistory(args: {
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${args.token}`,
-      'User-Agent': 'Dragonfruit-Backups',
+      'User-Agent': 'DragonFruit-Backups',
       'X-GitHub-Api-Version': '2022-11-28',
     },
     cache: 'no-store',
@@ -568,7 +568,7 @@ export async function getBackupDocument(token: string, owner: string, repo: stri
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
-      'User-Agent': 'Dragonfruit-Backups',
+      'User-Agent': 'DragonFruit-Backups',
       'X-GitHub-Api-Version': '2022-11-28',
     },
     cache: 'no-store',

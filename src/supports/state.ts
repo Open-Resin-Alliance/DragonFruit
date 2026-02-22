@@ -995,7 +995,7 @@ export function resetStore() {
 }
 
 /**
- * Loads support data from the Dragonfruit Interchange Format (e.g. from Lychee conversion).
+ * Loads support data from the DragonFruit Interchange Format (e.g. from Lychee conversion).
  */
 export function loadFromLychee(data: DragonfruitImportFormat) {
     // Reset first

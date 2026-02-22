@@ -106,7 +106,7 @@ export function CameraSettingsTab({
                 Selection highlight mode
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                In Spotlight mode, Dragonfruit combines spotlight and mesh tint together.
+                In Spotlight mode, DragonFruit combines spotlight and mesh tint together.
               </div>
             </div>
             <SelectionHighlightDropdown

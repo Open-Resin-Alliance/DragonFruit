@@ -845,7 +845,7 @@ export function BackupsSettingsTab() {
   const copyOAuthEnvTemplate = React.useCallback(async () => {
     const secret = oauthCookieSecretDraft.trim() || '<generate_a_64_char_secret>';
     const text = [
-      '# Dragonfruit GitHub Backup OAuth',
+      '# DragonFruit GitHub Backup OAuth',
       'GITHUB_OAUTH_CLIENT_ID=<your_github_oauth_client_id>',
       'GITHUB_OAUTH_CLIENT_SECRET=<your_github_oauth_client_secret>',
       `GITHUB_OAUTH_REDIRECT_URI=${oauthCallbackUrl}`,
@@ -915,7 +915,7 @@ export function BackupsSettingsTab() {
                     style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-strong)' }}
                   >
                     <p>
-                      Backups are stored in your own private GitHub repository. Dragonfruit does not run a central backup server and does not keep a copy of your backup data outside your repository.
+                      Backups are stored in your own private GitHub repository. DragonFruit does not run a central backup server and does not keep a copy of your backup data outside your repository.
                     </p>
                     <p className="mt-2" style={{ color: 'var(--text-muted)' }}>
                       You can disconnect GitHub at any time. OAuth access is used only for repository checks and syncing backup files.
@@ -924,7 +924,7 @@ export function BackupsSettingsTab() {
                 </div>
               </div>
               <p className="mt-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                Dragonfruit stores backups in your own private GitHub repository. We intentionally avoid ORA-hosted cloud storage and we do not operate a Dragonfruit backup server.
+                DragonFruit stores backups in your own private GitHub repository. We intentionally avoid ORA-hosted cloud storage and we do not operate a DragonFruit backup server.
               </p>
             </div>
           </div>
@@ -934,7 +934,7 @@ export function BackupsSettingsTab() {
             <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Onboarding</div>
             <h4 className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Set up private backups</h4>
             <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-              Dragonfruit handles setup automatically and uses only your own private GitHub repository.
+              DragonFruit handles setup automatically and uses only your own private GitHub repository.
             </p>
 
             <div className="mt-3 rounded-md border p-3 text-center" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
@@ -945,7 +945,7 @@ export function BackupsSettingsTab() {
                   </h5>
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                     {backupsConfigured
-                      ? 'Authorize Dragonfruit so backups can be saved into your private repository.'
+                      ? 'Authorize DragonFruit so backups can be saved into your private repository.'
                       : 'This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work.'}
                   </p>
                   <div className="mt-2.5 flex items-center justify-center gap-2">
@@ -1095,7 +1095,7 @@ export function BackupsSettingsTab() {
             <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Backup Management</h4>
           </div>
           <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-            If GitHub has a newer backup, Dragonfruit pauses sync and asks whether to restore remote or force-push local.
+            If GitHub has a newer backup, DragonFruit pauses sync and asks whether to restore remote or force-push local.
           </p>
 
           <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
@@ -1603,7 +1603,7 @@ export function BackupsSettingsTab() {
                 <li>Set <span style={{ color: 'var(--text-strong)' }}>Homepage URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthHomepageUrl}</span>.</li>
                 <li>Set <span style={{ color: 'var(--text-strong)' }}>Authorization callback URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthCallbackUrl}</span>.</li>
                 <li>Copy the Client ID and Client Secret into your local <span style={{ color: 'var(--text-strong)' }}>.env</span>.</li>
-                <li>Restart Dragonfruit, then click <span style={{ color: 'var(--text-strong)' }}>I configured it</span>.</li>
+                <li>Restart DragonFruit, then click <span style={{ color: 'var(--text-strong)' }}>I configured it</span>.</li>
               </ol>
 
               <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>

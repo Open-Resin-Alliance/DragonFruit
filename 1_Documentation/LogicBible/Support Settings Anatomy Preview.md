@@ -1,10 +1,10 @@
 # Support Settings Anatomy Preview
 
-This page explains the Support Settings “Anatomy Preview” panel: what it’s for in Dragonfruit, the UX contract it supports, and how it’s wired internally so you can safely extend or refactor it.
+This page explains the Support Settings “Anatomy Preview” panel: what it’s for in DragonFruit, the UX contract it supports, and how it’s wired internally so you can safely extend or refactor it.
 
 ## Context (what this preview is actually for)
 
-Dragonfruit generates and edits **3D printing supports**: small pieces of geometry that connect the model to a base/raft so it can print successfully.
+DragonFruit generates and edits **3D printing supports**: small pieces of geometry that connect the model to a base/raft so it can print successfully.
 
 The **Support Settings** panel is where you tune the parameters that control the shape and behavior of those supports. Examples include:
 
@@ -21,7 +21,7 @@ The **Anatomy Preview** solves that by rendering a small, canonical “preview s
 ## Purpose
 
 - **Explain what each setting controls in concrete geometry terms**
-  - When you focus a specific Support Settings input, the preview highlights the *support part* that input controls (tip/contact vs. cone vs. shaft/joints vs. roots/base vs. raft wall/base).
+  - When you focus a specific Support Settings input, the preview highlights the _support part_ that input controls (tip/contact vs. cone vs. shaft/joints vs. roots/base vs. raft wall/base).
 - **Make tuning faster and less error-prone**
   - While you type/change a value, the preview updates immediately so you can see the effect without having to hunt for a real support in the main scene.
 - **Make the settings panel self-explanatory**
@@ -123,9 +123,9 @@ Important behavior detail:
 
 Camera focus is selected in two steps:
 
-1) `AnatomyPreviewCameraLogic.ts` selects the correct preview type based on the active kind (example: `trunk` vs `raft`).
+1. `AnatomyPreviewCameraLogic.ts` selects the correct preview type based on the active kind (example: `trunk` vs `raft`).
 
-2) The selected preview type’s `camera.ts` returns the focus state for the active setting key.
+2. The selected preview type’s `camera.ts` returns the focus state for the active setting key.
 
 - When `activeSettingKey` changes, the preview begins animating camera values toward the selected pose.
 - When there is no focused key, it uses the kind’s HOME pose (`getTargetFocusState(activeKind, null)`).
@@ -139,7 +139,7 @@ Camera focus is selected in two steps:
 Notes:
 
 - The animator can be interrupted if the user is interacting with the preview camera (when interaction is enabled).
-- The code includes *dynamic zoom behavior* for specific keys:
+- The code includes _dynamic zoom behavior_ for specific keys:
   - `tip.contactDiameterMm` dynamically changes zoom based on the current diameter.
     - If cone-angle control shifts the preview tip horizontally, contact diameter focus also adjusts X framing so the tip stays in view.
   - `tip.lengthMm` dynamically adjusts zoom and target to keep the cone framed as length changes.

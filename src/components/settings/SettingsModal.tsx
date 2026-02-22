@@ -470,7 +470,7 @@ export function SettingsModal({
             <div>
               <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>Settings</h2>
               <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Customize Dragonfruit behavior, visuals, and controls.
+                Customize DragonFruit behavior, visuals, and controls.
               </p>
             </div>
           </div>
@@ -695,11 +695,11 @@ export function SettingsModal({
                       <div className="min-w-0 flex-1">
                         <img
                           src="/textonlyupdate.png"
-                          alt="Dragonfruit"
+                          alt="DragonFruit"
                           className="h-8 w-auto object-contain"
                         />
                         <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                          Dragonfruit is an open-source slicer for resin 3D printing.
+                          DragonFruit is an open-source slicer for resin 3D printing.
                         </p>
                       </div>
                     </div>
@@ -844,7 +844,7 @@ export function SettingsModal({
 
                   <div className="rounded-lg border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 25%)' }}>
                     <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      Dragonfruit is actively evolving. Expect rapid iteration and workflow improvements.
+                      DragonFruit is actively evolving. Expect rapid iteration and workflow improvements.
                     </div>
                   </div>
 
