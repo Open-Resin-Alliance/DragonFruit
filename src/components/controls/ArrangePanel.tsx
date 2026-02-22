@@ -177,52 +177,6 @@ export function ArrangePanel({
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange mode</div>
-            <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-                onClick={() => onPrecisionModeChange('standard')}
-                disabled={isApplying}
-                style={precisionMode === 'standard'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
-                title="Current arrange algorithm"
-              >
-                Standard
-              </button>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
-                onClick={() => onPrecisionModeChange('high_precision')}
-                disabled={isApplying}
-                style={precisionMode === 'high_precision'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
-                title="Hull-based SAT packing for tighter fit"
-              >
-                High-Precision
-              </button>
-            </div>
-            <div className="mt-1.5 grid grid-cols-2 gap-1 text-[10px] leading-snug" style={{ color: 'var(--text-muted)' }}>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 35%)' }}>
-                Fast rectangle packing
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 35%)' }}>
-                Hull SAT packing (tighter, slower)
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
             <div className="grid grid-cols-2 gap-1">
               <button
@@ -253,10 +207,53 @@ export function ArrangePanel({
                     }
                   : undefined}
               >
-                Array
+                Manual
               </button>
             </div>
           </div>
+
+          {layoutMode === 'auto' && (
+            <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange mode</div>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onPrecisionModeChange('standard')}
+                  disabled={isApplying}
+                  style={precisionMode === 'standard'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+                        color: 'var(--text-strong)',
+                      }
+                    : undefined}
+                  title="Current arrange algorithm"
+                >
+                  Standard
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => {
+                    onPrecisionModeChange('high_precision');
+                    onAllowRotateOnZChange(true);
+                  }}
+                  disabled={isApplying}
+                  style={precisionMode === 'high_precision'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+                        color: 'var(--text-strong)',
+                      }
+                    : undefined}
+                  title="Hull-based SAT packing for tighter fit"
+                >
+                  High-Precision
+                </button>
+              </div>
+            </div>
+          )}
 
           {layoutMode === 'auto' ? (
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -350,12 +347,17 @@ export function ArrangePanel({
               className="w-full rounded-md border px-2 py-2 text-left transition-colors disabled:opacity-60"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
               onClick={() => onAllowRotateOnZChange(!allowRotateOnZ)}
-              disabled={isApplying}
-              title="Allow auto-arrange to rotate models by 90° on Z when beneficial"
+              disabled={isApplying || precisionMode === 'high_precision'}
+              title={precisionMode === 'high_precision'
+                ? 'High-Precision mode requires Z-rotation and keeps it enabled'
+                : 'Allow auto-arrange to rotate models by 90° on Z when beneficial'}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <RotateCw className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+                  <RotateCw
+                    className="h-3.5 w-3.5"
+                    style={{ color: precisionMode === 'high_precision' ? 'var(--text-muted)' : 'var(--accent)' }}
+                  />
                   <span className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Allow Z-rotation</span>
                 </div>
                 <span
@@ -366,7 +368,7 @@ export function ArrangePanel({
                     background: allowRotateOnZ ? 'color-mix(in srgb, var(--accent), transparent 88%)' : 'transparent',
                   }}
                 >
-                  {allowRotateOnZ ? 'ON' : 'OFF'}
+                  {precisionMode === 'high_precision' ? 'ON (Required)' : (allowRotateOnZ ? 'ON' : 'OFF')}
                 </span>
               </div>
             </button>

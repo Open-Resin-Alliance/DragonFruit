@@ -164,6 +164,12 @@ export default function Home() {
     localMinY: number;
     localMaxY: number;
   }>>(new Map());
+
+  React.useEffect(() => {
+    if (arrangePrecisionMode !== 'high_precision') return;
+    if (arrangeAllowRotateOnZ) return;
+    setArrangeAllowRotateOnZ(true);
+  }, [arrangePrecisionMode, arrangeAllowRotateOnZ]);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
