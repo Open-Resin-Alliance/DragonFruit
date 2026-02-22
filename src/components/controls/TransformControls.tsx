@@ -8,16 +8,23 @@ interface SectionHeaderProps {
   title: string;
   expanded: boolean;
   onToggle: () => void;
+  accentColor?: string;
 }
 
-function SectionHeader({ title, expanded, onToggle }: SectionHeaderProps) {
+function SectionHeader({ title, expanded, onToggle, accentColor }: SectionHeaderProps) {
   return (
     <button
       onClick={onToggle}
-      className="w-full flex items-center justify-between py-1 text-sm font-semibold transition-colors"
+      className="flex w-full items-center justify-between py-0.5 text-xs font-semibold uppercase tracking-wide transition-colors"
       style={{ color: 'var(--text-strong)' }}
     >
-      <span>{title}</span>
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full"
+          style={{ background: accentColor ?? 'var(--accent)' }}
+        />
+        {title}
+      </span>
       {expanded ? (
         <ChevronDown className="w-4 h-4" style={{ color: 'var(--text-muted)' }} />
       ) : (
@@ -84,7 +91,48 @@ export function TransformControls({
   const [uniformScaling, setUniformScaling] = useState(true);
   const [scaleUnit, setScaleUnit] = useState<'mm' | '%'>('%');
 
-  const compactButtonClass = 'ui-button ui-button-secondary px-2.5 py-2 text-sm min-h-10';
+  const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
+  const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-center tabular-nums no-spinners';
+  const configButtonClass = 'ui-button ui-button-secondary !h-8 px-2 text-xs uppercase tracking-wide';
+
+  const sectionCardStyle: React.CSSProperties = {
+    borderColor: 'var(--border-subtle)',
+    background: 'var(--surface-1)',
+  };
+
+  const moveCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #4f8cff, var(--border-subtle) 78%)',
+    background: 'color-mix(in srgb, #4f8cff, var(--surface-1) 94%)',
+  };
+
+  const rotateCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #8f6cff, var(--border-subtle) 80%)',
+    background: 'color-mix(in srgb, #8f6cff, var(--surface-1) 95%)',
+  };
+
+  const scaleCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, #2eb67d, var(--border-subtle) 80%)',
+    background: 'color-mix(in srgb, #2eb67d, var(--surface-1) 95%)',
+  };
+
+  const outlinedConfigInactiveStyle: React.CSSProperties = {
+    borderColor: 'var(--border-subtle)',
+    background: 'transparent',
+    color: 'var(--text-muted)',
+  };
+
+  const outlinedConfigActiveStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 16%)',
+    background: 'transparent',
+    color: 'var(--text-strong)',
+    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), transparent 72%) inset',
+  };
+
+  const outlinedConfigEmphasisStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 36%)',
+    background: 'transparent',
+    color: 'var(--text-strong)',
+  };
 
   // Conversion helpers
   const toDegrees = (rad: number) => (rad * 180) / Math.PI;
@@ -183,267 +231,221 @@ export function TransformControls({
       />
 
       {expanded ? (
-        <div className="px-2.5 pt-1 pb-2.5 max-h-[calc(100vh-180px)] overflow-y-auto space-y-2">
-      
-      {/* MOVE SECTION */}
-      <div
-        className="rounded-md border p-2.5"
-        style={{
-          background: 'color-mix(in srgb, #4f8cff, var(--surface-1) 91%)',
-          borderColor: 'color-mix(in srgb, #4f8cff, var(--border-subtle) 62%)',
-        }}
-      >
-        <SectionHeader title="Move" expanded={moveExpanded} onToggle={() => setMoveExpanded(!moveExpanded)} />
-        {moveExpanded && (
-          <div className="pt-1.5 space-y-2">
-            {/* XYZ Position Inputs */}
-            <div className="flex gap-1.5">
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#f87171' }}>X</label>
-                <NumberInput
-                  value={parseFloat(position.x.toFixed(2))}
-                  onChange={(val) => handlePositionChange('x', val)}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#4ade80' }}>Y</label>
-                <NumberInput
-                  value={parseFloat(position.y.toFixed(2))}
-                  onChange={(val) => handlePositionChange('y', val)}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#60a5fa' }}>Z</label>
-                <NumberInput
-                  value={parseFloat(position.z.toFixed(2))}
-                  onChange={(val) => handlePositionChange('z', val)}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
-            </div>
+        <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5 max-h-[calc(100vh-180px)] overflow-y-auto">
 
-            {/* Action Buttons */}
-            <div className="grid grid-cols-3 gap-1.5">
-              <button
-                onClick={onCenter}
-                className={compactButtonClass}
-              >
-                Center
-              </button>
-              <button
-                onClick={() => modelBBox && onPlatform(modelBBox)}
-                disabled={!modelBBox}
-                className={`${compactButtonClass} disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                Platform
-              </button>
-              <button
-                onClick={handleArrangeAll}
-                disabled={!modelBBox}
-                className={`${compactButtonClass} disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                Arrange
-              </button>
-            </div>
+          {/* MOVE SECTION */}
+          <div className="rounded-md border p-2" style={moveCardStyle}>
+            <SectionHeader title="Move" expanded={moveExpanded} onToggle={() => setMoveExpanded(!moveExpanded)} accentColor="#4f8cff" />
+            {moveExpanded && (
+              <div className="pt-1.5 space-y-2">
+                <div className="grid grid-cols-3 gap-1 min-w-0">
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
+                    <NumberInput
+                      value={parseFloat(position.x.toFixed(2))}
+                      onChange={(val) => handlePositionChange('x', val)}
+                      className={valueInputClass}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
+                    <NumberInput
+                      value={parseFloat(position.y.toFixed(2))}
+                      onChange={(val) => handlePositionChange('y', val)}
+                      className={valueInputClass}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
+                    <NumberInput
+                      value={parseFloat(position.z.toFixed(2))}
+                      onChange={(val) => handlePositionChange('z', val)}
+                      className={valueInputClass}
+                    />
+                  </div>
+                </div>
 
-            {/* Lift Object Section */}
-            <div className="rounded-md border p-2.5 space-y-2" style={{ background: 'var(--surface-0)', borderColor: 'var(--border-subtle)' }}>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Auto lift</span>
-                <div className="flex gap-1">
+                <div className="grid grid-cols-3 gap-1 min-w-0">
+                  <button onClick={onCenter} className={compactButtonClass}>Center</button>
                   <button
-                    onClick={() => onAutoLiftChange(true)}
-                    className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
-                      autoLift
-                        ? 'ui-button-primary'
-                        : 'ui-button-secondary'
-                    }`}
+                    onClick={() => modelBBox && onPlatform(modelBBox)}
+                    disabled={!modelBBox}
+                    className={`ui-button ui-button-accent !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
-                    on
+                    Platform
                   </button>
                   <button
-                    onClick={() => onAutoLiftChange(false)}
-                    className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
-                      !autoLift
-                        ? 'ui-button-primary'
-                        : 'ui-button-secondary'
-                    }`}
+                    onClick={handleArrangeAll}
+                    disabled={!modelBBox}
+                    className={`ui-button ui-button-primary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
-                    off
+                    Arrange
                   </button>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-[auto_1fr] items-center gap-2">
-                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Distance (mm)</span>
-                <NumberInput
-                  value={liftDistance}
-                  onChange={(val) => onLiftDistanceChange(val)}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
+                <div className="rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Auto lift</span>
+                    <div className="grid grid-cols-2 gap-1">
+                      <button
+                        onClick={() => onAutoLiftChange(true)}
+                        className={configButtonClass}
+                        style={autoLift ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
+                      >
+                        ON
+                      </button>
+                      <button
+                        onClick={() => onAutoLiftChange(false)}
+                        className={configButtonClass}
+                        style={!autoLift ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
+                      >
+                        OFF
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  onClick={onLift}
-                  disabled={!modelBBox}
-                  className="ui-button ui-button-primary px-2.5 py-2 text-sm min-h-10 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Lift
-                </button>
-                <button
-                  onClick={onDrop}
-                  disabled={!modelBBox}
-                  className="ui-button ui-button-secondary px-2.5 py-2 text-sm min-h-10 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Drop
-                </button>
+                  <div className="grid grid-cols-[auto_1fr] items-center gap-2 min-w-0">
+                    <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Distance (mm)</span>
+                    <NumberInput
+                      value={liftDistance}
+                      onChange={(val) => onLiftDistanceChange(val)}
+                      className="ui-input h-8 w-full px-2 text-xs sm:text-sm no-spinners"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      onClick={onLift}
+                      disabled={!modelBBox}
+                      className="ui-button ui-button-primary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Lift
+                    </button>
+                    <button
+                      onClick={onDrop}
+                      disabled={!modelBBox}
+                      className="ui-button ui-button-accent !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Drop
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* ROTATE SECTION */}
-      <div
-        className="rounded-md border p-2.5"
-        style={{
-          background: 'color-mix(in srgb, #8f6cff, var(--surface-1) 91%)',
-          borderColor: 'color-mix(in srgb, #8f6cff, var(--border-subtle) 62%)',
-        }}
-      >
-        <SectionHeader title="Rotate" expanded={rotateExpanded} onToggle={() => setRotateExpanded(!rotateExpanded)} />
-        {rotateExpanded && (
-          <div className="pt-1.5 space-y-2">
-            {/* XYZ Rotation Inputs */}
-            <div className="flex gap-1.5">
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#f87171' }}>X</label>
-                <NumberInput
-                  value={parseFloat(toDegrees(rotation.x).toFixed(2))}
-                  onChange={(val) => handleRotationChange('x', val)}
-                  onBlur={() => onRotationComplete?.()}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#4ade80' }}>Y</label>
-                <NumberInput
-                  value={parseFloat(toDegrees(rotation.y).toFixed(2))}
-                  onChange={(val) => handleRotationChange('y', val)}
-                  onBlur={() => onRotationComplete?.()}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#60a5fa' }}>Z</label>
-                <NumberInput
-                  value={parseFloat(toDegrees(rotation.z).toFixed(2))}
-                  onChange={(val) => handleRotationChange('z', val)}
-                  onBlur={() => onRotationComplete?.()}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
-            </div>
+          {/* ROTATE SECTION */}
+          <div className="rounded-md border p-2" style={rotateCardStyle}>
+            <SectionHeader title="Rotate" expanded={rotateExpanded} onToggle={() => setRotateExpanded(!rotateExpanded)} accentColor="#8f6cff" />
+            {rotateExpanded && (
+              <div className="pt-1.5 space-y-2">
+                <div className="grid grid-cols-3 gap-1 min-w-0">
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
+                    <NumberInput
+                      value={parseFloat(toDegrees(rotation.x).toFixed(2))}
+                      onChange={(val) => handleRotationChange('x', val)}
+                      onBlur={() => onRotationComplete?.()}
+                      className={valueInputClass}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
+                    <NumberInput
+                      value={parseFloat(toDegrees(rotation.y).toFixed(2))}
+                      onChange={(val) => handleRotationChange('y', val)}
+                      onBlur={() => onRotationComplete?.()}
+                      className={valueInputClass}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
+                    <NumberInput
+                      value={parseFloat(toDegrees(rotation.z).toFixed(2))}
+                      onChange={(val) => handleRotationChange('z', val)}
+                      onBlur={() => onRotationComplete?.()}
+                      className={valueInputClass}
+                    />
+                  </div>
+                </div>
 
-            <button
-              onClick={onResetRotation}
-              className="ui-button ui-button-secondary w-full px-2.5 py-2 text-sm min-h-10"
-            >
-              Reset Rotation
-            </button>
+                <button onClick={onResetRotation} className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]">
+                  Reset Rotation
+                </button>
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* SCALE SECTION */}
-      <div
-        className="rounded-md border p-2.5"
-        style={{
-          background: 'color-mix(in srgb, #2eb67d, var(--surface-1) 91%)',
-          borderColor: 'color-mix(in srgb, #2eb67d, var(--border-subtle) 62%)',
-        }}
-      >
-        <SectionHeader title="Scale" expanded={scaleExpanded} onToggle={() => setScaleExpanded(!scaleExpanded)} />
-        {scaleExpanded && (
-          <div className="pt-1.5 space-y-2">
-            {/* Scale Factor Inputs */}
-            <div className="flex gap-1.5">
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#f87171' }}>X</label>
-                <NumberInput
-                  value={parseFloat(getScaleDisplayValue('x').toFixed(2))}
-                  onChange={(val) => handleScaleChange('x', val)}
-                  className="ui-input w-full px-2 py-1.5 text-sm no-spinners"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#4ade80' }}>Y</label>
-                <NumberInput
-                  value={parseFloat(getScaleDisplayValue('y').toFixed(2))}
-                  onChange={(val) => handleScaleChange('y', val)}
-                  disabled={uniformScaling}
-                  className="ui-input w-full px-2 py-1.5 text-sm disabled:opacity-50 no-spinners"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="ui-label mb-1 block" style={{ color: '#60a5fa' }}>Z</label>
-                <NumberInput
-                  value={parseFloat(getScaleDisplayValue('z').toFixed(2))}
-                  onChange={(val) => handleScaleChange('z', val)}
-                  disabled={uniformScaling}
-                  className="ui-input w-full px-2 py-1.5 text-sm disabled:opacity-50 no-spinners"
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  onClick={() => setScaleUnit(scaleUnit === 'mm' ? '%' : 'mm')}
-                  className="ui-button ui-button-secondary px-2.5 py-1.5 text-sm min-h-10 mb-0"
-                >
-                  {scaleUnit}
+          {/* SCALE SECTION */}
+          <div className="rounded-md border p-2" style={scaleCardStyle}>
+            <SectionHeader title="Scale" expanded={scaleExpanded} onToggle={() => setScaleExpanded(!scaleExpanded)} accentColor="#2eb67d" />
+            {scaleExpanded && (
+              <div className="pt-1.5 space-y-2">
+                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_44px] gap-1 min-w-0">
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#f87171' }}>X</label>
+                    <NumberInput
+                      value={parseFloat(getScaleDisplayValue('x').toFixed(2))}
+                      onChange={(val) => handleScaleChange('x', val)}
+                      className={valueInputClass}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#4ade80' }}>Y</label>
+                    <NumberInput
+                      value={parseFloat(getScaleDisplayValue('y').toFixed(2))}
+                      onChange={(val) => handleScaleChange('y', val)}
+                      disabled={uniformScaling}
+                      className={`${valueInputClass} disabled:opacity-50`}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="ui-meta mb-1 block text-center" style={{ color: '#60a5fa' }}>Z</label>
+                    <NumberInput
+                      value={parseFloat(getScaleDisplayValue('z').toFixed(2))}
+                      onChange={(val) => handleScaleChange('z', val)}
+                      disabled={uniformScaling}
+                      className={`${valueInputClass} disabled:opacity-50`}
+                    />
+                  </div>
+                  <div className="flex items-end min-w-0">
+                    <button
+                      onClick={() => setScaleUnit(scaleUnit === 'mm' ? '%' : 'mm')}
+                      className="ui-button ui-button-secondary !h-8 w-full !px-0 text-[10px] sm:text-[11px] tracking-normal inline-flex items-center justify-center leading-none"
+                      style={outlinedConfigEmphasisStyle}
+                    >
+                      {scaleUnit === 'mm' ? 'MM' : '%'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Uniform</span>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      onClick={() => setUniformScaling(true)}
+                      className={configButtonClass}
+                      style={uniformScaling ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
+                    >
+                      ON
+                    </button>
+                    <button
+                      onClick={() => setUniformScaling(false)}
+                      className={configButtonClass}
+                      style={!uniformScaling ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
+                    >
+                      OFF
+                    </button>
+                  </div>
+                </div>
+
+                <button onClick={onResetScale} className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]">
+                  Reset Scale
                 </button>
               </div>
-            </div>
-
-            {/* Uniform Scaling Toggle */}
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Uniform</span>
-              <div className="flex gap-1">
-                <button
-                  onClick={() => setUniformScaling(true)}
-                  className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
-                    uniformScaling
-                      ? 'ui-button-primary'
-                      : 'ui-button-secondary'
-                  }`}
-                >
-                  on
-                </button>
-                <button
-                  onClick={() => setUniformScaling(false)}
-                  className={`ui-button px-2.5 py-1.5 text-sm min-h-9 ${
-                    !uniformScaling
-                      ? 'ui-button-primary'
-                      : 'ui-button-secondary'
-                  }`}
-                >
-                  off
-                </button>
-              </div>
-            </div>
-
-            <button
-              onClick={onResetScale}
-              className="ui-button ui-button-secondary w-full px-2.5 py-2 text-sm min-h-10"
-            >
-              Reset Scale
-            </button>
+            )}
           </div>
-        )}
-      </div>
-      </div>
+        </div>
       ) : null}
     </Card>
   );

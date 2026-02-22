@@ -96,6 +96,22 @@ export function DuplicatePanel({
   const [expanded, setExpanded] = React.useState(true);
   const hasSelection = !!activeModelName;
 
+  const panelCardStyle: React.CSSProperties = {
+    borderColor: 'var(--border-subtle)',
+    background: 'var(--surface-1)',
+  };
+
+  const accentCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 76%)',
+    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)',
+  };
+
+  const activeModeStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+    color: 'var(--text-strong)',
+  };
+
   const sanitizeNumber = React.useCallback((value: number, fallback: number) => {
     return Number.isFinite(value) ? value : fallback;
   }, []);
@@ -162,14 +178,14 @@ export function DuplicatePanel({
 
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={panelCardStyle}>
             <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Selected model</div>
             <div className="mt-0.5 text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
               {activeModelName ?? 'Select a model first'}
             </div>
           </div>
 
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={accentCardStyle}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
             <div className="grid grid-cols-2 gap-1 min-w-0">
               <button
@@ -177,13 +193,7 @@ export function DuplicatePanel({
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={isApplying}
-                style={layoutMode === 'auto'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
+                style={layoutMode === 'auto' ? activeModeStyle : undefined}
               >
                 Auto layout
               </button>
@@ -192,13 +202,7 @@ export function DuplicatePanel({
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={isApplying}
-                style={layoutMode === 'array'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
+                style={layoutMode === 'array' ? activeModeStyle : undefined}
               >
                 Array
               </button>
@@ -207,7 +211,7 @@ export function DuplicatePanel({
 
           {layoutMode === 'auto' ? (
             <>
-              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="rounded-md border p-2" style={panelCardStyle}>
                 <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total copies</label>
                 <div className="mt-1 flex min-w-0 items-center gap-1">
                   <IconButton
@@ -243,7 +247,7 @@ export function DuplicatePanel({
                 </div>
               </div>
 
-              <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="rounded-md border p-2" style={panelCardStyle}>
                 <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
                 <div className="mt-1 flex min-w-0 items-center gap-1">
                   <IconButton
@@ -280,7 +284,7 @@ export function DuplicatePanel({
               </div>
             </>
           ) : (
-            <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="rounded-md border p-2" style={panelCardStyle}>
               <div className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center text-[10px] uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>
                 <span />
                 <span className="text-center">Count</span>
@@ -313,7 +317,7 @@ export function DuplicatePanel({
             </div>
           )}
 
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={accentCardStyle}>
             <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Total copies</label>
             <div className="mt-0.5 text-center text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
               {displayTotalCopies}
@@ -322,7 +326,7 @@ export function DuplicatePanel({
 
           <Button
             onClick={onConfirm}
-            variant="accent"
+            variant="primary"
             size="sm"
             className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
             disabled={!hasSelection || previewCount <= 0 || isApplying}
@@ -340,7 +344,7 @@ export function DuplicatePanel({
 
           <Button
             onClick={onFillPlate}
-            variant="secondary"
+            variant="accent"
             size="sm"
             className="w-full !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
             disabled={!hasSelection || isApplying || layoutMode !== 'auto'}
