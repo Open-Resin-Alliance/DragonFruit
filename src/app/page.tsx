@@ -214,6 +214,8 @@ export default function Home() {
     scale: THREE.Vector3;
   } | null>(null);
   const dragDepthRef = React.useRef(0);
+  const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
 
   React.useEffect(() => {
@@ -221,6 +223,30 @@ export default function Home() {
     if (arrangeAllowRotateOnZ) return;
     setArrangeAllowRotateOnZ(true);
   }, [arrangePrecisionMode, arrangeAllowRotateOnZ]);
+
+  React.useLayoutEffect(() => {
+    const element = modelStatsCardContainerRef.current;
+    if (!element) {
+      setModelStatsBottomClearancePx(220);
+      return;
+    }
+
+    const updateClearance = () => {
+      const rect = element.getBoundingClientRect();
+      const bottomMarginPx = 12; // bottom-3 (aligned with floating panel margin)
+      const safetyGapPx = 14;
+      const measured = Math.ceil(rect.height + bottomMarginPx + safetyGapPx);
+      setModelStatsBottomClearancePx(Math.max(220, measured));
+    };
+
+    updateClearance();
+    const observer = new ResizeObserver(() => {
+      updateClearance();
+    });
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [scene.models.length]);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
@@ -2350,6 +2376,7 @@ export default function Home() {
               onLoadMeshChange={scene.onFileChange}
               onImportSceneChange={scene.onImportLysChange}
               dimmed={showEmptySceneDialog || importOverlayState.active}
+              bottomClearancePx={modelStatsBottomClearancePx}
             />
 
             {debugPrimitivesPanelVisible && (
@@ -2804,15 +2831,21 @@ export default function Home() {
             </>
           )}
 
-          {/* Model Info Overlay Card */}
-          <ModelStatsCard
-            model={scene.models.find(m => m.id === displayActiveModelId) || null}
-            models={scene.models}
-            selectedModelIds={scene.selectedModelIds}
-            inBoundsModelIds={inBoundsModelIds}
-            numLayers={slicing.numLayers}
-            heightMm={slicing.heightMm}
-          />
+          {scene.models.length > 0 && (
+            <div
+              ref={modelStatsCardContainerRef}
+              className="absolute bottom-3 left-3 z-30 pointer-events-auto"
+            >
+              <ModelStatsCard
+                model={scene.models.find((m) => m.id === displayActiveModelId) || null}
+                models={scene.models}
+                selectedModelIds={scene.selectedModelIds}
+                inBoundsModelIds={inBoundsModelIds}
+                numLayers={slicing.numLayers}
+                heightMm={slicing.heightMm}
+              />
+            </div>
+          )}
 
           {showSceneImportOverlay && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-[1px]">
