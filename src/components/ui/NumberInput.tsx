@@ -1,13 +1,43 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 
 interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> {
   value: number;
   onChange: (value: number) => void;
+  showStepper?: boolean;
 }
 
-export function NumberInput({ value, onChange, className, onBlur, ...props }: NumberInputProps) {
+function parseNumericBound(bound: string | number | undefined): number | null {
+  if (typeof bound === 'number' && Number.isFinite(bound)) return bound;
+  if (typeof bound === 'string') {
+    const parsed = Number(bound);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function countStepDecimals(step: number): number {
+  if (!Number.isFinite(step)) return 0;
+  const asString = step.toString();
+  if (asString.includes('e-')) {
+    const exponent = Number(asString.split('e-')[1] ?? '0');
+    return Number.isFinite(exponent) ? exponent : 0;
+  }
+  const decimal = asString.split('.')[1];
+  return decimal ? decimal.length : 0;
+}
+
+export function NumberInput({ value, onChange, className, onBlur, showStepper = true, ...props }: NumberInputProps) {
   const safeValue = typeof value === 'number' && Number.isFinite(value) ? value : 0;
   const formatValue = React.useCallback((n: number) => Number(n.toFixed(2)).toString(), []);
+  const minBound = parseNumericBound(props.min);
+  const maxBound = parseNumericBound(props.max);
+  const stepSize = (() => {
+    const raw = typeof props.step === 'number' ? props.step : Number(props.step);
+    return Number.isFinite(raw) && raw > 0 ? raw : 1;
+  })();
+  const stepPrecision = Math.min(6, countStepDecimals(stepSize));
+
   // Current string in the input
   const [displayValue, setDisplayValue] = useState(formatValue(safeValue));
   const isEditing = useRef(false);
@@ -68,15 +98,74 @@ export function NumberInput({ value, onChange, className, onBlur, ...props }: Nu
     if (props.onFocus) props.onFocus(e);
   };
 
+  const applyStepDelta = React.useCallback((direction: 1 | -1) => {
+    const parsedCurrent = Number.parseFloat(displayValue);
+    const currentValue = Number.isFinite(parsedCurrent) ? parsedCurrent : safeValue;
+    let next = currentValue + (stepSize * direction);
+
+    if (minBound != null) next = Math.max(minBound, next);
+    if (maxBound != null) next = Math.min(maxBound, next);
+
+    const normalized = Number(next.toFixed(stepPrecision));
+    setDisplayValue(formatValue(normalized));
+    onChange(normalized);
+  }, [displayValue, formatValue, maxBound, minBound, onChange, safeValue, stepPrecision, stepSize]);
+
+  const parsedCurrent = Number.parseFloat(displayValue);
+  const currentValue = Number.isFinite(parsedCurrent) ? parsedCurrent : safeValue;
+  const disableIncrement = props.disabled || (maxBound != null && currentValue >= maxBound);
+  const disableDecrement = props.disabled || (minBound != null && currentValue <= minBound);
+
+  if (!showStepper) {
+    return (
+      <input
+        {...props}
+        type="text"
+        value={displayValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onFocus={handleFocus}
+        className={className}
+      />
+    );
+  }
+
   return (
-    <input
-      {...props}
-      type="text" // Use text to allow full control over input (like '0.', '', '-')
-      value={displayValue}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      onFocus={handleFocus}
-      className={className}
-    />
+    <div className="relative min-w-0">
+      <input
+        {...props}
+        type="text" // Use text to allow full control over input (like '0.', '', '-')
+        value={displayValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onFocus={handleFocus}
+        className={className}
+      />
+
+      {showStepper && (
+        <div className="absolute inset-y-0 right-0.5 flex w-4 flex-col items-center justify-center gap-0.5">
+          <button
+            type="button"
+            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
+            onClick={() => applyStepDelta(1)}
+            disabled={Boolean(disableIncrement)}
+            tabIndex={-1}
+            aria-label="Increase value"
+          >
+            <ChevronUp className="h-2.5 w-2.5" />
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
+            onClick={() => applyStepDelta(-1)}
+            disabled={Boolean(disableDecrement)}
+            tabIndex={-1}
+            aria-label="Decrease value"
+          >
+            <ChevronDown className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

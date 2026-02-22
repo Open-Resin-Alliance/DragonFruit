@@ -21,7 +21,7 @@ export type NanoDlpPrimaryEditField = {
 };
 
 /**
- * Material-process values consumed by Dragonfruit material/profile sync flows.
+ * Material-process values consumed by DragonFruit material/profile sync flows.
  */
 export type NanoDlpMaterialProcessValues = {
   layerHeightMm?: number;

@@ -1793,7 +1793,7 @@ export function useSceneCollectionManager() {
       const text = await file.text();
       const json = JSON.parse(text);
 
-      // Determine if it's raw Lychee (has 'supports') or pre-converted Dragonfruit (has 'trunks')
+      // Determine if it's raw Lychee (has 'supports') or pre-converted DragonFruit (has 'trunks')
       // But here we assume raw Lychee as per the goal.
       // LysConverter.convert handles the Raw Lychee structure.
       // Dynamic import to avoid circular deps if any (though usually fine here)

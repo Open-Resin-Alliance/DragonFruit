@@ -1,5 +1,6 @@
 import React from 'react';
 import type { IslandVolumeAnalysisState } from '../useIslandVolumeAnalysis';
+import { NumberInput } from '@/components/ui/NumberInput';
 
 interface Props {
     state: IslandVolumeAnalysisState;
@@ -29,15 +30,14 @@ export function IslandVolumeAnalysisCard({ state }: Props) {
 
                 <div className="flex items-center gap-2 mb-2">
                     <label className="text-xs text-neutral-400">Voxel Size (mm):</label>
-                    <input
-                        type="number"
+                    <NumberInput
                         step="0.1"
                         min="0.1"
                         max="10.0"
                         value={state.voxelSize}
-                        onChange={(e) => state.setVoxelSize(parseFloat(e.target.value))}
+                        onChange={(next) => state.setVoxelSize(next)}
                         disabled={steps[1] === 'running' || steps[1] === 'complete'}
-                        className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-xs text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className="w-16 bg-neutral-900 border border-neutral-700 rounded pl-1.5 pr-5 py-0.5 text-xs text-right"
                     />
                 </div>
 

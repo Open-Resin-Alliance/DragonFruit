@@ -213,7 +213,7 @@ export function DiagnosticsModal({
           <div>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>Diagnostics</h2>
             <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Runtime telemetry for Dragonfruit (toggle with Ctrl+Shift+D)
+              Runtime telemetry for DragonFruit (toggle with Ctrl+Shift+D)
             </p>
           </div>
           <button

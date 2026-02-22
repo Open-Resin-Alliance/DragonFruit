@@ -26,7 +26,7 @@ function firstMetaNumericValue(meta: Record<string, unknown>, keys: string[]): n
 }
 
 /**
- * Extract Dragonfruit material-process values from raw NanoDLP profile metadata.
+ * Extract DragonFruit material-process values from raw NanoDLP profile metadata.
  *
  * Handles key aliases and converts layer height from microns to mm when needed.
  */

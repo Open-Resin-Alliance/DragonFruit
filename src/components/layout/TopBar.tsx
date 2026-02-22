@@ -243,7 +243,7 @@ export function TopBar({
       <div className="flex w-[280px] items-center gap-2.5 pl-2 pr-4 py-1.5">
         <img
           src="/textonlyupdate.png"
-          alt="Dragonfruit Slicer"
+          alt="DragonFruit Slicer"
           className="h-8 w-auto object-contain translate-y-px"
         />
       </div>

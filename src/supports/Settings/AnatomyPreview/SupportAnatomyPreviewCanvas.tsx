@@ -18,6 +18,7 @@ import { getRaftSettings, subscribeToRaftStore } from '../../Rafts/Crenelated/Ra
 import { resolveConeAxisPolicy } from '@/supports/PlacementLogic/ConeAxisPolicy';
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { SupportTipProfile } from '@/supports/SupportPrimitives/ContactCone/types';
+import { NumberInput } from '@/components/ui/NumberInput';
 
 // Define the shape of our captured config
 interface CapturedConfig {
@@ -119,6 +120,11 @@ function TunerControl({
         else setLocalVal(value.toString());
     };
 
+    const numericLocalValue = React.useMemo(() => {
+        const parsed = parseFloat(localVal);
+        return Number.isFinite(parsed) ? parsed : value;
+    }, [localVal, value]);
+
     return (
         <div className={`flex items-center gap-2 text-xs ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
             {label && <span className="opacity-70 w-16 text-right whitespace-nowrap flex-shrink-0">{label}:</span>}
@@ -149,14 +155,16 @@ function TunerControl({
             />
 
             {/* Number Input */}
-            <input
-                type="number"
+            <NumberInput
                 step={step}
-                className="bg-gray-800 border border-gray-600 rounded px-1.5 w-14 text-right flex-shrink-0 focus:border-blue-400 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:bg-gray-900 disabled:text-gray-500"
-                value={localVal}
-                onChange={(e) => {
-                    setLocalVal(e.target.value);
-                    commit(e.target.value); // Commit immediately for live updates
+                min={min}
+                max={max}
+                className="bg-gray-800 border border-gray-600 rounded pl-1.5 pr-5 w-14 text-right flex-shrink-0 focus:border-blue-400 focus:outline-none disabled:bg-gray-900 disabled:text-gray-500"
+                value={numericLocalValue}
+                onChange={(next) => {
+                    const nextStr = String(next);
+                    setLocalVal(nextStr);
+                    commit(nextStr); // Commit immediately for live updates
                 }}
                 onFocus={() => {
                     setFocused(true);

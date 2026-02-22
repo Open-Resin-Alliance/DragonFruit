@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Dragonfruit",
-  description: "Dragonfruit by Open Resin Alliance",
+  title: "DragonFruit",
+  description: "DragonFruit by Open Resin Alliance",
 };
 
 export default function RootLayout({

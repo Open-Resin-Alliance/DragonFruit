@@ -143,7 +143,7 @@ Compact UI surfaces must use **theme tokens** from `src/app/globals.css` so dark
 | Primary action       | `var(--accent)`                          | Main interactive accent            |
 | Primary action hover | `var(--accent-hover)`                    | Hover/active for primary action    |
 | Accent contrast text | `var(--accent-contrast)`                 | Text/icons on accent backgrounds   |
-| Secondary action     | `var(--accent-secondary)`                | Dragonfruit secondary brand action |
+| Secondary action     | `var(--accent-secondary)`                | DragonFruit secondary brand action |
 
 ### Semantic exceptions
 
