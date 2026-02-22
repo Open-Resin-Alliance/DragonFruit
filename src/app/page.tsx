@@ -45,10 +45,10 @@ import {
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
 import {
-  computeHighPrecisionArrangeUpdates,
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
+import { computeHighPrecisionArrangeUpdatesWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -123,9 +123,64 @@ export default function Home() {
   const [arrangeArrayGapX, setArrangeArrayGapX] = React.useState(5);
   const [arrangeArrayGapY, setArrangeArrayGapY] = React.useState(5);
   const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
+  const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'array' | null>(null);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
+  const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
+  const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
   const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(0.5);
+  const showArrangeBlockingOverlay = isAutoArranging;
+
+  const arrangeOverlayContent = React.useMemo(() => {
+    if (activeArrangeOperation === 'high_precision') {
+      return {
+        title: 'High-Precision Arrange Running…',
+        detailLines: [
+          'This is a computationally expensive operation for dense packing.',
+          'Please be patient while we process your models.',
+        ],
+      };
+    }
+
+    if (activeArrangeOperation === 'array') {
+      return {
+        title: 'Applying Array Arrange…',
+        detailLines: [
+          'Positioning models and validating placement.',
+          'Please wait a moment.',
+        ],
+      };
+    }
+
+    return {
+      title: 'Arranging Models…',
+      detailLines: [
+        'Computing placements and resolving collisions.',
+        'Please wait.',
+      ],
+    };
+  }, [activeArrangeOperation]);
+
+  React.useEffect(() => {
+    if (!showArrangeBlockingOverlay) {
+      setArrangeOverlayElapsedSec(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const id = window.setInterval(() => {
+      setArrangeOverlayElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 250);
+
+    return () => window.clearInterval(id);
+  }, [showArrangeBlockingOverlay]);
+
+  const arrangeOverlayElapsedLabel = React.useMemo(() => {
+    const total = Math.max(0, arrangeOverlayElapsedSec);
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  }, [arrangeOverlayElapsedSec]);
   const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
   const [duplicateArrayCountX, setDuplicateArrayCountX] = React.useState(2);
   const [duplicateArrayCountY, setDuplicateArrayCountY] = React.useState(1);
@@ -803,6 +858,8 @@ export default function Home() {
 
     const minSpinnerMs = 220;
     const startedAt = performance.now();
+    setActiveArrangeOperation('standard');
+    setArrangeOverlayModelCount(visibleModels.length);
     setIsAutoArranging(true);
     await sleep(0);
 
@@ -1199,6 +1256,8 @@ export default function Home() {
         await sleep(minSpinnerMs - elapsed);
       }
       setIsAutoArranging(false);
+      setActiveArrangeOperation(null);
+      setArrangeOverlayModelCount(null);
     }
   }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelBoundingFootprintMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
 
@@ -1210,11 +1269,13 @@ export default function Home() {
 
     const minSpinnerMs = 220;
     const startedAt = performance.now();
+    setActiveArrangeOperation('high_precision');
+    setArrangeOverlayModelCount(visibleModels.length);
     setIsAutoArranging(true);
     await sleep(0);
 
     try {
-      const updates = computeHighPrecisionArrangeUpdates({
+      const updates = await computeHighPrecisionArrangeUpdatesWorker({
         visibleModels: visibleModels as unknown as HighPrecisionArrangeModel[],
         sceneModels: scene.models as unknown as HighPrecisionArrangeModel[],
         widthMm: scene.view3dSettings.widthMm,
@@ -1237,6 +1298,8 @@ export default function Home() {
         await sleep(minSpinnerMs - elapsed);
       }
       setIsAutoArranging(false);
+      setActiveArrangeOperation(null);
+      setArrangeOverlayModelCount(null);
     }
   }, [
     arrangeAllowRotateOnZ,
@@ -1362,8 +1425,13 @@ export default function Home() {
   const handleManualArrayArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
 
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+    if (visibleModels.length <= 1) return;
+
     const minSpinnerMs = 220;
     const startedAt = performance.now();
+    setActiveArrangeOperation('array');
+    setArrangeOverlayModelCount(visibleModels.length);
     setIsAutoArranging(true);
     await sleep(0);
 
@@ -1379,6 +1447,8 @@ export default function Home() {
         await sleep(minSpinnerMs - elapsed);
       }
       setIsAutoArranging(false);
+      setActiveArrangeOperation(null);
+      setArrangeOverlayModelCount(null);
     }
   }, [
     arrangeAnchorMode,
@@ -2071,6 +2141,7 @@ export default function Home() {
     duplicateArrayGapY,
     duplicateArrayGapZ,
     duplicateLayoutMode,
+    resolveArrangeVisibleModels,
     duplicateSpacingMm,
     duplicateTotalCopies,
     scene.activeModel,
@@ -2800,6 +2871,47 @@ export default function Home() {
         totalPolygons={totalPolygons}
         selectedPolygons={selectedPolygons}
       />
+
+      {showArrangeBlockingOverlay && (
+        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+              borderColor: 'var(--border-subtle)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              {arrangeOverlayContent.title}
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {arrangeOverlayContent.detailLines.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
+
+            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
+              Elapsed: {arrangeOverlayElapsedLabel}
+            </div>
+            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Processing {arrangeOverlayModelCount ?? 0} {arrangeOverlayModelCount === 1 ? 'model' : 'models'}
+            </div>
+
+            <div
+              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
+              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+            >
+              <div
+                className="ui-loading-indicator"
+                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
