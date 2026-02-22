@@ -1292,6 +1292,35 @@ export function SceneCanvas({
     return activeModel.transform;
   }, [activeModel, transform, activeModelId]);
 
+  const satDebugTargets = React.useMemo(() => {
+    if (!activeBuildVolumeSettings.showSliceSatBoundingMesh) return [] as Array<{
+      id: string;
+      geometry: LoadedModel['geometry'];
+      transform: ModelTransform;
+    }>;
+
+    if (!activeBuildVolumeSettings.showSliceSatBoundingMeshForAllModels) {
+      if (!activeModel || !activeModelTransform) return [];
+      return [{ id: activeModel.id, geometry: activeModel.geometry, transform: activeModelTransform }];
+    }
+
+    return models
+      .filter((model) => model.visible)
+      .map((model) => ({
+        id: model.id,
+        geometry: model.geometry,
+        transform: (model.id === activeModelId && transform) ? transform : model.transform,
+      }));
+  }, [
+    activeBuildVolumeSettings.showSliceSatBoundingMesh,
+    activeBuildVolumeSettings.showSliceSatBoundingMeshForAllModels,
+    activeModel,
+    activeModelId,
+    activeModelTransform,
+    models,
+    transform,
+  ]);
+
   const introControllerBounds = React.useMemo(() => {
     if (mode === 'support' && activeModel) {
       return computeModelWorldBounds(activeModel);
@@ -1949,15 +1978,18 @@ export function SceneCanvas({
                 </>
               )}
 
-              <SliceSatBoundingMeshRenderer
-                modelGeometry={activeModel ? activeModel.geometry : null}
-                modelTransform={activeModelTransform}
-                enabled={Boolean(activeBuildVolumeSettings.showSliceSatBoundingMesh)}
-                renderMode={activeBuildVolumeSettings.sliceSatBoundingMeshMode === 'accurate_hull'
-                  ? 'hull'
-                  : activeBuildVolumeSettings.experimentalSliceSatBoundingMeshRenderMode}
-                interactionActive={isGizmoDragging}
-              />
+              {satDebugTargets.map((entry) => (
+                <SliceSatBoundingMeshRenderer
+                  key={`sat-debug-${entry.id}`}
+                  modelGeometry={entry.geometry}
+                  modelTransform={entry.transform}
+                  enabled={Boolean(activeBuildVolumeSettings.showSliceSatBoundingMesh)}
+                  renderMode={activeBuildVolumeSettings.sliceSatBoundingMeshMode === 'accurate_hull'
+                    ? 'hull'
+                    : activeBuildVolumeSettings.experimentalSliceSatBoundingMeshRenderMode}
+                  interactionActive={isGizmoDragging}
+                />
+              ))}
 
               {/* Gizmo attached to active model */}
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && isModelSelected && (

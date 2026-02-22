@@ -20,6 +20,13 @@ const HULL_MARGIN_MM = 0.05;
 const HULL_MAX_INPUT_VERTICES = 200_000;
 const HULL_CACHE_MAX_ENTRIES = 8;
 
+// Shared across all renderer instances so duplicate models (same source mesh UUID)
+// reuse the same computed hull geometry instead of rebuilding per copy.
+const sharedHullGeometryCache = new Map<string, {
+  hullGeometry: THREE.BufferGeometry;
+  hullEdgeGeometry: THREE.BufferGeometry;
+}>();
+
 const BASE_SLICE_COUNT = 24;
 const MAX_SLICE_COUNT = 96;
 const RESAMPLED_RING_POINTS = 64;
@@ -674,17 +681,13 @@ export default function SliceSatBoundingMeshRenderer({
   const cachedSourceIdRef = React.useRef<string | null>(null);
   const cachedRenderModeRef = React.useRef<string | null>(null);
   const [hullCacheRevision, setHullCacheRevision] = React.useState(0);
-  const hullGeometryCacheRef = React.useRef<Map<string, {
-    hullGeometry: THREE.BufferGeometry;
-    hullEdgeGeometry: THREE.BufferGeometry;
-  }>>(new Map());
 
   const ensureHullCacheEntry = React.useCallback((geometry: GeometryWithBounds): {
     hullGeometry: THREE.BufferGeometry;
     hullEdgeGeometry: THREE.BufferGeometry;
   } | null => {
     const sourceId = geometry.geometry.uuid;
-    const existing = hullGeometryCacheRef.current.get(sourceId);
+    const existing = sharedHullGeometryCache.get(sourceId);
     if (existing) return existing;
 
     const positionAttr = geometry.geometry.getAttribute('position') as THREE.BufferAttribute;
@@ -706,16 +709,16 @@ export default function SliceSatBoundingMeshRenderer({
       hullGeometry: hullResult.hullMesh,
       hullEdgeGeometry: hullResult.hullEdges,
     };
-    hullGeometryCacheRef.current.set(sourceId, nextEntry);
+    sharedHullGeometryCache.set(sourceId, nextEntry);
 
     // Keep cache bounded; evict oldest entry when above cap.
-    while (hullGeometryCacheRef.current.size > HULL_CACHE_MAX_ENTRIES) {
-      const oldestKey = hullGeometryCacheRef.current.keys().next().value as string | undefined;
+    while (sharedHullGeometryCache.size > HULL_CACHE_MAX_ENTRIES) {
+      const oldestKey = sharedHullGeometryCache.keys().next().value as string | undefined;
       if (!oldestKey || oldestKey === sourceId) break;
-      const oldest = hullGeometryCacheRef.current.get(oldestKey);
+      const oldest = sharedHullGeometryCache.get(oldestKey);
       oldest?.hullGeometry.dispose();
       oldest?.hullEdgeGeometry.dispose();
-      hullGeometryCacheRef.current.delete(oldestKey);
+      sharedHullGeometryCache.delete(oldestKey);
     }
 
     return nextEntry;
@@ -737,7 +740,7 @@ export default function SliceSatBoundingMeshRenderer({
     if (interactionActive) return;
 
     const sourceId = modelGeometry.geometry.uuid;
-    if (hullGeometryCacheRef.current.has(sourceId)) return;
+    if (sharedHullGeometryCache.has(sourceId)) return;
 
     let cancelled = false;
     const idleWindow = window as Window & {
@@ -788,7 +791,7 @@ export default function SliceSatBoundingMeshRenderer({
 
     // ── Hull mode: cache-only on render path (build happens in idle effect). ─
     if (renderMode === 'hull') {
-      const cachedEntry = hullGeometryCacheRef.current.get(sourceId);
+      const cachedEntry = sharedHullGeometryCache.get(sourceId);
       if (!cachedEntry) return null;
 
       return {
@@ -1011,15 +1014,8 @@ export default function SliceSatBoundingMeshRenderer({
     };
   }, [satGeometries]);
 
-  React.useEffect(() => {
-    return () => {
-      for (const cached of hullGeometryCacheRef.current.values()) {
-        cached.hullGeometry.dispose();
-        cached.hullEdgeGeometry.dispose();
-      }
-      hullGeometryCacheRef.current.clear();
-    };
-  }, []);
+  // Do not dispose shared hull cache on individual unmounts.
+  // Cache eviction is handled centrally by HULL_CACHE_MAX_ENTRIES.
 
   if (!enabled || !satGeometries) return null;
 
