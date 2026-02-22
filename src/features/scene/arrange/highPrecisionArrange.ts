@@ -312,10 +312,98 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     return wb.minX >= minX && wb.maxX <= maxX && wb.minY >= minY && wb.maxY <= maxY;
   };
 
+  type CollisionLookup = {
+    query: (candidate: CollisionProxy, center: THREE.Vector2, pad: number) => CollisionProxy[];
+    insert: (proxy: CollisionProxy) => void;
+  };
+
+  const estimateCollisionCellSize = (poolSize: number) => {
+    const plateArea = Math.max(1, widthMm * depthMm);
+    const nominal = Math.sqrt(plateArea / Math.max(1, poolSize));
+    return Math.max(2, minSpacing * 2, nominal);
+  };
+
+  const makeCollisionLookup = (initial: CollisionProxy[], preferredCellSize: number): CollisionLookup => {
+    const cellSize = Math.max(1, preferredCellSize);
+    const invCellSize = 1 / cellSize;
+    const buckets = new Map<string, CollisionProxy[]>();
+    const idByProxy = new WeakMap<CollisionProxy, number>();
+    let idSeq = 1;
+
+    const getId = (proxy: CollisionProxy) => {
+      let id = idByProxy.get(proxy);
+      if (!id) {
+        id = idSeq++;
+        idByProxy.set(proxy, id);
+      }
+      return id;
+    };
+
+    const key = (ix: number, iy: number) => `${ix}:${iy}`;
+
+    const insert = (proxy: CollisionProxy) => {
+      const wb = worldBoundsAt(proxy, proxy.center);
+      const ix0 = Math.floor(wb.minX * invCellSize);
+      const ix1 = Math.floor(wb.maxX * invCellSize);
+      const iy0 = Math.floor(wb.minY * invCellSize);
+      const iy1 = Math.floor(wb.maxY * invCellSize);
+      for (let ix = ix0; ix <= ix1; ix++) {
+        for (let iy = iy0; iy <= iy1; iy++) {
+          const k = key(ix, iy);
+          const bucket = buckets.get(k);
+          if (bucket) bucket.push(proxy);
+          else buckets.set(k, [proxy]);
+        }
+      }
+      getId(proxy);
+    };
+
+    for (const proxy of initial) insert(proxy);
+
+    // Correctness invariant:
+    // - Buckets index full world-space AABBs for all blockers/placed items.
+    // - Query expands the candidate AABB by `pad` and returns a superset of potential overlaps.
+    // - Final feasibility still uses exact broadphase + SAT, so placement density/quality is unchanged.
+    const query = (candidate: CollisionProxy, center: THREE.Vector2, pad: number) => {
+      const wb = worldBoundsAt(candidate, center);
+      const qMinX = wb.minX - pad;
+      const qMaxX = wb.maxX + pad;
+      const qMinY = wb.minY - pad;
+      const qMaxY = wb.maxY + pad;
+      const ix0 = Math.floor(qMinX * invCellSize) - 1;
+      const ix1 = Math.floor(qMaxX * invCellSize) + 1;
+      const iy0 = Math.floor(qMinY * invCellSize) - 1;
+      const iy1 = Math.floor(qMaxY * invCellSize) + 1;
+      const out: CollisionProxy[] = [];
+      const seenIds = new Set<number>();
+      for (let ix = ix0; ix <= ix1; ix++) {
+        for (let iy = iy0; iy <= iy1; iy++) {
+          const bucket = buckets.get(key(ix, iy));
+          if (!bucket) continue;
+          for (const proxy of bucket) {
+            const id = getId(proxy);
+            if (seenIds.has(id)) continue;
+            seenIds.add(id);
+            out.push(proxy);
+          }
+        }
+      }
+      return out;
+    };
+
+    return { query, insert };
+  };
+
   // Placement feasibility = inside plate + broadphase cull + narrowphase SAT spacing check.
-  const canPlaceAt = (candidate: CollisionProxy, center: THREE.Vector2, others: CollisionProxy[]) => {
+  const canPlaceAt = (
+    candidate: CollisionProxy,
+    center: THREE.Vector2,
+    others: CollisionProxy[],
+    lookup?: CollisionLookup,
+  ) => {
     if (!withinPlateAt(candidate, center)) return false;
-    for (const other of others) {
+    const candidates = lookup ? lookup.query(candidate, center, minSpacing) : others;
+    for (const other of candidates) {
       if (!intersectsBroadphase(candidate, center, other, other.center, minSpacing)) continue;
       if (polygonsOverlapWithSpacing(candidate.hull, center, other.hull, other.center, minSpacing)) return false;
     }
@@ -479,6 +567,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
   // Fast simulation pass used to pick a strong shared rotation in homogeneous batches.
   const simPackAtAngle = (angle: number): number => {
     const simPlaced: CollisionProxy[] = [...blockers];
+    const simLookup = makeCollisionLookup(simPlaced, estimateCollisionCellSize(simPlaced.length));
     let count = 0;
     for (const model of visibleModels) {
       const h = getHullAtRotation(model, angle);
@@ -514,11 +603,14 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
         addSim(other.center.x, ob.maxY + minSpacing - h.localMinY);
       }
       cands.sort((a, b) => a.d - b.d);
+      const scratchCenter = new THREE.Vector2();
       for (const c of cands) {
-        const ctr = new THREE.Vector2(c.cx, c.cy);
-        if (canPlaceAt(proxy, ctr, simPlaced)) {
+        scratchCenter.set(c.cx, c.cy);
+        if (canPlaceAt(proxy, scratchCenter, simPlaced, simLookup)) {
           count++;
+          const ctr = new THREE.Vector2(c.cx, c.cy);
           simPlaced.push({ ...proxy, center: ctr });
+          simLookup.insert(simPlaced[simPlaced.length - 1]);
           break;
         }
       }
@@ -573,6 +665,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
           .slice(0, MAX_CANDIDATE_NEIGHBORS)
         : neighborPool;
       const collisionPool = [...placed, ...blockers];
+      const collisionLookup = makeCollisionLookup(collisionPool, estimateCollisionCellSize(collisionPool.length));
 
       const angleOptions = (() => {
         const base = makeRotationOptions(t.rotation.z);
@@ -607,7 +700,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
           if (cands.length >= MAX_CANDIDATE_BUFFER) return;
           const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
           const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
-          const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
+          const k = `${Math.round(cx * 100)}:${Math.round(cy * 100)}`;
           if (seen.has(k)) return;
           seen.add(k);
           const dx = cx - packingAnchor.x;
@@ -690,13 +783,14 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
         });
 
         let localBest: { center: THREE.Vector2; score: PlacementScore } | null = null;
+        const scratchCenter = new THREE.Vector2();
         for (let ci = 0; ci < cands.length && ci < MAX_EVALUATED_CANDIDATES; ci++) {
           const c = cands[ci];
-          const center = new THREE.Vector2(c.x, c.y);
-          if (canPlaceAt(candidateProxy, center, collisionPool)) {
-            const placementScore = scoreCandidatePlacement(candidateProxy, center, placedBounds, c.sortKey);
+          scratchCenter.set(c.x, c.y);
+          if (canPlaceAt(candidateProxy, scratchCenter, collisionPool, collisionLookup)) {
+            const placementScore = scoreCandidatePlacement(candidateProxy, scratchCenter, placedBounds, c.sortKey);
             if (!localBest || isScoreBetter(placementScore, localBest.score)) {
-              localBest = { center, score: placementScore };
+              localBest = { center: scratchCenter.clone(), score: placementScore };
               if (aggressive && placementScore.area <= (placedBounds ? (placedBounds.maxX - placedBounds.minX) * (placedBounds.maxY - placedBounds.minY) * 1.01 : Number.MAX_VALUE)) {
                 break;
               }
