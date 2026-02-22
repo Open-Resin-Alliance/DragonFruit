@@ -414,6 +414,11 @@ export function BackupsSettingsTab() {
   const [snapshotModalTab, setSnapshotModalTab] = React.useState<SnapshotModalTab>('overview');
   const [selectedStorageKey, setSelectedStorageKey] = React.useState<string | null>(null);
   const [selectedProfilesPrinterId, setSelectedProfilesPrinterId] = React.useState<string | null>(null);
+  const [showOAuthSetupModal, setShowOAuthSetupModal] = React.useState(false);
+  const [oauthCookieSecretDraft, setOauthCookieSecretDraft] = React.useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem('dragonfruit-backups:oauth-cookie-secret-draft') ?? '';
+  });
   const [selectedBackupRepoName, setSelectedBackupRepoName] = React.useState<string>(() => {
     if (typeof window === 'undefined') return DEFAULT_BACKUP_REPO_NAME;
     return window.localStorage.getItem(BACKUP_SELECTED_REPO_KEY)?.trim() || DEFAULT_BACKUP_REPO_NAME;
@@ -436,6 +441,16 @@ export function BackupsSettingsTab() {
     if (typeof window === 'undefined') return null;
     return window.localStorage.getItem(LAST_SYNC_AT_KEY);
   });
+
+  const oauthCallbackUrl = React.useMemo(() => {
+    if (typeof window === 'undefined') return 'http://localhost:3000/api/backups/github/auth/callback';
+    return `${window.location.origin}/api/backups/github/auth/callback`;
+  }, []);
+
+  const oauthHomepageUrl = React.useMemo(() => {
+    if (typeof window === 'undefined') return 'http://localhost:3000';
+    return window.location.origin;
+  }, []);
 
   const statusRef = React.useRef<StatusResponse | null>(null);
   statusRef.current = status;
@@ -710,6 +725,11 @@ export function BackupsSettingsTab() {
   }, [repoChoiceResolved]);
 
   React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('dragonfruit-backups:oauth-cookie-secret-draft', oauthCookieSecretDraft);
+  }, [oauthCookieSecretDraft]);
+
+  React.useEffect(() => {
     if (!status?.authenticated) {
       setRepoChoiceResolved(false);
     }
@@ -817,6 +837,29 @@ export function BackupsSettingsTab() {
     setMessage({ kind: 'success', text: `Creating new repository: ${suggestedNewRepoName}` });
   }, [suggestedNewRepoName]);
 
+  const generateCookieSecretDraft = React.useCallback(() => {
+    const token = `${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`;
+    setOauthCookieSecretDraft(token);
+  }, []);
+
+  const copyOAuthEnvTemplate = React.useCallback(async () => {
+    const secret = oauthCookieSecretDraft.trim() || '<generate_a_64_char_secret>';
+    const text = [
+      '# Dragonfruit GitHub Backup OAuth',
+      'GITHUB_OAUTH_CLIENT_ID=<your_github_oauth_client_id>',
+      'GITHUB_OAUTH_CLIENT_SECRET=<your_github_oauth_client_secret>',
+      `GITHUB_OAUTH_REDIRECT_URI=${oauthCallbackUrl}`,
+      `BACKUP_COOKIE_SECRET=${secret}`,
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage({ kind: 'success', text: 'OAuth .env template copied to clipboard.' });
+    } catch {
+      setMessage({ kind: 'error', text: 'Failed to copy OAuth template. Copy it manually from the setup dialog.' });
+    }
+  }, [oauthCallbackUrl, oauthCookieSecretDraft]);
+
   return (
     <div className="space-y-3">
       <section className="relative rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -836,11 +879,11 @@ export function BackupsSettingsTab() {
         <div
           className="transition-opacity duration-200"
           style={{
-            opacity: !loadingStatus && !backupsConfigured ? 0.48 : 1,
-            filter: !loadingStatus && !backupsConfigured ? 'grayscale(0.35)' : 'none',
-            pointerEvents: !loadingStatus && !backupsConfigured ? 'none' : 'auto',
+            opacity: 1,
+            filter: 'none',
+            pointerEvents: 'auto',
           }}
-          aria-disabled={!loadingStatus && !backupsConfigured}
+          aria-disabled={false}
         >
           <div className="flex items-start gap-2.5">
             <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
@@ -849,6 +892,15 @@ export function BackupsSettingsTab() {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Private GitHub Backups</h3>
+                {!backupsConfigured && (
+                  <button
+                    type="button"
+                    onClick={() => setShowOAuthSetupModal(true)}
+                    className="ui-button ui-button-secondary !h-7 !px-2 !py-0 text-[11px]"
+                  >
+                    OAuth setup
+                  </button>
+                )}
                 <div className="relative group">
                   <button
                     type="button"
@@ -888,24 +940,46 @@ export function BackupsSettingsTab() {
             <div className="mt-3 rounded-md border p-3 text-center" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
               {!authenticated ? (
                 <>
-                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Connect your GitHub account</h5>
+                  <h5 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {backupsConfigured ? 'Connect your GitHub account' : 'Set up GitHub OAuth'}
+                  </h5>
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    Authorize Dragonfruit so backups can be saved into your private repository.
+                    {backupsConfigured
+                      ? 'Authorize Dragonfruit so backups can be saved into your private repository.'
+                      : 'This self-compiled build needs your own GitHub OAuth app in .env before sign-in can work.'}
                   </p>
                   <div className="mt-2.5 flex items-center justify-center gap-2">
                     <button
                       type="button"
-                      onClick={() => { void handleConnectGithub(); }}
-                      disabled={busy !== 'none' || !status?.configured}
+                      onClick={() => {
+                        if (backupsConfigured) {
+                          void handleConnectGithub();
+                        } else {
+                          setShowOAuthSetupModal(true);
+                        }
+                      }}
+                      disabled={busy !== 'none'}
                       className="ui-button ui-button-primary !h-10 !px-4 !py-0 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
                       style={{ background: 'linear-gradient(135deg, #8250df, #6f42c1)', borderColor: 'color-mix(in srgb, #8250df, white 14%)', color: '#ffffff' }}
                     >
                       {busy === 'auth' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Github className="h-4 w-4" />}
-                      Connect GitHub now
+                      {backupsConfigured ? 'Connect GitHub now' : 'Set up OAuth'}
                     </button>
+                    {!backupsConfigured && (
+                      <button
+                        type="button"
+                        onClick={() => { void loadStatus(true); }}
+                        className="ui-button ui-button-secondary !h-10 !px-3 !py-0 text-sm inline-flex items-center gap-1.5"
+                      >
+                        <RefreshCcw className="h-4 w-4" />
+                        I configured it
+                      </button>
+                    )}
                   </div>
                   <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    We’ll open a secure GitHub popup to connect your account.
+                    {backupsConfigured
+                      ? 'We’ll open a secure GitHub popup to connect your account.'
+                      : 'After updating .env, restart the app, then click “I configured it”.'}
                   </div>
                 </>
               ) : needsRepoChoice ? (
@@ -1497,6 +1571,77 @@ export function BackupsSettingsTab() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOAuthSetupModal && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-2xl rounded-xl border shadow-2xl overflow-hidden" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="flex items-center justify-between gap-2 px-4 py-3" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
+              <div>
+                <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Set up GitHub OAuth</h4>
+                <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Required for self-compiled builds that do not ship with backup OAuth env values.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowOAuthSetupModal(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors"
+                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-1)' }}
+                aria-label="Close OAuth setup"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <ol className="list-decimal list-inside space-y-1.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                <li>Open GitHub Developer Settings and create a new OAuth App.</li>
+                <li>Set <span style={{ color: 'var(--text-strong)' }}>Homepage URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthHomepageUrl}</span>.</li>
+                <li>Set <span style={{ color: 'var(--text-strong)' }}>Authorization callback URL</span> to <span style={{ color: 'var(--text-strong)' }}>{oauthCallbackUrl}</span>.</li>
+                <li>Copy the Client ID and Client Secret into your local <span style={{ color: 'var(--text-strong)' }}>.env</span>.</li>
+                <li>Restart Dragonfruit, then click <span style={{ color: 'var(--text-strong)' }}>I configured it</span>.</li>
+              </ol>
+
+              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>BACKUP_COOKIE_SECRET helper</div>
+                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Generate a local secret (at least 32 chars) and use it in your .env.
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={oauthCookieSecretDraft}
+                    onChange={(event) => setOauthCookieSecretDraft(event.target.value)}
+                    className="ui-input h-9 w-full px-2 text-[12px]"
+                    placeholder="Generate a secret…"
+                  />
+                  <button
+                    type="button"
+                    onClick={generateCookieSecretDraft}
+                    className="ui-button ui-button-secondary !h-9 !px-2.5 !py-0 text-xs"
+                  >
+                    Generate
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-muted)' }}>.env template</div>
+                <pre className="mt-2 rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>{`GITHUB_OAUTH_CLIENT_ID=<your_github_oauth_client_id>\nGITHUB_OAUTH_CLIENT_SECRET=<your_github_oauth_client_secret>\nGITHUB_OAUTH_REDIRECT_URI=${oauthCallbackUrl}\nBACKUP_COOKIE_SECRET=${oauthCookieSecretDraft.trim() || '<generate_a_64_char_secret>'}`}</pre>
+                <div className="mt-2 flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={() => { void copyOAuthEnvTemplate(); }}
+                    className="ui-button ui-button-primary !h-8 !px-2.5 !py-0 text-xs"
+                  >
+                    Copy template
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
