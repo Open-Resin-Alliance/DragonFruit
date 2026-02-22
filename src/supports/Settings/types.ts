@@ -32,6 +32,10 @@ import {
     DEFAULT_GRID_ATTACH_SEARCH_STEP_MM,
     DEFAULT_MESH_TO_MESH_STICK_VS_TWIG_CUTOFF_MM,
 } from './defaults';
+import {
+    createDefaultAutoBracingSettings,
+    type AutoBracingSettings,
+} from '../autoBracing/settings';
 
 // --- Profile Types ---
 
@@ -107,6 +111,7 @@ export interface SupportSettings {
     joint: JointProfile;
     grid: GridSettings;
     meshToMesh: MeshToMeshSettings;
+    autoBracing: AutoBracingSettings;
 }
 
 // --- Default Factory ---
@@ -164,6 +169,7 @@ export function createDefaultSettings(): SupportSettings {
         meshToMesh: {
             stickVsTwigCutoffMm: DEFAULT_MESH_TO_MESH_STICK_VS_TWIG_CUTOFF_MM,
         },
+        autoBracing: createDefaultAutoBracingSettings(),
     };
 }
 

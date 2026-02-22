@@ -6,6 +6,10 @@
  */
 
 import { SupportSettings, createDefaultSettings } from './types';
+import {
+    applyAutoBracingSettingsPatch,
+    normalizeAutoBracingSettings,
+} from '../autoBracing/settings';
 
 // --- Store ---
 
@@ -36,6 +40,11 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         attachSearchStepMm: coerceNumber((mergedGridRaw as any).attachSearchStepMm, defaults.grid.attachSearchStepMm),
     };
 
+    const mergedAutoBracing = normalizeAutoBracingSettings({
+        ...defaults.autoBracing,
+        ...((settings as any).autoBracing ?? {}),
+    });
+
     return {
         ...defaults,
         ...settings,
@@ -46,6 +55,7 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         joint: { ...defaults.joint, ...settings.joint },
         grid: mergedGrid,
         meshToMesh: { ...defaults.meshToMesh, ...(settings as any).meshToMesh },
+        autoBracing: mergedAutoBracing,
     };
 }
 
@@ -94,6 +104,10 @@ export function getGridSettings() {
 
 export function getMeshToMeshSettings() {
     return currentSettings.meshToMesh;
+}
+
+export function getAutoBracingSettings() {
+    return currentSettings.autoBracing;
 }
 
 // --- Setters ---
@@ -155,6 +169,14 @@ export function updateMeshToMeshSettings(meshToMesh: Partial<SupportSettings['me
     currentSettings = {
         ...currentSettings,
         meshToMesh: { ...currentSettings.meshToMesh, ...meshToMesh },
+    };
+    notify();
+}
+
+export function updateAutoBracingSettings(autoBracing: Partial<SupportSettings['autoBracing']>): void {
+    currentSettings = {
+        ...currentSettings,
+        autoBracing: applyAutoBracingSettingsPatch(currentSettings.autoBracing, autoBracing),
     };
     notify();
 }

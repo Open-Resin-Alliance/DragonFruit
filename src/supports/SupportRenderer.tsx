@@ -21,6 +21,7 @@ import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
 import { SupportMode } from './types';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
+import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -31,6 +32,7 @@ interface SupportRendererProps {
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const supportBraceState = useSupportBraceStoreState();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
@@ -276,6 +278,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         showKnots={showKnots}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
+                        debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
                     />
                 );
             })}

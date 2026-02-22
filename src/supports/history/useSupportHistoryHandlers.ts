@@ -18,6 +18,7 @@ import {
   SUPPORT_ADD_SUPPORT_BRACE,
   SUPPORT_REMOVE_SUPPORT_BRACE,
   SUPPORT_REPLACE_TRUNK,
+  SUPPORT_AUTO_BRACE_REPLACE,
   SupportLeafPayload,
   SupportBranchPayload,
   SupportTwigPayload,
@@ -28,6 +29,7 @@ import {
   SupportTrunkUpdatePayload,
   SupportBranchUpdatePayload,
   SupportReplaceTrunkPayload,
+  SupportReplaceStatePayload,
   SupportSupportBracePayload,
 } from './actionTypes';
 import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKnotById, removeRootById, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
@@ -257,6 +259,16 @@ export function useSupportHistoryHandlers() {
       }),
       registerHistoryHandler(SUPPORT_REPLACE_TRUNK, (action, direction) => {
         const payload = action.payload as SupportReplaceTrunkPayload | undefined;
+        if (!payload?.before || !payload?.after) return false;
+        if (direction === 'undo') {
+          setSnapshot(payload.before);
+        } else {
+          setSnapshot(payload.after);
+        }
+        return true;
+      }),
+      registerHistoryHandler(SUPPORT_AUTO_BRACE_REPLACE, (action, direction) => {
+        const payload = action.payload as SupportReplaceStatePayload | undefined;
         if (!payload?.before || !payload?.after) return false;
         if (direction === 'undo') {
           setSnapshot(payload.before);

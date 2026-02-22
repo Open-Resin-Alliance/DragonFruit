@@ -14,7 +14,7 @@ const TABS: TabDef[] = [
     { kind: 'trunk', label: 'Trunk', icon: Pickaxe },
     { kind: 'raft', label: 'Raft', icon: Sailboat },
     { kind: 'grid', label: 'Grid', icon: Grid3X3 },
-    { kind: 'stick', label: 'Stick', icon: WandSparkles },
+    { kind: 'stick', label: 'Bracing', icon: WandSparkles },
 ];
 
 export function SupportKindTabs({

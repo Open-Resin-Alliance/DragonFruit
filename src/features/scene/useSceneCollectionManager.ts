@@ -14,6 +14,7 @@ import type { SupportMode } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
+import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   DEFAULT_VIEW3D_SETTINGS,
@@ -1945,6 +1946,24 @@ export function useSceneCollectionManager() {
 
     trackedGeometriesRef.current = next;
   }, [modelClipboard, models]);
+
+  // Sync model geometries into the auto-brace mesh store so clearance checks can access them.
+  useEffect(() => {
+    const currentIds = new Set(models.map((m) => m.id));
+    for (const model of models) {
+      const matrix = new THREE.Matrix4().compose(
+        model.transform.position,
+        new THREE.Quaternion().setFromEuler(model.transform.rotation),
+        model.transform.scale,
+      );
+      registerMeshForAutoBrace(model.id, model.geometry.geometry, matrix);
+    }
+    return () => {
+      for (const id of currentIds) {
+        unregisterMeshForAutoBrace(id);
+      }
+    };
+  }, [models]);
 
   useEffect(() => {
     return () => {
