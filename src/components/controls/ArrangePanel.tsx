@@ -1,12 +1,15 @@
 import React from 'react';
-import { ChevronDown, ChevronUp, LayoutGrid, Loader2, RotateCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, LayoutGrid, Loader2, Minus, Plus, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
 
 export type ArrangeAnchorMode = 'center' | 'front_left' | 'front_right' | 'back_left' | 'back_right';
 export type ArrangeLayoutMode = 'auto' | 'array';
+export type ArrangePrecisionMode = 'standard' | 'high_precision';
 
 interface ArrangePanelProps {
+  precisionMode: ArrangePrecisionMode;
+  onPrecisionModeChange: (value: ArrangePrecisionMode) => void;
   layoutMode: ArrangeLayoutMode;
   onLayoutModeChange: (value: ArrangeLayoutMode) => void;
   spacingMm: number;
@@ -95,6 +98,8 @@ function MiniStepperField({ value, onChange, min, max, disabled = false }: MiniS
 }
 
 export function ArrangePanel({
+  precisionMode,
+  onPrecisionModeChange,
   layoutMode,
   onLayoutModeChange,
   spacingMm,
@@ -122,6 +127,14 @@ export function ArrangePanel({
   isApplying = false,
 }: ArrangePanelProps) {
   const [expanded, setExpanded] = React.useState(true);
+  const sanitizeNumber = React.useCallback((value: number, fallback: number) => (
+    Number.isFinite(value) ? value : fallback
+  ), []);
+  const setClampedSpacing = React.useCallback((value: number) => {
+    const next = sanitizeNumber(value, 0.5);
+    const rounded = Number((Math.round(next * 10) / 10).toFixed(1));
+    onSpacingMmChange(Math.min(5, Math.max(0, rounded)));
+  }, [onSpacingMmChange, sanitizeNumber]);
 
   const clampCount = React.useCallback((value: number) => Math.min(64, Math.max(1, Math.round(value))), []);
   const clampGap = React.useCallback((value: number) => Math.min(120, Math.max(0, Math.round(value))), []);
@@ -194,24 +207,88 @@ export function ArrangePanel({
                     }
                   : undefined}
               >
-                Array
+                Manual
               </button>
             </div>
           </div>
 
+          {layoutMode === 'auto' && (
+            <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange mode</div>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => onPrecisionModeChange('standard')}
+                  disabled={isApplying}
+                  style={precisionMode === 'standard'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+                        color: 'var(--text-strong)',
+                      }
+                    : undefined}
+                  title="Current arrange algorithm"
+                >
+                  Standard
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
+                  onClick={() => {
+                    onPrecisionModeChange('high_precision');
+                    onAllowRotateOnZChange(true);
+                  }}
+                  disabled={isApplying}
+                  style={precisionMode === 'high_precision'
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+                        color: 'var(--text-strong)',
+                      }
+                    : undefined}
+                  title="Hull-based SAT packing for tighter fit"
+                >
+                  High-Precision
+                </button>
+              </div>
+            </div>
+          )}
+
           {layoutMode === 'auto' ? (
           <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Spacing (mm)</label>
-            <NumberInput
-              value={spacingMm}
-              onChange={(next) => {
-                if (next >= 2 && next <= 120) {
-                  onSpacingMmChange(next);
-                }
-              }}
-              disabled={isApplying}
-              className="ui-input mt-1 w-full min-w-0 !h-8 px-2 text-xs sm:text-sm no-spinners"
-            />
+            <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
+            <div className="mt-1 flex min-w-0 items-center gap-1">
+              <IconButton
+                className="!h-8 !w-8 shrink-0 !p-0"
+                onClick={() => setClampedSpacing(spacingMm - 0.1)}
+                disabled={spacingMm <= 0 || isApplying}
+                title="Decrease spacing"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </IconButton>
+
+              <NumberInput
+                value={spacingMm}
+                onChange={setClampedSpacing}
+                onWheel={(e) => {
+                  if (isApplying) return;
+                  e.preventDefault();
+                  setClampedSpacing(spacingMm + (e.deltaY < 0 ? 0.1 : -0.1));
+                }}
+                disabled={isApplying}
+                className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
+              />
+
+              <IconButton
+                className="!h-8 !w-8 shrink-0 !p-0"
+                onClick={() => setClampedSpacing(spacingMm + 0.1)}
+                disabled={spacingMm >= 5 || isApplying}
+                title="Increase spacing"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </IconButton>
+            </div>
           </div>
 
           ) : (
@@ -270,12 +347,17 @@ export function ArrangePanel({
               className="w-full rounded-md border px-2 py-2 text-left transition-colors disabled:opacity-60"
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
               onClick={() => onAllowRotateOnZChange(!allowRotateOnZ)}
-              disabled={isApplying}
-              title="Allow auto-arrange to rotate models by 90° on Z when beneficial"
+              disabled={isApplying || precisionMode === 'high_precision'}
+              title={precisionMode === 'high_precision'
+                ? 'High-Precision mode requires Z-rotation and keeps it enabled'
+                : 'Allow auto-arrange to rotate models by 90° on Z when beneficial'}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <RotateCw className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+                  <RotateCw
+                    className="h-3.5 w-3.5"
+                    style={{ color: precisionMode === 'high_precision' ? 'var(--text-muted)' : 'var(--accent)' }}
+                  />
                   <span className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Allow Z-rotation</span>
                 </div>
                 <span
@@ -286,7 +368,7 @@ export function ArrangePanel({
                     background: allowRotateOnZ ? 'color-mix(in srgb, var(--accent), transparent 88%)' : 'transparent',
                   }}
                 >
-                  {allowRotateOnZ ? 'ON' : 'OFF'}
+                  {precisionMode === 'high_precision' ? 'ON (Required)' : (allowRotateOnZ ? 'ON' : 'OFF')}
                 </span>
               </div>
             </button>
