@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronDown, ChevronUp, LayoutGrid, Loader2, Minus, Plus, RotateCw } from 'lucide-react';
+import { LayoutGrid, Loader2, Minus, Plus, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
 
@@ -55,44 +55,21 @@ function MiniStepperField({ value, onChange, min, max, disabled = false }: MiniS
   }, [max, min, onChange]);
 
   return (
-    <div
-      className="relative min-w-0"
-      onWheel={(e) => {
-        if (disabled) return;
-        e.preventDefault();
-        const delta = e.deltaY < 0 ? 1 : -1;
-        apply(clamped + delta);
-      }}
-    >
+    <div className="min-w-0" onWheel={(e) => {
+      if (disabled) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 1 : -1;
+      apply(clamped + delta);
+    }}>
       <NumberInput
         value={clamped}
         onChange={apply}
+        min={min}
+        max={max}
+        step={1}
         disabled={disabled}
         className="ui-input h-8 w-full min-w-0 pl-1.5 pr-5 text-xs text-center no-spinners"
       />
-
-      <div className="absolute inset-y-0 right-0.5 flex w-4 flex-col items-center justify-center gap-0.5">
-        <button
-          type="button"
-          className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
-          onClick={() => apply(clamped + 1)}
-          disabled={disabled || clamped >= max}
-          tabIndex={-1}
-          aria-label="Increase value"
-        >
-          <ChevronUp className="h-2.5 w-2.5" />
-        </button>
-        <button
-          type="button"
-          className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
-          onClick={() => apply(clamped - 1)}
-          disabled={disabled || clamped <= min}
-          tabIndex={-1}
-          aria-label="Decrease value"
-        >
-          <ChevronDown className="h-2.5 w-2.5" />
-        </button>
-      </div>
     </div>
   );
 }
@@ -271,6 +248,7 @@ export function ArrangePanel({
               <NumberInput
                 value={spacingMm}
                 onChange={setClampedSpacing}
+                showStepper={false}
                 onWheel={(e) => {
                   if (isApplying) return;
                   e.preventDefault();

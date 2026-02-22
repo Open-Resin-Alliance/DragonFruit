@@ -116,6 +116,20 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   const disableIncrement = props.disabled || (maxBound != null && currentValue >= maxBound);
   const disableDecrement = props.disabled || (minBound != null && currentValue <= minBound);
 
+  if (!showStepper) {
+    return (
+      <input
+        {...props}
+        type="text"
+        value={displayValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onFocus={handleFocus}
+        className={className}
+      />
+    );
+  }
+
   return (
     <div className="relative min-w-0">
       <input
