@@ -108,7 +108,7 @@ export default function Home() {
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
-  const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(5);
+  const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeLayoutMode, setArrangeLayoutMode] = React.useState<ArrangeLayoutMode>('auto');
@@ -121,7 +121,7 @@ export default function Home() {
   const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
-  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(5);
+  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(0.5);
   const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
   const [duplicateArrayCountX, setDuplicateArrayCountX] = React.useState(2);
   const [duplicateArrayCountY, setDuplicateArrayCountY] = React.useState(1);
@@ -1212,16 +1212,17 @@ export default function Home() {
     await sleep(0);
 
     try {
-      const SAT_EPS_MM = 0.001;
+      const SAT_EPS_MM = 0.05;
       const spacing = Math.max(0, arrangeSpacingMm);
       // minSpacing is the SAT hull-to-hull gap enforcing the requested spacing.
       const minSpacing = spacing + SAT_EPS_MM;
-      const PERF_COMPLEX_SCENE = visibleModels.length >= 18;
+      const PERF_COMPLEX_SCENE = visibleModels.length >= 30;
       const MAX_CANDIDATE_NEIGHBORS = PERF_COMPLEX_SCENE ? 20 : 36;
       const MAX_VERTEX_PAIR_CANDIDATES = PERF_COMPLEX_SCENE ? 180 : 420;
       const MAX_CONTACT_CANDIDATES = PERF_COMPLEX_SCENE ? 360 : 900;
       const MAX_LATTICE_CANDIDATES = PERF_COMPLEX_SCENE ? 320 : 900;
       const MAX_EVALUATED_CANDIDATES = PERF_COMPLEX_SCENE ? 420 : 1200;
+      const MAX_CANDIDATE_BUFFER = PERF_COMPLEX_SCENE ? 560 : 1500;
 
       const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
       const maxX = minX + scene.view3dSettings.widthMm;
@@ -1489,6 +1490,7 @@ export default function Home() {
         if (!arrangeAllowRotateOnZ) return [currentZ];
         const options: number[] = [];
         const seen = new Set<number>();
+        const rotationStepDeg = PERF_COMPLEX_SCENE ? 30 : 15;
         const push = (angle: number) => {
           const twoPi = Math.PI * 2;
           let a = angle % twoPi;
@@ -1500,7 +1502,7 @@ export default function Home() {
         };
 
         push(currentZ);
-        for (let deg = 0; deg < 360; deg += 15) push(THREE.MathUtils.degToRad(deg));
+        for (let deg = 0; deg < 360; deg += rotationStepDeg) push(THREE.MathUtils.degToRad(deg));
         return options;
       };
 
@@ -1574,6 +1576,9 @@ export default function Home() {
 
       const allShareSameGeometry = visibleModels.length > 0
         && visibleModels.every((m) => m.geometry.geometry.uuid === visibleModels[0].geometry.geometry.uuid);
+      const SAME_GEOMETRY_FAST_PATH = allShareSameGeometry && visibleModels.length >= 18;
+      const USE_CONTACT_CANDIDATES = !(SAME_GEOMETRY_FAST_PATH && PERF_COMPLEX_SCENE);
+      const ENABLE_MULTI_ORDERING_RETRY = visibleModels.length <= 32;
 
       // ── Pre-select best rotation for identical-geometry batches ─────────────
       // Run a fast BLF simulation at each angle and keep the angle that fits most.
@@ -1649,14 +1654,33 @@ export default function Home() {
       };
       const modelOrder = [...visibleModels].sort((a, b) => areaAtBestAngle(b) - areaAtBestAngle(a));
 
+      // ── Placement attempt function ───────────────────────────────────────
+      // Greedy BLF is ordering-sensitive — different model orderings yield
+      // different packing configurations.  By retrying with alternative orderings
+      // when models spill, we eliminate the counter-intuitive case where smaller
+      // spacing fits fewer models than larger spacing.
+      const attemptPlacement = (order: typeof modelOrder) => {
       const placed: Placed[] = [];
       let spills: Placed[] = [];
 
       // ── Per-model placement ──────────────────────────────────────────────────
-      for (const model of modelOrder) {
+      for (const model of order) {
         const t = modelTransformById.get(model.id) ?? model.transform;
+        const neighborPool: CollisionProxy[] = [...placed, ...blockers];
+        const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
+          ? neighborPool
+            .slice()
+            .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
+            .slice(0, MAX_CANDIDATE_NEIGHBORS)
+          : neighborPool;
+        const collisionPool = [...placed, ...blockers];
+
         const angleOptions = (() => {
           const base = makeRotationOptions(t.rotation.z);
+          if (SAME_GEOMETRY_FAST_PATH && sharedBestRotation != null) {
+            const alternatives = base.filter((a) => Math.abs(a - sharedBestRotation) > 1e-5).slice(0, 2);
+            return [sharedBestRotation, ...alternatives];
+          }
           if (sharedBestRotation == null) return base;
           const prioritized = [sharedBestRotation, ...base.filter((a) => Math.abs(a - sharedBestRotation) > 1e-5)];
           return prioritized;
@@ -1682,7 +1706,7 @@ export default function Home() {
           const seen = new Set<string>();
           const cands: Array<{ x: number; y: number; sortKey: number }> = [];
           const addCandidate = (x: number, y: number) => {
-            if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) return;
+            if (cands.length >= MAX_CANDIDATE_BUFFER) return;
             const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
             const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
             const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
@@ -1699,18 +1723,10 @@ export default function Home() {
           addCandidate(minCenterX, maxCenterY);
           addCandidate(maxCenterX, maxCenterY);
 
-          const neighborPool: CollisionProxy[] = [...placed, ...blockers];
-          const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
-            ? neighborPool
-              .slice()
-              .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
-              .slice(0, MAX_CANDIDATE_NEIGHBORS)
-            : neighborPool;
-
           // AABB touch positions — fast coverage for axis-aligned shapes
           let vertexPairCount = 0;
           for (const other of candidateNeighbors) {
-            if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) break;
+            if (cands.length >= MAX_CANDIDATE_BUFFER) break;
             const ob = worldBoundsAt(other, other.center);
             // Right of / left of / above / below neighbour
             addCandidate(ob.maxX + minSpacing - h.localMinX, other.center.y);
@@ -1738,38 +1754,42 @@ export default function Home() {
           }
 
           // SAT-contact edge candidates — places new hull flush against each placed edge
-          const contactRaw: Array<{ x: number; y: number }> = [];
-          buildContactCandidates(
-            h,
-            candidateNeighbors,
-            minCenterX,
-            maxCenterX,
-            minCenterY,
-            maxCenterY,
-            contactRaw,
-            MAX_CONTACT_CANDIDATES,
-          );
-          for (const c of contactRaw) addCandidate(c.x, c.y);
+          if (USE_CONTACT_CANDIDATES) {
+            const contactRaw: Array<{ x: number; y: number }> = [];
+            buildContactCandidates(
+              h,
+              candidateNeighbors,
+              minCenterX,
+              maxCenterX,
+              minCenterY,
+              maxCenterY,
+              contactRaw,
+              MAX_CONTACT_CANDIDATES,
+            );
+            for (const c of contactRaw) addCandidate(c.x, c.y);
+          }
 
-          // Dense regular lattice — ensures we always match axis-aligned packing capacity
+          // Dense regular lattice + hex offset — ensures we always match axis-aligned packing capacity
           const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
           const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
           const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
           const rowsY = Math.ceil((maxCenterY - minCenterY) / pitchY) + 1;
-          const totalLatticeCells = (colsX + 1) * (rowsY + 1);
+          const totalLatticeCells = (colsX + 1) * (rowsY + 1) * 1.5; // account for hex offset
           const latticeStride = Math.max(1, Math.ceil(totalLatticeCells / Math.max(1, MAX_LATTICE_CANDIDATES)));
           let latticeCounter = 0;
           for (let ix = 0; ix <= colsX; ix++) {
             for (let iy = 0; iy <= rowsY; iy++) {
               if ((latticeCounter++ % latticeStride) !== 0) continue;
               addCandidate(minCenterX + ix * pitchX, minCenterY + iy * pitchY);
+              // Hex-offset row: shift every other row by half pitch
+              if (iy % 2 === 1) {
+                addCandidate(minCenterX + ix * pitchX + pitchX * 0.5, minCenterY + iy * pitchY);
+              }
             }
           }
 
           // Sort by anchor proximity and take first valid (BLF)
           cands.sort((a, b) => a.sortKey - b.sortKey);
-          const collisionPool = [...placed, ...blockers];
-
           let localBest: { center: THREE.Vector2; anchorDistSq: number } | null = null;
           for (let ci = 0; ci < cands.length && ci < MAX_EVALUATED_CANDIDATES; ci++) {
             const c = cands[ci];
@@ -1835,8 +1855,21 @@ export default function Home() {
         for (const spill of retryOrder) {
           const model = spill.model;
           const t = modelTransformById.get(model.id) ?? model.transform;
+          const neighborPool: CollisionProxy[] = [...placed, ...blockers];
+          const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
+            ? neighborPool
+              .slice()
+              .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
+              .slice(0, MAX_CANDIDATE_NEIGHBORS)
+            : neighborPool;
+          const collisionPool = [...placed, ...blockers];
+
           const angleOptions = (() => {
             const base = makeRotationOptions(t.rotation.z);
+            if (SAME_GEOMETRY_FAST_PATH && sharedBestRotation != null) {
+              const alternatives = base.filter((a) => Math.abs(a - sharedBestRotation) > 1e-5).slice(0, 2);
+              return [sharedBestRotation, ...alternatives];
+            }
             if (sharedBestRotation == null) return base;
             return [sharedBestRotation, ...base.filter((a) => Math.abs(a - sharedBestRotation) > 1e-5)];
           })();
@@ -1861,7 +1894,7 @@ export default function Home() {
             const seen = new Set<string>();
             const cands: Array<{ x: number; y: number; sortKey: number }> = [];
             const addCandidate = (x: number, y: number) => {
-              if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) return;
+              if (cands.length >= MAX_CANDIDATE_BUFFER) return;
               const cx = Math.min(maxCenterX, Math.max(minCenterX, x));
               const cy = Math.min(maxCenterY, Math.max(minCenterY, y));
               const k = `${cx.toFixed(2)}:${cy.toFixed(2)}`;
@@ -1878,15 +1911,8 @@ export default function Home() {
             addCandidate(minCenterX, maxCenterY);
             addCandidate(maxCenterX, maxCenterY);
 
-            const neighborPool: CollisionProxy[] = [...placed, ...blockers];
-            const candidateNeighbors = neighborPool.length > MAX_CANDIDATE_NEIGHBORS
-              ? neighborPool
-                .slice()
-                .sort((a, b) => a.center.distanceToSquared(anchor) - b.center.distanceToSquared(anchor))
-                .slice(0, MAX_CANDIDATE_NEIGHBORS)
-              : neighborPool;
             for (const other of candidateNeighbors) {
-              if (cands.length >= MAX_EVALUATED_CANDIDATES * 2) break;
+              if (cands.length >= MAX_CANDIDATE_BUFFER) break;
               const ob = worldBoundsAt(other, other.center);
               addCandidate(ob.maxX + minSpacing - h.localMinX, other.center.y);
               addCandidate(ob.minX - minSpacing - h.localMaxX, other.center.y);
@@ -1896,36 +1922,39 @@ export default function Home() {
               addCandidate(anchor.x, ob.maxY + minSpacing - h.localMinY);
             }
 
-            const contactRaw: Array<{ x: number; y: number }> = [];
-            buildContactCandidates(
-              h,
-              candidateNeighbors,
-              minCenterX,
-              maxCenterX,
-              minCenterY,
-              maxCenterY,
-              contactRaw,
-              MAX_CONTACT_CANDIDATES,
-            );
-            for (const c of contactRaw) addCandidate(c.x, c.y);
+            if (USE_CONTACT_CANDIDATES) {
+              const contactRaw: Array<{ x: number; y: number }> = [];
+              buildContactCandidates(
+                h,
+                candidateNeighbors,
+                minCenterX,
+                maxCenterX,
+                minCenterY,
+                maxCenterY,
+                contactRaw,
+                MAX_CONTACT_CANDIDATES,
+              );
+              for (const c of contactRaw) addCandidate(c.x, c.y);
+            }
 
             const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
             const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
             const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
             const rowsY = Math.ceil((maxCenterY - minCenterY) / pitchY) + 1;
-            const totalLatticeCells = (colsX + 1) * (rowsY + 1);
+            const totalLatticeCells = (colsX + 1) * (rowsY + 1) * 1.5;
             const latticeStride = Math.max(1, Math.ceil(totalLatticeCells / Math.max(1, MAX_LATTICE_CANDIDATES)));
             let latticeCounter = 0;
             for (let ix = 0; ix <= colsX; ix++) {
               for (let iy = 0; iy <= rowsY; iy++) {
                 if ((latticeCounter++ % latticeStride) !== 0) continue;
                 addCandidate(minCenterX + ix * pitchX, minCenterY + iy * pitchY);
+                if (iy % 2 === 1) {
+                  addCandidate(minCenterX + ix * pitchX + pitchX * 0.5, minCenterY + iy * pitchY);
+                }
               }
             }
 
             cands.sort((a, b) => a.sortKey - b.sortKey);
-            const collisionPool = [...placed, ...blockers];
-
             for (let ci = 0; ci < cands.length && ci < MAX_EVALUATED_CANDIDATES; ci++) {
               const c = cands[ci];
               const center = new THREE.Vector2(c.x, c.y);
@@ -1958,6 +1987,46 @@ export default function Home() {
 
         spills = remainingSpills;
       }
+
+      return { placed, spills };
+      };
+
+      // ── Multi-ordering retry ─────────────────────────────────────────────────
+      // Try the primary ordering; if models spill, retry with alternative
+      // orderings and keep the result with fewest spills.
+      let bestResult = attemptPlacement(modelOrder);
+
+      if (ENABLE_MULTI_ORDERING_RETRY && bestResult.spills.length > 0) {
+        // Give spilled models first dibs on plate positions
+        const spillIds = new Set(bestResult.spills.map(s => s.model.id));
+        const spillFirstOrder = [
+          ...modelOrder.filter(m => spillIds.has(m.id)),
+          ...modelOrder.filter(m => !spillIds.has(m.id)),
+        ];
+        const attempt = attemptPlacement(spillFirstOrder);
+        if (attempt.spills.length < bestResult.spills.length) bestResult = attempt;
+      }
+
+      if (ENABLE_MULTI_ORDERING_RETRY && bestResult.spills.length > 0) {
+        // Smallest-first: small models fill gaps more flexibly
+        const attempt = attemptPlacement([...modelOrder].reverse());
+        if (attempt.spills.length < bestResult.spills.length) bestResult = attempt;
+      }
+
+      if (ENABLE_MULTI_ORDERING_RETRY && bestResult.spills.length > 0) {
+        // Interleaved: alternate large/small to balance coverage and gap-filling
+        const interleaved: typeof modelOrder = [];
+        let lo = 0; let hi = modelOrder.length - 1;
+        while (lo <= hi) {
+          interleaved.push(modelOrder[lo++]);
+          if (lo <= hi) interleaved.push(modelOrder[hi--]);
+        }
+        const attempt = attemptPlacement(interleaved);
+        if (attempt.spills.length < bestResult.spills.length) bestResult = attempt;
+      }
+
+      const placed = bestResult.placed;
+      const spills = bestResult.spills;
 
       // ── Multi-axis compaction ────────────────────────────────────────────────
       // Move each model toward the anchor, then independently squeeze it along
@@ -2007,6 +2076,34 @@ export default function Home() {
         }
 
         if (!moved) break;
+      }
+
+      // ── Re-layout spills using regular column-based packing ──────────────
+      if (spills.length > 0) {
+        const outsideGap = Math.max(8, spacing);
+        let columnLeftX = maxX + outsideGap;
+        let columnYCursor = minY;
+        let columnMaxWidth = 0;
+
+        for (const entry of spills) {
+          const w = entry.localMaxX - entry.localMinX;
+          const d = entry.localMaxY - entry.localMinY;
+
+          // Wrap to next column if this model would exceed plate depth
+          if (columnYCursor > minY && (columnYCursor + d) > maxY) {
+            columnLeftX += columnMaxWidth + outsideGap;
+            columnMaxWidth = 0;
+            columnYCursor = minY;
+          }
+
+          entry.center.set(
+            columnLeftX - entry.localMinX,
+            columnYCursor - entry.localMinY,
+          );
+
+          columnYCursor += d + spacing;
+          columnMaxWidth = Math.max(columnMaxWidth, w);
+        }
       }
 
       const updates = [...placed, ...spills].map((entry) => {
