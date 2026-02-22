@@ -41,6 +41,7 @@ interface ModelManagerPanelProps {
   onLoadMeshChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onImportSceneChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   dimmed?: boolean;
+  bottomClearancePx?: number;
 }
 
 type GroupedEntry = {
@@ -80,6 +81,7 @@ export function ModelManagerPanel({
   onLoadMeshChange,
   onImportSceneChange,
   dimmed = false,
+  bottomClearancePx = 220,
 }: ModelManagerPanelProps) {
   const [expanded, setExpanded] = useState(true);
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Record<string, boolean>>({});
@@ -154,6 +156,15 @@ export function ModelManagerPanel({
   const closeContextMenu = () => setContextMenu(null);
 
   const orderedModelIds = useMemo(() => grouped.flatMap((group) => group.models.map((model) => model.id)), [grouped]);
+  const computedBottomClearance = Math.max(140, Math.round(bottomClearancePx));
+  const panelMaxHeight = `calc(100vh - var(--topbar-height) - ${computedBottomClearance}px)`;
+  const panelClassName = dimmed
+    ? 'opacity-60 pointer-events-none transition-opacity duration-150 flex flex-col'
+    : 'transition-opacity duration-150 flex flex-col';
+  const panelStyle: React.CSSProperties = {
+    ...(dimmed ? { filter: 'grayscale(0.25)' } : {}),
+    ...(expanded ? { maxHeight: panelMaxHeight } : {}),
+  };
 
   const toggleGroupCollapsed = (groupId: string) => {
     setCollapsedGroupIds((prev) => ({
@@ -222,8 +233,8 @@ export function ModelManagerPanel({
 
   return (
     <Card
-      className={dimmed ? 'opacity-60 pointer-events-none transition-opacity duration-150' : 'transition-opacity duration-150'}
-      style={dimmed ? { filter: 'grayscale(0.25)' } : undefined}
+      className={panelClassName}
+      style={panelStyle}
     >
       <CardHeader
         left={(
@@ -272,7 +283,7 @@ export function ModelManagerPanel({
       />
 
       {expanded && (
-        <div className="px-2.5 pt-1 pb-2.5 space-y-2">
+        <div className="px-2.5 pt-1 pb-2.5 space-y-2 flex flex-col flex-1 min-h-0">
           <div
             className="rounded-md border p-2"
             style={{ background: 'var(--surface-1)', borderColor: 'var(--border-subtle)' }}
@@ -330,7 +341,7 @@ export function ModelManagerPanel({
             </div>
           </div>
 
-          <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 max-h-[min(68vh,calc(100vh-var(--topbar-height)-220px))]">
+          <div className="space-y-1 overflow-y-auto custom-scrollbar pr-0.5 flex-1 min-h-0">
             {models.length === 0 ? (
               <div className="text-xs text-center py-2 italic" style={{ color: 'var(--text-muted)' }}>
                 No models loaded

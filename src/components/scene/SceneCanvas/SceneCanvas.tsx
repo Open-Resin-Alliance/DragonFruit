@@ -27,6 +27,7 @@ import type { SupportData } from '@/supports/rendering';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
+import SliceSatBoundingMeshRenderer from '@/supports/Rafts/Crenelated/rendering/SliceSatBoundingMeshRenderer';
 import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
@@ -62,6 +63,12 @@ import {
   type CameraProjectionMode,
 } from '@/components/settings/cameraProjectionPreferences';
 import { DEFAULT_VIEW3D_SETTINGS, type View3DSettings } from '@/components/settings/view3dPreferences';
+import {
+  computeApproxModelWorldBounds,
+  computePreciseModelWorldBounds,
+  isBoundsOutsideVolume,
+  shouldUsePreciseBoundsForTransform,
+} from '@/utils/modelBounds';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -964,62 +971,29 @@ export function SceneCanvas({
   const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
 
-  const computeModelWorldBounds = React.useCallback((model: LoadedModel, modelTransformOverride?: ModelTransform) => {
-    const modelBox = model.geometry.bbox.clone();
-    const center = model.geometry.center;
-    modelBox.translate(new THREE.Vector3(-center.x, -center.y, -center.z));
-
+  const computeModelWorldBounds = React.useCallback((
+    model: LoadedModel,
+    modelTransformOverride?: ModelTransform,
+    volumeBounds?: THREE.Box3 | null,
+  ) => {
     const t = modelTransformOverride ?? model.transform;
 
-    const ax = Math.abs(t.rotation.x);
-    const ay = Math.abs(t.rotation.y);
-    const az = Math.abs(t.rotation.z);
-    const rotationAxisCount = Number(ax > 1e-4) + Number(ay > 1e-4) + Number(az > 1e-4);
-    const usePreciseMultiAxisBounds = rotationAxisCount > 1;
-
-    const transformMatrix = new THREE.Matrix4().compose(
-      t.position,
-      new THREE.Quaternion().setFromEuler(t.rotation),
-      t.scale,
-    );
-
-    if (!usePreciseMultiAxisBounds) {
-      modelBox.applyMatrix4(transformMatrix);
-      return modelBox;
+    if (shouldUsePreciseBoundsForTransform(t)) {
+      return computePreciseModelWorldBounds(model.geometry, t);
     }
 
-    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    const finalMatrix = transformMatrix.multiply(offsetMatrix);
-    const positionAttribute = model.geometry.geometry.getAttribute('position');
-    if (!positionAttribute || positionAttribute.count === 0) {
-      modelBox.applyMatrix4(finalMatrix);
-      return modelBox;
+    const approxBounds = computeApproxModelWorldBounds(model.geometry, t);
+    if (!volumeBounds) {
+      return approxBounds;
     }
 
-    const preciseBounds = new THREE.Box3();
-    preciseBounds.makeEmpty();
-
-    const point = new THREE.Vector3();
-    if (positionAttribute instanceof THREE.BufferAttribute) {
-      const array = positionAttribute.array;
-      const itemSize = positionAttribute.itemSize;
-
-      for (let i = 0; i < positionAttribute.count; i++) {
-        const idx = i * itemSize;
-        point.set(array[idx], array[idx + 1], array[idx + 2]).applyMatrix4(finalMatrix);
-        preciseBounds.expandByPoint(point);
-      }
-    } else {
-      for (let i = 0; i < positionAttribute.count; i++) {
-        point
-          .set(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i))
-          .applyMatrix4(finalMatrix);
-        preciseBounds.expandByPoint(point);
-      }
+    // Fast path: if conservative bounds are clearly inside volume, skip precise pass.
+    if (!isBoundsOutsideVolume(approxBounds, volumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+      return approxBounds;
     }
 
-    return preciseBounds.isEmpty() ? modelBox.applyMatrix4(finalMatrix) : preciseBounds;
-  }, []);
+    return computePreciseModelWorldBounds(model.geometry, t);
+  }, [BUILD_VOLUME_BOUNDS_EPS_MM]);
 
   const buildVolumeBounds = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled) return null;
@@ -1035,6 +1009,19 @@ export function SceneCanvas({
     );
   }, [activeBuildVolumeSettings]);
 
+  const modelWorldBounds = React.useMemo(() => {
+    const map = new Map<string, THREE.Box3>();
+    for (const model of models) {
+      if (!model.visible) continue;
+      const effectiveTransform =
+        (model.id === activeModelId && transform)
+          ? transform
+          : model.transform;
+      map.set(model.id, computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds));
+    }
+    return map;
+  }, [activeModelId, buildVolumeBounds, computeModelWorldBounds, models, transform]);
+
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
     if (isGizmoDragging || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
@@ -1042,34 +1029,22 @@ export function SceneCanvas({
     return models
       .filter((model) => model.visible)
       .map((model) => {
-        const effectiveTransform =
-          (model.id === activeModelId && transform)
-            ? transform
-            : model.transform;
-
+        const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds);
         return {
-        id: model.id,
-        name: model.name,
-          bounds: computeModelWorldBounds(model, effectiveTransform),
+          id: model.id,
+          name: model.name,
+          bounds,
         };
       })
-      .filter(({ bounds }) => (
-        bounds.min.x < (buildVolumeBounds.min.x - BUILD_VOLUME_BOUNDS_EPS_MM)
-        || bounds.max.x > (buildVolumeBounds.max.x + BUILD_VOLUME_BOUNDS_EPS_MM)
-        || bounds.min.y < (buildVolumeBounds.min.y - BUILD_VOLUME_BOUNDS_EPS_MM)
-        || bounds.max.y > (buildVolumeBounds.max.y + BUILD_VOLUME_BOUNDS_EPS_MM)
-        || bounds.min.z < (buildVolumeBounds.min.z - BUILD_VOLUME_BOUNDS_EPS_MM)
-        || bounds.max.z > (buildVolumeBounds.max.z + BUILD_VOLUME_BOUNDS_EPS_MM)
-      ));
+      .filter(({ bounds }) => isBoundsOutsideVolume(bounds, buildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM));
   }, [
     BUILD_VOLUME_BOUNDS_EPS_MM,
-    activeModelId,
     buildVolumeBounds,
     computeModelWorldBounds,
     isGizmoDragging,
+    modelWorldBounds,
     models,
     outOfBoundsRotateGraceActive,
-    transform,
   ]);
 
   const shaderOutOfBoundsBounds = React.useMemo(() => {
@@ -1099,14 +1074,14 @@ export function SceneCanvas({
           (model.id === activeModelId && transform)
             ? transform
             : model.transform;
-        const bounds = computeModelWorldBounds(model, effectiveTransform);
+        const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
         return {
           id: model.id,
           positions: buildBoxWireframePositions(bounds),
           color: outOfBoundsModelIds.has(model.id) ? '#ff5b6f' : '#5aaeff',
         };
       });
-  }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeModelId, computeModelWorldBounds, models, outOfBoundsModelIds, transform]);
+  }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeModelId, computeModelWorldBounds, modelWorldBounds, models, outOfBoundsModelIds, transform]);
 
   const buildVolumeBoxGeometry = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled) return null;
@@ -1316,6 +1291,35 @@ export function SceneCanvas({
     if (transform && activeModelId === activeModel.id) return transform;
     return activeModel.transform;
   }, [activeModel, transform, activeModelId]);
+
+  const satDebugTargets = React.useMemo(() => {
+    if (!activeBuildVolumeSettings.showSliceSatBoundingMesh) return [] as Array<{
+      id: string;
+      geometry: LoadedModel['geometry'];
+      transform: ModelTransform;
+    }>;
+
+    if (!activeBuildVolumeSettings.showSliceSatBoundingMeshForAllModels) {
+      if (!activeModel || !activeModelTransform) return [];
+      return [{ id: activeModel.id, geometry: activeModel.geometry, transform: activeModelTransform }];
+    }
+
+    return models
+      .filter((model) => model.visible)
+      .map((model) => ({
+        id: model.id,
+        geometry: model.geometry,
+        transform: (model.id === activeModelId && transform) ? transform : model.transform,
+      }));
+  }, [
+    activeBuildVolumeSettings.showSliceSatBoundingMesh,
+    activeBuildVolumeSettings.showSliceSatBoundingMeshForAllModels,
+    activeModel,
+    activeModelId,
+    activeModelTransform,
+    models,
+    transform,
+  ]);
 
   const introControllerBounds = React.useMemo(() => {
     if (mode === 'support' && activeModel) {
@@ -1973,6 +1977,19 @@ export function SceneCanvas({
                   <FootprintBorderRenderer modelGeometry={activeModel ? activeModel.geometry : null} modelTransform={activeModelTransform} />
                 </>
               )}
+
+              {satDebugTargets.map((entry) => (
+                <SliceSatBoundingMeshRenderer
+                  key={`sat-debug-${entry.id}`}
+                  modelGeometry={entry.geometry}
+                  modelTransform={entry.transform}
+                  enabled={Boolean(activeBuildVolumeSettings.showSliceSatBoundingMesh)}
+                  renderMode={activeBuildVolumeSettings.sliceSatBoundingMeshMode === 'accurate_hull'
+                    ? 'hull'
+                    : activeBuildVolumeSettings.experimentalSliceSatBoundingMeshRenderMode}
+                  interactionActive={isGizmoDragging}
+                />
+              ))}
 
               {/* Gizmo attached to active model */}
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && isModelSelected && (

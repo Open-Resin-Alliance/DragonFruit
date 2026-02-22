@@ -16,7 +16,12 @@ import { DebugPrimitivesPanel } from '@/components/controls/DebugPrimitivesPanel
 import { ModelStatsCard } from '@/components/controls/ModelStatsCard';
 import { TransformToolbar } from '@/components/controls/TransformToolbar';
 import { TransformControls } from '@/components/controls/TransformControls';
-import { ArrangePanel, type ArrangeAnchorMode, type ArrangeLayoutMode } from '@/components/controls/ArrangePanel';
+import {
+  ArrangePanel,
+  type ArrangeAnchorMode,
+  type ArrangeLayoutMode,
+  type ArrangePrecisionMode,
+} from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
@@ -33,6 +38,17 @@ import {
 } from '@/components/layout/floatingLayoutPreferences';
 
 import { initializeBVH } from '@/utils/bvh';
+import {
+  computeApproxModelWorldBounds,
+  computePreciseModelWorldBounds,
+  isBoundsOutsideVolume,
+  shouldUsePreciseBoundsForTransform,
+} from '@/utils/modelBounds';
+import {
+  type HullCacheEntry,
+  type ArrangeModel as HighPrecisionArrangeModel,
+} from '@/features/scene/arrange/highPrecisionArrange';
+import { computeHighPrecisionArrangeUpdatesWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
 
 // Domain Features
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -96,7 +112,8 @@ export default function Home() {
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
-  const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(5);
+  const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
+  const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
   const [arrangeAllowRotateOnZ, setArrangeAllowRotateOnZ] = React.useState(false);
   const [arrangeLayoutMode, setArrangeLayoutMode] = React.useState<ArrangeLayoutMode>('auto');
   const [arrangeAnchorMode, setArrangeAnchorMode] = React.useState<ArrangeAnchorMode>('center');
@@ -106,9 +123,64 @@ export default function Home() {
   const [arrangeArrayGapX, setArrangeArrayGapX] = React.useState(5);
   const [arrangeArrayGapY, setArrangeArrayGapY] = React.useState(5);
   const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
+  const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'array' | null>(null);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
+  const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
+  const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
   const [duplicateTotalCopies, setDuplicateTotalCopies] = React.useState(2);
-  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(5);
+  const [duplicateSpacingMm, setDuplicateSpacingMm] = React.useState(0.5);
+  const showArrangeBlockingOverlay = isAutoArranging;
+
+  const arrangeOverlayContent = React.useMemo(() => {
+    if (activeArrangeOperation === 'high_precision') {
+      return {
+        title: 'High-Precision Arrange Running…',
+        detailLines: [
+          'This is a computationally expensive operation for dense packing.',
+          'Please be patient while we process your models.',
+        ],
+      };
+    }
+
+    if (activeArrangeOperation === 'array') {
+      return {
+        title: 'Applying Array Arrange…',
+        detailLines: [
+          'Positioning models and validating placement.',
+          'Please wait a moment.',
+        ],
+      };
+    }
+
+    return {
+      title: 'Arranging Models…',
+      detailLines: [
+        'Computing placements and resolving collisions.',
+        'Please wait.',
+      ],
+    };
+  }, [activeArrangeOperation]);
+
+  React.useEffect(() => {
+    if (!showArrangeBlockingOverlay) {
+      setArrangeOverlayElapsedSec(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const id = window.setInterval(() => {
+      setArrangeOverlayElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 250);
+
+    return () => window.clearInterval(id);
+  }, [showArrangeBlockingOverlay]);
+
+  const arrangeOverlayElapsedLabel = React.useMemo(() => {
+    const total = Math.max(0, arrangeOverlayElapsedSec);
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  }, [arrangeOverlayElapsedSec]);
   const [duplicateLayoutMode, setDuplicateLayoutMode] = React.useState<DuplicateLayoutMode>('auto');
   const [duplicateArrayCountX, setDuplicateArrayCountX] = React.useState(2);
   const [duplicateArrayCountY, setDuplicateArrayCountY] = React.useState(1);
@@ -142,6 +214,39 @@ export default function Home() {
     scale: THREE.Vector3;
   } | null>(null);
   const dragDepthRef = React.useRef(0);
+  const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
+  const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
+
+  React.useEffect(() => {
+    if (arrangePrecisionMode !== 'high_precision') return;
+    if (arrangeAllowRotateOnZ) return;
+    setArrangeAllowRotateOnZ(true);
+  }, [arrangePrecisionMode, arrangeAllowRotateOnZ]);
+
+  React.useLayoutEffect(() => {
+    const element = modelStatsCardContainerRef.current;
+    if (!element) {
+      setModelStatsBottomClearancePx(220);
+      return;
+    }
+
+    const updateClearance = () => {
+      const rect = element.getBoundingClientRect();
+      const bottomMarginPx = 12; // bottom-3 (aligned with floating panel margin)
+      const safetyGapPx = 14;
+      const measured = Math.ceil(rect.height + bottomMarginPx + safetyGapPx);
+      setModelStatsBottomClearancePx(Math.max(220, measured));
+    };
+
+    updateClearance();
+    const observer = new ResizeObserver(() => {
+      updateClearance();
+    });
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [scene.models.length]);
   const rightClickGestureRef = React.useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
@@ -380,6 +485,24 @@ export default function Home() {
     };
   }, []);
 
+  const isFiniteNumber = React.useCallback((n: number) => Number.isFinite(n) && !Number.isNaN(n), []);
+
+  const isFiniteTransform = React.useCallback((t: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }) => (
+    isFiniteNumber(t.position.x)
+    && isFiniteNumber(t.position.y)
+    && isFiniteNumber(t.position.z)
+    && isFiniteNumber(t.rotation.x)
+    && isFiniteNumber(t.rotation.y)
+    && isFiniteNumber(t.rotation.z)
+    && isFiniteNumber(t.scale.x)
+    && isFiniteNumber(t.scale.y)
+    && isFiniteNumber(t.scale.z)
+  ), [isFiniteNumber]);
+
   // Sync transform manager when active model changes
   useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
@@ -391,6 +514,31 @@ export default function Home() {
       }
 
       const t = scene.activeModel.transform;
+
+      if (!isFiniteTransform(t)) {
+        const fallback = isFiniteTransform(transformMgr.transform)
+          ? {
+            position: transformMgr.transform.position.clone(),
+            rotation: transformMgr.transform.rotation.clone(),
+            scale: transformMgr.transform.scale.clone(),
+          }
+          : {
+            position: new THREE.Vector3(0, 0, 0),
+            rotation: new THREE.Euler(0, 0, 0),
+            scale: new THREE.Vector3(1, 1, 1),
+          };
+
+        console.warn('[TransformSync] Active model had non-finite transform. Auto-recovering.', {
+          id: scene.activeModelId,
+        });
+
+        scene.updateModelTransform(scene.activeModelId, fallback);
+        transformMgr.transformHook.setPosition(fallback.position.x, fallback.position.y, fallback.position.z);
+        transformMgr.transformHook.setRotation(fallback.rotation.x, fallback.rotation.y, fallback.rotation.z);
+        transformMgr.transformHook.setScale(fallback.scale.x, fallback.scale.y, fallback.scale.z);
+        setDisplayActiveModelId(scene.activeModelId);
+        return;
+      }
 
       console.log('[Home] Syncing transform from model:', {
         id: scene.activeModelId,
@@ -428,7 +576,7 @@ export default function Home() {
     } else {
       setDisplayActiveModelId(null);
     }
-  }, [scene.activeModelId, scene.activeModel, displayActiveModelId]);
+  }, [displayActiveModelId, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
@@ -438,6 +586,21 @@ export default function Home() {
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
       const modelTransform = scene.activeModel?.transform;
       if (!modelTransform) return;
+
+      if (!isFiniteTransform(modelTransform)) {
+        if (isFiniteTransform(transformMgr.transform)) {
+          scene.updateModelTransform(scene.activeModelId, {
+            position: transformMgr.transform.position.clone(),
+            rotation: transformMgr.transform.rotation.clone(),
+            scale: transformMgr.transform.scale.clone(),
+          });
+        }
+        return;
+      }
+
+      if (!isFiniteTransform(transformMgr.transform)) {
+        return;
+      }
 
       const current = transformMgr.transform;
       const EPSILON = 0.0001;
@@ -465,6 +628,7 @@ export default function Home() {
     transformMgr.transform.scale.x,
     transformMgr.transform.scale.y,
     transformMgr.transform.scale.z,
+    isFiniteTransform,
   ]);
 
   // Wrap transform change to update local state
@@ -512,62 +676,29 @@ export default function Home() {
   // Temporary: LYS Ghost Viewer State
   const [ghostData, setGhostData] = React.useState<any>(null);
 
-  const computeModelWorldBounds = React.useCallback((model: (typeof scene.models)[number], transformOverride?: typeof model.transform) => {
-    const modelBox = model.geometry.bbox.clone();
-    const center = model.geometry.center;
-    modelBox.translate(new THREE.Vector3(-center.x, -center.y, -center.z));
-
+  const computeModelWorldBounds = React.useCallback((
+    model: (typeof scene.models)[number],
+    transformOverride?: typeof model.transform,
+    volumeBounds?: THREE.Box3 | null,
+  ) => {
     const t = transformOverride ?? model.transform;
 
-    const ax = Math.abs(t.rotation.x);
-    const ay = Math.abs(t.rotation.y);
-    const az = Math.abs(t.rotation.z);
-    const rotationAxisCount = Number(ax > 1e-4) + Number(ay > 1e-4) + Number(az > 1e-4);
-    const usePreciseMultiAxisBounds = rotationAxisCount > 1;
-
-    const transformMatrix = new THREE.Matrix4().compose(
-      t.position,
-      new THREE.Quaternion().setFromEuler(t.rotation),
-      t.scale,
-    );
-
-    if (!usePreciseMultiAxisBounds) {
-      modelBox.applyMatrix4(transformMatrix);
-      return modelBox;
+    if (shouldUsePreciseBoundsForTransform(t)) {
+      return computePreciseModelWorldBounds(model.geometry, t);
     }
 
-    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    const finalMatrix = transformMatrix.multiply(offsetMatrix);
-    const positionAttribute = model.geometry.geometry.getAttribute('position');
-    if (!positionAttribute || positionAttribute.count === 0) {
-      modelBox.applyMatrix4(finalMatrix);
-      return modelBox;
+    const approxBounds = computeApproxModelWorldBounds(model.geometry, t);
+
+    if (!volumeBounds) {
+      return approxBounds;
     }
 
-    const preciseBounds = new THREE.Box3();
-    preciseBounds.makeEmpty();
-    const point = new THREE.Vector3();
-
-    if (positionAttribute instanceof THREE.BufferAttribute) {
-      const array = positionAttribute.array;
-      const itemSize = positionAttribute.itemSize;
-
-      for (let i = 0; i < positionAttribute.count; i++) {
-        const idx = i * itemSize;
-        point.set(array[idx], array[idx + 1], array[idx + 2]).applyMatrix4(finalMatrix);
-        preciseBounds.expandByPoint(point);
-      }
-    } else {
-      for (let i = 0; i < positionAttribute.count; i++) {
-        point
-          .set(positionAttribute.getX(i), positionAttribute.getY(i), positionAttribute.getZ(i))
-          .applyMatrix4(finalMatrix);
-        preciseBounds.expandByPoint(point);
-      }
+    if (!isBoundsOutsideVolume(approxBounds, volumeBounds, 0.01)) {
+      return approxBounds;
     }
 
-    return preciseBounds.isEmpty() ? modelBox.applyMatrix4(finalMatrix) : preciseBounds;
-  }, [scene.models]);
+    return computePreciseModelWorldBounds(model.geometry, t);
+  }, []);
 
   const buildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
@@ -600,15 +731,8 @@ export default function Home() {
           (scene.activeModelId === model.id && displayActiveModelId === scene.activeModelId)
             ? transformMgr.transform
             : model.transform;
-        const bounds = computeModelWorldBounds(model, effectiveTransform);
-        return (
-          bounds.min.x < (buildVolumeBounds.min.x - BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.max.x > (buildVolumeBounds.max.x + BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.min.y < (buildVolumeBounds.min.y - BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.max.y > (buildVolumeBounds.max.y + BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.min.z < (buildVolumeBounds.min.z - BUILD_VOLUME_BOUNDS_EPS_MM)
-          || bounds.max.z > (buildVolumeBounds.max.z + BUILD_VOLUME_BOUNDS_EPS_MM)
-        );
+        const bounds = computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
+        return isBoundsOutsideVolume(bounds, buildVolumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM);
       })
       .map((model) => model.id);
   }, [
@@ -640,38 +764,139 @@ export default function Home() {
       .reduce((sum, model) => sum + (model.polygonCount || 0), 0);
   }, [scene.models, scene.selectedModelIds]);
 
-  const getModelFootprintMm = React.useCallback((model: (typeof scene.models)[number]) => {
-    const size = model.geometry.size;
+  const getArrangeTransform = React.useCallback((model: (typeof scene.models)[number]) => {
+    if (
+      scene.activeModelId
+      && model.id === scene.activeModelId
+      && displayActiveModelId === scene.activeModelId
+    ) {
+      return transformMgr.transform;
+    }
+    return model.transform;
+  }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
+
+  const getModelBoundingFootprintMm = React.useCallback((
+    model: (typeof scene.models)[number],
+    rotationZOverride?: number,
+    transformOverride?: (typeof scene.models)[number]['transform'],
+  ) => {
+    const t = transformOverride ?? getArrangeTransform(model);
+    const rotation = new THREE.Euler(
+      t.rotation.x,
+      t.rotation.y,
+      rotationZOverride ?? t.rotation.z,
+      t.rotation.order,
+    );
+
+    const bounds = computeApproxModelWorldBounds(
+      model.geometry,
+      {
+        position: new THREE.Vector3(0, 0, 0),
+        rotation,
+        scale: t.scale,
+      },
+    );
+
     return {
-      width: Math.max(2, Math.abs(size.x * model.transform.scale.x)),
-      depth: Math.max(2, Math.abs(size.y * model.transform.scale.y)),
+      width: Math.max(2, bounds.max.x - bounds.min.x),
+      depth: Math.max(2, bounds.max.y - bounds.min.y),
     };
-  }, []);
+  }, [computeApproxModelWorldBounds, getArrangeTransform]);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
   }), []);
 
+  const resolveArrangeVisibleModels = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+    if (scope === 'all') {
+      return scene.models.filter((m) => m.visible);
+    }
+
+    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
+
+    // Guard against transient selection desync: ensure active model participates
+    // when user arranges selected models and the active model is visible.
+    if (scene.activeModelId) {
+      const activeVisible = scene.models.some((m) => m.id === scene.activeModelId && m.visible);
+      if (activeVisible) selectedIdSet.add(scene.activeModelId);
+    }
+
+    return scene.models.filter((m) => m.visible && selectedIdSet.has(m.id));
+  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+  const applyArrangeTransforms = React.useCallback((updates: Array<{
+    id: string;
+    transform: {
+      position: THREE.Vector3;
+      rotation: THREE.Euler;
+      scale: THREE.Vector3;
+    };
+  }>) => {
+    if (updates.length === 0) return;
+
+    const isFiniteNumber = (n: number) => Number.isFinite(n) && !Number.isNaN(n);
+    const sanitizedUpdates = updates.filter((update) => {
+      const { position, rotation, scale } = update.transform;
+      return isFiniteNumber(position.x)
+        && isFiniteNumber(position.y)
+        && isFiniteNumber(position.z)
+        && isFiniteNumber(rotation.x)
+        && isFiniteNumber(rotation.y)
+        && isFiniteNumber(rotation.z)
+        && isFiniteNumber(scale.x)
+        && isFiniteNumber(scale.y)
+        && isFiniteNumber(scale.z);
+    });
+
+    if (sanitizedUpdates.length === 0) {
+      console.warn('[Arrange][HighPrecision] Skipping apply: all computed transforms were non-finite.');
+      return;
+    }
+
+    if (sanitizedUpdates.length !== updates.length) {
+      console.warn('[Arrange][HighPrecision] Dropped non-finite transforms:', {
+        dropped: updates.length - sanitizedUpdates.length,
+        total: updates.length,
+      });
+    }
+
+    scene.updateModelTransforms(sanitizedUpdates);
+
+    if (!scene.activeModelId || displayActiveModelId !== scene.activeModelId) {
+      return;
+    }
+
+    const activeUpdate = sanitizedUpdates.find((update) => update.id === scene.activeModelId);
+    if (!activeUpdate) return;
+
+    const { position, rotation, scale } = activeUpdate.transform;
+    transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+    transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+    transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+  }, [displayActiveModelId, scene, transformMgr.transformHook]);
+
   const handleAutoArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
 
-    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
-    const visibleModels = scene.models.filter((m) => {
-      if (!m.visible) return false;
-      if (scope === 'selected') return selectedIdSet.has(m.id);
-      return true;
-    });
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
 
     if (visibleModels.length <= 1) return;
 
     const minSpinnerMs = 220;
     const startedAt = performance.now();
+    setActiveArrangeOperation('standard');
+    setArrangeOverlayModelCount(visibleModels.length);
     setIsAutoArranging(true);
     await sleep(0);
 
     try {
+      const modelTransformById = new Map(
+        visibleModels.map((model) => [model.id, getArrangeTransform(model)] as const),
+      );
+
       const modelsWithFootprints = visibleModels.map((model) => {
-        const baseFootprint = getModelFootprintMm(model);
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const baseFootprint = getModelBoundingFootprintMm(model, undefined, t);
         return {
           model,
           baseWidth: baseFootprint.width,
@@ -711,6 +936,7 @@ export default function Home() {
       const evaluatePacking = (ordered: typeof modelsWithFootprints, targetRowWidth: number) => {
         const rows: Row[] = [];
         const spills: SpillEntry[] = [];
+        const placementSizeCache = new Map<string, { width: number; depth: number }>();
 
         let occupiedArea = 0;
         let totalDepthUsed = 0;
@@ -733,21 +959,25 @@ export default function Home() {
           return canonical + k * twoPi;
         };
 
-        const footprintAtAngle = (baseWidth: number, baseDepth: number, angleZ: number) => {
-          const c = Math.abs(Math.cos(angleZ));
-          const s = Math.abs(Math.sin(angleZ));
-          return {
-            width: baseWidth * c + baseDepth * s,
-            depth: baseWidth * s + baseDepth * c,
-          };
+        const footprintAtAngle = (model: (typeof visibleModels)[number], angleZ: number) => {
+          const t = modelTransformById.get(model.id) ?? model.transform;
+          const key = `${model.id}|${angleZ.toFixed(5)}|${t.scale.x.toFixed(5)}|${t.scale.y.toFixed(5)}|${t.scale.z.toFixed(5)}|${t.rotation.x.toFixed(5)}|${t.rotation.y.toFixed(5)}`;
+          const cached = placementSizeCache.get(key);
+          if (cached) return cached;
+
+          const dims = getModelBoundingFootprintMm(model, angleZ, t);
+
+          placementSizeCache.set(key, dims);
+          return dims;
         };
 
         const getAllOptions = (current: (typeof modelsWithFootprints)[number]): PlacementOption[] => {
-          const currentZ = current.model.transform.rotation.z;
+          const t = modelTransformById.get(current.model.id) ?? current.model.transform;
+          const currentZ = t.rotation.z;
           const currentCanonical = normalizeToPi(currentZ);
 
           if (!arrangeAllowRotateOnZ) {
-            const dims = footprintAtAngle(current.baseWidth, current.baseDepth, currentCanonical);
+            const dims = footprintAtAngle(current.model, currentCanonical);
             return [{ rotationZ: currentZ, width: dims.width, depth: dims.depth }];
           }
 
@@ -765,7 +995,7 @@ export default function Home() {
 
           for (const rawCanonical of candidateCanonicals) {
             const canonical = normalizeToPi(rawCanonical);
-            const dims = footprintAtAngle(current.baseWidth, current.baseDepth, canonical);
+            const dims = footprintAtAngle(current.model, canonical);
             const key = `${dims.width.toFixed(3)}:${dims.depth.toFixed(3)}`;
             if (seenFootprints.has(key)) continue;
             seenFootprints.add(key);
@@ -1008,35 +1238,37 @@ export default function Home() {
         });
       }
 
-      scene.updateModelTransforms(
+      applyArrangeTransforms(
         [
           ...packedWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
+            const t = modelTransformById.get(model.id) ?? model.transform;
             return {
               id: model.id,
               transform: {
-                position: new THREE.Vector3(positionX, positionY, model.transform.position.z),
+                position: new THREE.Vector3(positionX, positionY, t.position.z),
                 rotation: new THREE.Euler(
-                  model.transform.rotation.x,
-                  model.transform.rotation.y,
+                  t.rotation.x,
+                  t.rotation.y,
                   rotationZ,
-                  model.transform.rotation.order,
+                  t.rotation.order,
                 ),
-                scale: model.transform.scale.clone(),
+                scale: t.scale.clone(),
               },
             };
           }),
           ...spillWithPositions.map(({ model, rotationZ, positionX, positionY }) => {
+            const t = modelTransformById.get(model.id) ?? model.transform;
             return {
               id: model.id,
               transform: {
-                position: new THREE.Vector3(positionX, positionY, model.transform.position.z),
+                position: new THREE.Vector3(positionX, positionY, t.position.z),
                 rotation: new THREE.Euler(
-                  model.transform.rotation.x,
-                  model.transform.rotation.y,
+                  t.rotation.x,
+                  t.rotation.y,
                   rotationZ,
-                  model.transform.rotation.order,
+                  t.rotation.order,
                 ),
-                scale: model.transform.scale.clone(),
+                scale: t.scale.clone(),
               },
             };
           }),
@@ -1050,16 +1282,70 @@ export default function Home() {
         await sleep(minSpinnerMs - elapsed);
       }
       setIsAutoArranging(false);
+      setActiveArrangeOperation(null);
+      setArrangeOverlayModelCount(null);
     }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getModelFootprintMm, isAutoArranging, scene, sleep, transformMgr]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelBoundingFootprintMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
+
+  const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
+    if (isAutoArranging) return;
+
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+    if (visibleModels.length <= 1) return;
+
+    const minSpinnerMs = 220;
+    const startedAt = performance.now();
+    setActiveArrangeOperation('high_precision');
+    setArrangeOverlayModelCount(visibleModels.length);
+    setIsAutoArranging(true);
+    await sleep(0);
+
+    try {
+      const updates = await computeHighPrecisionArrangeUpdatesWorker({
+        visibleModels: visibleModels as unknown as HighPrecisionArrangeModel[],
+        sceneModels: scene.models as unknown as HighPrecisionArrangeModel[],
+        widthMm: scene.view3dSettings.widthMm,
+        depthMm: scene.view3dSettings.depthMm,
+        originMode: scene.view3dSettings.originMode,
+        arrangeSpacingMm,
+        arrangeAllowRotateOnZ,
+        arrangeAnchorMode,
+        getArrangeTransform: (model) => getArrangeTransform(model as unknown as (typeof scene.models)[number]),
+        hullCache: arrangeHullFootprintCacheRef.current,
+      });
+
+      if (updates.length > 1) {
+        applyArrangeTransforms(updates);
+        transformMgr.setTransformMode('select');
+      }
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < minSpinnerMs) {
+        await sleep(minSpinnerMs - elapsed);
+      }
+      setIsAutoArranging(false);
+      setActiveArrangeOperation(null);
+      setArrangeOverlayModelCount(null);
+    }
+  }, [
+    arrangeAllowRotateOnZ,
+    arrangeAnchorMode,
+    arrangeSpacingMm,
+    getArrangeTransform,
+    isAutoArranging,
+    resolveArrangeVisibleModels,
+    scene,
+    sleep,
+    transformMgr,
+    applyArrangeTransforms,
+  ]);
 
   const computeManualArrayArrangeUpdates = React.useCallback((scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
-    const selectedIdSet = new Set(explicitSelectedIds ?? scene.selectedModelIds);
-    const visibleModels = scene.models.filter((m) => {
-      if (!m.visible) return false;
-      if (scope === 'selected') return selectedIdSet.has(m.id);
-      return true;
-    });
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+
+    const modelTransformById = new Map(
+      visibleModels.map((model) => [model.id, getArrangeTransform(model)] as const),
+    );
 
     if (visibleModels.length <= 1) return { models: visibleModels, updates: [] as Array<{ id: string; transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } }> };
 
@@ -1072,17 +1358,14 @@ export default function Home() {
     const gapZ = Math.max(0, arrangeArrayGapZ);
 
     const baseDims = visibleModels.map((model) => {
+      const t = modelTransformById.get(model.id) ?? model.transform;
+      const projected = getModelBoundingFootprintMm(model, undefined, t);
       const size = model.geometry.size;
-      const scaledWidth = Math.max(2, Math.abs(size.x * model.transform.scale.x));
-      const scaledDepth = Math.max(2, Math.abs(size.y * model.transform.scale.y));
-      const scaledHeight = Math.max(2, Math.abs(size.z * model.transform.scale.z));
-      const rz = model.transform.rotation.z;
-      const c = Math.abs(Math.cos(rz));
-      const s = Math.abs(Math.sin(rz));
+      const scaledHeight = Math.max(2, Math.abs(size.z * t.scale.z));
 
       return {
-        width: (scaledWidth * c) + (scaledDepth * s),
-        depth: (scaledWidth * s) + (scaledDepth * c),
+        width: projected.width,
+        depth: projected.depth,
         height: scaledHeight,
       };
     });
@@ -1124,9 +1407,10 @@ export default function Home() {
       startY = maxY - (maxDepth * 0.5) - totalDepth;
     }
 
-    const baseZ = Math.min(...visibleModels.map((model) => model.transform.position.z));
+    const baseZ = Math.min(...visibleModels.map((model) => (modelTransformById.get(model.id) ?? model.transform).position.z));
 
     const updates = visibleModels.map((model, index) => {
+      const t = modelTransformById.get(model.id) ?? model.transform;
       const xIndex = index % countX;
       const yIndex = Math.floor(index / countX) % countY;
       const zIndex = Math.floor(index / (countX * countY)) % usedCountZ;
@@ -1139,8 +1423,8 @@ export default function Home() {
             startY + (yIndex * stepY),
             baseZ + (zIndex * stepZ),
           ),
-          rotation: model.transform.rotation.clone(),
-          scale: model.transform.scale.clone(),
+          rotation: t.rotation.clone(),
+          scale: t.scale.clone(),
         },
       };
     });
@@ -1159,13 +1443,21 @@ export default function Home() {
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
     scene.view3dSettings.widthMm,
+    getArrangeTransform,
+    getModelBoundingFootprintMm,
+    resolveArrangeVisibleModels,
   ]);
 
   const handleManualArrayArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
 
+    const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
+    if (visibleModels.length <= 1) return;
+
     const minSpinnerMs = 220;
     const startedAt = performance.now();
+    setActiveArrangeOperation('array');
+    setArrangeOverlayModelCount(visibleModels.length);
     setIsAutoArranging(true);
     await sleep(0);
 
@@ -1173,7 +1465,7 @@ export default function Home() {
       const { updates } = computeManualArrayArrangeUpdates(scope, explicitSelectedIds);
       if (updates.length <= 1) return;
 
-      scene.updateModelTransforms(updates);
+      applyArrangeTransforms(updates);
       transformMgr.setTransformMode('select');
     } finally {
       const elapsed = performance.now() - startedAt;
@@ -1181,6 +1473,8 @@ export default function Home() {
         await sleep(minSpinnerMs - elapsed);
       }
       setIsAutoArranging(false);
+      setActiveArrangeOperation(null);
+      setArrangeOverlayModelCount(null);
     }
   }, [
     arrangeAnchorMode,
@@ -1195,6 +1489,7 @@ export default function Home() {
     scene,
     sleep,
     transformMgr,
+    applyArrangeTransforms,
   ]);
 
   React.useEffect(() => {
@@ -1264,7 +1559,9 @@ export default function Home() {
     onArrangeAll: () => {
       void (arrangeLayoutMode === 'array'
         ? handleManualArrayArrangeModels('all')
-        : handleAutoArrangeModels('all'));
+        : (arrangePrecisionMode === 'high_precision'
+          ? handleHighPrecisionArrangeModels('all')
+          : handleAutoArrangeModels('all')));
     },
   });
 
@@ -1870,9 +2167,9 @@ export default function Home() {
     duplicateArrayGapY,
     duplicateArrayGapZ,
     duplicateLayoutMode,
+    resolveArrangeVisibleModels,
     duplicateSpacingMm,
     duplicateTotalCopies,
-    getModelFootprintMm,
     scene.activeModel,
     scene.models,
     scene.mode,
@@ -2079,6 +2376,7 @@ export default function Home() {
               onLoadMeshChange={scene.onFileChange}
               onImportSceneChange={scene.onImportLysChange}
               dimmed={showEmptySceneDialog || importOverlayState.active}
+              bottomClearancePx={modelStatsBottomClearancePx}
             />
 
             {debugPrimitivesPanelVisible && (
@@ -2162,6 +2460,8 @@ export default function Home() {
             {scene.geom && transformMgr.transformMode === 'arrange' && (
               <ArrangePanel
                 key="prepare-arrange-panel"
+                precisionMode={arrangePrecisionMode}
+                onPrecisionModeChange={setArrangePrecisionMode}
                 layoutMode={arrangeLayoutMode}
                 onLayoutModeChange={setArrangeLayoutMode}
                 spacingMm={arrangeSpacingMm}
@@ -2185,12 +2485,16 @@ export default function Home() {
                 onApplyAll={() => {
                   void (arrangeLayoutMode === 'array'
                     ? handleManualArrayArrangeModels('all')
-                    : handleAutoArrangeModels('all'));
+                    : (arrangePrecisionMode === 'high_precision'
+                      ? handleHighPrecisionArrangeModels('all')
+                      : handleAutoArrangeModels('all')));
                 }}
                 onApplySelected={() => {
                   void (arrangeLayoutMode === 'array'
                     ? handleManualArrayArrangeModels('selected')
-                    : handleAutoArrangeModels('selected'));
+                    : (arrangePrecisionMode === 'high_precision'
+                      ? handleHighPrecisionArrangeModels('selected')
+                      : handleAutoArrangeModels('selected')));
                 }}
                 modelCount={scene.models.filter((m) => m.visible).length}
                 selectedModelCount={scene.models.filter((m) => m.visible && scene.selectedModelIds.includes(m.id)).length}
@@ -2527,15 +2831,21 @@ export default function Home() {
             </>
           )}
 
-          {/* Model Info Overlay Card */}
-          <ModelStatsCard
-            model={scene.models.find(m => m.id === displayActiveModelId) || null}
-            models={scene.models}
-            selectedModelIds={scene.selectedModelIds}
-            inBoundsModelIds={inBoundsModelIds}
-            numLayers={slicing.numLayers}
-            heightMm={slicing.heightMm}
-          />
+          {scene.models.length > 0 && (
+            <div
+              ref={modelStatsCardContainerRef}
+              className="absolute bottom-3 left-3 z-30 pointer-events-auto"
+            >
+              <ModelStatsCard
+                model={scene.models.find((m) => m.id === displayActiveModelId) || null}
+                models={scene.models}
+                selectedModelIds={scene.selectedModelIds}
+                inBoundsModelIds={inBoundsModelIds}
+                numLayers={slicing.numLayers}
+                heightMm={slicing.heightMm}
+              />
+            </div>
+          )}
 
           {showSceneImportOverlay && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 backdrop-blur-[1px]">
@@ -2594,6 +2904,47 @@ export default function Home() {
         totalPolygons={totalPolygons}
         selectedPolygons={selectedPolygons}
       />
+
+      {showArrangeBlockingOverlay && (
+        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
+          <div
+            className="w-[min(520px,92vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+              borderColor: 'var(--border-subtle)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+          >
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              {arrangeOverlayContent.title}
+            </div>
+            <div className="mt-1 space-y-0.5 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              {arrangeOverlayContent.detailLines.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
+
+            <div className="mt-2 text-[11px] font-medium tracking-wide" style={{ color: 'var(--accent)' }}>
+              Elapsed: {arrangeOverlayElapsedLabel}
+            </div>
+            <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Processing {arrangeOverlayModelCount ?? 0} {arrangeOverlayModelCount === 1 ? 'model' : 'models'}
+            </div>
+
+            <div
+              className="ui-loading-track mt-3 h-2.5 w-full rounded-full"
+              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+            >
+              <div
+                className="ui-loading-indicator"
+                style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

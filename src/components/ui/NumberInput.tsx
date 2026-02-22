@@ -7,18 +7,18 @@ interface NumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputEleme
 
 export function NumberInput({ value, onChange, className, onBlur, ...props }: NumberInputProps) {
   const safeValue = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  const formatValue = React.useCallback((n: number) => Number(n.toFixed(2)).toString(), []);
   // Current string in the input
-  const [displayValue, setDisplayValue] = useState(safeValue.toString());
+  const [displayValue, setDisplayValue] = useState(formatValue(safeValue));
   const isEditing = useRef(false);
 
   // Sync with external value changes when not editing
   useEffect(() => {
     if (!isEditing.current) {
-      // Handle floating point precision display if needed, 
-      // but generally toString() is fine for sync
-      setDisplayValue(Number(safeValue.toFixed(2)).toString());
+      const next = formatValue(safeValue);
+      setDisplayValue((prev) => (prev === next ? prev : next));
     }
-  }, [safeValue]);
+  }, [formatValue, safeValue]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVal = e.target.value;
@@ -51,13 +51,13 @@ export function NumberInput({ value, onChange, className, onBlur, ...props }: Nu
 
     if (displayValue === '' || isNaN(parsed)) {
       // Restore previous valid value
-      setDisplayValue(Number(safeValue.toFixed(2)).toString());
+      setDisplayValue(formatValue(safeValue));
     } else {
       // Ensure standard formatting (e.g. remove trailing decimal points)
       // But also respect the parent's update which triggers the Effect.
       // However, if parent value didn't change (e.g. parsed same as value), Effect won't run.
       // So force a sync.
-      setDisplayValue(Number(parsed.toFixed(2)).toString());
+      setDisplayValue(formatValue(parsed));
     }
 
     if (onBlur) onBlur(e);
