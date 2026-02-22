@@ -1,7 +1,9 @@
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useRef } from 'react';
 import * as THREE from 'three';
-import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, updateBrace, getTrunkById, getBranchById } from '../../state';
+import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, updateBrace, getTrunkById, getBranchById, updateSupportBrace } from '../../state';
 import { Trunk, Branch, Twig, Stick, Brace, Segment, BezierSegment, Joint } from '../../types';
+import type { SupportBrace } from '../../SupportTypes/SupportBrace/types';
+import { useSupportBraceStoreState } from '../../SupportTypes/SupportBrace/supportBraceStore';
 import { BezierHandle } from './BezierHandle';
 import { calculateControlPoint } from './utils';
 import { useCurveInteractionState, curveInteractionStore } from '../../Curves/curveInteractionState';
@@ -16,6 +18,7 @@ interface HandleContext {
     twig?: Twig;
     stick?: Stick;
     brace?: Brace;
+    supportBrace?: SupportBrace;
     joint: Joint;
     incomingSegment?: Segment; // Segment ending at this joint (from below)
     incomingIndex: number;
@@ -26,6 +29,7 @@ interface HandleContext {
 
 export function BezierGizmoManager() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const supportBraceState = useSupportBraceStoreState();
     const selectedId = state.selectedId;
     useCurveInteractionState();
     const initialTrunkRef = useRef<Trunk | null>(null);
@@ -110,8 +114,8 @@ export function BezierGizmoManager() {
                             if (root) {
                                 // Match offset from curveUtils.ts
                                 const rPos = root.transform.pos;
-                                const diskHeight = 0.5;
-                                const coneHeight = root.height || 1.5;
+                                const diskHeight = root.diskHeight;
+                                const coneHeight = root.coneHeight;
 
                                 bottomJoint = {
                                     id: root.id,
@@ -471,8 +475,119 @@ export function BezierGizmoManager() {
             }
         }
 
+        // Also check support braces.
+        const supportBraces = Object.values(supportBraceState.supportBraces);
+        for (const supportBrace of supportBraces) {
+            const segments = supportBrace.segments;
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+
+                if (seg.topJoint?.id === selectedId) {
+                    contexts.push({
+                        id: `support-brace-joint-${seg.topJoint.id}-incoming`,
+                        supportBrace,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
+                    contexts.push({
+                        id: `support-brace-joint-${seg.topJoint.id}-outgoing`,
+                        supportBrace,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'outgoing',
+                    });
+                }
+
+                if (seg.bottomJoint?.id === selectedId && i === 0) {
+                    contexts.push({
+                        id: `support-brace-joint-${seg.bottomJoint.id}-outgoing`,
+                        supportBrace,
+                        joint: seg.bottomJoint,
+                        incomingSegment: undefined,
+                        incomingIndex: -1,
+                        outgoingSegment: seg,
+                        outgoingIndex: i,
+                        activeHandle: 'outgoing',
+                    });
+                }
+
+                if (seg.id === selectedId && seg.type === 'bezier') {
+                    let bottomJoint = seg.bottomJoint;
+                    if (!bottomJoint) {
+                        if (i > 0) {
+                            bottomJoint = segments[i - 1].topJoint;
+                        } else {
+                            const root = state.roots[supportBrace.rootId] ?? supportBraceState.roots[supportBrace.rootId];
+                            if (root) {
+                                bottomJoint = {
+                                    id: root.id,
+                                    pos: {
+                                        x: root.transform.pos.x,
+                                        y: root.transform.pos.y,
+                                        z: root.transform.pos.z + root.diskHeight + root.coneHeight,
+                                    },
+                                    diameter: root.diameter,
+                                };
+                            }
+                        }
+                    }
+
+                    if (bottomJoint) {
+                        contexts.push({
+                            id: `support-brace-seg-${seg.id}-bottom`,
+                            supportBrace,
+                            joint: bottomJoint,
+                            incomingSegment: segments[i - 1],
+                            incomingIndex: i - 1,
+                            outgoingSegment: seg,
+                            outgoingIndex: i,
+                            activeHandle: 'outgoing',
+                        });
+                    }
+
+                    if (seg.topJoint) {
+                        contexts.push({
+                            id: `support-brace-seg-${seg.id}-top`,
+                            supportBrace,
+                            joint: seg.topJoint,
+                            incomingSegment: seg,
+                            incomingIndex: i,
+                            outgoingSegment: segments[i + 1],
+                            outgoingIndex: i + 1,
+                            activeHandle: 'incoming',
+                        });
+                    } else {
+                        const hostKnot = state.knots[supportBrace.hostKnotId] ?? supportBraceState.knots[supportBrace.hostKnotId];
+                        if (hostKnot) {
+                            contexts.push({
+                                id: `support-brace-seg-${seg.id}-top-host-knot`,
+                                supportBrace,
+                                joint: {
+                                    id: hostKnot.id,
+                                    pos: hostKnot.pos,
+                                    diameter: hostKnot.diameter ?? seg.diameter,
+                                },
+                                incomingSegment: seg,
+                                incomingIndex: i,
+                                outgoingSegment: undefined,
+                                outgoingIndex: i + 1,
+                                activeHandle: 'incoming',
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         return contexts;
-    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, state.braces, state.knots]);
+    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, state.braces, state.knots, state.roots, supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots]);
 
     const contexts = findGizmoContexts();
     if (contexts.length === 0) return null;
@@ -523,7 +638,7 @@ export function BezierGizmoManager() {
     };
 
     const handleDrag = (ctx: HandleContext, newPos: THREE.Vector3) => {
-        const { trunk, branch, twig, stick, brace, joint, incomingIndex, outgoingIndex, activeHandle } = ctx;
+        const { trunk, branch, twig, stick, brace, supportBrace, joint, incomingIndex, outgoingIndex, activeHandle } = ctx;
         const jointPos = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
 
         if (brace) {
@@ -553,7 +668,7 @@ export function BezierGizmoManager() {
         }
 
         // Get the parent (trunk/branch/twig/stick) and its segments
-        const parent = trunk || branch || twig || stick;
+        const parent = trunk || branch || twig || stick || supportBrace;
         if (!parent) return;
 
         // Clone to mutate
@@ -623,6 +738,8 @@ export function BezierGizmoManager() {
             updateTwig(newParent as Twig);
         } else if (stick) {
             updateStick(newParent as Stick);
+        } else if (supportBrace) {
+            updateSupportBrace(newParent as SupportBrace);
         }
     };
 

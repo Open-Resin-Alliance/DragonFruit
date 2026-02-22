@@ -10,9 +10,9 @@ import { usePicking } from '@/components/picking';
 import { setSelectedId } from '../../state';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
-    top: '#00e5ff',
-    middle: '#76ff03',
-    bottom: '#ff6d00',
+    top: '#7dd3fc',
+    middle: '#7dd3fc',
+    bottom: '#76ff03',
 };
 
 interface BraceRendererProps {

@@ -1,6 +1,6 @@
 import React, { useSyncExternalStore, useCallback, useRef } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
-import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById } from '../../state';
+import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, updateSupportBrace } from '../../state';
 import { moveJoint } from './jointUtils';
 import * as THREE from 'three';
 import { pushHistory } from '@/history/historyStore';
@@ -8,7 +8,7 @@ import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { Trunk, Branch, Twig, Stick, Joint } from '../../types';
-import { useSupportBraceStoreState, updateSupportBrace } from '../../SupportTypes/SupportBrace/supportBraceStore';
+import { useSupportBraceStoreState } from '../../SupportTypes/SupportBrace/supportBraceStore';
 import type { SupportBrace } from '../../SupportTypes/SupportBrace/types';
 
 export function JointGizmo() {

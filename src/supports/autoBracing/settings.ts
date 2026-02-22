@@ -3,13 +3,12 @@ export type AutoBracingPattern = 'singleDiagonal' | 'crossDiagonal';
 export interface AutoBracingSettings {
     braceDiameterMm: number;
     maxGroupSize: number;
-    topPattern: AutoBracingPattern;
-    topOffsetFromTopMm: number;
-    middlePattern: AutoBracingPattern;
-    middleRepeatIntervalMm: number;
-    bottomPattern: AutoBracingPattern;
-    bottomOffsetFromBottomMm: number;
+    initialPattern: AutoBracingPattern;
+    repeatPattern: AutoBracingPattern;
+    initialOffsetFromBottomMm: number;
+    repeatIntervalMm: number;
     debugSectionColorsEnabled: boolean;
+    debugSupportHeightLabelsEnabled: boolean;
 }
 
 type NumericConstraint = {
@@ -23,9 +22,8 @@ type NumericConstraint = {
 type NumericAutoBracingSettingKey =
     | 'braceDiameterMm'
     | 'maxGroupSize'
-    | 'topOffsetFromTopMm'
-    | 'middleRepeatIntervalMm'
-    | 'bottomOffsetFromBottomMm';
+    | 'initialOffsetFromBottomMm'
+    | 'repeatIntervalMm';
 
 export const AUTO_BRACING_PATTERN_OPTIONS: readonly AutoBracingPattern[] = [
     'singleDiagonal',
@@ -35,9 +33,8 @@ export const AUTO_BRACING_PATTERN_OPTIONS: readonly AutoBracingPattern[] = [
 export const AUTO_BRACING_CONSTRAINTS = {
     braceDiameterMm: { min: 0.5, max: 2.0, step: 0.05, defaultValue: 0.7 },
     maxGroupSize: { min: 3, max: 10, step: 1, defaultValue: 10, integer: true },
-    topOffsetFromTopMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 2.0 },
-    middleRepeatIntervalMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 3.0 },
-    bottomOffsetFromBottomMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 2.0 },
+    initialOffsetFromBottomMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 5.0 },
+    repeatIntervalMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 10.0 },
 } satisfies Record<NumericAutoBracingSettingKey, NumericConstraint>;
 
 export const AUTO_BRACING_HARD_RULES = {
@@ -46,12 +43,6 @@ export const AUTO_BRACING_HARD_RULES = {
     minGroupSize: 3,
     minAxisSeparationDeg: 20,
     supportBraceMeshClearanceMm: 0.5,
-    minHeightForBottomSectionMm: 0,
-    minHeightForFirstMiddleTierMm: 0,
-    firstMiddleMinClearanceFromTopBottomMm: 0,
-    middleTierRepeatMinClearanceMm: 0,
-    sectionActivationOrder: ['top', 'bottom', 'middle'] as const,
-    qualificationAnchorSectionRule: 'top-most-middle-if-present-else-top' as const,
 };
 
 function precisionFromStep(step: number): number {
@@ -94,30 +85,30 @@ export function createDefaultAutoBracingSettings(): AutoBracingSettings {
     return {
         braceDiameterMm: AUTO_BRACING_CONSTRAINTS.braceDiameterMm.defaultValue,
         maxGroupSize: AUTO_BRACING_CONSTRAINTS.maxGroupSize.defaultValue,
-        topPattern: 'singleDiagonal',
-        topOffsetFromTopMm: AUTO_BRACING_CONSTRAINTS.topOffsetFromTopMm.defaultValue,
-        middlePattern: 'singleDiagonal',
-        middleRepeatIntervalMm: AUTO_BRACING_CONSTRAINTS.middleRepeatIntervalMm.defaultValue,
-        bottomPattern: 'singleDiagonal',
-        bottomOffsetFromBottomMm: AUTO_BRACING_CONSTRAINTS.bottomOffsetFromBottomMm.defaultValue,
+        initialPattern: 'singleDiagonal',
+        repeatPattern: 'singleDiagonal',
+        initialOffsetFromBottomMm: AUTO_BRACING_CONSTRAINTS.initialOffsetFromBottomMm.defaultValue,
+        repeatIntervalMm: AUTO_BRACING_CONSTRAINTS.repeatIntervalMm.defaultValue,
         debugSectionColorsEnabled: false,
+        debugSupportHeightLabelsEnabled: false,
     };
 }
 
 export function normalizeAutoBracingSettings(input?: Partial<AutoBracingSettings> | null): AutoBracingSettings {
     const defaults = createDefaultAutoBracingSettings();
     const source = input ?? defaults;
+    const normalizedInitialPattern = normalizePattern(source.initialPattern, defaults.initialPattern);
+    const normalizedRepeatPattern = normalizePattern(source.repeatPattern, defaults.repeatPattern);
 
     return {
         braceDiameterMm: clampNumeric(source.braceDiameterMm, AUTO_BRACING_CONSTRAINTS.braceDiameterMm),
         maxGroupSize: clampNumeric(source.maxGroupSize, AUTO_BRACING_CONSTRAINTS.maxGroupSize),
-        topPattern: normalizePattern(source.topPattern, defaults.topPattern),
-        topOffsetFromTopMm: clampNumeric(source.topOffsetFromTopMm, AUTO_BRACING_CONSTRAINTS.topOffsetFromTopMm),
-        middlePattern: normalizePattern(source.middlePattern, defaults.middlePattern),
-        middleRepeatIntervalMm: clampNumeric(source.middleRepeatIntervalMm, AUTO_BRACING_CONSTRAINTS.middleRepeatIntervalMm),
-        bottomPattern: normalizePattern(source.bottomPattern, defaults.bottomPattern),
-        bottomOffsetFromBottomMm: clampNumeric(source.bottomOffsetFromBottomMm, AUTO_BRACING_CONSTRAINTS.bottomOffsetFromBottomMm),
+        initialPattern: normalizedInitialPattern,
+        repeatPattern: normalizedRepeatPattern,
+        initialOffsetFromBottomMm: clampNumeric(source.initialOffsetFromBottomMm, AUTO_BRACING_CONSTRAINTS.initialOffsetFromBottomMm),
+        repeatIntervalMm: clampNumeric(source.repeatIntervalMm, AUTO_BRACING_CONSTRAINTS.repeatIntervalMm),
         debugSectionColorsEnabled: normalizeBoolean(source.debugSectionColorsEnabled, defaults.debugSectionColorsEnabled),
+        debugSupportHeightLabelsEnabled: normalizeBoolean(source.debugSupportHeightLabelsEnabled, defaults.debugSupportHeightLabelsEnabled),
     };
 }
 

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { pushHistory } from '@/history/historyStore';
 import { getSettings } from '../Settings/state';
 import { getAllMeshEntriesForAutoBrace } from './meshGeometryStore';
+import { getSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
 import {
     SUPPORT_AUTO_BRACE_REPLACE,
     type SupportReplaceStatePayload,
@@ -28,8 +29,7 @@ import {
     type AutoBracingSettings,
 } from './settings';
 
-type SupportKind = 'trunk' | 'branch';
-type SectionKey = 'top' | 'bottom' | 'middle';
+type SupportKind = 'trunk' | 'branch' | 'supportBrace';
 
 const MESH_CLEARANCE_MM = 1.0;
 const BRACE_CLEARANCE_SAMPLE_COUNT = 12;
@@ -99,12 +99,6 @@ type SupportSample = {
     sortAnchor: Vec3;
 };
 
-type SectionHeights = {
-    top: number[];
-    bottom: number[];
-    middle: number[];
-};
-
 type AnchorPoint = {
     supportId: string;
     modelId: string;
@@ -122,7 +116,6 @@ type AnchorCandidate = {
 };
 
 type AnchorSpec = {
-    section: 'top' | 'middle';
     anchorZ: number;
 };
 
@@ -199,6 +192,7 @@ function collectSegmentExtrema(segments: SegmentSample[]): { topReferenceZ: numb
 
 function buildSupportSamples(snapshot: SupportState): SupportSample[] {
     const supports: SupportSample[] = [];
+    const supportBraceSnapshot = getSupportBraceSnapshot();
 
     for (const trunk of Object.values(snapshot.trunks)) {
         const root = snapshot.roots[trunk.rootId];
@@ -224,6 +218,48 @@ function buildSupportSamples(snapshot: SupportState): SupportSample[] {
             supportId: trunk.id,
             supportKind: 'trunk',
             modelId: trunk.modelId,
+            segments,
+            topReferenceZ: extrema.topReferenceZ,
+            bottomReferenceZ: extrema.bottomReferenceZ,
+            sortAnchor: extrema.sortAnchor,
+        });
+    }
+
+    for (const supportBrace of Object.values(supportBraceSnapshot.supportBraces)) {
+        const root = snapshot.roots[supportBrace.rootId] ?? supportBraceSnapshot.roots[supportBrace.rootId];
+        const hostKnot = snapshot.knots[supportBrace.hostKnotId] ?? supportBraceSnapshot.knots[supportBrace.hostKnotId];
+        if (!root || !hostKnot) continue;
+
+        const segments: SegmentSample[] = [];
+        let startPos: Vec3 = {
+            x: root.transform.pos.x,
+            y: root.transform.pos.y,
+            z: root.transform.pos.z + root.diskHeight + root.coneHeight,
+        };
+
+        supportBrace.segments.forEach((segment, segmentIndex) => {
+            const endPos = segment.topJoint?.pos ?? hostKnot.pos;
+            segments.push({
+                segmentId: segment.id,
+                segment,
+                start: startPos,
+                end: endPos,
+                diameterMm: segment.diameter,
+            });
+
+            const nextStart = supportBrace.segments[segmentIndex].topJoint?.pos;
+            if (nextStart) {
+                startPos = nextStart;
+            }
+        });
+
+        if (segments.length === 0) continue;
+
+        const extrema = collectSegmentExtrema(segments);
+        supports.push({
+            supportId: supportBrace.id,
+            supportKind: 'supportBrace',
+            modelId: supportBrace.modelId,
             segments,
             topReferenceZ: extrema.topReferenceZ,
             bottomReferenceZ: extrema.bottomReferenceZ,
@@ -259,164 +295,76 @@ function validateCandidate(
     return hDist <= AUTO_BRACING_HARD_RULES.maxBraceLengthMm;
 }
 
-/**
- * Compute the dz needed for a 45\u00b0 brace between two supports.
- * Uses bottom-of-shaft positions as the stable horizontal reference.
- */
-function computeDzFor45(supportA: SupportSample, supportB: SupportSample): number | null {
-    const baseA = resolveAnchorAtZ(supportA, supportA.bottomReferenceZ);
-    const baseB = resolveAnchorAtZ(supportB, supportB.bottomReferenceZ);
-    if (!baseA || !baseB) return null;
+function computeAngleConstrainedDzRange(horizontalDistanceMm: number): { minDz: number; maxDz: number } {
+    const toleranceDeg = 20;
+    const minAngleDeg = Math.max(1, AUTO_BRACING_HARD_RULES.braceAngleDeg - toleranceDeg);
+    const maxAngleDeg = Math.min(89, AUTO_BRACING_HARD_RULES.braceAngleDeg + toleranceDeg);
+    const toRad = (deg: number) => deg * (Math.PI / 180);
 
-    const hDist = Math.sqrt(
-        (baseA.pos.x - baseB.pos.x) ** 2 +
-        (baseA.pos.y - baseB.pos.y) ** 2,
+    return {
+        minDz: horizontalDistanceMm * Math.tan(toRad(minAngleDeg)),
+        maxDz: horizontalDistanceMm * Math.tan(toRad(maxAngleDeg)),
+    };
+}
+
+function resolveAnchorAtZStrict(support: SupportSample, targetZ: number): AnchorPoint | null {
+    const tolerance = 0.0001;
+    if (targetZ < support.bottomReferenceZ - tolerance) return null;
+    if (targetZ > support.topReferenceZ - tolerance) return null;
+    return resolveAnchorAtZ(support, targetZ);
+}
+
+function resolveDirectionalPlacementAtAnchorZ(
+    lowSupport: SupportSample,
+    highSupport: SupportSample,
+    anchorZ: number,
+): PairPlacementResult | null {
+    const lowAnchor = resolveAnchorAtZStrict(lowSupport, anchorZ);
+    const highAnchorAtLowZ = resolveAnchorAtZStrict(highSupport, anchorZ);
+    if (!lowAnchor || !highAnchorAtLowZ) return null;
+
+    const dx = highAnchorAtLowZ.pos.x - lowAnchor.pos.x;
+    const dy = highAnchorAtLowZ.pos.y - lowAnchor.pos.y;
+    const horizontalDistanceMm = Math.sqrt(dx * dx + dy * dy);
+    if (horizontalDistanceMm < 0.001) return null;
+
+    const { minDz, maxDz } = computeAngleConstrainedDzRange(horizontalDistanceMm);
+    const maxAvailableDz = Math.max(0, highSupport.topReferenceZ - anchorZ);
+    const maxCandidateDz = Math.min(maxDz, maxAvailableDz);
+    if (maxCandidateDz < minDz) return null;
+
+    const targetDz = clamp(
+        horizontalDistanceMm,
+        minDz,
+        maxCandidateDz,
     );
-    return hDist < 0.001 ? null : hDist;
-}
 
-/**
- * For bottom/middle: searchStart is the LOW point, high = searchStart + dz.
- * For top: searchStart is the HIGH point, low = searchStart - dz.
- * Returns { lowZ, highZ } for a given support and section.
- */
-function sectionLowHighZ(
-    searchStart: number,
-    dz: number,
-    sectionKey: SectionKey,
-): { lowZ: number; highZ: number } {
-    if (sectionKey === 'top') {
-        return { lowZ: searchStart - dz, highZ: searchStart };
-    }
-    return { lowZ: searchStart, highZ: searchStart + dz };
-}
+    let bestPlacement: PairPlacementResult | null = null;
+    let bestTargetDelta = Number.POSITIVE_INFINITY;
 
-/**
- * Primary diagonal: A-knot LOW, B-knot HIGH.
- * singleDiagonal places only this brace.
- */
-function resolvePairPlacement(
-    supportA: SupportSample,
-    supportB: SupportSample,
-    sectionKey: SectionKey,
-    settings: AutoBracingSettings,
-): PairPlacementResult | null {
-    const dz = computeDzFor45(supportA, supportB);
-    if (dz === null) return null;
+    const attempts = 12;
+    const dzStep = (maxCandidateDz - minDz) / attempts;
+    for (let i = 0; i <= attempts; i += 1) {
+        const candidateDz = minDz + dzStep * i;
+        const highZ = anchorZ + candidateDz;
+        const highAnchor = resolveAnchorAtZStrict(highSupport, highZ);
+        if (!highAnchor) continue;
+        if (!validateCandidate(lowAnchor, highAnchor)) continue;
+        if (highAnchor.pos.z - lowAnchor.pos.z < 0.1) continue;
 
-    const ssA = sectionSearchStart(supportA, sectionKey, settings);
-    const ssB = sectionSearchStart(supportB, sectionKey, settings);
-    if (ssA === null || ssB === null) return null;
-
-    // Use the lower of the two search starts as the shared reference.
-    // This anchors the brace to the shorter support's section Z so both
-    // primary and mirror span the same Z range regardless of height difference.
-    const ref = Math.min(ssA, ssB);
-    const { lowZ, highZ } = sectionLowHighZ(ref, dz, sectionKey);
-
-    const anchorA = resolveAnchorAtZ(supportA, lowZ);
-    const anchorB = resolveAnchorAtZ(supportB, highZ);
-    if (!anchorA || !anchorB) return null;
-    if (!validateCandidate(anchorA, anchorB)) return null;
-    if (anchorB.pos.z - anchorA.pos.z < 0.1) return null;
-
-    return { anchorA, anchorB };
-}
-
-/**
- * Mirror diagonal: A-knot HIGH, B-knot LOW.
- * crossDiagonal places this in addition to the primary, forming the X.
- * Uses the same shared reference Z as resolvePairPlacement so both braces
- * span the identical Z range — producing a clean symmetric X.
- */
-function resolveMirrorPlacement(
-    supportA: SupportSample,
-    supportB: SupportSample,
-    sectionKey: SectionKey,
-    settings: AutoBracingSettings,
-): PairPlacementResult | null {
-    const dz = computeDzFor45(supportA, supportB);
-    if (dz === null) return null;
-
-    const ssA = sectionSearchStart(supportA, sectionKey, settings);
-    const ssB = sectionSearchStart(supportB, sectionKey, settings);
-    if (ssA === null || ssB === null) return null;
-
-    // Same shared reference as primary — anchored to the shorter support's section Z.
-    const ref = Math.min(ssA, ssB);
-    const { lowZ, highZ } = sectionLowHighZ(ref, dz, sectionKey);
-
-    // Mirror: A gets HIGH, B gets LOW (opposite of primary)
-    const anchorA = resolveAnchorAtZ(supportA, highZ);
-    const anchorB = resolveAnchorAtZ(supportB, lowZ);
-    if (!anchorA || !anchorB) return null;
-    if (!validateCandidate(anchorA, anchorB)) return null;
-    if (anchorA.pos.z - anchorB.pos.z < 0.1) return null;
-
-    return { anchorA, anchorB };
-}
-
-/**
- * Returns the highest Z to start searching for a brace placement on a support
- * for the given section. Returns null if the section is not active for this support.
- */
-function sectionSearchStart(
-    support: SupportSample,
-    sectionKey: SectionKey,
-    settings: AutoBracingSettings,
-): number | null {
-    const effectiveHeight = support.topReferenceZ - support.bottomReferenceZ;
-
-    if (sectionKey === 'top') {
-        // Top section is always active. Search starts just below the top reference.
-        const z = support.topReferenceZ - settings.topOffsetFromTopMm;
-        return clamp(z, support.bottomReferenceZ, support.topReferenceZ);
+        const targetDelta = Math.abs(candidateDz - targetDz);
+        if (targetDelta < bestTargetDelta) {
+            bestTargetDelta = targetDelta;
+            bestPlacement = { anchorA: lowAnchor, anchorB: highAnchor };
+        }
     }
 
-    if (sectionKey === 'bottom') {
-        // Bottom section requires enough height to fit both top and bottom offsets
-        // with a minimum gap between them (TBD from calibration, using 2mm for now).
-        const minHeightForBottom = settings.topOffsetFromTopMm + settings.bottomOffsetFromBottomMm + 2.0;
-        if (effectiveHeight < minHeightForBottom) return null;
-        const z = support.bottomReferenceZ + settings.bottomOffsetFromBottomMm;
-        return clamp(z, support.bottomReferenceZ, support.topReferenceZ);
-    }
-
-    if (sectionKey === 'middle') {
-        // Middle section requires enough height for top + bottom + at least one middle tier
-        // with clearance from both ends (TBD from calibration, using 4mm for now).
-        const minHeightForMiddle = settings.topOffsetFromTopMm + settings.bottomOffsetFromBottomMm + 4.0;
-        if (effectiveHeight < minHeightForMiddle) return null;
-        // Middle starts at the center of effective height
-        const centerZ = (support.topReferenceZ + support.bottomReferenceZ) / 2;
-        return centerZ;
-    }
-
-    return null;
+    return bestPlacement;
 }
 
-/**
- * Returns all Z search starts for middle section repeats on a support.
- * First middle is at center, then repeats upward at middleRepeatIntervalMm.
- */
-function middleSectionSearchStarts(
-    support: SupportSample,
-    settings: AutoBracingSettings,
-): number[] {
-    const firstZ = sectionSearchStart(support, 'middle', settings);
-    if (firstZ === null) return [];
-
-    const topSearchBound = support.topReferenceZ - settings.topOffsetFromTopMm - 1.0;
-    const results: number[] = [firstZ];
-    const intervalMm = Math.max(0.5, settings.middleRepeatIntervalMm);
-    let nextZ = firstZ + intervalMm;
-
-    while (nextZ <= topSearchBound) {
-        results.push(nextZ);
-        nextZ += intervalMm;
-    }
-
-    return results;
+function classifyDebugSection(tierIndex: number): 'top' | 'middle' | 'bottom' {
+    if (tierIndex === 0) return 'bottom';
+    return 'top';
 }
 
 function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint | null {
@@ -706,6 +654,19 @@ function selectionExists(snapshot: SupportState, selectedId: string): boolean {
         return Boolean(snapshot.braces[braceId]);
     }
 
+    const supportBraceSnapshot = getSupportBraceSnapshot();
+    if (supportBraceSnapshot.supportBraces[selectedId]) return true;
+    if (supportBraceSnapshot.roots[selectedId]) return true;
+    if (supportBraceSnapshot.knots[selectedId]) return true;
+    if (Object.values(supportBraceSnapshot.supportBraces).some(
+        (supportBrace) => supportBrace.segments.some(
+            (segment) =>
+                segment.id === selectedId
+                || segment.bottomJoint?.id === selectedId
+                || segment.topJoint?.id === selectedId,
+        ),
+    )) return true;
+
     return false;
 }
 
@@ -809,15 +770,15 @@ function evaluateAnchorQualification(args: {
         axisAnglesBySupportId.set(supportId, list);
     };
 
-    const registerAxisFromEndpoint = (endpointKnot: Knot, otherKnot: Knot, braceSection: SectionKey) => {
+    const registerAxisFromEndpoint = (endpointKnot: Knot, otherKnot: Knot) => {
         const supportId = supportIdBySegmentId.get(endpointKnot.parentShaftId);
         if (!supportId) return;
 
         const anchorSpec = anchorSpecBySupportId.get(supportId);
         if (!anchorSpec) return;
 
-        // Only count braces from the anchor section for this support.
-        if (braceSection !== anchorSpec.section) return;
+        // Only count braces whose endpoint is on the qualification anchor Z.
+        if (Math.abs(endpointKnot.pos.z - anchorSpec.anchorZ) > ANCHOR_Z_TOLERANCE_MM) return;
 
         const dx = otherKnot.pos.x - endpointKnot.pos.x;
         const dy = otherKnot.pos.y - endpointKnot.pos.y;
@@ -832,9 +793,8 @@ function evaluateAnchorQualification(args: {
         const endKnot = snapshot.knots[brace.endKnotId];
         if (!startKnot || !endKnot) continue;
 
-        const braceSection = (brace.debugSection ?? 'top') as SectionKey;
-        registerAxisFromEndpoint(startKnot, endKnot, braceSection);
-        registerAxisFromEndpoint(endKnot, startKnot, braceSection);
+        registerAxisFromEndpoint(startKnot, endKnot);
+        registerAxisFromEndpoint(endKnot, startKnot);
     }
 
     let underQualifiedSupportCount = 0;
@@ -894,29 +854,22 @@ export function buildAutoBracedSnapshot(
     const generatedKnots: Record<string, Knot> = {};
     const anchorSpecBySupportId = new Map<string, AnchorSpec>();
 
-    const sectionOrder: SectionKey[] = ['top', 'bottom', 'middle'];
+    // Highest populated anchor Z per support (measured-anchor qualification rule).
+    const placedAnchorZBySupportId = new Map<string, number>();
 
-    // Track the highest placed knot Z per support per section for qualification anchor.
-    // Key: supportId, Value: { section, highestZ }
-    const placedAnchorZBySupportId = new Map<string, { section: SectionKey; highestZ: number }>();
-
-    const updatePlacedAnchor = (supportId: string, sectionKey: SectionKey, knotZ: number) => {
+    const updatePlacedAnchor = (supportId: string, anchorZ: number) => {
         const existing = placedAnchorZBySupportId.get(supportId);
-        // Qualification anchor rule: top-most middle if present, else top.
-        // Middle always wins over top. Within same section, prefer highest Z.
-        if (!existing) {
-            placedAnchorZBySupportId.set(supportId, { section: sectionKey, highestZ: knotZ });
-            return;
-        }
-        const sectionPriority = (s: SectionKey) => s === 'middle' ? 2 : s === 'top' ? 1 : 0;
-        if (sectionPriority(sectionKey) > sectionPriority(existing.section)) {
-            placedAnchorZBySupportId.set(supportId, { section: sectionKey, highestZ: knotZ });
-        } else if (sectionKey === existing.section && knotZ > existing.highestZ) {
-            placedAnchorZBySupportId.set(supportId, { section: sectionKey, highestZ: knotZ });
+        if (existing == null || anchorZ > existing) {
+            placedAnchorZBySupportId.set(supportId, anchorZ);
         }
     };
 
-    const placeBrace = (anchorA: AnchorPoint, anchorB: AnchorPoint, sectionKey: SectionKey) => {
+    const placeBrace = (
+        anchorA: AnchorPoint,
+        anchorB: AnchorPoint,
+        debugSection: 'top' | 'middle' | 'bottom',
+        anchorZ: number,
+    ) => {
         if (anchorA.modelId !== anchorB.modelId) return;
         if (anchorA.segmentId === anchorB.segmentId && Math.abs(anchorA.t - anchorB.t) < 0.0001) return;
         if (!bracePassesMeshClearance(anchorA.pos, anchorB.pos, anchorA.modelId, settings.braceDiameterMm)) return;
@@ -945,61 +898,46 @@ export function buildAutoBracedSnapshot(
             startKnotId,
             endKnotId,
             profile: { diameter: settings.braceDiameterMm },
-            debugSection: sectionKey,
+            debugSection,
         };
 
-        updatePlacedAnchor(anchorA.supportId, sectionKey, anchorA.pos.z);
-        updatePlacedAnchor(anchorB.supportId, sectionKey, anchorB.pos.z);
+        updatePlacedAnchor(anchorA.supportId, anchorZ);
+        updatePlacedAnchor(anchorB.supportId, anchorZ);
     };
 
     for (const group of groupedSupports) {
+        const maxTopReferenceZ = Math.max(...group.map((support) => support.topReferenceZ));
+        const interval = Math.max(0.1, settings.repeatIntervalMm);
 
-        for (const sectionKey of sectionOrder) {
-            const sectionPattern = sectionKey === 'top'
-                ? settings.topPattern
-                : sectionKey === 'bottom'
-                    ? settings.bottomPattern
-                    : settings.middlePattern;
+        let tierIndex = 0;
+        for (
+            let anchorZ = settings.initialOffsetFromBottomMm;
+            anchorZ < maxTopReferenceZ;
+            anchorZ += interval, tierIndex += 1
+        ) {
+            const tierPattern = tierIndex === 0 ? settings.initialPattern : settings.repeatPattern;
+            const pairs = buildGroupPairs(group, tierPattern);
+            const debugSection = classifyDebugSection(tierIndex);
 
-            const pairs = buildGroupPairs(group, sectionPattern);
+            for (const [supportA, supportB] of pairs) {
+                const forward = resolveDirectionalPlacementAtAnchorZ(supportA, supportB, anchorZ);
+                const reverse = resolveDirectionalPlacementAtAnchorZ(supportB, supportA, anchorZ);
 
-            const placePair = (supportA: SupportSample, supportB: SupportSample, sk: SectionKey) => {
-                const primary = resolvePairPlacement(supportA, supportB, sk, settings);
-                if (primary) placeBrace(primary.anchorA, primary.anchorB, sk);
-
-                if (sectionPattern === 'crossDiagonal') {
-                    const mirror = resolveMirrorPlacement(supportA, supportB, sk, settings);
-                    if (mirror) placeBrace(mirror.anchorA, mirror.anchorB, sk);
-                }
-            };
-
-            if (sectionKey === 'middle') {
-                for (const [supportA, supportB] of pairs) {
-                    const middleStartsA = middleSectionSearchStarts(supportA, settings);
-                    const middleStartsB = middleSectionSearchStarts(supportB, settings);
-                    const tierCount = Math.max(middleStartsA.length, middleStartsB.length);
-                    for (let tierIndex = 0; tierIndex < tierCount; tierIndex += 1) {
-                        placePair(supportA, supportB, 'middle');
+                if (tierPattern === 'crossDiagonal') {
+                    if (forward && reverse) {
+                        placeBrace(forward.anchorA, forward.anchorB, debugSection, anchorZ);
+                        placeBrace(reverse.anchorA, reverse.anchorB, debugSection, anchorZ);
                     }
-                }
-            } else {
-                for (const [supportA, supportB] of pairs) {
-                    placePair(supportA, supportB, sectionKey);
+                } else {
+                    const primary = forward ?? reverse;
+                    if (primary) placeBrace(primary.anchorA, primary.anchorB, debugSection, anchorZ);
                 }
             }
         }
     }
 
-    // Build anchorSpecBySupportId using sectionSearchStart as the anchor Z.
-    // We can't use placed.highestZ because the shared-ref approach intentionally
-    // places knots at the shorter support's Z, not each support's own section Z.
-    for (const [supportId, placed] of placedAnchorZBySupportId.entries()) {
-        const support = supportSamples.find((s) => s.supportId === supportId);
-        const qualSection: 'top' | 'middle' = placed.section === 'bottom' ? 'top' : placed.section;
-        const anchorZ = support
-            ? (sectionSearchStart(support, qualSection, settings) ?? placed.highestZ)
-            : placed.highestZ;
-        anchorSpecBySupportId.set(supportId, { section: qualSection, anchorZ });
+    for (const [supportId, anchorZ] of placedAnchorZBySupportId.entries()) {
+        anchorSpecBySupportId.set(supportId, { anchorZ });
     }
 
     nextSnapshot = clearMissingSelection({

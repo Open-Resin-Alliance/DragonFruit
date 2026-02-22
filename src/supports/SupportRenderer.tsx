@@ -22,6 +22,7 @@ import { SupportMode } from './types';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
+import { SupportHeightLabels } from './autoBracing/debug/SupportHeightLabels';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -316,6 +317,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 );
             })}
+
+            <SupportHeightLabels
+                trunks={Object.values(state.trunks)}
+                braces={Object.values(state.braces)}
+                rootsById={state.roots}
+                knotsById={state.knots}
+                enabled={settings.autoBracing.debugSupportHeightLabelsEnabled}
+            />
         </group>
     );
 });

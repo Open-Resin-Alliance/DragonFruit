@@ -79,36 +79,24 @@ export function AutoBracingSettingsCard({
             </div>
 
             <div className="grid grid-cols-2 gap-1.5">
-                {renderPatternSelect('Top pattern', settings.topPattern, (topPattern) => onChange({ topPattern }))}
+                {renderPatternSelect('Initial pattern', settings.initialPattern, (initialPattern) => onChange({ initialPattern }))}
                 <label className="space-y-1 min-w-0">
-                    <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Top offset from top (mm)</div>
+                    <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Initial offset from bottom (mm)</div>
                     <NumberInput
-                        value={settings.topOffsetFromTopMm}
-                        onChange={(value) => onChange({ topOffsetFromTopMm: value })}
+                        value={settings.initialOffsetFromBottomMm}
+                        onChange={(value) => onChange({ initialOffsetFromBottomMm: value })}
                         className={compactInputClass}
                     />
                 </label>
             </div>
 
             <div className="grid grid-cols-2 gap-1.5">
-                {renderPatternSelect('Middle pattern', settings.middlePattern, (middlePattern) => onChange({ middlePattern }))}
+                {renderPatternSelect('Repeat pattern', settings.repeatPattern, (repeatPattern) => onChange({ repeatPattern }))}
                 <label className="space-y-1 min-w-0">
-                    <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Middle repeat interval (mm)</div>
+                    <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Repeat interval (mm)</div>
                     <NumberInput
-                        value={settings.middleRepeatIntervalMm}
-                        onChange={(value) => onChange({ middleRepeatIntervalMm: value })}
-                        className={compactInputClass}
-                    />
-                </label>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1.5">
-                {renderPatternSelect('Bottom pattern', settings.bottomPattern, (bottomPattern) => onChange({ bottomPattern }))}
-                <label className="space-y-1 min-w-0">
-                    <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Bottom offset from bottom (mm)</div>
-                    <NumberInput
-                        value={settings.bottomOffsetFromBottomMm}
-                        onChange={(value) => onChange({ bottomOffsetFromBottomMm: value })}
+                        value={settings.repeatIntervalMm}
+                        onChange={(value) => onChange({ repeatIntervalMm: value })}
                         className={compactInputClass}
                     />
                 </label>
@@ -120,6 +108,16 @@ export function AutoBracingSettingsCard({
                     type="checkbox"
                     checked={settings.debugSectionColorsEnabled}
                     onChange={(event) => onChange({ debugSectionColorsEnabled: event.target.checked })}
+                    className="ui-checkbox"
+                />
+            </label>
+
+            <label className="flex items-center justify-between rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-0), transparent 8%)' }}>
+                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Show support height labels (debug)</span>
+                <input
+                    type="checkbox"
+                    checked={settings.debugSupportHeightLabelsEnabled}
+                    onChange={(event) => onChange({ debugSupportHeightLabelsEnabled: event.target.checked })}
                     className="ui-checkbox"
                 />
             </label>

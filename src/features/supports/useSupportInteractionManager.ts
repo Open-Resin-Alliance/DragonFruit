@@ -27,6 +27,8 @@ import {
   removeStick,
   removeTrunk,
   removeJointById,
+  removeKnotById,
+  removeRootById,
   updateKnot,
   updateTrunk,
   setSelectedId,
@@ -36,7 +38,8 @@ import {
 } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK } from '@/supports/history/actionTypes';
+import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_REMOVE_SUPPORT_BRACE } from '@/supports/history/actionTypes';
+import { getSupportBraceSnapshot, removeSupportBrace } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
@@ -205,6 +208,9 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           const braces = getBraces();
           if (braces.some(br => br.startKnotId === id || br.endKnotId === id)) return true;
 
+          const supportBraceState = getSupportBraceSnapshot();
+          if (Object.values(supportBraceState.supportBraces).some(sb => sb.hostKnotId === id)) return true;
+
           return false;
         }
 
@@ -337,6 +343,21 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
             setSelectedId(null);
             return;
           }
+
+          const supportBraceState = getSupportBraceSnapshot();
+          const supportBrace = Object.values(supportBraceState.supportBraces).find(sb => sb.hostKnotId === id);
+          if (supportBrace) {
+            const build = removeSupportBrace(supportBrace.id);
+            if (!build) return;
+            removeRootById(build.root.id);
+            removeKnotById(build.hostKnot.id);
+            pushHistory({
+              type: SUPPORT_REMOVE_SUPPORT_BRACE,
+              payload: { build },
+            });
+            setSelectedId(null);
+            return;
+          }
         } else if (category === 'branch') {
           const beforeSnapshot = getSnapshot();
           const snapshots = removeBranch(id);
@@ -392,12 +413,23 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           setSelectedId(null);
         } else if (category === 'brace') {
           const snapshots = removeBrace(id);
-          if (!snapshots) return;
-          pushHistory({
-            type: SUPPORT_REMOVE_BRACE,
-            payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
-          });
-          setSelectedId(null);
+          if (snapshots) {
+            pushHistory({
+              type: SUPPORT_REMOVE_BRACE,
+              payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
+            });
+            setSelectedId(null);
+          } else {
+            const build = removeSupportBrace(id);
+            if (!build) return;
+            removeRootById(build.root.id);
+            removeKnotById(build.hostKnot.id);
+            pushHistory({
+              type: SUPPORT_REMOVE_SUPPORT_BRACE,
+              payload: { build },
+            });
+            setSelectedId(null);
+          }
         }
 
         setHoveredId(null);

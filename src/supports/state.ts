@@ -5,7 +5,7 @@ import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { addSupportBrace, getSupportBraceSnapshot, removeSupportBrace, resetSupportBraceStore, updateSupportBrace } from './SupportTypes/SupportBrace/supportBraceStore';
+import { addSupportBrace, getSupportBraceSnapshot, removeSupportBrace, resetSupportBraceStore, updateSupportBrace as updateSupportBraceStore } from './SupportTypes/SupportBrace/supportBraceStore';
 import type { SupportBrace, SupportBraceBuildResult } from './SupportTypes/SupportBrace/types';
 import * as THREE from 'three';
 
@@ -1445,6 +1445,78 @@ export function updateStick(stick: Stick) {
     state = {
         ...state,
         sticks: nextSticks,
+        knots: nextKnots,
+        leaves: nextLeaves,
+    };
+    notify();
+}
+
+export function updateSupportBrace(supportBrace: SupportBrace) {
+    const supportBraceSnapshot = getSupportBraceSnapshot();
+    if (!supportBraceSnapshot.supportBraces[supportBrace.id]) return;
+
+    updateSupportBraceStore(supportBrace);
+
+    const root = state.roots[supportBrace.rootId] ?? supportBraceSnapshot.roots[supportBrace.rootId];
+    const hostKnot = state.knots[supportBrace.hostKnotId] ?? supportBraceSnapshot.knots[supportBrace.hostKnotId];
+    if (!root || !hostKnot) return;
+
+    let nextKnots = state.knots;
+    let nextLeaves = state.leaves;
+
+    const updatedKnots: Record<string, Knot> = { ...state.knots };
+    const updatedKnotPosById: Record<string, Vec3> = {};
+    let knotsChanged = false;
+
+    const rootTopZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
+
+    for (const knot of Object.values(state.knots)) {
+        const segIndex = supportBrace.segments.findIndex((segment) => segment.id === knot.parentShaftId);
+        if (segIndex === -1) continue;
+
+        const seg = supportBrace.segments[segIndex];
+        if (knot.t === undefined) continue;
+
+        let startPos: Vec3;
+        if (segIndex === 0) {
+            startPos = {
+                x: root.transform.pos.x,
+                y: root.transform.pos.y,
+                z: rootTopZ,
+            };
+        } else {
+            const prevSeg = supportBrace.segments[segIndex - 1];
+            if (!prevSeg.topJoint) continue;
+            startPos = prevSeg.topJoint.pos;
+        }
+
+        const endPos = seg.topJoint?.pos ?? hostKnot.pos;
+        const nextPos = calculateKnotPositionOnSegmentFromT(startPos, endPos, seg, knot.t);
+        const nextDiameter = seg.diameter + 0.1;
+
+        const posChanged =
+            nextPos.x !== knot.pos.x ||
+            nextPos.y !== knot.pos.y ||
+            nextPos.z !== knot.pos.z;
+        const diaChanged = knot.diameter !== nextDiameter;
+        if (!posChanged && !diaChanged) continue;
+
+        updatedKnots[knot.id] = { ...knot, pos: nextPos, diameter: nextDiameter };
+        knotsChanged = true;
+        if (posChanged) {
+            updatedKnotPosById[knot.id] = nextPos;
+        }
+    }
+
+    if (!knotsChanged) return;
+
+    nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+    const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+    const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+    nextKnots = braceSeg.knots;
+
+    state = {
+        ...state,
         knots: nextKnots,
         leaves: nextLeaves,
     };

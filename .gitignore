@@ -49,5 +49,11 @@ todo_list
 # backups
 2_Backup/
 
+# Documentation
+1_Documentation/
+
+#windsurf workflows
+.windsurf/
+
 # proprietary local notes
 Scratch/
