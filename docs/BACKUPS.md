@@ -1,6 +1,6 @@
 # Backups (GitHub Private Repository)
 
-Dragonfruit provides a privacy-first backup mechanism that stores backup data in a private GitHub repository owned by the user.
+DragonFruit provides a privacy-first backup mechanism that stores backup data in a private GitHub repository owned by the user.
 
 ## Overview
 
@@ -9,8 +9,8 @@ Dragonfruit provides a privacy-first backup mechanism that stores backup data in
 - Backup file path: `dragonfruit-backups/state.json`
 - Data included:
   - Known settings localStorage keys
-  - Dragonfruit profile storage payloads
-  - Additional Dragonfruit/app-scoped localStorage keys
+  - DragonFruit profile storage payloads
+  - Additional DragonFruit/app-scoped localStorage keys
 
 ## Environment Variables
 
@@ -27,7 +27,7 @@ Set these in `.env`:
   - `http://127.0.0.1:3005/api/backups/github/auth/callback` (dev example)
   - `https://your-domain/api/backups/github/auth/callback` (production)
 - For local loopback development, using `127.0.0.1` is preferred.
-- Use the same host in your browser as your callback host. Example: if callback is `127.0.0.1`, open Dragonfruit at `http://127.0.0.1:3005` (not `localhost`).
+- Use the same host in your browser as your callback host. Example: if callback is `127.0.0.1`, open DragonFruit at `http://127.0.0.1:3005` (not `localhost`).
 
 ## Conflict Resolution
 

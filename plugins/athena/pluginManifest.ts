@@ -34,7 +34,7 @@ function normalizeRelativePath(baseDir: string, relativePath: string): string {
 
 /**
  * Normalize a printer preset image path into a runtime URL that can be served by
- * Dragonfruit's `/api/profile-assets` endpoint.
+ * DragonFruit's `/api/profile-assets` endpoint.
  *
  * Supported forms:
  * - absolute web/data URLs (returned as-is)

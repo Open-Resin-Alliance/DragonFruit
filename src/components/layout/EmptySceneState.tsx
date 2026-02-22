@@ -127,7 +127,7 @@ export function EmptySceneState({
             }}
           >
             <Sparkles className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
-            <span>Dragonfruit Slicer</span>
+            <span>DragonFruit Slicer</span>
           </div>
         </div>
 

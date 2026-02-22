@@ -1,6 +1,6 @@
 # Contributing Complex Plugins (Custom Tooling)
 
-This guide is for contributors who want to add a **built-in complex plugin** to Dragonfruit (similar to Athena), including custom logic/tooling beyond data-only manifests.
+This guide is for contributors who want to add a **built-in complex plugin** to DragonFruit (similar to Athena), including custom logic/tooling beyond data-only manifests.
 
 > External GitHub plugin installs currently support data-only content (manifest, presets, templates). Complex runtime code is contributed via PR to this repository.
 
@@ -13,7 +13,7 @@ Use this PR path when your plugin needs one or more of:
 - custom protocol/network behavior
 - custom validation or field semantics
 - workflow-specific logic beyond static preset/template data
-- tooling that must run in Dragonfruit runtime (client/server)
+- tooling that must run in DragonFruit runtime (client/server)
 
 If your plugin only adds printer/material data, prefer the external GitHub manifest route.
 
@@ -34,7 +34,7 @@ Keep vendor-specific logic inside the plugin folder and avoid scattering it acro
 
 ## 3) Registration and integration points
 
-Wire your plugin through the existing registries used by Dragonfruit:
+Wire your plugin through the existing registries used by DragonFruit:
 
 - Profile/plugin manifest registration
   - `src/features/plugins/pluginRegistry.ts`
@@ -53,7 +53,7 @@ For networked plugins:
 
 ## 4) Safety expectations
 
-Complex plugin PRs must preserve Dragonfruit safety guarantees:
+Complex plugin PRs must preserve DragonFruit safety guarantees:
 
 - no remote code execution from third-party GitHub repos
 - no dynamic runtime code download/eval

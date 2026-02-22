@@ -16,7 +16,7 @@ function callbackHtml(success: boolean, message: string) {
   const safeMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<!doctype html>
 <html>
-  <head><meta charset="utf-8" /><title>Dragonfruit Backups</title></head>
+  <head><meta charset="utf-8" /><title>DragonFruit Backups</title></head>
   <body style="font-family: ui-sans-serif, system-ui; background:#0b0f15; color:#e8eef7; padding:24px;">
     <h2 style="margin:0 0 8px;">${success ? 'GitHub linked' : 'GitHub link failed'}</h2>
     <p style="margin:0 0 12px; color:#9fb0c7;">${safeMessage}</p>
@@ -86,9 +86,9 @@ export async function GET(request: NextRequest) {
 
     const callbackHost = request.nextUrl.host;
     if (configuredHost && configuredHost !== callbackHost) {
-      detail = `OAuth state validation failed. Host mismatch detected: callback arrived on ${callbackHost} but configured callback host is ${configuredHost}. Open Dragonfruit using the same host as your configured callback URL and try again.`;
+      detail = `OAuth state validation failed. Host mismatch detected: callback arrived on ${callbackHost} but configured callback host is ${configuredHost}. Open DragonFruit using the same host as your configured callback URL and try again.`;
     } else if (!stateValid || !pkceVerifier) {
-      detail = 'OAuth state validation failed because setup cookies were missing. This usually means the app was opened on a different host (for example localhost vs 127.0.0.1) during the OAuth flow. Open Dragonfruit with the exact callback host and retry.';
+      detail = 'OAuth state validation failed because setup cookies were missing. This usually means the app was opened on a different host (for example localhost vs 127.0.0.1) during the OAuth flow. Open DragonFruit with the exact callback host and retry.';
     }
 
     return new NextResponse(callbackHtml(false, detail), { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });

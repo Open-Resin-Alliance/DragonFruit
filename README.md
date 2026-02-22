@@ -1,6 +1,6 @@
-# Dragonfruit
+# DragonFruit
 
-**Dragonfruit is a 3D Printing slicer prototype**
+**DragonFruit is a 3D Printing slicer prototype**
 
 ## STL Slicer POC — Project Documentation
 
@@ -47,6 +47,7 @@ This project is organized by **component/feature**, not by shared technical cate
 ### Core Principle: Component-First Organization
 
 Each system or feature gets its own folder containing ALL of its logic:
+
 - Types and interfaces
 - State management
 - Hooks (specific to that system)
@@ -55,6 +56,7 @@ Each system or feature gets its own folder containing ALL of its logic:
 - Tests
 
 **Example structure for a new system (GPUPicking):**
+
 ```
 src/components/picking/
 ├── PickingContext.tsx      # React context providing pointerHit
@@ -76,11 +78,13 @@ src/components/picking/
 ### Domain Structure
 
 Major feature domains live under `src/` with their own namespace:
+
 - `src/supports/` — Support generation (trunks, branches, leaves, joints, rafts)
 - `src/components/` — Shared UI and scene components, each in its own subfolder
 - `src/modules/` — Standalone systems (e.g., island detection)
 
 Within each domain, organize by feature:
+
 ```
 src/supports/
 ├── BranchSupports/
@@ -144,6 +148,7 @@ Following this structure ensures clean boundaries, safer refactors, and easier c
 ### Example
 
 If a small unsupported base (e.g., a cone tip starting from a mathematical point) grows into a large cone above it:
+
 - The **entire cone is the island**
 - Not just the tiny unsupported base pixels
 - The volume includes all layers from first detection through the full vertical extent
