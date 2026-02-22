@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: 'Invalid authentication token.' }, { status: 401 });
   }
 
-  let repoName = BACKUP_REPO_NAME;
+  let repoName: string;
   try {
     const payload = await request.json().catch(() => null) as { repoName?: string } | null;
     repoName = normalizeBackupRepoName(payload?.repoName ?? BACKUP_REPO_NAME);
