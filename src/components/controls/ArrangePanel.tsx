@@ -131,8 +131,9 @@ export function ArrangePanel({
     Number.isFinite(value) ? value : fallback
   ), []);
   const setClampedSpacing = React.useCallback((value: number) => {
-    const next = sanitizeNumber(value, 2);
-    onSpacingMmChange(Math.min(120, Math.max(2, Math.round(next))));
+    const next = sanitizeNumber(value, 0.5);
+    const rounded = Number((Math.round(next * 10) / 10).toFixed(1));
+    onSpacingMmChange(Math.min(5, Math.max(0, rounded)));
   }, [onSpacingMmChange, sanitizeNumber]);
 
   const clampCount = React.useCallback((value: number) => Math.min(64, Math.max(1, Math.round(value))), []);
@@ -263,8 +264,8 @@ export function ArrangePanel({
             <div className="mt-1 flex min-w-0 items-center gap-1">
               <IconButton
                 className="!h-8 !w-8 shrink-0 !p-0"
-                onClick={() => setClampedSpacing(spacingMm - 1)}
-                disabled={spacingMm <= 2 || isApplying}
+                onClick={() => setClampedSpacing(spacingMm - 0.1)}
+                disabled={spacingMm <= 0 || isApplying}
                 title="Decrease spacing"
               >
                 <Minus className="h-3.5 w-3.5" />
@@ -276,7 +277,7 @@ export function ArrangePanel({
                 onWheel={(e) => {
                   if (isApplying) return;
                   e.preventDefault();
-                  setClampedSpacing(spacingMm + (e.deltaY < 0 ? 1 : -1));
+                  setClampedSpacing(spacingMm + (e.deltaY < 0 ? 0.1 : -0.1));
                 }}
                 disabled={isApplying}
                 className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
@@ -284,8 +285,8 @@ export function ArrangePanel({
 
               <IconButton
                 className="!h-8 !w-8 shrink-0 !p-0"
-                onClick={() => setClampedSpacing(spacingMm + 1)}
-                disabled={spacingMm >= 120 || isApplying}
+                onClick={() => setClampedSpacing(spacingMm + 0.1)}
+                disabled={spacingMm >= 5 || isApplying}
                 title="Increase spacing"
               >
                 <Plus className="h-3.5 w-3.5" />
