@@ -6,10 +6,11 @@ import { CameraSettingsTab } from '@/components/settings/CameraSettingsTab';
 import { HotkeysSettingsTab } from '@/components/settings/HotkeysSettingsTab';
 import { MeshSettingsTab } from '@/components/settings/MeshSettingsTab';
 import { PluginsSettingsTab } from '@/components/settings/PluginsSettingsTab';
+import { BackupsSettingsTab } from '@/components/settings/BackupsSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X , Camera, Grid3x3} from 'lucide-react';
+import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X , Camera, Grid3x3, ArchiveRestore } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -108,7 +109,7 @@ type SettingsModalProps = {
   onView3dSettingsChange: (settings: View3DSettings) => void;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'spacemouse' | 'plugins' | 'ui' | 'hotkeys' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -402,6 +403,12 @@ export function SettingsModal({
       icon: Plug,
       tone: 'secondary',
     },
+    backups: {
+      label: 'Backups',
+      description: 'Private GitHub settings sync',
+      icon: ArchiveRestore,
+      tone: 'secondary',
+    },
     about: {
       label: 'About',
       description: 'Version info and project details',
@@ -411,7 +418,7 @@ export function SettingsModal({
   };
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'spacemouse', 'ui', 'hotkeys'];
-  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'about'];
+  const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'backups', 'about'];
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
     setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
@@ -674,6 +681,7 @@ export function SettingsModal({
                 />
               )}
               {activeTab === 'plugins' && <PluginsSettingsTab />}
+              {activeTab === 'backups' && <BackupsSettingsTab />}
               {activeTab === 'about' && (
                 <div className="flex min-h-full flex-col gap-3.5">
                   <div
