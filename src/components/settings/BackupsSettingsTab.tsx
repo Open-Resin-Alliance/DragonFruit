@@ -254,6 +254,64 @@ function stringifyReadable(value: unknown): string {
   }
 }
 
+function classifyJsonToken(token: string): 'key' | 'string' | 'number' | 'boolean' | 'null' {
+  if (token.startsWith('"')) {
+    return /:\s*$/.test(token) ? 'key' : 'string';
+  }
+  if (token === 'true' || token === 'false') return 'boolean';
+  if (token === 'null') return 'null';
+  return 'number';
+}
+
+function renderHighlightedJson(raw: string): React.ReactNode {
+  const jsonTokenRegex = /("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"\s*:|"(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)/g;
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let matchIndex = 0;
+
+  const getTokenColor = (kind: ReturnType<typeof classifyJsonToken>) => {
+    switch (kind) {
+      case 'key':
+        return '#f472b6';
+      case 'string':
+        return '#a5b4fc';
+      case 'number':
+        return '#facc15';
+      case 'boolean':
+        return '#22d3ee';
+      case 'null':
+        return '#94a3b8';
+      default:
+        return 'var(--text-muted)';
+    }
+  };
+
+  for (const match of raw.matchAll(jsonTokenRegex)) {
+    const token = match[0];
+    const index = match.index ?? 0;
+
+    if (index > lastIndex) {
+      nodes.push(raw.slice(lastIndex, index));
+    }
+
+    const kind = classifyJsonToken(token);
+    nodes.push(
+      <span key={`json-token-${matchIndex}`} style={{ color: getTokenColor(kind) }}>
+        {token}
+      </span>,
+    );
+
+    lastIndex = index + token.length;
+    matchIndex += 1;
+  }
+
+  if (lastIndex < raw.length) {
+    nodes.push(raw.slice(lastIndex));
+  }
+
+  return nodes;
+}
+
 function parseProfilesSnapshot(value: unknown): ParsedProfilesSnapshot | null {
   if (!value || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;
@@ -1300,7 +1358,7 @@ export function BackupsSettingsTab() {
                           </div>
                           <pre className="mt-2 flex-1 min-h-0 w-full rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
                             {selectedStorageKey
-                              ? stringifyReadable((selectedHistoryDocument.snapshot.localStorage ?? {})[selectedStorageKey])
+                              ? renderHighlightedJson(stringifyReadable((selectedHistoryDocument.snapshot.localStorage ?? {})[selectedStorageKey]))
                               : 'Select a LocalStorage key from the left to view its value.'}
                           </pre>
                         </div>
@@ -1417,7 +1475,7 @@ export function BackupsSettingsTab() {
 
                     {snapshotModalTab === 'raw' && (
                       <pre className="flex-1 min-h-0 rounded-md border p-2 text-[11px] leading-relaxed overflow-auto custom-scrollbar whitespace-pre" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)', color: 'var(--text-muted)' }}>
-                        {stringifyReadable(selectedHistoryDocument)}
+                        {renderHighlightedJson(stringifyReadable(selectedHistoryDocument))}
                       </pre>
                     )}
                   </div>
