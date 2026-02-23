@@ -377,6 +377,17 @@ export function StlMesh({
 
           // Prepare mode selection is handled on pointer-down for lower latency.
           if (mode === 'prepare') {
+            // When transforming the already-active model, avoid consuming clicks so
+            // gizmo handles (e.g. center XY disc) can receive the event chain.
+            if (transformMode === 'transform' && isActiveModel) {
+              return;
+            }
+
+            // Let gizmo handles (especially center XY disc) receive clicks without
+            // model-level event swallowing.
+            if (isGizmoHoverCategory) {
+              return;
+            }
             e.stopPropagation();
             return;
           }
@@ -485,6 +496,18 @@ export function StlMesh({
         }}
         onPointerDown={(e) => {
           if (!shouldSuppressModelInteraction && mode === 'prepare' && e.button === 0) {
+            // While transforming the selected model, don't consume pointer-down at
+            // the model layer; this keeps gizmo handle clicks responsive.
+            if (transformMode === 'transform' && isActiveModel) {
+              return;
+            }
+
+            // If the pointer is over a gizmo handle, do not consume the event at
+            // the model layer; let gizmo drag interactions win.
+            if (isGizmoHoverCategory) {
+              return;
+            }
+
             e.stopPropagation();
             window.__modelClickGuardUntil = performance.now() + 48;
             window.__modelClickedThisFrame = true;
