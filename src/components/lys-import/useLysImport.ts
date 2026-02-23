@@ -6,13 +6,10 @@ import { createDefaultSettings } from '@/supports/Settings/types';
 import { loadFromLychee } from '@/supports/state';
 import { computeLowestZ } from '@/utils/geometry';
 import { eulerFromGlobalEuler, quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
+import { generateUuid } from '@/utils/uuid';
 
 function generateImportId(): string {
-    const maybeCrypto = (globalThis as any)?.crypto;
-    if (maybeCrypto && typeof maybeCrypto.randomUUID === 'function') {
-        return maybeCrypto.randomUUID();
-    }
-    return `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    return generateUuid();
 }
 
 function normalizeLycheeRotation(rotation: { x?: number; y?: number; z?: number } | null | undefined) {

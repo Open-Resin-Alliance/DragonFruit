@@ -16,6 +16,7 @@ import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { useSupportBraceStoreState } from '../SupportBrace/supportBraceStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
+import { generateUuid } from '@/utils/uuid';
 
 function vecEq(a: Vec3, b: Vec3) {
     return a.x === b.x && a.y === b.y && a.z === b.z;
@@ -757,9 +758,9 @@ export function BracePlacementController() {
                 const startDiam = start.hostDiameterMm ?? fallback;
                 const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-                const braceId = crypto.randomUUID();
-                const startKnotId = crypto.randomUUID();
-                const endKnotId = crypto.randomUUID();
+                const braceId = generateUuid();
+                const startKnotId = generateUuid();
+                const endKnotId = generateUuid();
 
                 const startKnot: Knot = {
                     id: startKnotId,
@@ -824,9 +825,9 @@ export function BracePlacementController() {
             const startDiam = start.hostDiameterMm ?? fallback;
             const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-            const braceId = crypto.randomUUID();
-            const startKnotId = crypto.randomUUID();
-            const endKnotId = crypto.randomUUID();
+            const braceId = generateUuid();
+            const startKnotId = generateUuid();
+            const endKnotId = generateUuid();
 
             const startKnot: Knot = {
                 id: startKnotId,
@@ -924,9 +925,9 @@ export function BracePlacementController() {
                 const startDiam = start.hostDiameterMm ?? fallback;
                 const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-                const braceId = crypto.randomUUID();
-                const startKnotId = crypto.randomUUID();
-                const endKnotId = crypto.randomUUID();
+                const braceId = generateUuid();
+                const startKnotId = generateUuid();
+                const endKnotId = generateUuid();
 
                 const startKnot: Knot = {
                     id: startKnotId,
@@ -987,9 +988,9 @@ export function BracePlacementController() {
             const startDiam = start.hostDiameterMm ?? fallback;
             const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-            const braceId = crypto.randomUUID();
-            const startKnotId = crypto.randomUUID();
-            const endKnotId = crypto.randomUUID();
+            const braceId = generateUuid();
+            const startKnotId = generateUuid();
+            const endKnotId = generateUuid();
 
             const startKnot: Knot = {
                 id: startKnotId,

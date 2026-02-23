@@ -15,6 +15,7 @@ import { useLycheeImport, type LycheeImportResult } from '@/components/lys-impor
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { generateUuid } from '@/utils/uuid';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
@@ -389,10 +390,7 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
 }
 
 function generateRecentEntryId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return generateUuid();
 }
 
 export interface LoadedModel {
@@ -807,7 +805,7 @@ export function useSceneCollectionManager() {
   }, []);
 
   // Helper to generate IDs
-  const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+  const generateId = () => generateUuid();
 
   const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean; shared?: boolean }): GeometryWithBounds => {
     if (options?.shared) {

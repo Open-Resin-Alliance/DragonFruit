@@ -31,6 +31,7 @@ import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
+import { generateUuid } from '@/utils/uuid';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
@@ -503,7 +504,7 @@ export function BranchPlacementController() {
             const hostDiameterMm = snapTarget.hostDiameterMm ?? fallbackHostDiameterMm;
             if (snapTarget.t === undefined) return;
 
-            const knotId = crypto.randomUUID();
+            const knotId = generateUuid();
             const segmentId = snapTarget.targetId;
 
             const parentKnot: Knot = {

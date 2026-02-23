@@ -4,6 +4,7 @@ import React from 'react';
 import { ArchiveRestore, CheckCircle2, CircleHelp, Eye, Github, Loader2, RefreshCcw, ShieldCheck, ShieldX, Trash2, UploadCloud, X } from 'lucide-react';
 import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
+import { generateUuid } from '@/utils/uuid';
 
 type StatusResponse = {
   ok: boolean;
@@ -161,9 +162,7 @@ function getOrCreateClientId(): string {
   const existing = window.localStorage.getItem(CLIENT_ID_KEY)?.trim();
   if (existing) return existing;
 
-  const created = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `df-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const created = generateUuid();
 
   window.localStorage.setItem(CLIENT_ID_KEY, created);
   return created;
@@ -838,7 +837,7 @@ export function BackupsSettingsTab() {
   }, [suggestedNewRepoName]);
 
   const generateCookieSecretDraft = React.useCallback(() => {
-    const token = `${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`;
+    const token = `${generateUuid().replace(/-/g, '')}${generateUuid().replace(/-/g, '')}`;
     setOauthCookieSecretDraft(token);
   }, []);
 
