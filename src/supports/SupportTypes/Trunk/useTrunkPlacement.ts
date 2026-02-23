@@ -13,12 +13,26 @@ import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 
 export function useTrunkPlacementV2() {
+    const HOVER_MIN_INTERVAL_MS = 9;
+    const HOVER_POS_EPSILON_MM = 0.06;
+    const HOVER_NORMAL_DOT_MIN = 0.999;
+
     const [previewData, setPreviewData] = useState<SupportData | null>(null);
     const [previewError, setPreviewError] = useState<LimitationCode | null>(null);
     const [previewWarning, setPreviewWarning] = useState<WarningCode | null>(null);
     const { isPlacementDisabled } = useInteractionStatus();
     const hoverFrameRef = useRef<number | null>(null);
     const latestHoverRef = useRef<THREE.Intersection | null>(null);
+    const normalMatrixRef = useRef(new THREE.Matrix3());
+    const hoverNormalRef = useRef(new THREE.Vector3());
+    const hoverFaceNormalRef = useRef(new THREE.Vector3());
+    const lastProcessedHoverRef = useRef<{
+        objectUuid: string;
+        modelId: string;
+        point: THREE.Vector3;
+        normal: THREE.Vector3;
+        atMs: number;
+    } | null>(null);
 
     const clearPreview = useCallback(() => {
         setPreviewData((prev) => (prev === null ? prev : null));
@@ -45,19 +59,70 @@ export function useTrunkPlacementV2() {
     const processSupportHover = useCallback((hit: THREE.Intersection | null) => {
         if (isPlacementDisabled) {
             clearPreview();
+            lastProcessedHoverRef.current = null;
             return;
         }
 
         if (!hit) {
             clearPreview();
+            lastProcessedHoverRef.current = null;
             return;
         }
-        
-        // Calculate Smoothed Normal
-        const tipNormal = calculateSmoothedNormal(hit);
-        const tipPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+
         const modelId = hit.object.userData.modelId || 'unknown';
-        
+        const objectUuid = hit.object.uuid;
+
+        // Fast hover normal for responsive preview: use transformed face normal.
+        // (Click path still uses smoothed normal for final placement correctness.)
+        let tipNormal: { x: number; y: number; z: number };
+        if (hit.face) {
+            hoverFaceNormalRef.current.copy(hit.face.normal);
+            if (hit.object instanceof THREE.Mesh) {
+                normalMatrixRef.current.getNormalMatrix(hit.object.matrixWorld);
+                hoverFaceNormalRef.current.applyNormalMatrix(normalMatrixRef.current);
+            }
+            hoverFaceNormalRef.current.normalize();
+            tipNormal = {
+                x: hoverFaceNormalRef.current.x,
+                y: hoverFaceNormalRef.current.y,
+                z: hoverFaceNormalRef.current.z,
+            };
+        } else {
+            tipNormal = calculateSmoothedNormal(hit);
+        }
+
+        const now = performance.now();
+        hoverNormalRef.current.set(tipNormal.x, tipNormal.y, tipNormal.z);
+        const prev = lastProcessedHoverRef.current;
+        if (prev && prev.objectUuid === objectUuid && prev.modelId === modelId) {
+            const dt = now - prev.atMs;
+            const posDeltaSq = prev.point.distanceToSquared(hit.point);
+            const normalDot = prev.normal.dot(hoverNormalRef.current);
+            const posEpsSq = HOVER_POS_EPSILON_MM * HOVER_POS_EPSILON_MM;
+
+            if (dt < HOVER_MIN_INTERVAL_MS && posDeltaSq <= posEpsSq && normalDot >= HOVER_NORMAL_DOT_MIN) {
+                return;
+            }
+        }
+
+        if (prev) {
+            prev.objectUuid = objectUuid;
+            prev.modelId = modelId;
+            prev.point.copy(hit.point);
+            prev.normal.copy(hoverNormalRef.current);
+            prev.atMs = now;
+        } else {
+            lastProcessedHoverRef.current = {
+                objectUuid,
+                modelId,
+                point: hit.point.clone(),
+                normal: hoverNormalRef.current.clone(),
+                atMs: now,
+            };
+        }
+
+        const tipPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+
         // Pass mesh for collision detection
         const mesh = hit.object instanceof THREE.Mesh ? hit.object : undefined;
         const result = buildTrunkData({ tipPos, tipNormal, modelId, mesh });
@@ -102,7 +167,7 @@ export function useTrunkPlacementV2() {
                     : null
         );
         setPreviewWarning((prev) => (prev === null ? prev : null));
-    }, [clearPreview, isPlacementDisabled]);
+    }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementDisabled]);
 
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
         latestHoverRef.current = hit;
