@@ -994,8 +994,12 @@ export function SceneCanvas({
   const prevModeRef = React.useRef<SupportMode | undefined>(mode);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
+  const [hoveredModelId, setHoveredModelId] = React.useState<string | null>(null);
   const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
     lastHoveredModelPointRef.current = point;
+  }, []);
+  const onModelHoverModelChange = React.useCallback((id: string | null) => {
+    setHoveredModelId(id);
   }, []);
 
   const { smoothingBrushState, onSmoothingGeometryActivate } = useMeshSmoothingSceneBindings({
@@ -1106,6 +1110,15 @@ export function SceneCanvas({
     if (isCommittedActive) return '#3b82f6';
     return model?.color || fallbackColor;
   }, [colorActiveModelId, committedActiveModelId, meshColor, models]);
+
+  const supportHoverTintColor = React.useMemo(() => {
+    const blend = (baseHex: string, tintHex: string, strength: number) =>
+      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
+
+    if (visualActiveModelId) return '#3b82f6';
+    if (hoveredModelId) return blend('#a3a3a3', '#3b82f6', 0.5);
+    return '#a3a3a3';
+  }, [hoveredModelId, visualActiveModelId]);
 
   const modelBoundingBoxDebugData = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showModelBoundingBoxes) return [] as Array<{
@@ -2006,6 +2019,7 @@ export function SceneCanvas({
                       isLeafPlacementActive={isLeafPlacementActive}
                       isBracePlacementActive={isBracePlacementActive}
                       onModelHoverPointChange={onModelHoverPointChange}
+                      onModelHoverModelChange={onModelHoverModelChange}
                       hoverTintColor={hoverTintColor}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
@@ -2196,12 +2210,12 @@ export function SceneCanvas({
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {!hidePlateContactPrimitives && (
                 <>
-                  <RaftRenderer colorized={!!visualActiveModelId} />
-                  <LineRaftRenderer colorized={!!visualActiveModelId} />
+                  <RaftRenderer colorized={!!visualActiveModelId || !!hoveredModelId} hoverized={!visualActiveModelId && !!hoveredModelId} />
+                  <LineRaftRenderer colorized={!!visualActiveModelId || !!hoveredModelId} hoverized={!visualActiveModelId && !!hoveredModelId} />
                   <FootprintBorderRenderer
                     modelGeometry={activeModel ? activeModel.geometry : null}
                     modelTransform={activeModelTransform}
-                    color={visualActiveModelId ? '#3b82f6' : '#a3a3a3'}
+                    color={supportHoverTintColor}
                   />
                 </>
               )}
@@ -2404,6 +2418,7 @@ export function SceneCanvas({
                 clipLower={clipLower}
                 clipUpper={clipUpper}
                 activeModelId={visualActiveModelId ?? null}
+                hoverModelId={hoveredModelId}
               />
 
               <IslandOverlay

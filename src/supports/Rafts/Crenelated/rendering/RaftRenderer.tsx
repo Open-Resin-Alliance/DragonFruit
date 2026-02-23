@@ -19,9 +19,10 @@ import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWall
  */
 interface RaftRendererProps {
   colorized?: boolean;
+  hoverized?: boolean;
 }
 
-export default function RaftRenderer({ colorized = true }: RaftRendererProps) {
+export default function RaftRenderer({ colorized = true, hoverized = false }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
@@ -42,8 +43,12 @@ export default function RaftRenderer({ colorized = true }: RaftRendererProps) {
 
     // Generate chamfered base mesh
     const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
-    const baseColor = colorized ? '#3b82f6' : '#a3a3a3';
-    const wallColor = colorized ? '#22c55e' : '#a3a3a3';
+    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
+      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
+
+    const tintStrength = colorized ? (hoverized ? 0.5 : 1.0) : 0.0;
+    const baseColor = blendColor('#a3a3a3', '#3b82f6', tintStrength);
+    const wallColor = blendColor('#a3a3a3', '#22c55e', tintStrength);
     baseMesh.material = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
     baseMesh.castShadow = false;
     baseMesh.receiveShadow = true;
@@ -72,7 +77,7 @@ export default function RaftRenderer({ colorized = true }: RaftRendererProps) {
     }
 
     return { baseMesh, wallMesh } as const;
-  }, [colorized, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
+  }, [colorized, hoverized, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
 
   // Attach/detach mesh to a group node
   const groupRef = React.useRef<THREE.Group>(null);

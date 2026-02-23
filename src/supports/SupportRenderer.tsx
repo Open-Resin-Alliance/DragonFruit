@@ -33,9 +33,10 @@ interface SupportRendererProps {
     hoverTintStrength?: number;
     selectedTintStrength?: number;
     activeModelId?: string | null;
+    hoverModelId?: string | null;
 }
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const supportBraceState = useSupportBraceStoreState();
@@ -97,11 +98,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [clipLower, clipUpper]);
 
     const resolveBaseColor = useMemo(() => {
-        return (modelId?: string) => {
-            const isSelectedModelSupport = !!activeModelId && !!modelId && modelId === activeModelId;
-            return isSelectedModelSupport ? '#ff8800' : '#a3a3a3';
+        const blend = (baseHex: string, tintHex: string, strength: number) => {
+            return new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
         };
-    }, [activeModelId]);
+
+        return (modelId?: string) => {
+            const baseHex = '#a3a3a3';
+            const isSelectedModelSupport = !!activeModelId && !!modelId && modelId === activeModelId;
+            if (isSelectedModelSupport) return '#ff8800';
+
+            const isHoveredModelSupport = !activeModelId && !!hoverModelId && !!modelId && modelId === hoverModelId;
+            if (isHoveredModelSupport) return blend(baseHex, '#ff8800', 0.5);
+
+            return baseHex;
+        };
+    }, [activeModelId, hoverModelId]);
 
     useEffect(() => {
         const root = groupRef.current;
@@ -153,6 +164,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const effectiveSelected = isTrunkSelected || isChildSelected;
 
                 return (
+                    <group key={trunk.id}>
                     <TrunkRenderer
                         key={trunk.id}
                         trunk={trunk}
@@ -165,6 +177,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isInteractable={isInteractable}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
                     />
+                    </group>
                 );
             })}
 
@@ -184,6 +197,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
+                    <group key={branch.id}>
                     <BranchRenderer
                         key={branch.id}
                         branch={branch}
@@ -196,6 +210,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
                     />
+                    </group>
                 );
             })}
 
@@ -210,6 +225,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
+                    <group key={leaf.id}>
                     <LeafRenderer
                         key={leaf.id}
                         leaf={leaf}
@@ -221,6 +237,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
                     />
+                    </group>
                 );
             })}
 
@@ -235,6 +252,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const effectiveSelected = isTwigSelected || isChildSelected;
 
                 return (
+                    <group key={twig.id}>
                     <TwigRenderer
                         key={twig.id}
                         twig={twig}
@@ -245,6 +263,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
                     />
+                    </group>
                 );
             })}
 
@@ -259,6 +278,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const effectiveSelected = isStickSelected || isChildSelected;
 
                 return (
+                    <group key={stick.id}>
                     <StickRenderer
                         key={stick.id}
                         stick={stick}
@@ -269,6 +289,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
                     />
+                    </group>
                 );
             })}
 
@@ -285,6 +306,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
+                    <group key={brace.id}>
                     <BraceRenderer
                         key={brace.id}
                         brace={brace}
@@ -298,6 +320,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isInteractable={isInteractable}
                         debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
                     />
+                    </group>
                 );
             })}
 
@@ -319,6 +342,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const showKnot = !hideUnselectedKnots || effectiveSelected;
 
                 return (
+                    <group key={supportBrace.id}>
                     <SupportBraceRenderer
                         key={supportBrace.id}
                         supportBrace={supportBrace}
@@ -333,6 +357,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isInteractable={isInteractable}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
                     />
+                    </group>
                 );
             })}
         </group>
