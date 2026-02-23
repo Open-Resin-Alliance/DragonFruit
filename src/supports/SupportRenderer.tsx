@@ -28,9 +28,14 @@ interface SupportRendererProps {
     hidePlateContactPrimitives?: boolean;
     clipLower?: number | null;
     clipUpper?: number | null;
+    supportColorsByModelId?: Record<string, string>;
+    hoverTintColor?: string;
+    hoverTintStrength?: number;
+    selectedTintStrength?: number;
+    activeModelId?: string | null;
 }
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const supportBraceState = useSupportBraceStoreState();
@@ -91,6 +96,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return planes;
     }, [clipLower, clipUpper]);
 
+    const resolveBaseColor = useMemo(() => {
+        return (modelId?: string) => {
+            const isSelectedModelSupport = !!activeModelId && !!modelId && modelId === activeModelId;
+            return isSelectedModelSupport ? '#ff8800' : '#a3a3a3';
+        };
+    }, [activeModelId]);
+
     useEffect(() => {
         const root = groupRef.current;
         if (!root) return;
@@ -148,6 +160,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isSelected={effectiveSelected}
                         selectedId={state.selectedId}
                         dimNonSelected={dimNonSelected}
+                        baseColor={resolveBaseColor(trunk.modelId)}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
@@ -178,6 +191,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isSelected={effectiveSelected}
                         selectedId={state.selectedId}
                         dimNonSelected={dimNonSelected}
+                        baseColor={resolveBaseColor(branch.modelId)}
                         showKnots={showKnots}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
@@ -202,6 +216,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         parentKnot={knot}
                         isSelected={effectiveSelected}
                         dimNonSelected={dimNonSelected}
+                        baseColor={resolveBaseColor(leaf.modelId)}
                         showKnots={showKnots}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
@@ -226,6 +241,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isSelected={effectiveSelected}
                         selectedId={state.selectedId}
                         dimNonSelected={dimNonSelected}
+                        baseColor={resolveBaseColor(twig.modelId)}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
                     />
@@ -249,6 +265,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isSelected={effectiveSelected}
                         selectedId={state.selectedId}
                         dimNonSelected={dimNonSelected}
+                        baseColor={resolveBaseColor(stick.modelId)}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
                     />
@@ -275,6 +292,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         endKnot={endKnot}
                         isSelected={effectiveSelected}
                         dimNonSelected={dimNonSelected}
+                        baseColor={resolveBaseColor(brace.modelId)}
                         showKnots={showKnots}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
@@ -309,6 +327,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isSelected={effectiveSelected}
                         selectedId={state.selectedId}
                         dimNonSelected={dimNonSelected}
+                        baseColor={resolveBaseColor(supportBrace.modelId)}
                         showKnot={showKnot}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}

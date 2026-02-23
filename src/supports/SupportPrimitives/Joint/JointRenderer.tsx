@@ -12,6 +12,7 @@ interface JointRendererProps {
     color?: string; 
     emissive?: string;
     emissiveIntensity?: number;
+    selectedColor?: string;
     onClick?: (e: any) => void;
     onSelect?: (id: string) => void;
     transparent?: boolean;
@@ -27,6 +28,7 @@ export function JointRenderer({
     color: propColor = '#ff8800', 
     emissive: propEmissive = '#000000', 
     emissiveIntensity: propEmissiveIntensity = 0,
+    selectedColor: _selectedColor,
     onClick,
     onSelect,
     transparent = false,

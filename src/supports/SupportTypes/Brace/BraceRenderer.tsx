@@ -26,6 +26,9 @@ interface BraceRendererProps {
     suppressHover?: boolean;
     isInteractable?: boolean;
     debugSectionColors?: boolean;
+    baseColor?: string;
+    hoverColor?: string;
+    selectedColor?: string;
 }
 
 export function BraceRenderer({
@@ -39,13 +42,14 @@ export function BraceRenderer({
     suppressHover,
     isInteractable = true,
     debugSectionColors = false,
+    baseColor = '#ff8800',
+    hoverColor,
+    selectedColor = '#80fffd',
 }: BraceRendererProps) {
     const segmentId = `braceSegment:${brace.id}`;
 
-    const isBezierSelected = !!isSelected && brace.curve?.type === 'bezier';
-
     const debugColor = debugSectionColors && brace.debugSection
-        ? DEBUG_SECTION_COLORS[brace.debugSection] ?? '#ff8800'
+        ? DEBUG_SECTION_COLORS[brace.debugSection] ?? baseColor
         : null;
 
     const { pickRef, visuals } = useHighlight({
@@ -54,11 +58,12 @@ export function BraceRenderer({
         isSelected,
         suppressHover,
         externalHover: propHovered,
-        baseColor: debugColor ?? (dimNonSelected && !isSelected ? '#666666' : '#ff8800'),
-        selectedColor: '#80fffd',
+        baseColor: debugColor ?? (dimNonSelected && !isSelected ? '#666666' : baseColor),
+        selectedColor,
+        hoverColor,
     });
 
-    const shaftColor = isBezierSelected ? '#ff00ff' : visuals.color;
+    const shaftColor = visuals.color;
 
     const segmentRef = useRef<THREE.Group>(null);
     const pickIdRef = useRef<number | null>(null);
@@ -144,9 +149,10 @@ export function BraceRenderer({
                             diameterStart={uniformBraceDiameter}
                             diameterEnd={uniformBraceDiameter}
                             resolution={brace.curve.resolution}
-                            color={shaftColor}
+                            color={isSelected ? '#ff00ff' : shaftColor}
                             emissive={visuals.emissive}
                             emissiveIntensity={visuals.emissiveIntensity}
+                            selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
                             isSelected={false}
                             onClick={() => setSelectedId(segmentId)}
@@ -162,6 +168,7 @@ export function BraceRenderer({
                             color={shaftColor}
                             emissive={visuals.emissive}
                             emissiveIntensity={visuals.emissiveIntensity}
+                            selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
                             isSelected={false}
                             onClick={() => setSelectedId(segmentId)}
@@ -176,6 +183,7 @@ export function BraceRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={!!isSelected}
                 />
@@ -186,6 +194,7 @@ export function BraceRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={!!isSelected}
                 />

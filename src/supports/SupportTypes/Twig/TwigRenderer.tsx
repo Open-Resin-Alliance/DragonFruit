@@ -18,6 +18,9 @@ interface TwigRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  baseColor?: string;
+  hoverColor?: string;
+  selectedColor?: string;
 }
 
 export function TwigRenderer({
@@ -28,6 +31,9 @@ export function TwigRenderer({
   isHovered: propHovered,
   suppressHover,
   isInteractable = true,
+  baseColor = '#ff8800',
+  hoverColor,
+  selectedColor = '#80fffd',
 }: TwigRendererProps) {
   const { pickRef, visuals } = useHighlight({
     id: twig.id,
@@ -35,8 +41,9 @@ export function TwigRenderer({
     isSelected,
     suppressHover,
     externalHover: propHovered,
-    baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-    selectedColor: '#80fffd',
+    baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+    selectedColor,
+    hoverColor,
   });
 
   const handleClick = (e: unknown) => {
@@ -105,6 +112,7 @@ export function TwigRenderer({
           color={bezierColor}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -123,6 +131,7 @@ export function TwigRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -170,6 +179,7 @@ export function TwigRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
         />

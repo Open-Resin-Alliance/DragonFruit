@@ -23,9 +23,12 @@ interface TrunkRendererProps {
     suppressHover?: boolean;
     isInteractable?: boolean;
     hidePlateContactPrimitives?: boolean;
+    baseColor?: string;
+    hoverColor?: string;
+    selectedColor?: string;
 }
 
-export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, hidePlateContactPrimitives = false }: TrunkRendererProps) {
+export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
     // Use universal highlight hook
     const { pickRef, visuals } = useHighlight({
         id: trunk.id,
@@ -33,8 +36,9 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
         isSelected,
         suppressHover,
         externalHover: propHovered,
-        baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-        selectedColor: '#80fffd'
+        baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+        selectedColor,
+        hoverColor,
     });
 
     // Subscribe to settings for Base Flare reactivity
@@ -102,10 +106,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
 
         // Add Shaft
         if (seg.type === 'bezier') {
-            // If parent is selected, Bezier segments appear Magenta to distinguish from Cyan straight segments
-            // If not selected, they match the standard Orange color
             const bezierColor = isSelected ? '#ff00ff' : visuals.color;
-
             shafts.push(
                 <BezierRenderer
                     key={`shaft-${seg.id}`}
@@ -119,6 +120,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                     color={bezierColor}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={isSegSelected}
                     onClick={() => setSelectedId(seg.id)}
@@ -135,6 +137,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={isSegSelected}
                     onClick={() => setSelectedId(seg.id)}
@@ -155,6 +158,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={isSelected}
                 />
@@ -193,6 +197,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                         color={visuals.color}
                         emissive={visuals.emissive}
                         emissiveIntensity={visuals.emissiveIntensity}
+                        selectedColor={visuals.selectedColor}
                     />
                 )}
                 {shafts}

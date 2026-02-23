@@ -17,7 +17,11 @@ import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWall
  * - Builds a convex footprint around support base circles
  * - Generates chamfered base mesh and renders it at Z=0 when enabled
  */
-export default function RaftRenderer() {
+interface RaftRendererProps {
+  colorized?: boolean;
+}
+
+export default function RaftRenderer({ colorized = true }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
@@ -38,7 +42,9 @@ export default function RaftRenderer() {
 
     // Generate chamfered base mesh
     const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
-    baseMesh.material = new THREE.MeshStandardMaterial({ color: '#3b82f6', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
+    const baseColor = colorized ? '#3b82f6' : '#a3a3a3';
+    const wallColor = colorized ? '#22c55e' : '#a3a3a3';
+    baseMesh.material = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
     baseMesh.castShadow = false;
     baseMesh.receiveShadow = true;
 
@@ -59,14 +65,14 @@ export default function RaftRenderer() {
         : generatePerimeterWall(profile, { wallHeight: raft.wallHeight, wallThickness: raft.wallThickness, thickness: raft.thickness });
 
       if (wallMesh.geometry && (wallMesh.geometry as any).attributes?.position?.count > 0) {
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#22c55e', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
       }
     }
 
     return { baseMesh, wallMesh } as const;
-  }, [supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
+  }, [colorized, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
 
   // Attach/detach mesh to a group node
   const groupRef = React.useRef<THREE.Group>(null);

@@ -51,6 +51,7 @@ export function StlMesh({
   isLeafPlacementActive,
   isBracePlacementActive,
   onModelHoverPointChange,
+  onModelHoverModelChange,
   revealGhostOpacity,
   hoverTintColor,
   hoverTintStrength,
@@ -100,6 +101,7 @@ export function StlMesh({
   isLeafPlacementActive?: boolean;
   isBracePlacementActive?: boolean;
   onModelHoverPointChange?: (point: THREE.Vector3 | null) => void;
+  onModelHoverModelChange?: (modelId: string | null) => void;
   revealGhostOpacity?: number;
   hoverTintColor?: string;
   hoverTintStrength?: number;
@@ -429,17 +431,20 @@ export function StlMesh({
           if (shouldSuppressModelInteraction || isBlockingHoverCategory) {
             schedulePointerHover(false);
             onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
             return;
           }
 
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
             schedulePointerHover(false);
+            onModelHoverModelChange?.(null);
             return;
           }
 
           schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
+          onModelHoverModelChange?.(modelId);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             if (isBlockingHoverCategory) {
@@ -486,6 +491,7 @@ export function StlMesh({
         onPointerOut={() => {
           schedulePointerHover(false);
           onModelHoverPointChange?.(null);
+          onModelHoverModelChange?.(null);
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             setMeshSmoothingHover(null, null);

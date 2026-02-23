@@ -635,6 +635,7 @@ function SupportModeCameraRestoreController({
 export function SceneCanvas({
   models: modelsProp = [],
   activeModelId: activeModelIdProp,
+  visualActiveModelId,
   selectedModelIds,
   // Legacy props kept for compatibility if needed
   geom,
@@ -720,6 +721,7 @@ export function SceneCanvas({
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
+  visualActiveModelId?: string | null;
   selectedModelIds?: string[];
   geom?: any;
   clipLower?: number | null;
@@ -882,11 +884,25 @@ export function SceneCanvas({
     return [];
   }, [geom, meshColor, meshVisible, modelsProp]);
 
+  const supportColorsByModelId = React.useMemo(() => {
+    const fallbackColor = meshColor ?? '#a3a3a3';
+    const entries = models.map((model) => [model.id, model.color || fallbackColor] as const);
+    return Object.fromEntries(entries);
+  }, [meshColor, models]);
+
   const activeModelId = React.useMemo(() => {
     if (typeof activeModelIdProp === 'string') return activeModelIdProp;
     if (activeModelIdProp === null) return null;
     return models.length === 1 ? models[0].id : null;
   }, [activeModelIdProp, models]);
+
+  const committedActiveModelId = React.useMemo(() => {
+    if (typeof visualActiveModelId === 'string') return visualActiveModelId;
+    if (visualActiveModelId === null) return null;
+    return activeModelId;
+  }, [activeModelId, visualActiveModelId]);
+
+  const colorActiveModelId = React.useMemo(() => committedActiveModelId, [committedActiveModelId]);
 
   const meshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
   const actualMeshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
@@ -1081,6 +1097,15 @@ export function SceneCanvas({
   const outOfBoundsModelIds = React.useMemo(() => {
     return new Set(outOfBoundsModels.map((m) => m.id));
   }, [outOfBoundsModels]);
+
+  const activeModelVisualColor = React.useMemo(() => {
+    const fallbackColor = meshColor ?? '#a3a3a3';
+    if (!colorActiveModelId) return fallbackColor;
+    const model = models.find((m) => m.id === colorActiveModelId);
+    const isCommittedActive = !!committedActiveModelId && colorActiveModelId === committedActiveModelId;
+    if (isCommittedActive) return '#3b82f6';
+    return model?.color || fallbackColor;
+  }, [colorActiveModelId, committedActiveModelId, meshColor, models]);
 
   const modelBoundingBoxDebugData = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showModelBoundingBoxes) return [] as Array<{
@@ -2171,9 +2196,13 @@ export function SceneCanvas({
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {!hidePlateContactPrimitives && (
                 <>
-                  <RaftRenderer />
-                  <LineRaftRenderer />
-                  <FootprintBorderRenderer modelGeometry={activeModel ? activeModel.geometry : null} modelTransform={activeModelTransform} />
+                  <RaftRenderer colorized={!!visualActiveModelId} />
+                  <LineRaftRenderer colorized={!!visualActiveModelId} />
+                  <FootprintBorderRenderer
+                    modelGeometry={activeModel ? activeModel.geometry : null}
+                    modelTransform={activeModelTransform}
+                    color={visualActiveModelId ? '#3b82f6' : '#a3a3a3'}
+                  />
                 </>
               )}
 
@@ -2374,6 +2403,7 @@ export function SceneCanvas({
                 hidePlateContactPrimitives={hidePlateContactPrimitives}
                 clipLower={clipLower}
                 clipUpper={clipUpper}
+                activeModelId={visualActiveModelId ?? null}
               />
 
               <IslandOverlay

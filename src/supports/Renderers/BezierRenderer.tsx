@@ -18,6 +18,7 @@ interface BezierRendererProps {
     color?: string;
     emissive?: string;
     emissiveIntensity?: number;
+    selectedColor?: string;
     transparent?: boolean;
     opacity?: number;
     raycast?: any;
@@ -193,7 +194,7 @@ export function BezierRenderer({
         }));
     };
 
-    const finalColor = isSelected ? '#ff80ff' : color; // Light Magenta when selected
+    const finalColor = isSelected ? '#ff80ff' : color;
     const finalEmissive = isSelected ? '#440044' : (isHovered ? '#ffffff' : emissive);
     const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.3 : emissiveIntensity);
 

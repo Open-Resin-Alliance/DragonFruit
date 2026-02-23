@@ -24,6 +24,9 @@ interface SupportBraceRendererProps {
     isHovered?: boolean;
     isInteractable?: boolean;
     hidePlateContactPrimitives?: boolean;
+    baseColor?: string;
+    hoverColor?: string;
+    selectedColor?: string;
 }
 
 export function SupportBraceRenderer({
@@ -38,6 +41,9 @@ export function SupportBraceRenderer({
     isHovered: propHovered,
     isInteractable = true,
     hidePlateContactPrimitives = false,
+    baseColor = '#ff8800',
+    hoverColor,
+    selectedColor = '#80fffd',
 }: SupportBraceRendererProps) {
     const { pickRef, visuals } = useHighlight({
         id: supportBrace.id,
@@ -45,8 +51,9 @@ export function SupportBraceRenderer({
         isSelected,
         suppressHover,
         externalHover: propHovered,
-        baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-        selectedColor: '#80fffd',
+        baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+        selectedColor,
+        hoverColor,
     });
 
     const handleClick = (e: ThreeEvent<MouseEvent>) => {
@@ -74,6 +81,7 @@ export function SupportBraceRenderer({
         const segmentSelected = selectedId === segment.id;
 
         if (segment.type === 'bezier') {
+            const bezierColor = isSelected ? '#ff00ff' : visuals.color;
             shafts.push(
                 <BezierRenderer
                     key={`shaft-${segment.id}`}
@@ -86,9 +94,10 @@ export function SupportBraceRenderer({
                     diameterStart={isLast ? supportBrace.profile.terminalStartDiameterMm : undefined}
                     diameterEnd={isLast ? supportBrace.profile.terminalEndDiameterMm : undefined}
                     resolution={segment.resolution}
-                    color={visuals.color}
+                    color={bezierColor}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={segmentSelected}
                     onClick={() => setSelectedId(segment.id)}
@@ -107,6 +116,7 @@ export function SupportBraceRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={segmentSelected}
                     onClick={() => setSelectedId(segment.id)}
@@ -122,6 +132,7 @@ export function SupportBraceRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={isSelected}
                 />,
@@ -153,6 +164,7 @@ export function SupportBraceRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={isSelected}
                 />

@@ -17,6 +17,9 @@ interface StickRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  baseColor?: string;
+  hoverColor?: string;
+  selectedColor?: string;
 }
 
 export function StickRenderer({
@@ -27,6 +30,9 @@ export function StickRenderer({
   isHovered: propHovered,
   suppressHover,
   isInteractable = true,
+  baseColor = '#ff8800',
+  hoverColor,
+  selectedColor = '#80fffd',
 }: StickRendererProps) {
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
@@ -34,8 +40,9 @@ export function StickRenderer({
     isSelected,
     suppressHover,
     externalHover: propHovered,
-    baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-    selectedColor: '#80fffd',
+    baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+    selectedColor,
+    hoverColor,
   });
 
   const handleClick = (e: any) => {
@@ -91,6 +98,7 @@ export function StickRenderer({
           color={bezierColor}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -107,6 +115,7 @@ export function StickRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -162,6 +171,7 @@ export function StickRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
         />
