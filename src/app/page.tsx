@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { Redo2, Undo2 } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -32,6 +33,7 @@ import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothin
 import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
+import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -63,6 +65,20 @@ import { useCameraProjectionHotkey } from '@/hotkeys/useCameraProjectionHotkey';
 import { usePrepareTransformHotkeys } from '@/hotkeys/usePrepareTransformHotkeys';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
+import {
+  clearHistory,
+  clearHistoryDebugEvents,
+  getHistoryDebugEvents,
+  getRedoCount,
+  getUndoCount,
+  redo,
+  subscribeHistory,
+  subscribeHistoryDebug,
+  subscribeHistoryOperations,
+  undo,
+} from '@/history/historyStore';
+import type { HistoryDebugEvent } from '@/history/types';
+import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
@@ -74,6 +90,7 @@ import {
 } from '@/features/profiles/profileStore';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
+import type { ModelTransform } from '@/hooks/useModelTransform';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
@@ -100,6 +117,19 @@ export default function Home() {
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
   const [displayActiveModelId, setDisplayActiveModelId] = React.useState<string | null>(null);
+  const pendingTransformHistoryRef = React.useRef<{ modelId: string; before: ModelTransform; description?: string } | null>(null);
+  const transformHistoryCommitRequestedRef = React.useRef(false);
+  const pendingHistoryTransformResyncRef = React.useRef(false);
+  const skipNextTransformEndCommitRef = React.useRef(false);
+  const pendingRotateGizmoCommitRef = React.useRef<{
+    modelId: string;
+    before: ModelTransform;
+    description: string;
+  } | null>(null);
+  const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
+  const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
+  const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -111,6 +141,15 @@ export default function Home() {
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
+  const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
+  const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
+  const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
+    undo: 0,
+    redo: 0,
+  });
+  const [historyPreviewTargetEventId, setHistoryPreviewTargetEventId] = React.useState<number | null>(null);
+  const [isHistoryPreviewActive, setIsHistoryPreviewActive] = React.useState(false);
+  const historyPreviewBaselineRef = React.useRef<{ undo: number; redo: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
@@ -389,6 +428,163 @@ export default function Home() {
     scene.selectModel(modelId, options?.selectionMode ?? 'single');
   }, [scene]);
 
+  const handleSceneMarqueeSelection = React.useCallback((ids: string[]) => {
+    const deduped = Array.from(new Set(ids));
+    if (deduped.length === 0) {
+      scene.clearModelSelection();
+      return;
+    }
+
+    scene.setSelectedModelIds(deduped);
+    const preferredActiveId = deduped.includes(scene.activeModelId ?? '')
+      ? scene.activeModelId
+      : deduped[0];
+    scene.setActiveModelId(preferredActiveId);
+  }, [scene]);
+
+  const isFiniteNumber = React.useCallback((n: number) => Number.isFinite(n) && !Number.isNaN(n), []);
+
+  const isFiniteTransform = React.useCallback((t: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }) => (
+    isFiniteNumber(t.position.x)
+    && isFiniteNumber(t.position.y)
+    && isFiniteNumber(t.position.z)
+    && isFiniteNumber(t.rotation.x)
+    && isFiniteNumber(t.rotation.y)
+    && isFiniteNumber(t.rotation.z)
+    && isFiniteNumber(t.scale.x)
+    && isFiniteNumber(t.scale.y)
+    && isFiniteNumber(t.scale.z)
+  ), [isFiniteNumber]);
+
+  const commitPendingTransformHistory = React.useCallback(() => {
+    const pending = pendingTransformHistoryRef.current;
+    if (!pending) return false;
+
+    const targetModel = scene.models.find((model) => model.id === pending.modelId);
+    if (!targetModel) {
+      pendingTransformHistoryRef.current = null;
+      transformHistoryCommitRequestedRef.current = false;
+      return false;
+    }
+
+    const pendingTransform = transformMgr.pendingTransformRef.current;
+    const afterTransform = (
+      scene.activeModelId === pending.modelId
+      && pendingTransform
+      && isFiniteTransform({
+        position: pendingTransform.pos,
+        rotation: pendingTransform.rot,
+        scale: pendingTransform.scl,
+      })
+    )
+      ? {
+          position: pendingTransform.pos.clone(),
+          rotation: pendingTransform.rot.clone(),
+          scale: pendingTransform.scl.clone(),
+        }
+      : (
+        scene.activeModelId === pending.modelId && isFiniteTransform(transformMgr.transform)
+      )
+        ? {
+            position: transformMgr.transform.position.clone(),
+            rotation: transformMgr.transform.rotation.clone(),
+            scale: transformMgr.transform.scale.clone(),
+          }
+        : {
+            position: targetModel.transform.position.clone(),
+            rotation: targetModel.transform.rotation.clone(),
+            scale: targetModel.transform.scale.clone(),
+          };
+
+    scene.commitModelTransformHistory(pending.modelId, pending.before, afterTransform, pending.description);
+    pendingTransformHistoryRef.current = null;
+    transformHistoryCommitRequestedRef.current = false;
+    return true;
+  }, [isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform]);
+
+  const scheduleCommitPendingTransformHistory = React.useCallback((frameDelay = 1) => {
+    transformHistoryCommitRequestedRef.current = true;
+    const run = (remaining: number) => {
+      if (remaining <= 0) {
+        commitPendingTransformHistory();
+        return;
+      }
+      window.requestAnimationFrame(() => run(remaining - 1));
+    };
+    run(Math.max(0, frameDelay));
+  }, [commitPendingTransformHistory]);
+
+  React.useEffect(() => {
+    const fallbackDescription = (type: string) => {
+      if (type === 'scene_models_snapshot_apply') return 'Scene Change';
+      return formatHistoryLabel(type);
+    };
+
+    const unsubscribe = subscribeHistoryOperations(({ direction, action }) => {
+      const sourceDescription = action.description?.trim() || fallbackDescription(action.type);
+      const description = formatHistoryLabel(sourceDescription);
+
+      if (action.type === 'scene_models_snapshot_apply') {
+        pendingHistoryTransformResyncRef.current = true;
+      }
+
+      setHistoryActionToast({ id: Date.now(), text: description, direction });
+      setIsHistoryActionToastVisible(true);
+
+      if (historyActionToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(historyActionToastFadeTimeoutRef.current);
+      }
+      if (historyActionToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(historyActionToastClearTimeoutRef.current);
+      }
+
+      historyActionToastFadeTimeoutRef.current = window.setTimeout(() => {
+        setIsHistoryActionToastVisible(false);
+        historyActionToastFadeTimeoutRef.current = null;
+      }, 1400);
+
+      historyActionToastClearTimeoutRef.current = window.setTimeout(() => {
+        setHistoryActionToast(null);
+        historyActionToastClearTimeoutRef.current = null;
+      }, 1800);
+    });
+
+    return () => {
+      unsubscribe();
+      if (historyActionToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(historyActionToastFadeTimeoutRef.current);
+      }
+      if (historyActionToastClearTimeoutRef.current !== null) {
+        window.clearTimeout(historyActionToastClearTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!pendingHistoryTransformResyncRef.current) return;
+
+    pendingHistoryTransformResyncRef.current = false;
+    pendingTransformHistoryRef.current = null;
+    transformHistoryCommitRequestedRef.current = false;
+
+    if (!scene.activeModelId || !scene.activeModel) {
+      setDisplayActiveModelId(null);
+      return;
+    }
+
+    const t = scene.activeModel.transform;
+    if (!isFiniteTransform(t)) return;
+
+    transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
+    transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
+    transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
+    setDisplayActiveModelId(scene.activeModelId);
+  }, [isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transformHook]);
+
   const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
     rightClickGestureRef.current = { x: e.clientX, y: e.clientY, moved: false };
@@ -445,6 +641,79 @@ export default function Home() {
   }, [arrangeSpacingMm, closeEditorContextMenu, scene]);
 
   React.useEffect(() => {
+    const refreshHistoryDebug = () => {
+      setHistoryDebugEvents(getHistoryDebugEvents());
+      setHistoryStackCounts({ undo: getUndoCount(), redo: getRedoCount() });
+    };
+
+    refreshHistoryDebug();
+
+    const unsubHistory = subscribeHistory(refreshHistoryDebug);
+    const unsubHistoryDebug = subscribeHistoryDebug(refreshHistoryDebug);
+
+    return () => {
+      unsubHistory();
+      unsubHistoryDebug();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (isHistoryDebugOpen) {
+      historyPreviewBaselineRef.current = {
+        undo: getUndoCount(),
+        redo: getRedoCount(),
+      };
+      setIsHistoryPreviewActive(false);
+      setHistoryPreviewTargetEventId(null);
+      return;
+    }
+
+    historyPreviewBaselineRef.current = null;
+    setIsHistoryPreviewActive(false);
+    setHistoryPreviewTargetEventId(null);
+  }, [isHistoryDebugOpen]);
+
+  const jumpHistoryToCounts = React.useCallback((targetUndoCount: number) => {
+    let safety = 800;
+
+    while (getUndoCount() > targetUndoCount && safety > 0) {
+      const before = getUndoCount();
+      undo();
+      const after = getUndoCount();
+      safety -= 1;
+      if (after >= before) break;
+    }
+
+    while (getUndoCount() < targetUndoCount && safety > 0) {
+      const before = getUndoCount();
+      redo();
+      const after = getUndoCount();
+      safety -= 1;
+      if (after <= before) break;
+    }
+  }, []);
+
+  const handleHistoryJumpToEvent = React.useCallback((event: HistoryDebugEvent) => {
+    const currentTotal = getUndoCount() + getRedoCount();
+    const targetTotal = event.undoCount + event.redoCount;
+
+    // We can only jump safely within the same undo/redo universe.
+    if (currentTotal !== targetTotal) return;
+
+    jumpHistoryToCounts(event.undoCount);
+    setIsHistoryPreviewActive(true);
+    setHistoryPreviewTargetEventId(event.id);
+  }, [jumpHistoryToCounts]);
+
+  const handleHistoryCancelPreview = React.useCallback(() => {
+    const baseline = historyPreviewBaselineRef.current;
+    if (!baseline) return;
+    jumpHistoryToCounts(baseline.undo);
+    setIsHistoryPreviewActive(false);
+    setHistoryPreviewTargetEventId(null);
+  }, [jumpHistoryToCounts]);
+
+  React.useEffect(() => {
     const handleDiagnosticsHotkey = (event: KeyboardEvent) => {
       const isCtrlShiftD = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd';
       if (!isCtrlShiftD) return;
@@ -455,9 +724,20 @@ export default function Home() {
       setIsDiagnosticsOpen((prev) => !prev);
     };
 
+    const handleHistoryDebugHotkey = (event: KeyboardEvent) => {
+      const isCtrlShiftC = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'c';
+      if (!isCtrlShiftC) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setIsHistoryDebugOpen((prev) => !prev);
+    };
+
     window.addEventListener('keydown', handleDiagnosticsHotkey, true);
+    window.addEventListener('keydown', handleHistoryDebugHotkey, true);
     return () => {
       window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
+      window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
     };
   }, []);
 
@@ -501,24 +781,6 @@ export default function Home() {
       window.removeEventListener(DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT, handleDebugPanelVisibilityChanged as EventListener);
     };
   }, []);
-
-  const isFiniteNumber = React.useCallback((n: number) => Number.isFinite(n) && !Number.isNaN(n), []);
-
-  const isFiniteTransform = React.useCallback((t: {
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  }) => (
-    isFiniteNumber(t.position.x)
-    && isFiniteNumber(t.position.y)
-    && isFiniteNumber(t.position.z)
-    && isFiniteNumber(t.rotation.x)
-    && isFiniteNumber(t.rotation.y)
-    && isFiniteNumber(t.rotation.z)
-    && isFiniteNumber(t.scale.x)
-    && isFiniteNumber(t.scale.y)
-    && isFiniteNumber(t.scale.z)
-  ), [isFiniteNumber]);
 
   // Sync transform manager when active model changes
   useEffect(() => {
@@ -629,10 +891,30 @@ export default function Home() {
       const scaleChanged = current.scale.distanceToSquared(modelTransform.scale) > EPSILON;
 
       if (posChanged || rotChanged || scaleChanged) {
+        const pending = pendingTransformHistoryRef.current;
+        if (!pending || pending.modelId !== scene.activeModelId) {
+          pendingTransformHistoryRef.current = {
+            modelId: scene.activeModelId,
+            before: {
+              position: modelTransform.position.clone(),
+              rotation: modelTransform.rotation.clone(),
+              scale: modelTransform.scale.clone(),
+            },
+            description: pending?.description,
+          };
+        }
+
         scene.updateModelTransform(scene.activeModelId, current);
+
+        if (transformHistoryCommitRequestedRef.current) {
+          window.requestAnimationFrame(() => {
+            commitPendingTransformHistory();
+          });
+        }
       }
     }
   }, [
+    commitPendingTransformHistory,
     scene.activeModelId,
     scene.activeModel,
     displayActiveModelId,
@@ -648,8 +930,20 @@ export default function Home() {
     isFiniteTransform,
   ]);
 
+  useEffect(() => {
+    const pending = pendingTransformHistoryRef.current;
+    if (!pending) {
+      transformHistoryCommitRequestedRef.current = false;
+      return;
+    }
+    if (scene.activeModelId === pending.modelId) return;
+    pendingTransformHistoryRef.current = null;
+    transformHistoryCommitRequestedRef.current = false;
+  }, [scene.activeModelId]);
+
   // Wrap transform change to update local state
   const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
+    transformMgr.setIsTransforming(true);
     transformMgr.onTransformChange(pos, rot, scl);
   };
 
@@ -1814,6 +2108,26 @@ export default function Home() {
   };
 
   const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
+    const targetModelId = scene.activeModelId;
+    const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
+
+    if (operation === 'rotate' && pendingRotateGizmoCommitRef.current && targetModelId === pendingRotateGizmoCommitRef.current.modelId) {
+      pendingTransformHistoryRef.current = {
+        modelId: pendingRotateGizmoCommitRef.current.modelId,
+        before: {
+          position: pendingRotateGizmoCommitRef.current.before.position.clone(),
+          rotation: pendingRotateGizmoCommitRef.current.before.rotation.clone(),
+          scale: pendingRotateGizmoCommitRef.current.before.scale.clone(),
+        },
+        description: pendingRotateGizmoCommitRef.current.description,
+      };
+      pendingRotateGizmoCommitRef.current = null;
+    }
+
+    if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
+      pendingTransformHistoryRef.current.description = `transform:${operation} ${targetModelName}`;
+    }
+
     transformMgr.setIsTransforming(false);
 
     if (operation === 'rotate') {
@@ -1823,11 +2137,96 @@ export default function Home() {
     } else {
       transformMgr.pendingTransformRef.current = null;
     }
+
+    if (skipNextTransformEndCommitRef.current) {
+      skipNextTransformEndCommitRef.current = false;
+      pendingTransformHistoryRef.current = null;
+      transformHistoryCommitRequestedRef.current = false;
+      pendingRotateGizmoCommitRef.current = null;
+      return;
+    }
+
+    scheduleCommitPendingTransformHistory(operation === 'rotate' ? 2 : 1);
   };
 
+  const handleGizmoTransformCommit = React.useCallback((payload: {
+    modelId: string;
+    operation: 'move' | 'rotate' | 'scale';
+    before: ModelTransform;
+    after: ModelTransform;
+  }) => {
+    const targetModel = scene.models.find((model) => model.id === payload.modelId);
+    const targetModelName = (targetModel?.name ?? payload.modelId).trim();
+
+    if (payload.operation === 'rotate') {
+      pendingRotateGizmoCommitRef.current = {
+        modelId: payload.modelId,
+        before: {
+          position: payload.before.position.clone(),
+          rotation: payload.before.rotation.clone(),
+          scale: payload.before.scale.clone(),
+        },
+        description: `transform:${payload.operation} ${targetModelName}`,
+      };
+      skipNextTransformEndCommitRef.current = false;
+      return;
+    }
+
+    scene.commitModelTransformHistory(
+      payload.modelId,
+      payload.before,
+      payload.after,
+      `transform:${payload.operation} ${targetModelName}`,
+    );
+
+    skipNextTransformEndCommitRef.current = true;
+  }, [scene]);
+
+  const handleTransformStart = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
+    if (!scene.activeModelId || !scene.activeModel) return;
+    const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
+
+    if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
+      pendingTransformHistoryRef.current = {
+        modelId: scene.activeModelId,
+        before: {
+          position: scene.activeModel.transform.position.clone(),
+          rotation: scene.activeModel.transform.rotation.clone(),
+          scale: scene.activeModel.transform.scale.clone(),
+        },
+        description: `transform:${operation} ${targetModelName}`,
+      };
+    }
+
+    if (operation === 'rotate') {
+      pendingRotateGizmoCommitRef.current = null;
+    }
+
+    transformMgr.setIsTransforming(true);
+  }, [scene.activeModel, scene.activeModelId, transformMgr]);
+
   const handleRotationComplete = () => {
+    const targetModelId = scene.activeModelId;
+    const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
+    if (!pendingTransformHistoryRef.current && targetModelId && scene.activeModel) {
+      pendingTransformHistoryRef.current = {
+        modelId: targetModelId,
+        before: {
+          position: scene.activeModel.transform.position.clone(),
+          rotation: scene.activeModel.transform.rotation.clone(),
+          scale: scene.activeModel.transform.scale.clone(),
+        },
+        description: `transform:rotate ${targetModelName}`,
+      };
+    }
+
+    if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
+      pendingTransformHistoryRef.current.description = `transform:rotate ${targetModelName}`;
+    }
+
     islands.clearScanData();
     applyPostRotateLift();
+    scheduleCommitPendingTransformHistory(2);
   };
 
   const handleCameraChange = React.useCallback(() => {
@@ -1857,13 +2256,6 @@ export default function Home() {
       scene.setBackgroundGeometryWorkPaused(false);
     };
   }, [scene]);
-
-  React.useEffect(() => {
-    if (scene.mode === 'prepare') return;
-    if (!isSelectAllModelsActive) return;
-    setIsSelectAllModelsActive(false);
-    scene.clearModelSelection();
-  }, [isSelectAllModelsActive, scene]);
 
   React.useEffect(() => {
     const unregister = registerDeleteHandler(
@@ -1920,7 +2312,6 @@ export default function Home() {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key.toLowerCase() !== 'a') return;
       if (isEditableTarget(event.target)) return;
-      if (scene.mode !== 'prepare') return;
       if (scene.models.length === 0) return;
 
       // Prevent browser-level "select all text in the app" behavior and arm model select-all.
@@ -2430,6 +2821,7 @@ export default function Home() {
                   const lowestWorldZ = transformMgr.getLowestWorldZ();
                   if (lowestWorldZ !== null) transformMgr.transformHook.snapToPlatform(lowestWorldZ);
                 }}
+                onTransformCommit={scheduleCommitPendingTransformHistory}
               />
             )}
 
@@ -2790,12 +3182,15 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            onTransformStart={handleTransformStart}
+            onGizmoTransformCommit={handleGizmoTransformCommit}
             onTransformChange={handleTransformChange}
             onTransformEnd={handleTransformEnd}
             mode={scene.mode}
             onSupportClick={supports.onModelClick}
             onSupportHover={supports.onModelHover}
             onActiveModelChange={handleSceneModelSelection}
+            onMarqueeSelectionChange={handleSceneMarqueeSelection}
             trunkPlacementPreview={supports.trunkPlacementV2.previewData}
             branchPlacementPreview={supports.branchPlacement.previewData}
             leafPlacementPreview={supports.leafPlacement.previewData}
@@ -2922,6 +3317,27 @@ export default function Home() {
         selectedPolygons={selectedPolygons}
       />
 
+      <HistoryDebugModal
+        isOpen={isHistoryDebugOpen}
+        onClose={() => setIsHistoryDebugOpen(false)}
+        historyDebugEvents={historyDebugEvents}
+        historyStackCounts={historyStackCounts}
+        selectedPreviewEventId={historyPreviewTargetEventId}
+        isPreviewActive={isHistoryPreviewActive}
+        onJumpToEvent={handleHistoryJumpToEvent}
+        onCancelPreview={handleHistoryCancelPreview}
+        onClearEventLog={() => {
+          clearHistoryDebugEvents();
+        }}
+        onClearUndoRedoStacks={() => {
+          clearHistory();
+        }}
+        onClearAll={() => {
+          clearHistory();
+          clearHistoryDebugEvents();
+        }}
+      />
+
       {showArrangeBlockingOverlay && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
           <div
@@ -2959,6 +3375,33 @@ export default function Home() {
                 style={{ background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {historyActionToast && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
+          <div
+            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
+            style={{
+              borderColor: historyActionToast.direction === 'undo'
+                ? 'color-mix(in srgb, #fbbf24, var(--border-subtle) 50%)'
+                : 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
+              background: historyActionToast.direction === 'undo'
+                ? 'color-mix(in srgb, #fbbf24, var(--surface-0) 90%)'
+                : 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
+              color: 'var(--text-strong)',
+              opacity: isHistoryActionToastVisible ? 1 : 0,
+              transform: `translateY(${isHistoryActionToastVisible ? '0px' : '8px'})`,
+              transition: 'opacity 220ms ease, transform 220ms ease',
+            }}
+          >
+            {historyActionToast.direction === 'undo' ? (
+              <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : (
+              <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
+            )}
+            {historyActionToast.text}
           </div>
         </div>
       )}

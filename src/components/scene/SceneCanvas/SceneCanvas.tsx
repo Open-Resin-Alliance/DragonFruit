@@ -672,6 +672,8 @@ export function SceneCanvas({
   transformMode,
   transform,
   onTransformChange,
+  onTransformStart,
+  onGizmoTransformCommit,
   onTransformChangeEnd, // Was onTransformEnd in previous code, checking usage
   onTransformEnd,
   crossSectionMode,
@@ -681,6 +683,7 @@ export function SceneCanvas({
   onSupportClick,
   onSupportHover,
   onActiveModelChange,
+  onMarqueeSelectionChange,
   trunkPlacementPreview,
   branchPlacementPreview,
   leafPlacementPreview,
@@ -753,6 +756,13 @@ export function SceneCanvas({
   transformMode?: TransformMode;
   transform?: ModelTransform;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
+  onTransformStart?: (operation: 'move' | 'rotate' | 'scale') => void;
+  onGizmoTransformCommit?: (payload: {
+    modelId: string;
+    operation: 'move' | 'rotate' | 'scale';
+    before: ModelTransform;
+    after: ModelTransform;
+  }) => void;
   onTransformChangeEnd?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   onTransformEnd?: (operation: 'move' | 'rotate' | 'scale') => void;
   crossSectionMode?: 'smooth' | 'rasterized';
@@ -762,6 +772,7 @@ export function SceneCanvas({
   onSupportClick?: (hit: THREE.Intersection) => void;
   onSupportHover?: (hit: THREE.Intersection | null) => void;
   onActiveModelChange?: (id: string | null, options?: { selectionMode?: 'single' | 'toggle' | 'add' }) => void;
+  onMarqueeSelectionChange?: (ids: string[]) => void;
   trunkPlacementPreview?: SupportData | null;
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
@@ -894,6 +905,11 @@ export function SceneCanvas({
   const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
   const postGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
+  const gizmoTransformStartSnapshotRef = React.useRef<{
+    modelId: string;
+    operation: 'move' | 'rotate' | 'scale';
+    before: ModelTransform;
+  } | null>(null);
 
   const startOutOfBoundsRotateGrace = React.useCallback(() => {
     setOutOfBoundsRotateGraceActive(true);
@@ -920,11 +936,17 @@ export function SceneCanvas({
 
   const cameraRef = React.useRef<THREE.Camera | null>(null);
   const suppressNextCanvasClickRef = React.useRef(false);
+  const marqueePointerIdRef = React.useRef<number | null>(null);
   const orbitInteractionActiveRef = React.useRef(false);
   const orbitInteractionMovedRef = React.useRef(false);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
   const [mouseOrbitDragRunId, setMouseOrbitDragRunId] = React.useState(0);
+  const [marqueeSelection, setMarqueeSelection] = React.useState<{
+    start: { x: number; y: number };
+    current: { x: number; y: number };
+  } | null>(null);
+  const isMarqueeSelecting = marqueeSelection !== null;
   const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
 
   const buildVolumeCenterTarget = React.useMemo(() => {
@@ -1277,6 +1299,60 @@ export function SceneCanvas({
     return new Set(selectedModelIds ?? []);
   }, [selectedModelIds]);
 
+  const resolveMarqueeSelectedIds = React.useCallback((selection: {
+    start: { x: number; y: number };
+    current: { x: number; y: number };
+  }) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const camera = cameraRef.current;
+    if (!rect || !camera) return [] as string[];
+
+    const minX = Math.min(selection.start.x, selection.current.x);
+    const maxX = Math.max(selection.start.x, selection.current.x);
+    const minY = Math.min(selection.start.y, selection.current.y);
+    const maxY = Math.max(selection.start.y, selection.current.y);
+
+    const projected = new THREE.Vector3();
+    const selectedIds: string[] = [];
+
+    for (const model of models) {
+      if (!model.visible) continue;
+
+      const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds);
+      if (bounds.isEmpty()) continue;
+
+      projected.copy(bounds.getCenter(new THREE.Vector3()));
+      projected.project(camera);
+
+      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
+        continue;
+      }
+
+      // Skip centers outside clip space.
+      if (projected.z < -1 || projected.z > 1) continue;
+
+      const sx = ((projected.x + 1) * 0.5) * rect.width;
+      const sy = ((1 - projected.y) * 0.5) * rect.height;
+
+      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+        selectedIds.push(model.id);
+      }
+    }
+
+    return selectedIds;
+  }, [buildVolumeBounds, computeModelWorldBounds, modelWorldBounds, models]);
+
+  const marqueeCandidateIdSet = React.useMemo(() => {
+    if (!marqueeSelection) return new Set<string>();
+
+    const dragDx = marqueeSelection.current.x - marqueeSelection.start.x;
+    const dragDy = marqueeSelection.current.y - marqueeSelection.start.y;
+    const dragDistanceSq = (dragDx * dragDx) + (dragDy * dragDy);
+    if (dragDistanceSq < 16) return new Set<string>();
+
+    return new Set(resolveMarqueeSelectedIds(marqueeSelection));
+  }, [marqueeSelection, resolveMarqueeSelectedIds]);
+
   const duplicatePreviewMeshOffset = React.useMemo(() => {
     if (!duplicatePreviewModel) return null;
     return new THREE.Vector3(
@@ -1577,8 +1653,13 @@ export function SceneCanvas({
     (e: React.MouseEvent) => {
       console.log('[Canvas] handleCanvasClick fired, mode:', mode);
 
+      if (isMarqueeSelecting) {
+        return;
+      }
+
       // If model was just clicked, ignore this background click
       if (window.__modelClickedThisFrame) {
+        window.__modelClickedThisFrame = false;
         console.log('[Canvas] Ignoring click (model clicked this frame)');
         return;
       }
@@ -1608,8 +1689,116 @@ export function SceneCanvas({
       console.log('[Canvas] Background clicked, deselecting');
       clearSelection();
     },
-    [mode, onActiveModelChange],
+    [isMarqueeSelecting, mode, onActiveModelChange],
   );
+
+  const clampPointToContainer = React.useCallback((clientX: number, clientY: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+
+    const x = Math.min(rect.width, Math.max(0, clientX - rect.left));
+    const y = Math.min(rect.height, Math.max(0, clientY - rect.top));
+    return { x, y, rect };
+  }, []);
+
+  const handleMarqueePointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (mode !== 'prepare') return;
+    if (e.button !== 0 || !e.altKey) return;
+    if (isGizmoDragging || isPostGizmoInteractionGuardActive) return;
+
+    const clamped = clampPointToContainer(e.clientX, e.clientY);
+    if (!clamped) return;
+
+    marqueePointerIdRef.current = e.pointerId;
+    suppressNextCanvasClickRef.current = true;
+
+    setMarqueeSelection({
+      start: { x: clamped.x, y: clamped.y },
+      current: { x: clamped.x, y: clamped.y },
+    });
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // no-op: pointer capture can fail in edge cases; marquee still works without it
+    }
+  }, [clampPointToContainer, isGizmoDragging, isPostGizmoInteractionGuardActive, mode]);
+
+  const handleMarqueePointerMoveCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (marqueePointerIdRef.current == null) return;
+    if (e.pointerId !== marqueePointerIdRef.current) return;
+    if (!marqueeSelection) return;
+
+    const clamped = clampPointToContainer(e.clientX, e.clientY);
+    if (!clamped) return;
+
+    setMarqueeSelection((prev) => (prev
+      ? {
+          ...prev,
+          current: { x: clamped.x, y: clamped.y },
+        }
+      : prev));
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
+  }, [clampPointToContainer, marqueeSelection]);
+
+  const endMarqueeSelection = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (marqueePointerIdRef.current == null) return;
+    if (e.pointerId !== marqueePointerIdRef.current) return;
+
+    const currentSelection = marqueeSelection;
+    marqueePointerIdRef.current = null;
+    setMarqueeSelection(null);
+
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore release failures
+    }
+
+    if (!currentSelection) return;
+
+    const dragDx = currentSelection.current.x - currentSelection.start.x;
+    const dragDy = currentSelection.current.y - currentSelection.start.y;
+    const dragDistanceSq = (dragDx * dragDx) + (dragDy * dragDy);
+
+    // Require intentional drag, not a tiny ALT click jitter.
+    if (dragDistanceSq < 64) {
+      return;
+    }
+
+    if (!onMarqueeSelectionChange) return;
+
+    const selectedIds = resolveMarqueeSelectedIds(currentSelection);
+
+    onMarqueeSelectionChange(selectedIds);
+
+    if (selectedIds.length > 0) {
+      window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: selectedIds[0] } }));
+    } else {
+      window.dispatchEvent(new CustomEvent('model-deselected'));
+    }
+
+    // Consume the click generated at pointer-up so single-click deselect logic doesn't race this selection.
+    window.__modelClickedThisFrame = true;
+    window.requestAnimationFrame(() => {
+      window.__modelClickedThisFrame = false;
+    });
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
+  }, [
+    marqueeSelection,
+    onMarqueeSelectionChange,
+    resolveMarqueeSelectedIds,
+  ]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -1675,7 +1864,15 @@ export function SceneCanvas({
   }, []);
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }} onClick={handleCanvasClick} ref={containerRef}>
+    <div
+      style={{ width: '100%', height: '100%', position: 'relative' }}
+      onClick={handleCanvasClick}
+      onPointerDownCapture={handleMarqueePointerDownCapture}
+      onPointerMoveCapture={handleMarqueePointerMoveCapture}
+      onPointerUpCapture={endMarqueeSelection}
+      onPointerCancelCapture={endMarqueeSelection}
+      ref={containerRef}
+    >
       <Canvas
         style={{ width: '100%', height: '100%', backgroundColor: '#181a22', display: 'block' }}
         camera={defaultCamera}
@@ -1714,6 +1911,7 @@ export function SceneCanvas({
               {models.map((model) => {
                 const isActive = model.id === activeModelId;
                 const isSelectedModel = selectedModelIdSet.has(model.id);
+                const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
                 const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive;
                 const interactionLodEnabled = (isOrbitInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
@@ -1778,6 +1976,7 @@ export function SceneCanvas({
                           effectiveModelSelected && (selectionHighlightMode === 'tint' || selectionHighlightMode === 'spotlight')
                         )
                       }
+                      isMarqueeCandidate={isMarqueeCandidate}
                       isBranchPlacementActive={isBranchPlacementActive}
                       isLeafPlacementActive={isLeafPlacementActive}
                       isBracePlacementActive={isBracePlacementActive}
@@ -1992,7 +2191,7 @@ export function SceneCanvas({
               ))}
 
               {/* Gizmo attached to active model */}
-              {mode === 'prepare' && transformMode === 'transform' && activeModelId && isModelSelected && (
+              {mode === 'prepare' && transformMode === 'transform' && activeModelId && (
                 <UnifiedGizmo
                   meshRef={activeGroupRef as React.RefObject<THREE.Mesh>}
                   position={[transform?.position.x ?? 0, transform?.position.y ?? 0, transform?.position.z ?? 0]}
@@ -2007,6 +2206,21 @@ export function SceneCanvas({
                       activeGroupRef.current.position.add(delta);
                     }
                   }}
+                  onMoveStart={() => {
+                    onTransformStart?.('move');
+                    if (activeModelId && activeModel) {
+                      const sourceTransform = transform ?? activeModel.transform;
+                      gizmoTransformStartSnapshotRef.current = {
+                        modelId: activeModelId,
+                        operation: 'move',
+                        before: {
+                          position: sourceTransform.position.clone(),
+                          rotation: sourceTransform.rotation.clone(),
+                          scale: sourceTransform.scale.clone(),
+                        },
+                      };
+                    }
+                  }}
                   onMoveEnd={() => {
                     markGizmoDragEnded();
                     if (activeGroupRef.current && onTransformChange) {
@@ -2015,13 +2229,48 @@ export function SceneCanvas({
                         activeGroupRef.current.rotation.clone(),
                         activeGroupRef.current.scale.clone(),
                       );
+
+                      const startSnapshot = gizmoTransformStartSnapshotRef.current;
+                      if (startSnapshot && startSnapshot.modelId === activeModelId) {
+                        onGizmoTransformCommit?.({
+                          modelId: activeModelId,
+                          operation: startSnapshot.operation,
+                          before: {
+                            position: startSnapshot.before.position.clone(),
+                            rotation: startSnapshot.before.rotation.clone(),
+                            scale: startSnapshot.before.scale.clone(),
+                          },
+                          after: {
+                            position: activeGroupRef.current.position.clone(),
+                            rotation: activeGroupRef.current.rotation.clone(),
+                            scale: activeGroupRef.current.scale.clone(),
+                          },
+                        });
+                      }
                     }
+                    gizmoTransformStartSnapshotRef.current = null;
+                    onTransformEnd?.('move');
                   }}
                   onRotate={(axis, angle) => {
                     if (activeGroupRef.current) {
                       const worldAxis = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
                       const quaternion = new THREE.Quaternion().setFromAxisAngle(worldAxis, -angle);
                       activeGroupRef.current.quaternion.premultiply(quaternion);
+                    }
+                  }}
+                  onRotateStart={() => {
+                    onTransformStart?.('rotate');
+                    if (activeModelId && activeModel) {
+                      const sourceTransform = transform ?? activeModel.transform;
+                      gizmoTransformStartSnapshotRef.current = {
+                        modelId: activeModelId,
+                        operation: 'rotate',
+                        before: {
+                          position: sourceTransform.position.clone(),
+                          rotation: sourceTransform.rotation.clone(),
+                          scale: sourceTransform.scale.clone(),
+                        },
+                      };
                     }
                   }}
                   onRotateEnd={() => {
@@ -2032,12 +2281,44 @@ export function SceneCanvas({
                         activeGroupRef.current.rotation.clone(),
                         activeGroupRef.current.scale.clone(),
                       );
+
+                      const startSnapshot = gizmoTransformStartSnapshotRef.current;
+                      if (startSnapshot && startSnapshot.modelId === activeModelId) {
+                        onGizmoTransformCommit?.({
+                          modelId: activeModelId,
+                          operation: startSnapshot.operation,
+                          before: {
+                            position: startSnapshot.before.position.clone(),
+                            rotation: startSnapshot.before.rotation.clone(),
+                            scale: startSnapshot.before.scale.clone(),
+                          },
+                          after: {
+                            position: activeGroupRef.current.position.clone(),
+                            rotation: activeGroupRef.current.rotation.clone(),
+                            scale: activeGroupRef.current.scale.clone(),
+                          },
+                        });
+                      }
                     }
+                    gizmoTransformStartSnapshotRef.current = null;
                     onTransformEnd?.('rotate');
                   }}
                   onScaleStart={() => {
+                    onTransformStart?.('scale');
                     if (activeGroupRef.current) {
                       initialScaleRef.current.copy(activeGroupRef.current.scale);
+                    }
+                    if (activeModelId && activeModel) {
+                      const sourceTransform = transform ?? activeModel.transform;
+                      gizmoTransformStartSnapshotRef.current = {
+                        modelId: activeModelId,
+                        operation: 'scale',
+                        before: {
+                          position: sourceTransform.position.clone(),
+                          rotation: sourceTransform.rotation.clone(),
+                          scale: sourceTransform.scale.clone(),
+                        },
+                      };
                     }
                   }}
                   onScale={(axis, factor) => {
@@ -2060,7 +2341,27 @@ export function SceneCanvas({
                         activeGroupRef.current.rotation.clone(),
                         activeGroupRef.current.scale.clone(),
                       );
+
+                      const startSnapshot = gizmoTransformStartSnapshotRef.current;
+                      if (startSnapshot && startSnapshot.modelId === activeModelId) {
+                        onGizmoTransformCommit?.({
+                          modelId: activeModelId,
+                          operation: startSnapshot.operation,
+                          before: {
+                            position: startSnapshot.before.position.clone(),
+                            rotation: startSnapshot.before.rotation.clone(),
+                            scale: startSnapshot.before.scale.clone(),
+                          },
+                          after: {
+                            position: activeGroupRef.current.position.clone(),
+                            rotation: activeGroupRef.current.rotation.clone(),
+                            scale: activeGroupRef.current.scale.clone(),
+                          },
+                        });
+                      }
                     }
+                    gizmoTransformStartSnapshotRef.current = null;
+                    onTransformEnd?.('scale');
                   }}
                 />
               )}
@@ -2252,7 +2553,12 @@ export function SceneCanvas({
           makeDefault
           enableDamping={false}
           enablePan
-          enabled={models.length > 0 && !(mode === 'prepare' && transformMode === 'smoothing' && smoothingBrushState.isStrokeActive) && !isGizmoDragging}
+          enabled={
+            models.length > 0
+            && !(mode === 'prepare' && transformMode === 'smoothing' && smoothingBrushState.isStrokeActive)
+            && !isGizmoDragging
+            && !isMarqueeSelecting
+          }
           onStart={handleOrbitStart}
           onChange={handleOrbitChange}
           onEnd={handleOrbitEnd}
@@ -2349,6 +2655,24 @@ export function SceneCanvas({
 
       {/* GPU Picking Debug Overlay - shows what's under cursor */}
       {gpuPickingTest && <PickingDebugOverlay position="top-right" />}
+
+      {marqueeSelection && (
+        <div
+          style={{
+            position: 'absolute',
+            left: Math.min(marqueeSelection.start.x, marqueeSelection.current.x),
+            top: Math.min(marqueeSelection.start.y, marqueeSelection.current.y),
+            width: Math.abs(marqueeSelection.current.x - marqueeSelection.start.x),
+            height: Math.abs(marqueeSelection.current.y - marqueeSelection.start.y),
+            border: '1px solid color-mix(in srgb, var(--accent), white 18%)',
+            background: 'color-mix(in srgb, var(--accent), transparent 82%)',
+            boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent-secondary), transparent 68%)',
+            borderRadius: 6,
+            pointerEvents: 'none',
+            zIndex: 45,
+          }}
+        />
+      )}
 
       {activeBuildVolumeSettings?.enabled && activeBuildVolumeSettings.showViolationWarning && outOfBoundsModels.length > 0 && (
         <div
