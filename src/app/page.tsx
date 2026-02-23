@@ -116,6 +116,11 @@ export default function Home() {
   const transformHistoryCommitRequestedRef = React.useRef(false);
   const pendingHistoryTransformResyncRef = React.useRef(false);
   const skipNextTransformEndCommitRef = React.useRef(false);
+  const pendingRotateGizmoCommitRef = React.useRef<{
+    modelId: string;
+    before: ModelTransform;
+    description: string;
+  } | null>(null);
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
@@ -493,11 +498,16 @@ export default function Home() {
     return true;
   }, [isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform]);
 
-  const scheduleCommitPendingTransformHistory = React.useCallback(() => {
+  const scheduleCommitPendingTransformHistory = React.useCallback((frameDelay = 1) => {
     transformHistoryCommitRequestedRef.current = true;
-    window.requestAnimationFrame(() => {
-      commitPendingTransformHistory();
-    });
+    const run = (remaining: number) => {
+      if (remaining <= 0) {
+        commitPendingTransformHistory();
+        return;
+      }
+      window.requestAnimationFrame(() => run(remaining - 1));
+    };
+    run(Math.max(0, frameDelay));
   }, [commitPendingTransformHistory]);
 
   React.useEffect(() => {
@@ -2054,6 +2064,20 @@ export default function Home() {
   const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
     const targetModelId = scene.activeModelId;
     const targetModelName = scene.activeModel?.name ?? targetModelId ?? 'Model';
+
+    if (operation === 'rotate' && pendingRotateGizmoCommitRef.current && targetModelId === pendingRotateGizmoCommitRef.current.modelId) {
+      pendingTransformHistoryRef.current = {
+        modelId: pendingRotateGizmoCommitRef.current.modelId,
+        before: {
+          position: pendingRotateGizmoCommitRef.current.before.position.clone(),
+          rotation: pendingRotateGizmoCommitRef.current.before.rotation.clone(),
+          scale: pendingRotateGizmoCommitRef.current.before.scale.clone(),
+        },
+        description: pendingRotateGizmoCommitRef.current.description,
+      };
+      pendingRotateGizmoCommitRef.current = null;
+    }
+
     if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
       const operationLabel = operation === 'rotate'
         ? 'Rotate'
@@ -2077,10 +2101,11 @@ export default function Home() {
       skipNextTransformEndCommitRef.current = false;
       pendingTransformHistoryRef.current = null;
       transformHistoryCommitRequestedRef.current = false;
+      pendingRotateGizmoCommitRef.current = null;
       return;
     }
 
-    scheduleCommitPendingTransformHistory();
+    scheduleCommitPendingTransformHistory(operation === 'rotate' ? 2 : 1);
   };
 
   const handleGizmoTransformCommit = React.useCallback((payload: {
@@ -2096,6 +2121,20 @@ export default function Home() {
       : payload.operation === 'move'
         ? 'Move'
         : 'Scale';
+
+    if (payload.operation === 'rotate') {
+      pendingRotateGizmoCommitRef.current = {
+        modelId: payload.modelId,
+        before: {
+          position: payload.before.position.clone(),
+          rotation: payload.before.rotation.clone(),
+          scale: payload.before.scale.clone(),
+        },
+        description: `${operationLabel} Model ${targetModelName}`,
+      };
+      skipNextTransformEndCommitRef.current = false;
+      return;
+    }
 
     scene.commitModelTransformHistory(
       payload.modelId,
@@ -2128,6 +2167,10 @@ export default function Home() {
       };
     }
 
+    if (operation === 'rotate') {
+      pendingRotateGizmoCommitRef.current = null;
+    }
+
     transformMgr.setIsTransforming(true);
   }, [scene.activeModel, scene.activeModelId, transformMgr]);
 
@@ -2152,7 +2195,7 @@ export default function Home() {
 
     islands.clearScanData();
     applyPostRotateLift();
-    scheduleCommitPendingTransformHistory();
+    scheduleCommitPendingTransformHistory(2);
   };
 
   const handleCameraChange = React.useCallback(() => {
