@@ -3,6 +3,7 @@
 import React from 'react';
 import { X } from 'lucide-react';
 import type { HistoryDebugEvent } from '@/history/types';
+import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 
 type HistoryDebugModalProps = {
   isOpen: boolean;
@@ -291,9 +292,9 @@ export function HistoryDebugModal({
 
                       {(event.actionType || event.actionDescription) ? (
                         <div className="mt-1 text-xs leading-tight" style={{ color: 'var(--text-strong)' }}>
-                          <span className="font-semibold">{event.actionDescription || event.actionType}</span>
+                          <span className="font-semibold">{formatHistoryLabel(event.actionDescription || event.actionType || '')}</span>
                           {event.actionDescription && event.actionType ? (
-                            <span style={{ color: 'var(--text-muted)' }}> · {event.actionType}</span>
+                            <span style={{ color: 'var(--text-muted)' }}> · {formatHistoryLabel(event.actionType)}</span>
                           ) : null}
                         </div>
                       ) : (
