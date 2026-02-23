@@ -23,6 +23,7 @@ interface BranchRendererProps {
   isInteractable?: boolean;
   deferStraightShaftsToSceneBatch?: boolean;
   deferInteractionToSceneBatch?: boolean;
+  deferContactConesToSceneBatch?: boolean;
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
@@ -40,6 +41,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   isInteractable = true,
   deferStraightShaftsToSceneBatch = false,
   deferInteractionToSceneBatch = false,
+  deferContactConesToSceneBatch = false,
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
@@ -178,7 +180,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
 
   // --- Render Contact Cone (if present) ---
   let coneRender = null;
-  if (branch.contactCone) {
+  if (branch.contactCone && !deferContactConesToSceneBatch) {
     coneRender = (
       <ContactConeRenderer
         pos={branch.contactCone.pos}

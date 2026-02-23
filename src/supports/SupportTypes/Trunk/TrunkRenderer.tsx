@@ -25,13 +25,15 @@ interface TrunkRendererProps {
     isInteractable?: boolean;
     deferStraightShaftsToSceneBatch?: boolean;
     deferInteractionToSceneBatch?: boolean;
+    deferRootsToSceneBatch?: boolean;
+    deferContactConesToSceneBatch?: boolean;
     hidePlateContactPrimitives?: boolean;
     baseColor?: string;
     hoverColor?: string;
     selectedColor?: string;
 }
 
-export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
+export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, deferRootsToSceneBatch = false, deferContactConesToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
@@ -194,7 +196,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
 
     // --- Render Contact Cone ---
     let coneRender = null;
-    if (trunk.contactCone) {
+    if (trunk.contactCone && !deferContactConesToSceneBatch) {
         coneRender = (
             <ContactConeRenderer
                 pos={trunk.contactCone.pos}
@@ -222,7 +224,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
         >
             {/* Trunk Picking Group - Contains Roots, Shafts, Cones */}
             <group ref={pickRef as any}>
-                {!hidePlateContactPrimitives && (
+                {!hidePlateContactPrimitives && !deferRootsToSceneBatch && (
                     <RootsRenderer
                         root={root}
                         shaftDiameter={shaftDiameter}

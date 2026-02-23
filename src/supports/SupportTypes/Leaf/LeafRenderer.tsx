@@ -14,6 +14,7 @@ interface LeafRendererProps {
     isHovered?: boolean;
     suppressHover?: boolean;
     isInteractable?: boolean;
+    deferContactConesToSceneBatch?: boolean;
     baseColor?: string;
     hoverColor?: string;
     selectedColor?: string;
@@ -28,6 +29,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     isHovered: propHovered,
     suppressHover,
     isInteractable = true,
+    deferContactConesToSceneBatch = false,
     baseColor = '#ff8800',
     hoverColor,
     selectedColor = '#80fffd',
@@ -80,7 +82,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     return (
         <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             <group ref={pickRef as any}>
-                {leaf.contactCone && (
+                {leaf.contactCone && !deferContactConesToSceneBatch && (
                     <ContactConeRenderer
                         pos={leaf.contactCone.pos}
                         normal={leaf.contactCone.normal}

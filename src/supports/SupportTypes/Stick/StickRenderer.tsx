@@ -20,6 +20,7 @@ interface StickRendererProps {
   isInteractable?: boolean;
   deferStraightShaftsToSceneBatch?: boolean;
   deferInteractionToSceneBatch?: boolean;
+  deferContactConesToSceneBatch?: boolean;
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
@@ -35,6 +36,7 @@ export const StickRenderer = React.memo(function StickRenderer({
   isInteractable = true,
   deferStraightShaftsToSceneBatch = false,
   deferInteractionToSceneBatch = false,
+  deferContactConesToSceneBatch = false,
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
@@ -152,7 +154,7 @@ export const StickRenderer = React.memo(function StickRenderer({
     }
   });
 
-  const coneA = (
+  const coneA = !deferContactConesToSceneBatch && (
     <ContactConeRenderer
       pos={stick.contactConeA.pos}
       normal={stick.contactConeA.normal}
@@ -170,7 +172,7 @@ export const StickRenderer = React.memo(function StickRenderer({
     />
   );
 
-  const coneB = (
+  const coneB = !deferContactConesToSceneBatch && (
     <ContactConeRenderer
       pos={stick.contactConeB.pos}
       normal={stick.contactConeB.normal}
