@@ -5,6 +5,13 @@ import { X } from 'lucide-react';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 import { getPickingDiagnosticsSnapshot } from '@/components/picking/pickingDiagnostics';
+import {
+  DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT,
+  DIAGNOSTICS_BENCHMARK_REQUEST_EVENT,
+  type DiagnosticsBenchmarkProgressDetail,
+  type DiagnosticsBenchmarkResult,
+  type DiagnosticsBenchmarkStressProfile,
+} from '@/components/modals/diagnosticsBenchmarkEvents';
 
 type DiagnosticsModalProps = {
   isOpen: boolean;
@@ -97,6 +104,16 @@ function formatBytes(bytes: number | null): string {
 function formatPercent(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return 'N/A';
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatMs(value: number | null | undefined, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return 'N/A';
+  return `${value.toFixed(digits)} ms`;
+}
+
+function formatFps(value: number | null | undefined, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return 'N/A';
+  return `${value.toFixed(digits)} fps`;
 }
 
 function computeSupportDiagnostics(): SupportDiagnosticsStats {
@@ -235,6 +252,21 @@ export function DiagnosticsModal({
     webglMode: 'Unknown',
     supportStats: EMPTY_SUPPORT_STATS,
   });
+  const [benchmarkResult, setBenchmarkResult] = React.useState<DiagnosticsBenchmarkResult | null>(null);
+  const [benchmarkStressProfile, setBenchmarkStressProfile] = React.useState<DiagnosticsBenchmarkStressProfile>('standard');
+  const [benchmarkRunState, setBenchmarkRunState] = React.useState<{
+    isRunning: boolean;
+    requestId: string | null;
+    phaseLabel: string;
+    message: string;
+    error: string | null;
+  }>({
+    isRunning: false,
+    requestId: null,
+    phaseLabel: '',
+    message: '',
+    error: null,
+  });
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -310,6 +342,90 @@ export function DiagnosticsModal({
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [isOpen, onClose]);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    const handleBenchmarkProgress = (event: Event) => {
+      const customEvent = event as CustomEvent<DiagnosticsBenchmarkProgressDetail>;
+      const detail = customEvent.detail;
+      if (!detail?.requestId) return;
+
+      if (detail.status === 'started') {
+        setBenchmarkRunState({
+          isRunning: true,
+          requestId: detail.requestId,
+          phaseLabel: 'Starting',
+          message: detail.message ?? 'Starting benchmark…',
+          error: null,
+        });
+        return;
+      }
+
+      setBenchmarkRunState((prev) => {
+        if (prev.requestId && prev.requestId !== detail.requestId) return prev;
+
+        if (detail.status === 'phase-complete') {
+          return {
+            ...prev,
+            isRunning: true,
+            requestId: detail.requestId,
+            phaseLabel: detail.phase ? `${detail.phase.toUpperCase()} complete` : prev.phaseLabel,
+            message: detail.message ?? prev.message,
+            error: null,
+          };
+        }
+
+        if (detail.status === 'completed') {
+          if (detail.result) {
+            setBenchmarkResult(detail.result);
+          }
+          return {
+            isRunning: false,
+            requestId: detail.requestId,
+            phaseLabel: 'Done',
+            message: detail.message ?? 'Benchmark complete.',
+            error: null,
+          };
+        }
+
+        if (detail.status === 'error') {
+          return {
+            isRunning: false,
+            requestId: detail.requestId,
+            phaseLabel: 'Failed',
+            message: detail.message ?? 'Benchmark failed.',
+            error: detail.message ?? 'Benchmark failed.',
+          };
+        }
+
+        return prev;
+      });
+    };
+
+    window.addEventListener(DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT, handleBenchmarkProgress as EventListener);
+    return () => {
+      window.removeEventListener(DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT, handleBenchmarkProgress as EventListener);
+    };
+  }, [isOpen]);
+
+  const handleRunBenchmark = React.useCallback(() => {
+    if (!isOpen) return;
+    if (benchmarkRunState.isRunning) return;
+
+    const requestId = `benchmark-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setBenchmarkRunState({
+      isRunning: true,
+      requestId,
+      phaseLabel: 'Queued',
+      message: 'Requesting benchmark run…',
+      error: null,
+    });
+
+    window.dispatchEvent(new CustomEvent(DIAGNOSTICS_BENCHMARK_REQUEST_EVENT, {
+      detail: { requestId, stressProfile: benchmarkStressProfile },
+    }));
+  }, [benchmarkRunState.isRunning, benchmarkStressProfile, isOpen]);
 
   if (!isOpen) return null;
 
@@ -389,6 +505,118 @@ export function DiagnosticsModal({
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Picking Avg</div>
               <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingAvgMs.toFixed(3)} ms</div>
             </div>
+          </div>
+
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>Automated Orbit Benchmark</div>
+                <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  Runs slow, medium, and fast full 3D sweep passes around the current model and records frame timing.
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={benchmarkStressProfile}
+                  onChange={(event) => setBenchmarkStressProfile(event.target.value as DiagnosticsBenchmarkStressProfile)}
+                  disabled={benchmarkRunState.isRunning}
+                  className="h-9 rounded-md border px-2.5 text-[12px]"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'var(--surface-0)',
+                    color: 'var(--text-strong)',
+                  }}
+                  aria-label="Benchmark stress profile"
+                >
+                  <option value="quick">Quick</option>
+                  <option value="standard">Standard</option>
+                  <option value="torture">Torture</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={handleRunBenchmark}
+                  disabled={benchmarkRunState.isRunning}
+                  className="h-9 rounded-md border px-3 text-[12px] font-semibold transition-colors disabled:opacity-45"
+                  style={benchmarkRunState.isRunning
+                    ? {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-2)',
+                        color: 'var(--text-muted)',
+                      }
+                    : {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }}
+                >
+                  {benchmarkRunState.isRunning ? 'Running…' : 'Run Benchmark'}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-2 text-[11px]" style={{ color: benchmarkRunState.error ? '#fca5a5' : 'var(--text-muted)' }}>
+              {benchmarkRunState.error
+                ? benchmarkRunState.error
+                : benchmarkRunState.message || 'No benchmark run yet.'}
+              {benchmarkRunState.phaseLabel ? ` • ${benchmarkRunState.phaseLabel}` : ''}
+            </div>
+
+            {benchmarkResult && (
+              <div className="mt-3 space-y-2">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Overall Avg</div>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      {formatFps(benchmarkResult.overall.fpsAvg)}
+                    </div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{formatMs(benchmarkResult.overall.frameTimeAvgMs)}</div>
+                  </div>
+                  <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Overall P95</div>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      {formatMs(benchmarkResult.overall.frameTimeP95Ms)}
+                    </div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Projection: {benchmarkResult.projectionMode}</div>
+                  </div>
+                  <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Run Duration</div>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      {(benchmarkResult.totalDurationMs / 1000).toFixed(2)}s
+                    </div>
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      Camera feel: {benchmarkResult.cameraFeelPreset} • Stress: {benchmarkResult.stressProfile}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <table className="w-full text-[11px]">
+                    <thead style={{ background: 'var(--surface-0)', color: 'var(--text-muted)' }}>
+                      <tr>
+                        <th className="text-left px-2 py-1.5 font-semibold">Phase</th>
+                        <th className="text-right px-2 py-1.5 font-semibold">Avg FPS</th>
+                        <th className="text-right px-2 py-1.5 font-semibold">Min FPS</th>
+                        <th className="text-right px-2 py-1.5 font-semibold">Avg FT</th>
+                        <th className="text-right px-2 py-1.5 font-semibold">P95 FT</th>
+                        <th className="text-right px-2 py-1.5 font-semibold">Max FT</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {benchmarkResult.phases.map((phase) => (
+                        <tr key={phase.phase} style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--surface-1)' }}>
+                          <td className="px-2 py-1.5" style={{ color: 'var(--text-strong)' }}>{phase.phase}</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-strong)' }}>{phase.stats.fpsAvg.toFixed(1)}</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{phase.stats.fpsMin.toFixed(1)}</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-strong)' }}>{phase.stats.frameTimeAvgMs.toFixed(2)} ms</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{phase.stats.frameTimeP95Ms.toFixed(2)} ms</td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{phase.stats.frameTimeMaxMs.toFixed(2)} ms</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
