@@ -32,6 +32,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     hoverColor,
     selectedColor = '#80fffd',
 }: LeafRendererProps) {
+    const useLowDetailPrimitives = !isSelected && !propHovered;
+
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
         category: 'support',
@@ -86,6 +88,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
                         color={visuals.color}
                         emissive={visuals.emissive}
                         emissiveIntensity={visuals.emissiveIntensity}
+                        radialSegments={useLowDetailPrimitives ? 10 : 32}
+                        sphereSegments={useLowDetailPrimitives ? 10 : 32}
                         isInteractable={isInteractable}
                         isParentSelected={!!isSelected}
                     />

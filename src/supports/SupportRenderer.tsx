@@ -66,16 +66,39 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
     const [sceneHoveredSupportId, setSceneHoveredSupportId] = React.useState<string | null>(null);
     const pendingSceneHoverClearFrameRef = React.useRef<number | null>(null);
+    const orbitInteractionActiveRef = React.useRef(false);
 
     useEffect(() => {
         const handleImmediateModelHover = (event: Event) => {
+            if (orbitInteractionActiveRef.current) return;
             const customEvent = event as CustomEvent<{ modelId?: string | null }>;
             setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
         };
 
+        const handleOrbitStartOrChange = () => {
+            orbitInteractionActiveRef.current = true;
+            if (pendingSceneHoverClearFrameRef.current != null) {
+                cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
+                pendingSceneHoverClearFrameRef.current = null;
+            }
+
+            setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
+            emitSupportModelPointerHover(null);
+        };
+
+        const handleOrbitEnd = () => {
+            orbitInteractionActiveRef.current = false;
+        };
+
         window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+        window.addEventListener('picking-orbit-start', handleOrbitStartOrChange);
+        window.addEventListener('picking-orbit-change', handleOrbitStartOrChange);
+        window.addEventListener('picking-orbit-end', handleOrbitEnd);
         return () => {
             window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+            window.removeEventListener('picking-orbit-start', handleOrbitStartOrChange);
+            window.removeEventListener('picking-orbit-change', handleOrbitStartOrChange);
+            window.removeEventListener('picking-orbit-end', handleOrbitEnd);
         };
     }, []);
 
@@ -774,6 +797,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [isInteractable]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
+        if (orbitInteractionActiveRef.current) return;
+
         if (pendingSceneHoverClearFrameRef.current != null) {
             cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
             pendingSceneHoverClearFrameRef.current = null;
@@ -785,6 +810,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, []);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback(() => {
+        if (orbitInteractionActiveRef.current) return;
+
         if (pendingSceneHoverClearFrameRef.current != null) {
             cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
         }

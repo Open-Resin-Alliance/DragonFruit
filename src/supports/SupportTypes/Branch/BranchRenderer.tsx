@@ -44,6 +44,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   hoverColor,
   selectedColor = '#80fffd',
 }: BranchRendererProps) {
+  const useLowDetailPrimitives = !isSelected && !propHovered;
+
   // Use universal highlight hook (matches TrunkRenderer pattern)
   const { pickRef, visuals } = useHighlight({
     id: branch.id,
@@ -185,6 +187,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
         color={visuals.color}
         emissive={visuals.emissive}
         emissiveIntensity={visuals.emissiveIntensity}
+        radialSegments={useLowDetailPrimitives ? 10 : 32}
+        sphereSegments={useLowDetailPrimitives ? 10 : 32}
         socketJointId={branch.contactCone.socketJointId}
         isInteractable={isInteractable}
         isParentSelected={isSelected}

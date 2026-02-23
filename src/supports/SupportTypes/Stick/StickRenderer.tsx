@@ -39,6 +39,8 @@ export const StickRenderer = React.memo(function StickRenderer({
   hoverColor,
   selectedColor = '#80fffd',
 }: StickRendererProps) {
+  const useLowDetailPrimitives = !isSelected && !propHovered;
+
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
     category: 'support',
@@ -158,6 +160,8 @@ export const StickRenderer = React.memo(function StickRenderer({
       color={visuals.color}
       emissive={visuals.emissive}
       emissiveIntensity={visuals.emissiveIntensity}
+      radialSegments={useLowDetailPrimitives ? 10 : 32}
+      sphereSegments={useLowDetailPrimitives ? 10 : 32}
       socketJointId={stick.contactConeA.socketJointId}
       isInteractable={isInteractable}
       isParentSelected={isSelected}
@@ -174,6 +178,8 @@ export const StickRenderer = React.memo(function StickRenderer({
       color={visuals.color}
       emissive={visuals.emissive}
       emissiveIntensity={visuals.emissiveIntensity}
+      radialSegments={useLowDetailPrimitives ? 10 : 32}
+      sphereSegments={useLowDetailPrimitives ? 10 : 32}
       socketJointId={stick.contactConeB.socketJointId}
       isInteractable={isInteractable}
       isParentSelected={isSelected}

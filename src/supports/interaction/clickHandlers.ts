@@ -1,13 +1,59 @@
 import { selectSupport, selectJoint } from './SupportSelection';
 import { setSelectedId, getModelIdForSupportEntityId } from '../state';
 
+let hoverGuardInitialized = false;
+let orbitInteractionActive = false;
+let pendingHoverModelId: string | null = null;
+let lastDispatchedHoverModelId: string | null = null;
+let pendingHoverDispatchRaf: number | null = null;
+
+function initializeHoverGuards() {
+    if (hoverGuardInitialized || typeof window === 'undefined') return;
+    hoverGuardInitialized = true;
+
+    const markOrbitActive = () => {
+        orbitInteractionActive = true;
+        if (pendingHoverDispatchRaf != null) {
+            cancelAnimationFrame(pendingHoverDispatchRaf);
+            pendingHoverDispatchRaf = null;
+        }
+        pendingHoverModelId = null;
+    };
+
+    const markOrbitInactive = () => {
+        orbitInteractionActive = false;
+    };
+
+    window.addEventListener('picking-orbit-start', markOrbitActive);
+    window.addEventListener('picking-orbit-change', markOrbitActive);
+    window.addEventListener('picking-orbit-end', markOrbitInactive);
+}
+
 export function emitSupportModelPointerHover(modelId: string | null) {
-    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
-        detail: {
-            modelId,
-            category: 'support',
-        },
-    }));
+    if (typeof window === 'undefined') return;
+
+    initializeHoverGuards();
+
+    if (orbitInteractionActive) return;
+
+    pendingHoverModelId = modelId;
+    if (pendingHoverDispatchRaf != null) return;
+
+    pendingHoverDispatchRaf = requestAnimationFrame(() => {
+        pendingHoverDispatchRaf = null;
+        const nextModelId = pendingHoverModelId;
+        pendingHoverModelId = null;
+
+        if (nextModelId === lastDispatchedHoverModelId) return;
+        lastDispatchedHoverModelId = nextModelId;
+
+        window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+            detail: {
+                modelId: nextModelId,
+                category: 'support',
+            },
+        }));
+    });
 }
 
 /**

@@ -2725,6 +2725,7 @@ export function SceneCanvas({
               <SupportRenderer
                 ref={supportsRef as React.RefObject<THREE.Group>}
                 mode={mode}
+                navigationLodActive={isOrbitInteracting || spaceMouseNavigationActive}
                 hidePlateContactPrimitives={hidePlateContactPrimitives}
                 clipLower={clipLower}
                 clipUpper={clipUpper}
