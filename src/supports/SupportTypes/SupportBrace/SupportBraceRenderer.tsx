@@ -24,6 +24,8 @@ interface SupportBraceRendererProps {
     suppressHover?: boolean;
     isHovered?: boolean;
     isInteractable?: boolean;
+    deferStraightShaftsToSceneBatch?: boolean;
+    deferInteractionToSceneBatch?: boolean;
     hidePlateContactPrimitives?: boolean;
     baseColor?: string;
     hoverColor?: string;
@@ -41,6 +43,8 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     suppressHover,
     isHovered: propHovered,
     isInteractable = true,
+    deferStraightShaftsToSceneBatch = false,
+    deferInteractionToSceneBatch = false,
     hidePlateContactPrimitives = false,
     baseColor = '#ff8800',
     hoverColor,
@@ -49,7 +53,7 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     const { pickRef, visuals } = useHighlight({
         id: supportBrace.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover,
+        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -95,7 +99,7 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
         const diameterEnd = isLast ? supportBrace.profile.terminalEndDiameterMm : undefined;
         const isUniformDiameter = (diameterStart == null && diameterEnd == null)
             || (diameterStart != null && diameterEnd != null && Math.abs(diameterStart - diameterEnd) < 1e-6);
-        const canBatchShaft = !isSelected && segment.type !== 'bezier' && isUniformDiameter;
+        const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && segment.type !== 'bezier' && isUniformDiameter;
 
         if (canBatchShaft) {
             batchedStraightShafts.push({
@@ -127,7 +131,7 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
                     onClick={() => setSelectedId(segment.id)}
                 />,
             );
-        } else {
+        } else if (!deferStraightShaftsToSceneBatch || isSelected) {
             shafts.push(
                 <ShaftRenderer
                     key={`shaft-${segment.id}`}
@@ -169,7 +173,11 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     const shaftDiameter = supportBrace.segments[0]?.diameter ?? supportBrace.profile.bodyDiameterMm;
 
     return (
-        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+        <group
+            onClick={handleClick}
+            onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+            onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+        >
             {!hidePlateContactPrimitives && (
                 <RootsRenderer
                     root={root}

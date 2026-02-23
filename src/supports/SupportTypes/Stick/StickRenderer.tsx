@@ -18,6 +18,8 @@ interface StickRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  deferStraightShaftsToSceneBatch?: boolean;
+  deferInteractionToSceneBatch?: boolean;
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
@@ -31,6 +33,8 @@ export const StickRenderer = React.memo(function StickRenderer({
   isHovered: propHovered,
   suppressHover,
   isInteractable = true,
+  deferStraightShaftsToSceneBatch = false,
+  deferInteractionToSceneBatch = false,
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
@@ -38,7 +42,7 @@ export const StickRenderer = React.memo(function StickRenderer({
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -94,7 +98,7 @@ export const StickRenderer = React.memo(function StickRenderer({
 
     const isSegSelected = selectedId === seg.id;
 
-    const canBatchShaft = !isSelected && seg.type !== 'bezier';
+    const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier';
 
     if (canBatchShaft) {
       batchedStraightShafts.push({
@@ -124,7 +128,7 @@ export const StickRenderer = React.memo(function StickRenderer({
           onClick={() => setSelectedId(seg.id)}
         />
       );
-    } else {
+    } else if (!deferStraightShaftsToSceneBatch || isSelected) {
       shafts.push(
         <ShaftRenderer
           key={`shaft-${seg.id}`}
@@ -177,7 +181,11 @@ export const StickRenderer = React.memo(function StickRenderer({
   );
 
   return (
-    <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+    <group
+      onClick={handleClick}
+      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+    >
       <group ref={pickRef as any}>
         <InstancedShaftGroup
           shafts={batchedStraightShafts}

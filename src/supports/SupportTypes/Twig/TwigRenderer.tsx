@@ -19,6 +19,8 @@ interface TwigRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  deferStraightShaftsToSceneBatch?: boolean;
+  deferInteractionToSceneBatch?: boolean;
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
@@ -32,6 +34,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   isHovered: propHovered,
   suppressHover,
   isInteractable = true,
+  deferStraightShaftsToSceneBatch = false,
+  deferInteractionToSceneBatch = false,
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
@@ -39,7 +43,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   const { pickRef, visuals } = useHighlight({
     id: twig.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -108,7 +112,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
 
     const isSegSelected = selectedId === seg.id;
 
-    const canBatchShaft = !isSelected && seg.type !== 'bezier' && Math.abs(diameterStart - diameterEnd) < 1e-6;
+    const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier' && Math.abs(diameterStart - diameterEnd) < 1e-6;
 
     if (canBatchShaft) {
       batchedStraightShafts.push({
@@ -138,7 +142,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           onClick={() => setSelectedId(seg.id)}
         />
       );
-    } else {
+    } else if (!deferStraightShaftsToSceneBatch || isSelected) {
       shafts.push(
         <ShaftRenderer
           key={`shaft-${seg.id}`}
@@ -185,7 +189,11 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   );
 
   return (
-    <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+    <group
+      onClick={handleClick}
+      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+    >
       <group ref={pickRef as React.Ref<THREE.Group>}>
         <InstancedShaftGroup
           shafts={batchedStraightShafts}
