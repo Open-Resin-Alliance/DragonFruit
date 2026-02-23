@@ -1041,11 +1041,12 @@ export function SceneCanvas({
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     const bounds = new THREE.Box3();
     let hasAny = false;
+    const BUILD_PLATE_Z = 0;
 
     const expandByRadius = (pos: { x: number; y: number; z: number } | THREE.Vector3, radiusMm: number) => {
       const p = pos instanceof THREE.Vector3 ? pos : new THREE.Vector3(pos.x, pos.y, pos.z);
       const r = Math.max(0, radiusMm);
-      bounds.expandByPoint(new THREE.Vector3(p.x - r, p.y - r, p.z - r));
+      bounds.expandByPoint(new THREE.Vector3(p.x - r, p.y - r, Math.max(BUILD_PLATE_Z, p.z - r)));
       bounds.expandByPoint(new THREE.Vector3(p.x + r, p.y + r, p.z + r));
       hasAny = true;
     };
