@@ -24,9 +24,19 @@ function initializeHoverGuards() {
         orbitInteractionActive = false;
     };
 
+    const markOrbitInactiveFromPointer = () => {
+        orbitInteractionActive = false;
+    };
+
     window.addEventListener('picking-orbit-start', markOrbitActive);
     window.addEventListener('picking-orbit-change', markOrbitActive);
     window.addEventListener('picking-orbit-end', markOrbitInactive);
+    window.addEventListener('pointerup', markOrbitInactiveFromPointer, true);
+    window.addEventListener('pointercancel', markOrbitInactiveFromPointer, true);
+    window.addEventListener('mouseup', markOrbitInactiveFromPointer, true);
+    window.addEventListener('contextmenu', markOrbitInactiveFromPointer, true);
+    window.addEventListener('blur', markOrbitInactiveFromPointer);
+    document.addEventListener('visibilitychange', markOrbitInactiveFromPointer);
 }
 
 export function emitSupportModelPointerHover(modelId: string | null) {

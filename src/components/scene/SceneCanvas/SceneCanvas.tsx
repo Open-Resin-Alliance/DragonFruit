@@ -1777,6 +1777,33 @@ export function SceneCanvas({
     return new Set(resolveMarqueeSelectedIds(marqueeSelection));
   }, [marqueeSelection, mode, resolveMarqueeSelectedIds]);
 
+  const supportMarqueeCandidateIdSet = React.useMemo(() => {
+    if (!marqueeSelection || mode !== 'support') return new Set<string>();
+
+    const dragDx = marqueeSelection.current.x - marqueeSelection.start.x;
+    const dragDy = marqueeSelection.current.y - marqueeSelection.start.y;
+    const dragDistanceSq = (dragDx * dragDx) + (dragDy * dragDy);
+    if (dragDistanceSq < 16) return new Set<string>();
+
+    return new Set(resolveMarqueeSelectedSupportIds(marqueeSelection));
+  }, [marqueeSelection, mode, resolveMarqueeSelectedSupportIds]);
+
+  React.useEffect(() => {
+    if (mode !== 'support' || !isMarqueeSelecting) {
+      window.dispatchEvent(new CustomEvent('support-marquee-hover', {
+        detail: { supportId: null, modelId: null },
+      }));
+      return;
+    }
+
+    const firstSupportId = supportMarqueeCandidateIdSet.values().next().value ?? null;
+    const modelId = firstSupportId ? getModelIdForSupportEntityId(firstSupportId) : null;
+
+    window.dispatchEvent(new CustomEvent('support-marquee-hover', {
+      detail: { supportId: firstSupportId, modelId },
+    }));
+  }, [isMarqueeSelecting, mode, supportMarqueeCandidateIdSet]);
+
   const duplicatePreviewMeshOffset = React.useMemo(() => {
     if (!duplicatePreviewModel) return null;
     return new THREE.Vector3(
@@ -2676,13 +2703,16 @@ export function SceneCanvas({
   ]);
 
   const handleOrbitChange = React.useCallback(() => {
-    if (orbitInteractionActiveRef.current) {
+    const orbitActive = orbitInteractionActiveRef.current;
+    if (orbitActive) {
       orbitInteractionMovedRef.current = true;
     }
     updateOrbitControlSpeeds();
     updateCameraBelowBuildPlate();
     onCameraChange?.();
-    window.dispatchEvent(new Event('picking-orbit-change'));
+    if (orbitActive) {
+      window.dispatchEvent(new Event('picking-orbit-change'));
+    }
   }, [onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
 
   const handleOrbitStart = React.useCallback(() => {
@@ -2694,7 +2724,7 @@ export function SceneCanvas({
   }, []);
 
   const handleOrbitEnd = React.useCallback(() => {
-    if (orbitInteractionActiveRef.current && orbitInteractionMovedRef.current) {
+    if (mode === 'prepare' && orbitInteractionActiveRef.current && orbitInteractionMovedRef.current) {
       suppressNextCanvasClickRef.current = true;
     }
     orbitInteractionActiveRef.current = false;
@@ -2704,7 +2734,30 @@ export function SceneCanvas({
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
     window.dispatchEvent(new Event('picking-orbit-end'));
-  }, [onCameraEnd, updateCameraBelowBuildPlate]);
+  }, [mode, onCameraEnd, updateCameraBelowBuildPlate]);
+
+  React.useEffect(() => {
+    const forceOrbitEndIfActive = () => {
+      if (!orbitInteractionActiveRef.current) return;
+      handleOrbitEnd();
+    };
+
+    window.addEventListener('pointerup', forceOrbitEndIfActive, true);
+    window.addEventListener('pointercancel', forceOrbitEndIfActive, true);
+    window.addEventListener('mouseup', forceOrbitEndIfActive, true);
+    window.addEventListener('contextmenu', forceOrbitEndIfActive, true);
+    window.addEventListener('blur', forceOrbitEndIfActive);
+    document.addEventListener('visibilitychange', forceOrbitEndIfActive);
+
+    return () => {
+      window.removeEventListener('pointerup', forceOrbitEndIfActive, true);
+      window.removeEventListener('pointercancel', forceOrbitEndIfActive, true);
+      window.removeEventListener('mouseup', forceOrbitEndIfActive, true);
+      window.removeEventListener('contextmenu', forceOrbitEndIfActive, true);
+      window.removeEventListener('blur', forceOrbitEndIfActive);
+      document.removeEventListener('visibilitychange', forceOrbitEndIfActive);
+    };
+  }, [handleOrbitEnd]);
 
   const markGizmoDragEnded = React.useCallback(() => {
     window.__gizmoDragEndedThisFrame = true;
