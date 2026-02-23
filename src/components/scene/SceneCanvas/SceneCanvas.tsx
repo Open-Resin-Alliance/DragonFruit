@@ -2112,6 +2112,7 @@ export function SceneCanvas({
     orbitInteractionMovedRef.current = false;
     setIsOrbitInteracting(true);
     setMouseOrbitDragRunId((id) => id + 1);
+    window.dispatchEvent(new Event('picking-orbit-start'));
   }, []);
 
   const handleOrbitEnd = React.useCallback(() => {
@@ -2201,7 +2202,7 @@ export function SceneCanvas({
                 const isActive = model.id === activeModelId;
                 const isSelectedModel = selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
-                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive;
+                const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive || isOrbitInteracting;
                 const interactionLodEnabled = (isOrbitInteracting || spaceMouseNavigationActive) && !isActive;
                 const supportNonSelectedOpacity = mode === 'support' && !!activeModelId && !isActive ? 0.5 : undefined;
                 const shouldHideDuplicateSourceModel = Boolean(
@@ -2682,6 +2683,10 @@ export function SceneCanvas({
                 hoverModelId={hoveredModelId}
                 onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                 onModelPointerHover={(modelId) => {
+                  if (isOrbitInteracting || spaceMouseNavigationActive) {
+                    setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+                    return;
+                  }
                   const nextModelId = modelId || null;
                   setHoveredSupportPointerModelId((prev) => (prev === nextModelId ? prev : nextModelId));
                 }}

@@ -41,7 +41,7 @@ export function PickingOrbitPauser() {
   const isPausedRef = React.useRef(false);
 
   useEffect(() => {
-    const handleOrbitChange = () => {
+    const pauseIfNeeded = () => {
       if (resumeTimeoutRef.current !== null) {
         window.clearTimeout(resumeTimeoutRef.current);
         resumeTimeoutRef.current = null;
@@ -51,6 +51,14 @@ export function PickingOrbitPauser() {
         pause();
       }
     };
+
+    const handleOrbitStart = () => {
+      pauseIfNeeded();
+    };
+
+    const handleOrbitChange = () => {
+      pauseIfNeeded();
+    };
     const handleOrbitEnd = () => {
       resumeTimeoutRef.current = window.setTimeout(() => {
         isPausedRef.current = false;
@@ -59,9 +67,11 @@ export function PickingOrbitPauser() {
       }, 150);
     };
 
+    window.addEventListener('picking-orbit-start', handleOrbitStart);
     window.addEventListener('picking-orbit-change', handleOrbitChange);
     window.addEventListener('picking-orbit-end', handleOrbitEnd);
     return () => {
+      window.removeEventListener('picking-orbit-start', handleOrbitStart);
       window.removeEventListener('picking-orbit-change', handleOrbitChange);
       window.removeEventListener('picking-orbit-end', handleOrbitEnd);
       if (resumeTimeoutRef.current !== null) window.clearTimeout(resumeTimeoutRef.current);
