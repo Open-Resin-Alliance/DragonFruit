@@ -1010,6 +1010,7 @@ export function SceneCanvas({
   } | null>(null);
   const suppressNextCanvasClickRef = React.useRef(false);
   const marqueePointerIdRef = React.useRef<number | null>(null);
+  const marqueePointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const orbitInteractionActiveRef = React.useRef(false);
   const orbitInteractionMovedRef = React.useRef(false);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
@@ -2207,30 +2208,44 @@ export function SceneCanvas({
     if (!clamped) return;
 
     marqueePointerIdRef.current = e.pointerId;
-
-    setMarqueeSelection({
-      start: { x: clamped.x, y: clamped.y },
-      current: { x: clamped.x, y: clamped.y },
-    });
-
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      // no-op: pointer capture can fail in edge cases; marquee still works without it
-    }
+    marqueePointerStartRef.current = { x: clamped.x, y: clamped.y };
   }, [clampPointToContainer, hoveredModelId, isGizmoDragging, isPostGizmoInteractionGuardActive, mode, supportStateForBounds.hoveredCategory]);
 
   const handleMarqueePointerMoveCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (marqueePointerIdRef.current == null) return;
     if (e.pointerId !== marqueePointerIdRef.current) return;
-    if (!marqueeSelection) return;
+    const start = marqueePointerStartRef.current;
+    if (!start) return;
 
     const clamped = clampPointToContainer(e.clientX, e.clientY);
     if (!clamped) return;
+
+    if (!marqueeSelection) {
+      const dx = clamped.x - start.x;
+      const dy = clamped.y - start.y;
+      const dragDistanceSq = (dx * dx) + (dy * dy);
+
+      if (dragDistanceSq < 16) {
+        return;
+      }
+
+      suppressNextCanvasClickRef.current = true;
+      setMarqueeSelection({
+        start: { x: start.x, y: start.y },
+        current: { x: clamped.x, y: clamped.y },
+      });
+
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
+
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // no-op: pointer capture can fail in edge cases; marquee still works without it
+      }
+      return;
+    }
 
     setMarqueeSelection((prev) => (prev
       ? {
@@ -2250,15 +2265,20 @@ export function SceneCanvas({
 
     const currentSelection = marqueeSelection;
     marqueePointerIdRef.current = null;
+    marqueePointerStartRef.current = null;
     setMarqueeSelection(null);
 
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore release failures
+    if (currentSelection) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore release failures
+      }
     }
 
-    if (!currentSelection) return;
+    if (!currentSelection) {
+      return;
+    }
 
     const dragDx = currentSelection.current.x - currentSelection.start.x;
     const dragDy = currentSelection.current.y - currentSelection.start.y;
