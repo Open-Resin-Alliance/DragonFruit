@@ -47,6 +47,8 @@ interface SupportShaftSet {
 }
 
 const BATCHED_SHAFT_RADIAL_SEGMENTS = 12;
+const BATCHED_SHAFT_LOW_RADIAL_SEGMENTS = 8;
+const BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD = 1200;
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -701,6 +703,37 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
     }, [state.branches, dimNonSelected, resolveBaseColor, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId]);
 
+    const sceneBatchedShaftInstanceCount = useMemo(() => {
+        const countGroups = [
+            sceneBatchedTrunkShaftGroups,
+            sceneBatchedBranchShaftGroups,
+            sceneBatchedBraceShaftGroups,
+            sceneBatchedTwigShaftGroups,
+            sceneBatchedStickShaftGroups,
+            sceneBatchedSupportBraceShaftGroups,
+        ];
+
+        let total = 0;
+        for (const groups of countGroups) {
+            for (const group of groups) {
+                total += group.shafts.length;
+            }
+        }
+
+        return total;
+    }, [
+        sceneBatchedTrunkShaftGroups,
+        sceneBatchedBranchShaftGroups,
+        sceneBatchedBraceShaftGroups,
+        sceneBatchedTwigShaftGroups,
+        sceneBatchedStickShaftGroups,
+        sceneBatchedSupportBraceShaftGroups,
+    ]);
+
+    const sceneBatchedShaftRadialSegments = sceneBatchedShaftInstanceCount >= BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD
+        ? BATCHED_SHAFT_LOW_RADIAL_SEGMENTS
+        : BATCHED_SHAFT_RADIAL_SEGMENTS;
+
     const hoveredSupportShaftSet = useMemo(() => {
         const hoveredSupportId = sceneHoveredSupportId ?? (state.hoveredCategory === 'support' ? state.hoveredId : null);
         if (!hoveredSupportId) return null;
@@ -805,7 +838,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-trunk-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
-                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    radialSegments={sceneBatchedShaftRadialSegments}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
@@ -870,7 +903,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-branch-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
-                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    radialSegments={sceneBatchedShaftRadialSegments}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
@@ -983,7 +1016,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-twig-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
-                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    radialSegments={sceneBatchedShaftRadialSegments}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
@@ -1028,7 +1061,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-stick-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
-                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    radialSegments={sceneBatchedShaftRadialSegments}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
@@ -1041,7 +1074,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-brace-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
-                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    radialSegments={sceneBatchedShaftRadialSegments}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
@@ -1134,7 +1167,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-support-brace-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
-                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    radialSegments={sceneBatchedShaftRadialSegments}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
