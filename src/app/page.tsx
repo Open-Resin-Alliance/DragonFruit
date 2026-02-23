@@ -71,9 +71,11 @@ import {
   getHistoryDebugEvents,
   getRedoCount,
   getUndoCount,
+  redo,
   subscribeHistory,
   subscribeHistoryDebug,
   subscribeHistoryOperations,
+  undo,
 } from '@/history/historyStore';
 import type { HistoryDebugEvent } from '@/history/types';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
@@ -144,6 +146,9 @@ export default function Home() {
     undo: 0,
     redo: 0,
   });
+  const [historyPreviewTargetEventId, setHistoryPreviewTargetEventId] = React.useState<number | null>(null);
+  const [isHistoryPreviewActive, setIsHistoryPreviewActive] = React.useState(false);
+  const historyPreviewBaselineRef = React.useRef<{ undo: number; redo: number } | null>(null);
   const [isSelectAllModelsActive, setIsSelectAllModelsActive] = React.useState(false);
   const [arrangeSpacingMm, setArrangeSpacingMm] = React.useState(0.5);
   const [arrangePrecisionMode, setArrangePrecisionMode] = React.useState<ArrangePrecisionMode>('standard');
@@ -649,6 +654,62 @@ export default function Home() {
       unsubHistoryDebug();
     };
   }, []);
+
+  React.useEffect(() => {
+    if (isHistoryDebugOpen) {
+      historyPreviewBaselineRef.current = {
+        undo: getUndoCount(),
+        redo: getRedoCount(),
+      };
+      setIsHistoryPreviewActive(false);
+      setHistoryPreviewTargetEventId(null);
+      return;
+    }
+
+    historyPreviewBaselineRef.current = null;
+    setIsHistoryPreviewActive(false);
+    setHistoryPreviewTargetEventId(null);
+  }, [isHistoryDebugOpen]);
+
+  const jumpHistoryToCounts = React.useCallback((targetUndoCount: number) => {
+    let safety = 800;
+
+    while (getUndoCount() > targetUndoCount && safety > 0) {
+      const before = getUndoCount();
+      undo();
+      const after = getUndoCount();
+      safety -= 1;
+      if (after >= before) break;
+    }
+
+    while (getUndoCount() < targetUndoCount && safety > 0) {
+      const before = getUndoCount();
+      redo();
+      const after = getUndoCount();
+      safety -= 1;
+      if (after <= before) break;
+    }
+  }, []);
+
+  const handleHistoryJumpToEvent = React.useCallback((event: HistoryDebugEvent) => {
+    const currentTotal = getUndoCount() + getRedoCount();
+    const targetTotal = event.undoCount + event.redoCount;
+
+    // We can only jump safely within the same undo/redo universe.
+    if (currentTotal !== targetTotal) return;
+
+    jumpHistoryToCounts(event.undoCount);
+    setIsHistoryPreviewActive(true);
+    setHistoryPreviewTargetEventId(event.id);
+  }, [jumpHistoryToCounts]);
+
+  const handleHistoryCancelPreview = React.useCallback(() => {
+    const baseline = historyPreviewBaselineRef.current;
+    if (!baseline) return;
+    jumpHistoryToCounts(baseline.undo);
+    setIsHistoryPreviewActive(false);
+    setHistoryPreviewTargetEventId(null);
+  }, [jumpHistoryToCounts]);
 
   React.useEffect(() => {
     const handleDiagnosticsHotkey = (event: KeyboardEvent) => {
@@ -3274,6 +3335,10 @@ export default function Home() {
         onClose={() => setIsHistoryDebugOpen(false)}
         historyDebugEvents={historyDebugEvents}
         historyStackCounts={historyStackCounts}
+        selectedPreviewEventId={historyPreviewTargetEventId}
+        isPreviewActive={isHistoryPreviewActive}
+        onJumpToEvent={handleHistoryJumpToEvent}
+        onCancelPreview={handleHistoryCancelPreview}
         onClearEventLog={() => {
           clearHistoryDebugEvents();
         }}

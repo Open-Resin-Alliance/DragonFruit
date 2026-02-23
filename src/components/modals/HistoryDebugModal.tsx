@@ -9,6 +9,10 @@ type HistoryDebugModalProps = {
   onClose: () => void;
   historyDebugEvents: HistoryDebugEvent[];
   historyStackCounts: { undo: number; redo: number };
+  selectedPreviewEventId: number | null;
+  isPreviewActive: boolean;
+  onJumpToEvent: (event: HistoryDebugEvent) => void;
+  onCancelPreview: () => void;
   onClearEventLog: () => void;
   onClearUndoRedoStacks: () => void;
   onClearAll: () => void;
@@ -19,6 +23,10 @@ export function HistoryDebugModal({
   onClose,
   historyDebugEvents,
   historyStackCounts,
+  selectedPreviewEventId,
+  isPreviewActive,
+  onJumpToEvent,
+  onCancelPreview,
   onClearEventLog,
   onClearUndoRedoStacks,
   onClearAll,
@@ -154,6 +162,20 @@ export function HistoryDebugModal({
           </span>
 
           <div className="ml-auto flex flex-wrap gap-2">
+            {isPreviewActive && (
+              <button
+                type="button"
+                className="h-8 inline-flex items-center justify-center rounded-md border px-3 text-xs font-semibold transition-colors"
+                style={{
+                  borderColor: 'color-mix(in srgb, #fbbf24, var(--border-subtle) 55%)',
+                  background: 'color-mix(in srgb, #fbbf24, var(--surface-1) 92%)',
+                  color: 'var(--text-strong)',
+                }}
+                onClick={onCancelPreview}
+              >
+                Cancel Preview
+              </button>
+            )}
             <button
               type="button"
               className="h-8 inline-flex items-center justify-center rounded-md border px-3 text-xs font-semibold transition-colors"
@@ -199,10 +221,11 @@ export function HistoryDebugModal({
               No history events yet.
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="space-y-1.5">
               {historyDebugEventsNewestFirst.map((event, index) => {
                 const visual = getHistoryDebugEventVisual(event.kind);
                 const isLast = index === historyDebugEventsNewestFirst.length - 1;
+                const isSelectedPreview = selectedPreviewEventId === event.id;
 
                 return (
                   <div key={event.id} className="relative pl-7">
@@ -229,13 +252,24 @@ export function HistoryDebugModal({
                     </div>
 
                     <div
-                      className="rounded-lg border px-3 py-2.5"
+                      className="cursor-pointer rounded-lg border px-2.5 py-1.5 transition-colors"
                       style={{
-                        borderColor: visual.rowBorder,
+                        borderColor: isSelectedPreview
+                          ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)'
+                          : visual.rowBorder,
                         background: 'color-mix(in srgb, var(--surface-1), black 8%)',
                       }}
+                      onClick={() => onJumpToEvent(event)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onJumpToEvent(event);
+                        }
+                      }}
                     >
-                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] leading-tight">
                         <span
                           className="rounded-full border px-2 py-0.5 font-semibold"
                           style={{
@@ -248,27 +282,35 @@ export function HistoryDebugModal({
                         </span>
                         <span style={{ color: 'var(--text-muted)' }}>#{event.id}</span>
                         <span style={{ color: 'var(--text-muted)' }}>{formatHistoryDebugTimestamp(event.timestamp)}</span>
+                        {isSelectedPreview && (
+                          <span className="rounded-full border px-1.5 py-0 text-[10px] font-semibold" style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)', color: 'var(--accent)' }}>
+                            Preview
+                          </span>
+                        )}
                       </div>
 
                       {(event.actionType || event.actionDescription) ? (
-                        <div className="mt-1.5 text-xs" style={{ color: 'var(--text-strong)' }}>
+                        <div className="mt-1 text-xs leading-tight" style={{ color: 'var(--text-strong)' }}>
                           <span className="font-semibold">{event.actionDescription || event.actionType}</span>
                           {event.actionDescription && event.actionType ? (
                             <span style={{ color: 'var(--text-muted)' }}> · {event.actionType}</span>
                           ) : null}
                         </div>
                       ) : (
-                        <div className="mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        <div className="mt-1 text-xs leading-tight" style={{ color: 'var(--text-muted)' }}>
                           No action payload attached
                         </div>
                       )}
 
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                         <span className="rounded border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
                           Undo: {event.undoCount}
                         </span>
                         <span className="rounded border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
                           Redo: {event.redoCount}
+                        </span>
+                        <span className="rounded border px-1.5 py-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                          Jump
                         </span>
                       </div>
                     </div>
