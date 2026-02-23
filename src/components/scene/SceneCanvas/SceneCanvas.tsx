@@ -2019,7 +2019,11 @@ export function SceneCanvas({
     updateCameraBelowBuildPlate();
   }, [updateCameraBelowBuildPlate]);
 
-  const hidePlateContactPrimitives = isCameraBelowBuildPlate;
+  // The below-plate flag flips early for UX smoothness; cull support plate-contact
+  // primitives and rafts only when the build plate is effectively fully faded out.
+  const belowPlateCullThreshold = 0.06;
+  const hidePlateContactPrimitives = isCameraBelowBuildPlate && buildPlateOpacity <= belowPlateCullThreshold;
+  const hideRaftPrimitives = hidePlateContactPrimitives;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -2385,7 +2389,7 @@ export function SceneCanvas({
               )}
 
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
-              {!hidePlateContactPrimitives && (
+              {!hideRaftPrimitives && (
                 <>
                   <RaftRenderer
                     colorized={!!visualActiveModelId || !!hoveredModelId}
