@@ -18,8 +18,10 @@ function generateImportId(): string {
 function normalizeLycheeRotation(rotation: { x?: number; y?: number; z?: number } | null | undefined) {
     const x = Number.isFinite(rotation?.x) ? (rotation?.x as number) : 0;
     const y = Number.isFinite(rotation?.y) ? (rotation?.y as number) : 0;
-    const z = Number.isFinite(rotation?.z) ? (rotation?.z as number) : 0;
-    return { x, y, z };
+    // const z = Number.isFinite(rotation?.z) ? (rotation?.z as number) : 0;
+    // For now, ignore Z rotation from Lychee as we don't have a clear strategy for applying it to the supports
+    // We can consider adding it back in the future if we implement a more complete support transform that includes rotation.
+    return { x, y, z: 0 };
 }
 
 function applySupportZOffset(importData: any, deltaZ: number) {
