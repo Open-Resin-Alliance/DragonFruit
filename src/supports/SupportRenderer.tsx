@@ -64,7 +64,7 @@ const BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD = 1200;
 const BATCHED_JOINT_WIDTH_SEGMENTS = 12;
 const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedSupportIds = useSyncExternalStore(
         subscribeSupportMultiSelection,
@@ -82,7 +82,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const dimNonSelected = state.selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = state.selectedId !== null || hasSupportMultiSelection;
 
-    const isInteractable = mode === 'support';
+    const isInteractable = mode === 'support' && !navigationLodActive;
+    const hidePlateContactPrimitivesEffective = hidePlateContactPrimitives;
     const restrictToActiveModel = mode === 'support' && !!activeModelId;
     const suppressHover = isJointCreationActive || !isInteractable || braceAltActive;
     const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
@@ -1215,7 +1216,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state.branches, dimNonSelected, resolveBaseColor, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
-        if (hidePlateContactPrimitives) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
+        if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
 
         const grouped = new Map<string, InstancedRoot[]>();
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
@@ -1258,7 +1259,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return Array.from(grouped.entries()).map(([color, roots]) => ({ color, roots }));
     }, [
-        hidePlateContactPrimitives,
+        hidePlateContactPrimitivesEffective,
         raftSettings.bottomMode,
         raftSettings.thickness,
         state.trunks,
@@ -1711,7 +1712,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         deferInteractionToSceneBatch={deferTrunkInteractionToSceneBatch}
                         deferRootsToSceneBatch={!effectiveSelected}
                         deferContactConesToSceneBatch={!effectiveSelected && !!trunk.contactCone}
-                        hidePlateContactPrimitives={hidePlateContactPrimitives}
+                        hidePlateContactPrimitives={hidePlateContactPrimitivesEffective}
                     />
                     </group>
                 );
@@ -1984,7 +1985,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isInteractable={isInteractable}
                         deferStraightShaftsToSceneBatch={!effectiveSelected && supportBraceShaftsBySupport.has(supportBrace.id)}
                         deferInteractionToSceneBatch={deferSupportBraceInteractionToSceneBatch}
-                        hidePlateContactPrimitives={hidePlateContactPrimitives}
+                        hidePlateContactPrimitives={hidePlateContactPrimitivesEffective}
                     />
                     </group>
                 );

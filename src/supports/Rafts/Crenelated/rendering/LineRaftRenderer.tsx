@@ -114,6 +114,7 @@ interface LineRaftRendererProps {
   hoverized?: boolean;
   activeModelId?: string | null;
   hoverModelId?: string | null;
+  navigationLodActive?: boolean;
   onModelPointerSelect?: (modelId: string, e: any) => void;
 }
 
@@ -122,6 +123,7 @@ export default function LineRaftRenderer({
   hoverized = false,
   activeModelId = null,
   hoverModelId = null,
+  navigationLodActive = false,
   onModelPointerSelect,
 }: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
@@ -130,6 +132,7 @@ export default function LineRaftRenderer({
 
   React.useEffect(() => {
     const handleImmediateModelHover = (event: Event) => {
+      if (navigationLodActive) return;
       const customEvent = event as CustomEvent<{ modelId?: string | null }>;
       setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
     };
@@ -274,11 +277,7 @@ export default function LineRaftRenderer({
       // Interior network only: keep this unioned mesh flat to avoid sloppy chamfer stitching.
       borderProfile: null,
     });
-      const tintStrength = resolveTintStrength(modelId);
-      const beamColor = blendColor('#a3a3a3', '#f97316', tintStrength);
-      const wallColor = blendColor('#a3a3a3', '#22c55e', tintStrength);
-
-    unionMesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
+    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
     unionMesh.castShadow = false;
     unionMesh.receiveShadow = true;
     unionMesh.userData.modelId = modelId;
@@ -296,7 +295,7 @@ export default function LineRaftRenderer({
           heightMm: beamHeight,
           chamferAngleDeg: 90,
         });
-        mesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
+        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
         mesh.castShadow = false;
         mesh.receiveShadow = true;
         mesh.userData.modelId = modelId;
@@ -307,7 +306,7 @@ export default function LineRaftRenderer({
     // Perimeter border beam: single manifold ring mesh (chamfered outer edge).
     if (hasBorderRing) {
       const borderMesh = generatePerimeterBorderBeam(profile, { widthMm: raft.lineWidthMm, heightMm: beamHeight, chamferAngleDeg: raft.chamferAngle });
-      borderMesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
+      borderMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
       borderMesh.castShadow = false;
       borderMesh.receiveShadow = true;
       borderMesh.userData.modelId = modelId;
@@ -334,7 +333,7 @@ export default function LineRaftRenderer({
               thickness: beamHeight,
             });
 
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
         wallMesh.userData.modelId = modelId;
@@ -345,7 +344,7 @@ export default function LineRaftRenderer({
     }
 
     return meshes;
-  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, raft, supportState]);
+  }, [raft, supportState]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
@@ -394,6 +393,37 @@ export default function LineRaftRenderer({
     }
   }, [raftMeshes]);
 
+  React.useEffect(() => {
+    const group = groupRef.current;
+    if (!group) return;
+
+    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
+      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength);
+
+    const resolveTintStrength = (modelId: string | null) => {
+      if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
+      if (!colorized) return 0;
+      if (activeModelId) return modelId === activeModelId ? 1 : 0;
+      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
+      return hoverized ? 0.5 : 1;
+    };
+
+    for (const child of group.children) {
+      const mesh = child as THREE.Mesh;
+      const material = mesh.material;
+      if (!material || Array.isArray(material) || !(material instanceof THREE.MeshStandardMaterial)) continue;
+
+      const modelId = (mesh.userData?.modelId as string | undefined) ?? null;
+      const tintStrength = resolveTintStrength(modelId);
+      const isWall = !!mesh.geometry && ((mesh.geometry as THREE.BufferGeometry).boundingBox?.max?.z ?? 0) > (raft.lineHeightMm + 0.001);
+      const tintHex = isWall ? '#22c55e' : '#f97316';
+      const nextColor = blendColor('#a3a3a3', tintHex, tintStrength);
+      if (!material.color.equals(nextColor)) {
+        material.color.copy(nextColor);
+      }
+    }
+  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, raft.lineHeightMm]);
+
   if (raft.bottomMode !== 'line') return null;
-  return <group ref={groupRef} position={[0, 0, 0]} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut} />;
+  return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
 }

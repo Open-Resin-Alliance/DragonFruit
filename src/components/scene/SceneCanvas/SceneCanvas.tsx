@@ -2350,11 +2350,31 @@ export function SceneCanvas({
     updateCameraBelowBuildPlate();
   }, [updateCameraBelowBuildPlate]);
 
-  // The below-plate flag flips early for UX smoothness; cull support plate-contact
-  // primitives and rafts only when the build plate is effectively fully faded out.
-  const belowPlateCullThreshold = 0.06;
-  const hidePlateContactPrimitives = isCameraBelowBuildPlate && buildPlateOpacity <= belowPlateCullThreshold;
-  const hideRaftPrimitives = hidePlateContactPrimitives;
+  // The below-plate flag flips early for UX smoothness. To avoid rapid
+  // mount/unmount churn near a single opacity cutoff while orbiting, keep a
+  // hysteresis state for plate-contact primitive culling.
+  const [plateContactCullActive, setPlateContactCullActive] = React.useState(false);
+
+  React.useEffect(() => {
+    const ENTER_CULL_OPACITY = 0.04;
+    const EXIT_CULL_OPACITY = 0.12;
+
+    setPlateContactCullActive((prev) => {
+      if (!isCameraBelowBuildPlate) {
+        return false;
+      }
+
+      if (prev) {
+        return buildPlateOpacity < EXIT_CULL_OPACITY;
+      }
+
+      return buildPlateOpacity <= ENTER_CULL_OPACITY;
+    });
+  }, [buildPlateOpacity, isCameraBelowBuildPlate]);
+
+  const hidePlateContactPrimitives = plateContactCullActive;
+  const hideRaftPrimitives = plateContactCullActive;
+  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -3141,6 +3161,7 @@ export function SceneCanvas({
                     hoverized={!visualActiveModelId && !!hoveredModelId}
                     activeModelId={visualActiveModelId ?? null}
                     hoverModelId={hoveredModelId}
+                    navigationLodActive={navigationLodActive}
                     onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   />
                   <LineRaftRenderer
@@ -3148,6 +3169,7 @@ export function SceneCanvas({
                     hoverized={!visualActiveModelId && !!hoveredModelId}
                     activeModelId={visualActiveModelId ?? null}
                     hoverModelId={hoveredModelId}
+                    navigationLodActive={navigationLodActive}
                     onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   />
                   <FootprintBorderRenderer
@@ -3356,7 +3378,7 @@ export function SceneCanvas({
               <SupportRenderer
                 ref={supportsRef as React.RefObject<THREE.Group>}
                 mode={mode}
-                navigationLodActive={isOrbitInteracting || spaceMouseNavigationActive}
+                navigationLodActive={navigationLodActive}
                 hidePlateContactPrimitives={hidePlateContactPrimitives}
                 clipLower={clipLower}
                 clipUpper={clipUpper}

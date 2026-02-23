@@ -22,6 +22,7 @@ interface RaftRendererProps {
   hoverized?: boolean;
   activeModelId?: string | null;
   hoverModelId?: string | null;
+  navigationLodActive?: boolean;
   onModelPointerSelect?: (modelId: string, e: any) => void;
 }
 
@@ -30,6 +31,7 @@ export default function RaftRenderer({
   hoverized = false,
   activeModelId = null,
   hoverModelId = null,
+  navigationLodActive = false,
   onModelPointerSelect,
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
@@ -38,6 +40,7 @@ export default function RaftRenderer({
 
   React.useEffect(() => {
     const handleImmediateModelHover = (event: Event) => {
+      if (navigationLodActive) return;
       const customEvent = event as CustomEvent<{ modelId?: string | null }>;
       setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
     };
@@ -83,13 +86,9 @@ export default function RaftRenderer({
       const profile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
       if (!profile || profile.length < 3) continue;
 
-      const tintStrength = resolveTintStrength(modelId);
-      const baseColor = blendColor('#a3a3a3', '#3b82f6', tintStrength);
-      const wallColor = blendColor('#a3a3a3', '#22c55e', tintStrength);
-
       const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
       baseMesh.userData.modelId = modelId;
-      baseMesh.material = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
+      baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
       baseMesh.castShadow = false;
       baseMesh.receiveShadow = true;
 
@@ -109,7 +108,7 @@ export default function RaftRenderer({
 
         if (wallMesh.geometry && (wallMesh.geometry as any).attributes?.position?.count > 0) {
           wallMesh.userData.modelId = modelId;
-          wallMesh.material = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
+          wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
           wallMesh.castShadow = false;
           wallMesh.receiveShadow = true;
         }
@@ -119,7 +118,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
+  }, [supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
@@ -169,6 +168,37 @@ export default function RaftRenderer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [raftMeshes]);
 
+  React.useEffect(() => {
+    const group = groupRef.current;
+    if (!group) return;
+
+    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
+      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength);
+
+    const resolveTintStrength = (modelId: string | null) => {
+      if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
+      if (!colorized) return 0;
+      if (activeModelId) return modelId === activeModelId ? 1 : 0;
+      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
+      return hoverized ? 0.5 : 1;
+    };
+
+    for (const child of group.children) {
+      const mesh = child as THREE.Mesh;
+      const material = mesh.material;
+      if (!material || Array.isArray(material) || !(material instanceof THREE.MeshStandardMaterial)) continue;
+
+      const modelId = (mesh.userData?.modelId as string | undefined) ?? null;
+      const tintStrength = resolveTintStrength(modelId);
+      const isWall = !!mesh.geometry && ((mesh.geometry as THREE.BufferGeometry).attributes?.position?.count ?? 0) > 0 && mesh.geometry.boundingBox?.max?.z !== undefined && ((mesh.geometry.boundingBox?.max.z ?? 0) > (raft.thickness + 0.001));
+      const tintHex = isWall ? '#22c55e' : '#3b82f6';
+      const nextColor = blendColor('#a3a3a3', tintHex, tintStrength);
+      if (!material.color.equals(nextColor)) {
+        material.color.copy(nextColor);
+      }
+    }
+  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, raft.thickness]);
+
   if (raft.bottomMode === 'off') return null;
-  return <group ref={groupRef} position={[0, 0, 0]} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut} />;
+  return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
 }
