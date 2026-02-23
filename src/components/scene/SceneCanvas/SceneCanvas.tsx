@@ -2210,11 +2210,22 @@ export function SceneCanvas({
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {!hidePlateContactPrimitives && (
                 <>
-                  <RaftRenderer colorized={!!visualActiveModelId || !!hoveredModelId} hoverized={!visualActiveModelId && !!hoveredModelId} />
-                  <LineRaftRenderer colorized={!!visualActiveModelId || !!hoveredModelId} hoverized={!visualActiveModelId && !!hoveredModelId} />
+                  <RaftRenderer
+                    colorized={!!visualActiveModelId || !!hoveredModelId}
+                    hoverized={!visualActiveModelId && !!hoveredModelId}
+                    activeModelId={visualActiveModelId ?? null}
+                    hoverModelId={hoveredModelId}
+                  />
+                  <LineRaftRenderer
+                    colorized={!!visualActiveModelId || !!hoveredModelId}
+                    hoverized={!visualActiveModelId && !!hoveredModelId}
+                    activeModelId={visualActiveModelId ?? null}
+                    hoverModelId={hoveredModelId}
+                  />
                   <FootprintBorderRenderer
                     modelGeometry={activeModel ? activeModel.geometry : null}
                     modelTransform={activeModelTransform}
+                    modelId={visualActiveModelId ?? hoveredModelId ?? null}
                     color={supportHoverTintColor}
                   />
                 </>

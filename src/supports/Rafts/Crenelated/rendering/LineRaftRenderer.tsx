@@ -112,25 +112,51 @@ function buildNonCrossingEdges(points: THREE.Vector2[], maxDegree: number, maxLe
 interface LineRaftRendererProps {
   colorized?: boolean;
   hoverized?: boolean;
+  activeModelId?: string | null;
+  hoverModelId?: string | null;
 }
 
-export default function LineRaftRenderer({ colorized = true, hoverized = false }: LineRaftRendererProps) {
+export default function LineRaftRenderer({
+  colorized = true,
+  hoverized = false,
+  activeModelId = null,
+  hoverModelId = null,
+}: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
-  const meshes = React.useMemo(() => {
+  const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'line') return null;
 
-    const roots = Object.values(supportState.roots);
-    if (roots.length === 0) return null;
+    const rootsByModel = new Map<string, typeof supportState.roots[string][]>();
+    for (const root of Object.values(supportState.roots)) {
+      const key = root.modelId || 'unknown';
+      if (!rootsByModel.has(key)) rootsByModel.set(key, []);
+      rootsByModel.get(key)!.push(root);
+    }
 
-    const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
+    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
+      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
 
-    const circles: SupportBaseCircle[] = roots.map((r) => ({
-      x: r.transform.pos.x,
-      y: r.transform.pos.y,
-      r: r.diameter / 2,
-    }));
+    const resolveTintStrength = (modelId: string) => {
+      if (!colorized) return 0;
+      if (activeModelId) return modelId === activeModelId ? 1 : 0;
+      if (hoverModelId) return modelId === hoverModelId ? 0.5 : 0;
+      return hoverized ? 0.5 : 1;
+    };
+
+    const meshes: Array<{ beamMeshes: THREE.Mesh[]; wallMesh: THREE.Mesh | null }> = [];
+
+    for (const [modelId, roots] of rootsByModel) {
+      if (roots.length === 0) continue;
+
+      const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
+
+      const circles: SupportBaseCircle[] = roots.map((r) => ({
+        x: r.transform.pos.x,
+        y: r.transform.pos.y,
+        r: r.diameter / 2,
+      }));
 
     // Footprint polygon wraps around the *outer edge* of all supports.
     // Important: the border is chamfered (bottom inset). To ensure the *bottom* of the chamfer
@@ -231,12 +257,9 @@ export default function LineRaftRenderer({ colorized = true, hoverized = false }
       // Interior network only: keep this unioned mesh flat to avoid sloppy chamfer stitching.
       borderProfile: null,
     });
-    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
-      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
-
-    const tintStrength = colorized ? (hoverized ? 0.5 : 1.0) : 0.0;
-    const beamColor = blendColor('#a3a3a3', '#f97316', tintStrength);
-    const wallColor = blendColor('#a3a3a3', '#22c55e', tintStrength);
+      const tintStrength = resolveTintStrength(modelId);
+      const beamColor = blendColor('#a3a3a3', '#f97316', tintStrength);
+      const wallColor = blendColor('#a3a3a3', '#22c55e', tintStrength);
 
     unionMesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
     unionMesh.castShadow = false;
@@ -297,8 +320,11 @@ export default function LineRaftRenderer({ colorized = true, hoverized = false }
       }
     }
 
-    return { beamMeshes, wallMesh } as const;
-  }, [colorized, hoverized, raft, supportState]);
+      meshes.push({ beamMeshes, wallMesh });
+    }
+
+    return meshes;
+  }, [activeModelId, colorized, hoverModelId, hoverized, raft, supportState]);
 
   const groupRef = React.useRef<THREE.Group>(null);
   React.useEffect(() => {
@@ -307,11 +333,13 @@ export default function LineRaftRenderer({ colorized = true, hoverized = false }
 
     while (group.children.length) group.remove(group.children[0]);
 
-    if (meshes) {
-      for (const m of meshes.beamMeshes) group.add(m);
-      if (meshes.wallMesh) group.add(meshes.wallMesh);
+    if (raftMeshes) {
+      for (const meshes of raftMeshes) {
+        for (const m of meshes.beamMeshes) group.add(m);
+        if (meshes.wallMesh) group.add(meshes.wallMesh);
+      }
     }
-  }, [meshes]);
+  }, [raftMeshes]);
 
   if (raft.bottomMode !== 'line') return null;
   return <group ref={groupRef} position={[0, 0, 0]} />;

@@ -14,6 +14,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 interface FootprintBorderRendererProps {
   modelGeometry: GeometryWithBounds | null;
   modelTransform: ModelTransform | null | undefined;
+  modelId?: string | null;
   color?: string;
 }
 
@@ -102,6 +103,7 @@ function offsetPolygonOutward(polygon: THREE.Vector2[], distance: number): THREE
 export default function FootprintBorderRenderer({
   modelGeometry,
   modelTransform,
+  modelId = null,
   color = '#3b82f6',
 }: FootprintBorderRendererProps) {
   const FOOTPRINT_BORDER_Z = 0.001;
@@ -114,11 +116,13 @@ export default function FootprintBorderRenderer({
     const allPoints: THREE.Vector2[] = [];
 
     // 1. Add raft outer boundary points
-    const circles: SupportBaseCircle[] = Object.values(supportState.roots).map(root => ({
-      x: root.transform.pos.x,
-      y: root.transform.pos.y,
-      r: root.diameter / 2,
-    }));
+    const circles: SupportBaseCircle[] = Object.values(supportState.roots)
+      .filter((root) => !modelId || root.modelId === modelId)
+      .map(root => ({
+        x: root.transform.pos.x,
+        y: root.transform.pos.y,
+        r: root.diameter / 2,
+      }));
 
     if (circles.length > 0) {
       const baseProfile = computeFootprint(circles, { marginMm: 0.2, samplesPerCircle: 24 });
@@ -240,7 +244,7 @@ export default function FootprintBorderRenderer({
     points.push(new THREE.Vector3(borderProfile[0].x, borderProfile[0].y, FOOTPRINT_BORDER_Z));
 
     return new THREE.BufferGeometry().setFromPoints(points);
-  }, [FOOTPRINT_BORDER_Z, modelGeometry, modelTransform, supportState, raft]);
+  }, [FOOTPRINT_BORDER_Z, modelGeometry, modelId, modelTransform, supportState, raft]);
 
   if (raft.bottomMode === 'off' || !raft.showFootprintBorder || !borderLine) {
     return null;
