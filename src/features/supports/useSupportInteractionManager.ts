@@ -10,7 +10,7 @@ import { useInteractionStatus } from '@/supports/interaction/useInteractionStatu
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
 import { useJointCreationState } from '@/supports/SupportPrimitives/Joint/jointCreationState';
-import { applyTrunkReplacement, computeAndApplyTrunkDiameterProfile, planTrunkReplacement } from '@/supports/SupportTypes/Trunk/TrunkReplacement';
+import { computeAndApplyTrunkDiameterProfile } from '@/supports/SupportTypes/Trunk/TrunkReplacement';
 import {
   getSelectedId,
   getSelectedCategory,
@@ -230,21 +230,6 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       }
 
       if (category === 'trunk') {
-        const beforeSnapshot = getSnapshot();
-        const planned = planTrunkReplacement({
-          snapshot: beforeSnapshot,
-          trunkIdToRemove: id,
-          mode: 'delete_trunk_promote_next_highest',
-        });
-
-        if (planned?.plan) {
-          const ok = applyTrunkReplacement(planned.plan, beforeSnapshot);
-          if (ok) {
-            setSelectedId(null);
-            return true;
-          }
-        }
-
         const snapshots = removeTrunk(id);
         if (!snapshots) return false;
         pushHistory({
