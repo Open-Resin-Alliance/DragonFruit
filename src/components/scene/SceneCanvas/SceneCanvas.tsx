@@ -1927,6 +1927,35 @@ export function SceneCanvas({
     };
   }, []);
 
+  React.useEffect(() => {
+    const handleEscapeDeselect = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (event.defaultPrevented) return;
+      if (mode !== 'prepare') return;
+      if (!onActiveModelChange) return;
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isTypingContext = !!target && (
+        target.isContentEditable
+        || tag === 'INPUT'
+        || tag === 'TEXTAREA'
+        || tag === 'SELECT'
+      );
+      if (isTypingContext) return;
+
+      if (!activeModelId && (!selectedModelIds || selectedModelIds.length === 0)) return;
+
+      onActiveModelChange(null);
+      window.dispatchEvent(new CustomEvent('model-deselected'));
+    };
+
+    window.addEventListener('keydown', handleEscapeDeselect);
+    return () => {
+      window.removeEventListener('keydown', handleEscapeDeselect);
+    };
+  }, [activeModelId, mode, onActiveModelChange, selectedModelIds]);
+
   // Handle canvas background clicks (deselect support)
   const handleCanvasClick = React.useCallback(
     (e: React.MouseEvent) => {
