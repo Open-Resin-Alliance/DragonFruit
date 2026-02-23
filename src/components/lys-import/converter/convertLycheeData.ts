@@ -36,6 +36,7 @@ import {
 } from './helpers';
 import { createContactAssembly } from './contactAssembly';
 import { HostEntry, LycheeData, LycheeSupport } from './types';
+import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 
 export function convertLycheeData(data: LycheeData, settings: SupportSettings, mesh?: THREE.Mesh): DragonfruitImportFormat {
   const result: DragonfruitImportFormat & { supportBraces: SupportBraceBuildResult[] } = {
@@ -105,14 +106,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
     const pos = targetObj.position || { x: 0, y: 0, z: 0 };
     const scale = targetObj.scale || { x: 1, y: 1, z: 1 };
     const rot = targetObj.rotation || { x: 0, y: 0, z: 0 };
-    const deg2rad = Math.PI / 180;
-
-    const objectQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-      (rot.x || 0) * deg2rad,
-      (rot.y || 0) * deg2rad,
-      (rot.z || 0) * deg2rad,
-      'XYZ'
-    ));
+    const objectQuaternion = quaternionFromGlobalEulerDegrees(rot);
 
     const objectLiftZ = Number.isFinite(pos.z) ? pos.z : 0;
     const objectPreSupportPos = new THREE.Vector3(0, 0, objectLiftZ);

@@ -3,6 +3,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 type DefaultCameraConfig = {
   position: [number, number, number];
@@ -113,7 +114,7 @@ export function useStlLoadCameraIntro(models: LoadedModel[], fallbackOrbitTarget
       const t = model.transform;
       const matrix = new THREE.Matrix4().compose(
         t.position,
-        new THREE.Quaternion().setFromEuler(t.rotation),
+        quaternionFromGlobalEuler(t.rotation),
         t.scale,
       );
       modelBox.applyMatrix4(matrix);

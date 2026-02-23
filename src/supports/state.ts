@@ -8,6 +8,7 @@ import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { addSupportBrace, getSupportBraceSnapshot, removeSupportBrace, resetSupportBraceStore, transformSupportBracesForModel, updateSupportBrace } from './SupportTypes/SupportBrace/supportBraceStore';
 import type { SupportBrace, SupportBraceBuildResult } from './SupportTypes/SupportBrace/types';
 import * as THREE from 'three';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 const listeners = new Set<() => void>();
 
@@ -817,12 +818,12 @@ export function transformSupportsForModel(
 
     const beforeMatrix = new THREE.Matrix4().compose(
         beforeTransform.position.clone(),
-        new THREE.Quaternion().setFromEuler(beforeTransform.rotation),
+        quaternionFromGlobalEuler(beforeTransform.rotation),
         beforeTransform.scale.clone(),
     );
     const afterMatrix = new THREE.Matrix4().compose(
         afterTransform.position.clone(),
-        new THREE.Quaternion().setFromEuler(afterTransform.rotation),
+        quaternionFromGlobalEuler(afterTransform.rotation),
         afterTransform.scale.clone(),
     );
 
