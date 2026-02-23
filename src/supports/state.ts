@@ -2397,6 +2397,81 @@ export function getHoveredCategory() {
     return state.hoveredCategory;
 }
 
+export function getModelIdForSupportEntityId(id: string | null | undefined): string | null {
+    if (!id) return null;
+
+    if (id.startsWith('braceSegment:')) {
+        const braceId = id.slice('braceSegment:'.length);
+        return state.braces[braceId]?.modelId ?? null;
+    }
+
+    if (state.roots[id]) return state.roots[id].modelId ?? null;
+    if (state.trunks[id]) return state.trunks[id].modelId ?? null;
+    if (state.branches[id]) return state.branches[id].modelId ?? null;
+    if (state.leaves[id]) return state.leaves[id].modelId ?? null;
+    if (state.twigs[id]) return state.twigs[id].modelId ?? null;
+    if (state.sticks[id]) return state.sticks[id].modelId ?? null;
+    if (state.braces[id]) return state.braces[id].modelId ?? null;
+
+    const supportBraceState = getSupportBraceSnapshot();
+    const directSupportBrace = supportBraceState.supportBraces[id];
+    if (directSupportBrace) return directSupportBrace.modelId ?? null;
+
+    for (const trunk of Object.values(state.trunks)) {
+        if (trunk.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return trunk.modelId ?? null;
+        }
+    }
+
+    for (const branch of Object.values(state.branches)) {
+        if (branch.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return branch.modelId ?? null;
+        }
+    }
+
+    for (const twig of Object.values(state.twigs)) {
+        if (twig.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return twig.modelId ?? null;
+        }
+    }
+
+    for (const stick of Object.values(state.sticks)) {
+        if (stick.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return stick.modelId ?? null;
+        }
+    }
+
+    for (const brace of Object.values(state.braces)) {
+        if (brace.startKnotId === id || brace.endKnotId === id) {
+            return brace.modelId ?? null;
+        }
+    }
+
+    for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+        if (supportBrace.hostKnotId === id) return supportBrace.modelId ?? null;
+        if (supportBrace.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return supportBrace.modelId ?? null;
+        }
+    }
+
+    if (state.knots[id]) {
+        const parentShaftId = state.knots[id].parentShaftId;
+        if (parentShaftId) {
+            const byParent = getModelIdForSupportEntityId(parentShaftId);
+            if (byParent) return byParent;
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.parentKnotId === id) return branch.modelId ?? null;
+        }
+        for (const leaf of Object.values(state.leaves)) {
+            if (leaf.parentKnotId === id) return leaf.modelId ?? null;
+        }
+    }
+
+    return null;
+}
+
 export function getTrunkById(trunkId: string) {
     return state.trunks[trunkId] ?? null;
 }

@@ -22,6 +22,7 @@ interface RaftRendererProps {
   hoverized?: boolean;
   activeModelId?: string | null;
   hoverModelId?: string | null;
+  onModelPointerSelect?: (modelId: string, e: any) => void;
 }
 
 export default function RaftRenderer({
@@ -29,6 +30,7 @@ export default function RaftRenderer({
   hoverized = false,
   activeModelId = null,
   hoverModelId = null,
+  onModelPointerSelect,
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
@@ -71,6 +73,7 @@ export default function RaftRenderer({
       const wallColor = blendColor('#a3a3a3', '#22c55e', tintStrength);
 
       const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
+      baseMesh.userData.modelId = modelId;
       baseMesh.material = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
       baseMesh.castShadow = false;
       baseMesh.receiveShadow = true;
@@ -90,6 +93,7 @@ export default function RaftRenderer({
           : generatePerimeterWall(profile, { wallHeight: raft.wallHeight, wallThickness: raft.wallThickness, thickness: raft.thickness });
 
         if (wallMesh.geometry && (wallMesh.geometry as any).attributes?.position?.count > 0) {
+          wallMesh.userData.modelId = modelId;
           wallMesh.material = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
           wallMesh.castShadow = false;
           wallMesh.receiveShadow = true;
@@ -101,6 +105,19 @@ export default function RaftRenderer({
 
     return meshes;
   }, [activeModelId, colorized, hoverModelId, hoverized, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
+
+  const handleClick = React.useCallback((e: any) => {
+    const modelId = e?.object?.userData?.modelId;
+    if (!modelId || !onModelPointerSelect) return;
+
+    e.stopPropagation();
+    if (e.nativeEvent) {
+      e.nativeEvent.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+    }
+
+    onModelPointerSelect(modelId, e);
+  }, [onModelPointerSelect]);
 
   // Attach/detach mesh to a group node
   const groupRef = React.useRef<THREE.Group>(null);
@@ -119,5 +136,5 @@ export default function RaftRenderer({
   }, [raftMeshes]);
 
   if (raft.bottomMode === 'off') return null;
-  return <group ref={groupRef} position={[0, 0, 0]} />;
+  return <group ref={groupRef} position={[0, 0, 0]} onClick={handleClick} />;
 }

@@ -1027,6 +1027,32 @@ export function SceneCanvas({
     setHoveredModelId(id);
   }, []);
 
+  const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
+    if (mode !== 'prepare') return;
+    if (!modelId || !onActiveModelChange) return;
+
+    onActiveModelChange(modelId);
+    window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId } }));
+    window.__modelClickedThisFrame = true;
+    window.requestAnimationFrame(() => {
+      window.__modelClickedThisFrame = false;
+    });
+  }, [mode, onActiveModelChange]);
+
+  React.useEffect(() => {
+    const handleSupportModelPointerSelect = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      const modelId = customEvent.detail?.modelId;
+      selectModelFromPointerHit(modelId ?? null);
+    };
+
+    window.addEventListener('support-model-pointer-select', handleSupportModelPointerSelect as EventListener);
+
+    return () => {
+      window.removeEventListener('support-model-pointer-select', handleSupportModelPointerSelect as EventListener);
+    };
+  }, [selectModelFromPointerHit]);
+
   const { smoothingBrushState, onSmoothingGeometryActivate } = useMeshSmoothingSceneBindings({
     mode,
     transformMode,
@@ -2397,12 +2423,14 @@ export function SceneCanvas({
                     hoverized={!visualActiveModelId && !!hoveredModelId}
                     activeModelId={visualActiveModelId ?? null}
                     hoverModelId={hoveredModelId}
+                    onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   />
                   <LineRaftRenderer
                     colorized={!!visualActiveModelId || !!hoveredModelId}
                     hoverized={!visualActiveModelId && !!hoveredModelId}
                     activeModelId={visualActiveModelId ?? null}
                     hoverModelId={hoveredModelId}
+                    onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   />
                   <FootprintBorderRenderer
                     modelGeometry={activeModel ? activeModel.geometry : null}

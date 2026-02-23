@@ -1,12 +1,23 @@
 import { selectSupport, selectJoint } from './SupportSelection';
-import { setSelectedId } from '../state';
+import { setSelectedId, getModelIdForSupportEntityId } from '../state';
 
 /**
  * Logic for handling clicks on Support objects (Trunks, Branches).
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.
  */
 export function handleSupportClick(e: any, id: string, isInteractable: boolean) {
-    if (!isInteractable) return;
+    if (!isInteractable) {
+        const modelId = getModelIdForSupportEntityId(id);
+        if (modelId) {
+            window.dispatchEvent(new CustomEvent('support-model-pointer-select', {
+                detail: {
+                    supportId: id,
+                    modelId,
+                },
+            }));
+        }
+        return;
+    }
     
     e.stopPropagation(); // Stop R3F propagation
     

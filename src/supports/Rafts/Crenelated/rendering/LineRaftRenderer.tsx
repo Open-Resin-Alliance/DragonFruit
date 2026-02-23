@@ -114,6 +114,7 @@ interface LineRaftRendererProps {
   hoverized?: boolean;
   activeModelId?: string | null;
   hoverModelId?: string | null;
+  onModelPointerSelect?: (modelId: string, e: any) => void;
 }
 
 export default function LineRaftRenderer({
@@ -121,6 +122,7 @@ export default function LineRaftRenderer({
   hoverized = false,
   activeModelId = null,
   hoverModelId = null,
+  onModelPointerSelect,
 }: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
@@ -264,6 +266,7 @@ export default function LineRaftRenderer({
     unionMesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
     unionMesh.castShadow = false;
     unionMesh.receiveShadow = true;
+    unionMesh.userData.modelId = modelId;
 
     const unionHasGeometry = (unionMesh.geometry as any)?.attributes?.position?.count > 0;
     const beamMeshes: THREE.Mesh[] = [];
@@ -281,6 +284,7 @@ export default function LineRaftRenderer({
         mesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
         mesh.castShadow = false;
         mesh.receiveShadow = true;
+        mesh.userData.modelId = modelId;
         beamMeshes.push(mesh);
       }
     }
@@ -291,6 +295,7 @@ export default function LineRaftRenderer({
       borderMesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: 1.0, transparent: false });
       borderMesh.castShadow = false;
       borderMesh.receiveShadow = true;
+      borderMesh.userData.modelId = modelId;
       beamMeshes.push(borderMesh);
     }
 
@@ -317,6 +322,7 @@ export default function LineRaftRenderer({
         wallMesh.material = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
+        wallMesh.userData.modelId = modelId;
       }
     }
 
@@ -325,6 +331,19 @@ export default function LineRaftRenderer({
 
     return meshes;
   }, [activeModelId, colorized, hoverModelId, hoverized, raft, supportState]);
+
+  const handleClick = React.useCallback((e: any) => {
+    const modelId = e?.object?.userData?.modelId;
+    if (!modelId || !onModelPointerSelect) return;
+
+    e.stopPropagation();
+    if (e.nativeEvent) {
+      e.nativeEvent.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+    }
+
+    onModelPointerSelect(modelId, e);
+  }, [onModelPointerSelect]);
 
   const groupRef = React.useRef<THREE.Group>(null);
   React.useEffect(() => {
@@ -342,5 +361,5 @@ export default function LineRaftRenderer({
   }, [raftMeshes]);
 
   if (raft.bottomMode !== 'line') return null;
-  return <group ref={groupRef} position={[0, 0, 0]} />;
+  return <group ref={groupRef} position={[0, 0, 0]} onClick={handleClick} />;
 }
