@@ -1068,12 +1068,12 @@ export function SceneCanvas({
     if (!modelId || !onActiveModelChange) return;
 
     onActiveModelChange(modelId);
-    window.__modelClickGuardUntil = performance.now() + 320;
+    window.__modelClickGuardUntil = performance.now() + 48;
     window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId } }));
     window.__modelClickedThisFrame = true;
     window.setTimeout(() => {
       window.__modelClickedThisFrame = false;
-    }, 340);
+    }, 0);
   }, [mode, onActiveModelChange]);
 
   React.useEffect(() => {
@@ -1932,14 +1932,13 @@ export function SceneCanvas({
     (e: React.MouseEvent) => {
       console.log('[Canvas] handleCanvasClick fired, mode:', mode);
 
-      if (isMarqueeSelecting) {
+      const target = e.target as HTMLElement | null;
+      // Canvas whitespace deselection is handled via R3F onPointerMissed for reliable hit/miss detection.
+      if (target?.tagName === 'CANVAS') {
         return;
       }
 
-      // If model was just clicked, ignore this background click
-      const modelClickGuardUntil = window.__modelClickGuardUntil ?? 0;
-      if (performance.now() < modelClickGuardUntil) {
-        console.log('[Canvas] Ignoring click (model click guard active)');
+      if (isMarqueeSelecting) {
         return;
       }
 
@@ -1958,23 +1957,35 @@ export function SceneCanvas({
         return;
       }
 
-      if (mode === 'prepare') {
-        // Deselect model if background is clicked
-        if (onActiveModelChange) {
-          console.log('[Canvas] Background clicked, deselecting model');
-          onActiveModelChange(null);
-        }
-        return;
-      }
-
-      if (mode !== 'support') return;
-
-      // Background was clicked, deselect via V2 logic
-      console.log('[Canvas] Background clicked, deselecting');
-      clearSelection();
+      // Non-canvas background clicks should not affect 3D selection state.
+      return;
     },
-    [isMarqueeSelecting, mode, onActiveModelChange],
+    [isMarqueeSelecting, mode],
   );
+
+  const handleScenePointerMissed = React.useCallback(() => {
+    if (isMarqueeSelecting) return;
+    if (window.__modelClickedThisFrame) return;
+    if (isOrbitInteracting || spaceMouseNavigationActive) return;
+
+    if (suppressNextCanvasClickRef.current || (window as any).__gizmoDragEndedThisFrame) {
+      suppressNextCanvasClickRef.current = false;
+      (window as any).__gizmoDragEndedThisFrame = false;
+      return;
+    }
+
+    if (mode === 'prepare') {
+      if (onActiveModelChange) {
+        onActiveModelChange(null);
+      }
+      window.dispatchEvent(new CustomEvent('model-deselected'));
+      return;
+    }
+
+    if (mode === 'support') {
+      clearSelection();
+    }
+  }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive]);
 
   const clampPointToContainer = React.useCallback((clientX: number, clientY: number) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -2070,11 +2081,11 @@ export function SceneCanvas({
     }
 
     // Consume the click generated at pointer-up so single-click deselect logic doesn't race this selection.
-    window.__modelClickGuardUntil = performance.now() + 320;
+    window.__modelClickGuardUntil = performance.now() + 48;
     window.__modelClickedThisFrame = true;
     window.setTimeout(() => {
       window.__modelClickedThisFrame = false;
-    }, 340);
+    }, 0);
 
     e.preventDefault();
     e.stopPropagation();
@@ -2169,6 +2180,7 @@ export function SceneCanvas({
         shadows
         dpr={dynamicDpr}
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
+        onPointerMissed={handleScenePointerMissed}
       >
         <LoggingHelper mode={mode} />
         <Lights
@@ -2195,7 +2207,7 @@ export function SceneCanvas({
           <SelectionProvider initialSelection={activeModelId || 'default-model'}>
             <SelectionSync activeModelId={activeModelId ?? null} />
             {/* Selection Manager - handles click-to-select/deselect logic */}
-            <SelectionManager enabled={mode === 'prepare'} mode={mode} />
+            <SelectionManager enabled={mode === 'prepare'} mode={mode} handleCanvasDeselect={false} />
 
             <React.Suspense fallback={null}>
               {models.map((model) => {

@@ -377,6 +377,7 @@ export function StlMesh({
 
           // Prepare mode selection is handled on pointer-down for lower latency.
           if (mode === 'prepare') {
+            e.stopPropagation();
             return;
           }
 
@@ -485,11 +486,11 @@ export function StlMesh({
         onPointerDown={(e) => {
           if (!shouldSuppressModelInteraction && mode === 'prepare' && e.button === 0) {
             e.stopPropagation();
-            window.__modelClickGuardUntil = performance.now() + 320;
+            window.__modelClickGuardUntil = performance.now() + 48;
             window.__modelClickedThisFrame = true;
             window.setTimeout(() => {
               window.__modelClickedThisFrame = false;
-            }, 340);
+            }, 0);
             window.dispatchEvent(
               new CustomEvent('model-clicked', {
                 detail: { modelId: modelId },
