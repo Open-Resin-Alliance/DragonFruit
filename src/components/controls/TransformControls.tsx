@@ -62,6 +62,7 @@ interface TransformControlsProps {
   onLiftDistanceChange: (distance: number) => void;
   onLift: () => void;
   onDrop: () => void;
+  onTransformCommit?: () => void;
 }
 
 export function TransformControls({
@@ -83,6 +84,7 @@ export function TransformControls({
   onLiftDistanceChange,
   onLift,
   onDrop,
+  onTransformCommit,
 }: TransformControlsProps) {
   const [expanded, setExpanded] = useState(true);
   const [moveExpanded, setMoveExpanded] = useState(true);
@@ -244,6 +246,7 @@ export function TransformControls({
                     <NumberInput
                       value={parseFloat(position.x.toFixed(2))}
                       onChange={(val) => handlePositionChange('x', val)}
+                      onBlur={() => onTransformCommit?.()}
                       className={valueInputClass}
                     />
                   </div>
@@ -252,6 +255,7 @@ export function TransformControls({
                     <NumberInput
                       value={parseFloat(position.y.toFixed(2))}
                       onChange={(val) => handlePositionChange('y', val)}
+                      onBlur={() => onTransformCommit?.()}
                       className={valueInputClass}
                     />
                   </div>
@@ -260,15 +264,28 @@ export function TransformControls({
                     <NumberInput
                       value={parseFloat(position.z.toFixed(2))}
                       onChange={(val) => handlePositionChange('z', val)}
+                      onBlur={() => onTransformCommit?.()}
                       className={valueInputClass}
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-1 min-w-0">
-                  <button onClick={onCenter} className={compactButtonClass}>Center</button>
                   <button
-                    onClick={() => modelBBox && onPlatform(modelBBox)}
+                    onClick={() => {
+                      onCenter();
+                      onTransformCommit?.();
+                    }}
+                    className={compactButtonClass}
+                  >
+                    Center
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!modelBBox) return;
+                      onPlatform(modelBBox);
+                      onTransformCommit?.();
+                    }}
                     disabled={!modelBBox}
                     className={`ui-button ui-button-accent !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
@@ -309,20 +326,27 @@ export function TransformControls({
                     <NumberInput
                       value={liftDistance}
                       onChange={(val) => onLiftDistanceChange(val)}
+                      onBlur={() => onTransformCommit?.()}
                       className="ui-input h-8 w-full px-2 text-xs sm:text-sm no-spinners"
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-1">
                     <button
-                      onClick={onLift}
+                      onClick={() => {
+                        onLift();
+                        onTransformCommit?.();
+                      }}
                       disabled={!modelBBox}
                       className="ui-button ui-button-primary !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Lift
                     </button>
                     <button
-                      onClick={onDrop}
+                      onClick={() => {
+                        onDrop();
+                        onTransformCommit?.();
+                      }}
                       disabled={!modelBBox}
                       className="ui-button ui-button-accent !h-8 px-1.5 text-[10px] sm:text-[11px] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -345,7 +369,10 @@ export function TransformControls({
                     <NumberInput
                       value={parseFloat(toDegrees(rotation.x).toFixed(2))}
                       onChange={(val) => handleRotationChange('x', val)}
-                      onBlur={() => onRotationComplete?.()}
+                      onBlur={() => {
+                        onRotationComplete?.();
+                        onTransformCommit?.();
+                      }}
                       className={valueInputClass}
                     />
                   </div>
@@ -354,7 +381,10 @@ export function TransformControls({
                     <NumberInput
                       value={parseFloat(toDegrees(rotation.y).toFixed(2))}
                       onChange={(val) => handleRotationChange('y', val)}
-                      onBlur={() => onRotationComplete?.()}
+                      onBlur={() => {
+                        onRotationComplete?.();
+                        onTransformCommit?.();
+                      }}
                       className={valueInputClass}
                     />
                   </div>
@@ -363,13 +393,22 @@ export function TransformControls({
                     <NumberInput
                       value={parseFloat(toDegrees(rotation.z).toFixed(2))}
                       onChange={(val) => handleRotationChange('z', val)}
-                      onBlur={() => onRotationComplete?.()}
+                      onBlur={() => {
+                        onRotationComplete?.();
+                        onTransformCommit?.();
+                      }}
                       className={valueInputClass}
                     />
                   </div>
                 </div>
 
-                <button onClick={onResetRotation} className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]">
+                <button
+                  onClick={() => {
+                    onResetRotation();
+                    onTransformCommit?.();
+                  }}
+                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                >
                   Reset Rotation
                 </button>
               </div>
@@ -387,6 +426,7 @@ export function TransformControls({
                     <NumberInput
                       value={parseFloat(getScaleDisplayValue('x').toFixed(2))}
                       onChange={(val) => handleScaleChange('x', val)}
+                      onBlur={() => onTransformCommit?.()}
                       className={valueInputClass}
                     />
                   </div>
@@ -396,6 +436,7 @@ export function TransformControls({
                       value={parseFloat(getScaleDisplayValue('y').toFixed(2))}
                       onChange={(val) => handleScaleChange('y', val)}
                       disabled={uniformScaling}
+                      onBlur={() => onTransformCommit?.()}
                       className={`${valueInputClass} disabled:opacity-50`}
                     />
                   </div>
@@ -405,6 +446,7 @@ export function TransformControls({
                       value={parseFloat(getScaleDisplayValue('z').toFixed(2))}
                       onChange={(val) => handleScaleChange('z', val)}
                       disabled={uniformScaling}
+                      onBlur={() => onTransformCommit?.()}
                       className={`${valueInputClass} disabled:opacity-50`}
                     />
                   </div>
@@ -439,7 +481,13 @@ export function TransformControls({
                   </div>
                 </div>
 
-                <button onClick={onResetScale} className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]">
+                <button
+                  onClick={() => {
+                    onResetScale();
+                    onTransformCommit?.();
+                  }}
+                  className="ui-button ui-button-secondary w-full !h-8 px-1.5 text-[10px] sm:text-[11px]"
+                >
                   Reset Scale
                 </button>
               </div>
