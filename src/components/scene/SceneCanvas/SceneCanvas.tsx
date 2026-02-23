@@ -2201,15 +2201,36 @@ export function SceneCanvas({
   const handleMarqueePointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (mode !== 'prepare' && mode !== 'support') return;
     if (e.button !== 0) return;
+    if (mode === 'support' && !e.shiftKey) return;
     if (isGizmoDragging || isPostGizmoInteractionGuardActive) return;
     if (hoveredModelId || supportStateForBounds.hoveredCategory !== 'none') return;
+
+    if (mode === 'prepare' && onActiveModelChange) {
+      const hasSelection = !!activeModelId || !!selectedModelIds?.length;
+      if (hasSelection && !window.__modelClickedThisFrame && !isOrbitInteracting && !spaceMouseNavigationActive) {
+        onActiveModelChange(null);
+        window.dispatchEvent(new CustomEvent('model-deselected'));
+      }
+    }
 
     const clamped = clampPointToContainer(e.clientX, e.clientY);
     if (!clamped) return;
 
     marqueePointerIdRef.current = e.pointerId;
     marqueePointerStartRef.current = { x: clamped.x, y: clamped.y };
-  }, [clampPointToContainer, hoveredModelId, isGizmoDragging, isPostGizmoInteractionGuardActive, mode, supportStateForBounds.hoveredCategory]);
+  }, [
+    activeModelId,
+    clampPointToContainer,
+    hoveredModelId,
+    isGizmoDragging,
+    isOrbitInteracting,
+    isPostGizmoInteractionGuardActive,
+    mode,
+    onActiveModelChange,
+    selectedModelIds,
+    spaceMouseNavigationActive,
+    supportStateForBounds.hoveredCategory,
+  ]);
 
   const handleMarqueePointerMoveCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (marqueePointerIdRef.current == null) return;
