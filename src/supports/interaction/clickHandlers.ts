@@ -1,4 +1,4 @@
-import { selectSupport, selectJoint } from './SupportSelection';
+import { selectSupport, selectSupportWithToggle, selectJoint } from './SupportSelection';
 import { setSelectedId } from '../state';
 
 let hoverGuardInitialized = false;
@@ -64,6 +64,8 @@ export function handleSupportClick(e: any, id: string, isInteractable: boolean) 
     if (!isInteractable) {
         return;
     }
+
+    const shiftDown = !!(e?.nativeEvent?.shiftKey ?? e?.shiftKey);
     
     e.stopPropagation(); // Stop R3F propagation
     
@@ -73,7 +75,11 @@ export function handleSupportClick(e: any, id: string, isInteractable: boolean) 
         e.nativeEvent.stopImmediatePropagation();
     }
     
-    selectSupport(id);
+    if (shiftDown) {
+        selectSupportWithToggle(id);
+    } else {
+        selectSupport(id);
+    }
 }
 
 /**

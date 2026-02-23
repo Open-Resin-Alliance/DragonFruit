@@ -13,6 +13,7 @@ import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
+import { generateUuid } from '@/utils/uuid';
 
 export function LeafPlacementController() {
     const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
@@ -328,7 +329,7 @@ export function LeafPlacementController() {
 
             if (snapTarget.t === undefined) return;
 
-            const knotId = crypto.randomUUID();
+            const knotId = generateUuid();
             const segmentId = snapTarget.targetId;
             const hostDiameterMm = snapTarget.hostDiameterMm;
 

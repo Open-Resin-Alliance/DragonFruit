@@ -27,6 +27,7 @@ import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationSt
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
 import { emitSupportModelPointerHover, handleSupportClick } from './interaction/clickHandlers';
+import { getEmptySelectedSupportIdsSnapshot, getSelectedSupportIds, subscribeSupportMultiSelection } from './interaction/supportMultiSelection';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
@@ -65,14 +66,21 @@ const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const selectedSupportIds = useSyncExternalStore(
+        subscribeSupportMultiSelection,
+        getSelectedSupportIds,
+        getEmptySelectedSupportIdsSnapshot,
+    );
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const supportBraceState = useSupportBraceStoreState();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
 
-    const dimNonSelected = state.selectedId !== null;
-    const hideUnselectedKnots = state.selectedId !== null;
+    const selectedSupportIdSet = useMemo(() => new Set(selectedSupportIds), [selectedSupportIds]);
+    const hasSupportMultiSelection = selectedSupportIds.length > 0;
+    const dimNonSelected = state.selectedId !== null || hasSupportMultiSelection;
+    const hideUnselectedKnots = state.selectedId !== null || hasSupportMultiSelection;
 
     const isInteractable = mode === 'support';
     const restrictToActiveModel = mode === 'support' && !!activeModelId;
@@ -194,123 +202,140 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const selectedTrunkIds = useMemo(() => {
         const selected = new Set<string>();
         const selectedId = state.selectedId;
-        if (!selectedId) return selected;
+        const hasSingleSelection = !!selectedId;
+        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
 
         for (const trunk of Object.values(state.trunks)) {
-            const isTrunkSelected = selectedId === trunk.id;
-            const isChildSelected = trunk.segments.some((segment) =>
-                segment.id === selectedId
-                || segment.topJoint?.id === selectedId
-                || segment.bottomJoint?.id === selectedId,
-            );
+            const isTrunkSelected = selectedSupportIdSet.has(trunk.id) || selectedId === trunk.id;
+            const isChildSelected = hasSingleSelection
+                ? trunk.segments.some((segment) =>
+                    segment.id === selectedId
+                    || segment.topJoint?.id === selectedId
+                    || segment.bottomJoint?.id === selectedId,
+                )
+                : false;
             if (isTrunkSelected || isChildSelected) selected.add(trunk.id);
         }
 
         return selected;
-    }, [state.trunks, state.selectedId]);
+    }, [state.trunks, state.selectedId, selectedSupportIdSet]);
 
     const selectedBranchIds = useMemo(() => {
         const selected = new Set<string>();
         const selectedId = state.selectedId;
-        if (!selectedId) return selected;
+        const hasSingleSelection = !!selectedId;
+        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
 
         for (const branch of Object.values(state.branches)) {
-            const isBranchSelected = selectedId === branch.id;
-            const isKnotSelected = branch.parentKnotId === selectedId;
-            const isChildSelected = branch.segments.some((segment) =>
-                segment.id === selectedId
-                || segment.topJoint?.id === selectedId
-                || segment.bottomJoint?.id === selectedId,
-            );
+            const isBranchSelected = selectedSupportIdSet.has(branch.id) || selectedId === branch.id;
+            const isKnotSelected = hasSingleSelection ? branch.parentKnotId === selectedId : false;
+            const isChildSelected = hasSingleSelection
+                ? branch.segments.some((segment) =>
+                    segment.id === selectedId
+                    || segment.topJoint?.id === selectedId
+                    || segment.bottomJoint?.id === selectedId,
+                )
+                : false;
             if (isBranchSelected || isKnotSelected || isChildSelected) selected.add(branch.id);
         }
 
         return selected;
-    }, [state.branches, state.selectedId]);
+    }, [state.branches, state.selectedId, selectedSupportIdSet]);
 
     const selectedBraceIds = useMemo(() => {
         const selected = new Set<string>();
         const selectedId = state.selectedId;
-        if (!selectedId) return selected;
+        const hasSingleSelection = !!selectedId;
+        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
 
         for (const brace of Object.values(state.braces)) {
-            const isBraceSelected = selectedId === brace.id;
-            const isSegmentSelected = selectedId === `braceSegment:${brace.id}`;
-            const isEndpointSelected = selectedId === brace.startKnotId || selectedId === brace.endKnotId;
+            const isBraceSelected = selectedSupportIdSet.has(brace.id) || selectedId === brace.id;
+            const isSegmentSelected = hasSingleSelection ? selectedId === `braceSegment:${brace.id}` : false;
+            const isEndpointSelected = hasSingleSelection ? selectedId === brace.startKnotId || selectedId === brace.endKnotId : false;
             if (isBraceSelected || isSegmentSelected || isEndpointSelected) selected.add(brace.id);
         }
 
         return selected;
-    }, [state.braces, state.selectedId]);
+    }, [state.braces, state.selectedId, selectedSupportIdSet]);
 
     const selectedTwigIds = useMemo(() => {
         const selected = new Set<string>();
         const selectedId = state.selectedId;
-        if (!selectedId) return selected;
+        const hasSingleSelection = !!selectedId;
+        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
 
         for (const twig of Object.values(state.twigs)) {
-            const isTwigSelected = selectedId === twig.id;
-            const isChildSelected = twig.segments.some((segment) =>
-                segment.id === selectedId
-                || segment.topJoint?.id === selectedId
-                || segment.bottomJoint?.id === selectedId,
-            );
+            const isTwigSelected = selectedSupportIdSet.has(twig.id) || selectedId === twig.id;
+            const isChildSelected = hasSingleSelection
+                ? twig.segments.some((segment) =>
+                    segment.id === selectedId
+                    || segment.topJoint?.id === selectedId
+                    || segment.bottomJoint?.id === selectedId,
+                )
+                : false;
             if (isTwigSelected || isChildSelected) selected.add(twig.id);
         }
 
         return selected;
-    }, [state.twigs, state.selectedId]);
+    }, [state.twigs, state.selectedId, selectedSupportIdSet]);
 
     const selectedStickIds = useMemo(() => {
         const selected = new Set<string>();
         const selectedId = state.selectedId;
-        if (!selectedId) return selected;
+        const hasSingleSelection = !!selectedId;
+        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
 
         for (const stick of Object.values(state.sticks)) {
-            const isStickSelected = selectedId === stick.id;
-            const isChildSelected = stick.segments.some((segment) =>
-                segment.id === selectedId
-                || segment.topJoint?.id === selectedId
-                || segment.bottomJoint?.id === selectedId,
-            );
+            const isStickSelected = selectedSupportIdSet.has(stick.id) || selectedId === stick.id;
+            const isChildSelected = hasSingleSelection
+                ? stick.segments.some((segment) =>
+                    segment.id === selectedId
+                    || segment.topJoint?.id === selectedId
+                    || segment.bottomJoint?.id === selectedId,
+                )
+                : false;
             if (isStickSelected || isChildSelected) selected.add(stick.id);
         }
 
         return selected;
-    }, [state.sticks, state.selectedId]);
+    }, [state.sticks, state.selectedId, selectedSupportIdSet]);
 
     const selectedSupportBraceIds = useMemo(() => {
         const selected = new Set<string>();
         const selectedId = state.selectedId;
-        if (!selectedId) return selected;
+        const hasSingleSelection = !!selectedId;
+        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            const isSupportBraceSelected = selectedId === supportBrace.id;
-            const isHostKnotSelected = selectedId === supportBrace.hostKnotId;
-            const isChildSelected = supportBrace.segments.some((segment) =>
-                segment.id === selectedId
-                || segment.topJoint?.id === selectedId
-                || segment.bottomJoint?.id === selectedId,
-            );
+            const isSupportBraceSelected = selectedSupportIdSet.has(supportBrace.id) || selectedId === supportBrace.id;
+            const isHostKnotSelected = hasSingleSelection ? selectedId === supportBrace.hostKnotId : false;
+            const isChildSelected = hasSingleSelection
+                ? supportBrace.segments.some((segment) =>
+                    segment.id === selectedId
+                    || segment.topJoint?.id === selectedId
+                    || segment.bottomJoint?.id === selectedId,
+                )
+                : false;
             if (isSupportBraceSelected || isHostKnotSelected || isChildSelected) selected.add(supportBrace.id);
         }
 
         return selected;
-    }, [supportBraceState.supportBraces, state.selectedId]);
+    }, [supportBraceState.supportBraces, state.selectedId, selectedSupportIdSet]);
 
     const selectedLeafIds = useMemo(() => {
         const selected = new Set<string>();
         const selectedId = state.selectedId;
-        if (!selectedId) return selected;
+        const hasSingleSelection = !!selectedId;
+        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
 
         for (const leaf of Object.values(state.leaves)) {
-            const isLeafSelected = selectedId === leaf.id;
-            const isKnotSelected = leaf.parentKnotId === selectedId;
+            const isLeafSelected = selectedSupportIdSet.has(leaf.id) || selectedId === leaf.id;
+            const isKnotSelected = hasSingleSelection ? leaf.parentKnotId === selectedId : false;
             if (isLeafSelected || isKnotSelected) selected.add(leaf.id);
         }
 
         return selected;
-    }, [state.leaves, state.selectedId]);
+    }, [state.leaves, state.selectedId, selectedSupportIdSet]);
 
     const trunkShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1626,7 +1651,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const root = state.roots[trunk.rootId];
                 if (!root) return null;
 
-                const isTrunkSelected = state.selectedId === trunk.id;
+                const isTrunkSelected = selectedSupportIdSet.has(trunk.id) || state.selectedId === trunk.id;
                 const isChildSelected = trunk.segments.some(s =>
                     (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
                     (s.bottomJoint?.id && s.bottomJoint.id === state.selectedId) ||
@@ -1679,7 +1704,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const knot = state.knots[branch.parentKnotId];
                 if (!knot) return null;
 
-                const isBranchSelected = state.selectedId === branch.id;
+                const isBranchSelected = selectedSupportIdSet.has(branch.id) || state.selectedId === branch.id;
                 const isKnotSelected = knot.id === state.selectedId;
                 const isChildSelected = branch.segments.some(s =>
                     (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
@@ -1721,7 +1746,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const knot = state.knots[leaf.parentKnotId];
                 if (!knot) return null;
 
-                const isLeafSelected = state.selectedId === leaf.id;
+                const isLeafSelected = selectedSupportIdSet.has(leaf.id) || state.selectedId === leaf.id;
                 const isKnotSelected = knot.id === state.selectedId;
                 const effectiveSelected = isLeafSelected || isKnotSelected;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
@@ -1747,7 +1772,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Twigs */}
             {Object.values(state.twigs).map(twig => {
                 if (restrictToActiveModel && twig.modelId !== activeModelId) return null;
-                const isTwigSelected = state.selectedId === twig.id;
+                const isTwigSelected = selectedSupportIdSet.has(twig.id) || state.selectedId === twig.id;
                 const isChildSelected = twig.segments.some(s =>
                     (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
                     (s.bottomJoint?.id && s.bottomJoint.id === state.selectedId) ||
@@ -1792,7 +1817,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Sticks */}
             {Object.values(state.sticks).map(stick => {
                 if (restrictToActiveModel && stick.modelId !== activeModelId) return null;
-                const isStickSelected = state.selectedId === stick.id;
+                const isStickSelected = selectedSupportIdSet.has(stick.id) || state.selectedId === stick.id;
                 const isChildSelected = stick.segments.some(s =>
                     (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
                     (s.bottomJoint?.id && s.bottomJoint.id === state.selectedId) ||
@@ -1854,7 +1879,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const endKnot = state.knots[brace.endKnotId];
                 if (!startKnot || !endKnot) return null;
 
-                const isBraceSelected = state.selectedId === brace.id;
+                const isBraceSelected = selectedSupportIdSet.has(brace.id) || state.selectedId === brace.id;
                 const isSegmentSelected = state.selectedId === `braceSegment:${brace.id}`;
                 const isEndpointSelected = state.selectedId === startKnot.id || state.selectedId === endKnot.id;
                 const effectiveSelected = isBraceSelected || isSegmentSelected || isEndpointSelected;
@@ -1892,7 +1917,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const hostKnot = state.knots[supportBrace.hostKnotId];
                 if (!root || !hostKnot) return null;
 
-                const isSupportBraceSelected = state.selectedId === supportBrace.id;
+                const isSupportBraceSelected = selectedSupportIdSet.has(supportBrace.id) || state.selectedId === supportBrace.id;
                 const isHostKnotSelected = state.selectedId === hostKnot.id;
                 const isChildSelected = supportBrace.segments.some(
                     (segment) =>

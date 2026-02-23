@@ -37,9 +37,51 @@ import {
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK } from '@/supports/history/actionTypes';
+import { clearSelection, getMultiSelectedSupportIds, selectAllSupports } from '@/supports/interaction/SupportSelection';
+import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+
+  const tagName = target.tagName.toLowerCase();
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return true;
+
+  const role = target.getAttribute('role');
+  if (role === 'textbox' || role === 'combobox' || role === 'searchbox' || role === 'spinbutton') return true;
+
+  return false;
+}
+
+function resolveSupportCategoryFromSnapshot(id: string) {
+  const snapshot = getSnapshot();
+  if (snapshot.trunks[id]) return 'trunk' as const;
+  if (snapshot.branches[id]) return 'branch' as const;
+  if (snapshot.leaves[id]) return 'leaf' as const;
+  if (snapshot.twigs[id]) return 'twig' as const;
+  if (snapshot.sticks[id]) return 'stick' as const;
+  if (snapshot.braces[id]) return 'brace' as const;
+  if (getSupportBraceSnapshot().supportBraces[id]) return 'brace' as const;
+  return null;
+}
+
+function collectAllSupportIds() {
+  const snapshot = getSnapshot();
+  const supportBraceSnapshot = getSupportBraceSnapshot();
+
+  return [
+    ...Object.keys(snapshot.trunks),
+    ...Object.keys(snapshot.branches),
+    ...Object.keys(snapshot.leaves),
+    ...Object.keys(snapshot.twigs),
+    ...Object.keys(snapshot.sticks),
+    ...Object.keys(snapshot.braces),
+    ...Object.keys(supportBraceSnapshot.supportBraces),
+  ];
 }
 
 export function useSupportInteractionManager({ mode }: SupportInteractionOptions) {
@@ -143,210 +185,120 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   // REQUIRES hovering over supports. The isPlacementDisabled check would
   // always be true when hovering a support, breaking branch placement.
   const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
+    if (mode !== 'support') return;
+
     if (leafPlacement.isActive) {
       leafPlacement.onSupportHover(hit);
     } else if (branchPlacement.isActive) {
       branchPlacement.onSupportHover(hit);
     }
-  }, [branchPlacement, leafPlacement]);
+  }, [mode, branchPlacement, leafPlacement]);
 
   // Handler for SUPPORT click (branch base placement on existing support shaft)
   const onSupportClick = useCallback((hit: THREE.Intersection) => {
+    if (mode !== 'support') return;
+
     if (leafPlacement.isActive) {
       leafPlacement.onSupportClick(hit);
     } else if (branchPlacement.isActive) {
       branchPlacement.onSupportClick(hit);
     }
     // Note: clicking on supports in non-branch mode is handled by SupportRenderer (selection)
-  }, [branchPlacement, leafPlacement]);
+  }, [mode, branchPlacement, leafPlacement]);
 
   useEffect(() => {
     if (mode !== 'support') return;
 
-    const isAltEvent = (e: KeyboardEvent) => {
-      return e.key === 'Alt' || e.key === 'AltGraph' || e.code === 'AltLeft' || e.code === 'AltRight';
-    };
+    const deleteSelectionByCategoryAndId = (category: string, id: string): boolean => {
+      if (category === 'joint') {
+        const result = removeJointById(id);
+        if (!result) return false;
+        if (result.kind === 'trunk') {
+          pushHistory({
+            type: SUPPORT_UPDATE_TRUNK,
+            payload: { before: result.before, after: result.after },
+          });
+          setSelectedId(result.trunkId);
+        } else {
+          pushHistory({
+            type: SUPPORT_UPDATE_BRANCH,
+            payload: { before: result.before, after: result.after },
+          });
+          setSelectedId(result.branchId);
+        }
+        return true;
+      }
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!isAltEvent(e)) return;
-      if (e.repeat) return;
-      if (altDownRef.current) return;
-      altDownRef.current = true;
-      console.log('[AltKey]', 'down', { key: e.key, code: e.code, time: performance.now() });
-    };
+      if (category === 'trunk') {
+        const beforeSnapshot = getSnapshot();
+        const planned = planTrunkReplacement({
+          snapshot: beforeSnapshot,
+          trunkIdToRemove: id,
+          mode: 'delete_trunk_promote_next_highest',
+        });
 
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (!isAltEvent(e)) return;
-      if (!altDownRef.current) return;
-      altDownRef.current = false;
-      console.log('[AltKey]', 'up', { key: e.key, code: e.code, time: performance.now() });
-    };
-
-    window.addEventListener('keydown', onKeyDown, true);
-    window.addEventListener('keyup', onKeyUp, true);
-    document.addEventListener('keydown', onKeyDown, true);
-    document.addEventListener('keyup', onKeyUp, true);
-
-    const unregister = registerDeleteHandler(
-      () => {
-        if (mode !== 'support') return false;
-        const category = getSelectedCategory();
-        const id = getSelectedId();
-        if (!id || !category) return false;
-        if (category === 'joint' || category === 'trunk' || category === 'leaf' || category === 'branch' || category === 'twig' || category === 'stick' || category === 'brace') return true;
-
-        if (category === 'knot') {
-          const leaves = getLeaves();
-          if (leaves.some(l => l.parentKnotId === id)) return true;
-
-          const branches = getBranches();
-          if (branches.some(b => b.parentKnotId === id)) return true;
-
-          const braces = getBraces();
-          if (braces.some(br => br.startKnotId === id || br.endKnotId === id)) return true;
-
-          return false;
+        if (planned?.plan) {
+          const ok = applyTrunkReplacement(planned.plan, beforeSnapshot);
+          if (ok) {
+            setSelectedId(null);
+            return true;
+          }
         }
 
-        return false;
-      },
-      () => {
-        const category = getSelectedCategory();
-        const id = getSelectedId();
-        if (!id || !category) return;
+        const snapshots = removeTrunk(id);
+        if (!snapshots) return false;
+        pushHistory({
+          type: SUPPORT_REMOVE_TRUNK,
+          payload: {
+            trunk: snapshots.trunk,
+            root: snapshots.root ?? undefined,
+            branches: snapshots.branches,
+            braces: snapshots.braces,
+            supportBraces: snapshots.supportBraces,
+            leaves: snapshots.leaves,
+            knots: snapshots.knots,
+          },
+        });
+        setSelectedId(null);
+        return true;
+      }
 
-        if (category === 'joint') {
-          const result = removeJointById(id);
-          if (!result) return;
-          if (result.kind === 'trunk') {
-            pushHistory({
-              type: SUPPORT_UPDATE_TRUNK,
-              payload: { before: result.before, after: result.after },
-            });
-            setSelectedId(result.trunkId);
-          } else {
-            pushHistory({
-              type: SUPPORT_UPDATE_BRANCH,
-              payload: { before: result.before, after: result.after },
-            });
-            setSelectedId(result.branchId);
-          }
-        } else if (category === 'trunk') {
-          const beforeSnapshot = getSnapshot();
-          const planned = planTrunkReplacement({
-            snapshot: beforeSnapshot,
-            trunkIdToRemove: id,
-            mode: 'delete_trunk_promote_next_highest',
-          });
+      if (category === 'leaf') {
+        const snapshots = removeLeaf(id);
+        if (!snapshots) return false;
+        pushHistory({
+          type: SUPPORT_REMOVE_LEAF,
+          payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
+        });
+        setSelectedId(null);
+        return true;
+      }
 
-          if (planned?.plan) {
-            const ok = applyTrunkReplacement(planned.plan, beforeSnapshot);
-            if (ok) {
-              setSelectedId(null);
-              return;
-            }
-          }
-
-          const snapshots = removeTrunk(id);
-          if (!snapshots) return;
-          pushHistory({
-            type: SUPPORT_REMOVE_TRUNK,
-            payload: {
-              trunk: snapshots.trunk,
-              root: snapshots.root ?? undefined,
-              branches: snapshots.branches,
-              braces: snapshots.braces,
-              supportBraces: snapshots.supportBraces,
-              leaves: snapshots.leaves,
-              knots: snapshots.knots,
-            },
-          });
-          setSelectedId(null);
-        } else if (category === 'leaf') {
-          const snapshots = removeLeaf(id);
-          if (!snapshots) return;
+      if (category === 'knot') {
+        const leaves = getLeaves();
+        const leaf = leaves.find(l => l.parentKnotId === id);
+        if (leaf) {
+          const snapshots = removeLeaf(leaf.id);
+          if (!snapshots) return false;
           pushHistory({
             type: SUPPORT_REMOVE_LEAF,
             payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
           });
           setSelectedId(null);
-        } else if (category === 'knot') {
-          const leaves = getLeaves();
-          const leaf = leaves.find(l => l.parentKnotId === id);
-          if (leaf) {
-            const snapshots = removeLeaf(leaf.id);
-            if (!snapshots) return;
-            pushHistory({
-              type: SUPPORT_REMOVE_LEAF,
-              payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
-            });
-            setSelectedId(null);
-            return;
-          }
+          return true;
+        }
 
-          const branches = getBranches();
-          const branch = branches.find(b => b.parentKnotId === id);
-          if (branch) {
-            const beforeSnapshot = getSnapshot();
-            const snapshots = removeBranch(branch.id);
-            if (!snapshots) return;
-            const afterSnapshot = getSnapshot();
-
-            let trunkUpdate: { before: any; after: any } | undefined;
-            let knotUpdates: any[] | undefined;
-            const parentKnot = branch.parentKnotId ? beforeSnapshot.knots[branch.parentKnotId] : undefined;
-            const parentSegId = parentKnot?.parentShaftId;
-            const trunkId = parentSegId
-              ? Object.values(beforeSnapshot.trunks).find(t => t.segments.some(s => s.id === parentSegId))?.id
-              : undefined;
-
-            if (trunkId && afterSnapshot.trunks[trunkId]) {
-              const applied = computeAndApplyTrunkDiameterProfile(afterSnapshot, trunkId);
-              if (applied) {
-                for (const u of applied.knotUpdates) updateKnot(u.after);
-                updateTrunk(applied.trunk);
-                const beforeTrunk = beforeSnapshot.trunks[trunkId];
-                if (beforeTrunk) {
-                  trunkUpdate = { before: structuredClone(beforeTrunk), after: structuredClone(applied.trunk) };
-                  knotUpdates = applied.knotUpdates;
-                }
-              }
-            }
-
-            pushHistory({
-              type: SUPPORT_REMOVE_BRANCH,
-              payload: {
-                ...snapshots,
-                trunkUpdate,
-                knotUpdates,
-              },
-            });
-            setSelectedId(null);
-            return;
-          }
-
-          const braces = getBraces();
-          const brace = braces.find(br => br.startKnotId === id || br.endKnotId === id);
-          if (brace) {
-            const snapshots = removeBrace(brace.id);
-            if (!snapshots) return;
-            pushHistory({
-              type: SUPPORT_REMOVE_BRACE,
-              payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
-            });
-            setSelectedId(null);
-            return;
-          }
-        } else if (category === 'branch') {
+        const branches = getBranches();
+        const branch = branches.find(b => b.parentKnotId === id);
+        if (branch) {
           const beforeSnapshot = getSnapshot();
-          const snapshots = removeBranch(id);
-          if (!snapshots) return;
+          const snapshots = removeBranch(branch.id);
+          if (!snapshots) return false;
           const afterSnapshot = getSnapshot();
 
           let trunkUpdate: { before: any; after: any } | undefined;
           let knotUpdates: any[] | undefined;
-          const removedRootBranch = snapshots.branches.find(b => b.id === id) ?? snapshots.branches[0];
-          const parentKnot = removedRootBranch?.parentKnotId ? beforeSnapshot.knots[removedRootBranch.parentKnotId] : undefined;
+          const parentKnot = branch.parentKnotId ? beforeSnapshot.knots[branch.parentKnotId] : undefined;
           const parentSegId = parentKnot?.parentShaftId;
           const trunkId = parentSegId
             ? Object.values(beforeSnapshot.trunks).find(t => t.segments.some(s => s.id === parentSegId))?.id
@@ -374,31 +326,195 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
             },
           });
           setSelectedId(null);
-        } else if (category === 'twig') {
-          const snapshots = removeTwig(id);
-          if (!snapshots) return;
-          pushHistory({
-            type: SUPPORT_REMOVE_TWIG,
-            payload: snapshots,
-          });
-          setSelectedId(null);
-        } else if (category === 'stick') {
-          const snapshots = removeStick(id);
-          if (!snapshots) return;
-          pushHistory({
-            type: SUPPORT_REMOVE_STICK,
-            payload: snapshots,
-          });
-          setSelectedId(null);
-        } else if (category === 'brace') {
-          const snapshots = removeBrace(id);
-          if (!snapshots) return;
+          return true;
+        }
+
+        const braces = getBraces();
+        const brace = braces.find(br => br.startKnotId === id || br.endKnotId === id);
+        if (brace) {
+          const snapshots = removeBrace(brace.id);
+          if (!snapshots) return false;
           pushHistory({
             type: SUPPORT_REMOVE_BRACE,
             payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
           });
           setSelectedId(null);
+          return true;
         }
+
+        return false;
+      }
+
+      if (category === 'branch') {
+        const beforeSnapshot = getSnapshot();
+        const snapshots = removeBranch(id);
+        if (!snapshots) return false;
+        const afterSnapshot = getSnapshot();
+
+        let trunkUpdate: { before: any; after: any } | undefined;
+        let knotUpdates: any[] | undefined;
+        const removedRootBranch = snapshots.branches.find(b => b.id === id) ?? snapshots.branches[0];
+        const parentKnot = removedRootBranch?.parentKnotId ? beforeSnapshot.knots[removedRootBranch.parentKnotId] : undefined;
+        const parentSegId = parentKnot?.parentShaftId;
+        const trunkId = parentSegId
+          ? Object.values(beforeSnapshot.trunks).find(t => t.segments.some(s => s.id === parentSegId))?.id
+          : undefined;
+
+        if (trunkId && afterSnapshot.trunks[trunkId]) {
+          const applied = computeAndApplyTrunkDiameterProfile(afterSnapshot, trunkId);
+          if (applied) {
+            for (const u of applied.knotUpdates) updateKnot(u.after);
+            updateTrunk(applied.trunk);
+            const beforeTrunk = beforeSnapshot.trunks[trunkId];
+            if (beforeTrunk) {
+              trunkUpdate = { before: structuredClone(beforeTrunk), after: structuredClone(applied.trunk) };
+              knotUpdates = applied.knotUpdates;
+            }
+          }
+        }
+
+        pushHistory({
+          type: SUPPORT_REMOVE_BRANCH,
+          payload: {
+            ...snapshots,
+            trunkUpdate,
+            knotUpdates,
+          },
+        });
+        setSelectedId(null);
+        return true;
+      }
+
+      if (category === 'twig') {
+        const snapshots = removeTwig(id);
+        if (!snapshots) return false;
+        pushHistory({
+          type: SUPPORT_REMOVE_TWIG,
+          payload: snapshots,
+        });
+        setSelectedId(null);
+        return true;
+      }
+
+      if (category === 'stick') {
+        const snapshots = removeStick(id);
+        if (!snapshots) return false;
+        pushHistory({
+          type: SUPPORT_REMOVE_STICK,
+          payload: snapshots,
+        });
+        setSelectedId(null);
+        return true;
+      }
+
+      if (category === 'brace') {
+        const snapshots = removeBrace(id);
+        if (!snapshots) return false;
+        pushHistory({
+          type: SUPPORT_REMOVE_BRACE,
+          payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
+        });
+        setSelectedId(null);
+        return true;
+      }
+
+      return false;
+    };
+
+    const isAltEvent = (e: KeyboardEvent) => {
+      return e.key === 'Alt' || e.key === 'AltGraph' || e.code === 'AltLeft' || e.code === 'AltRight';
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+
+      if (e.key === 'Escape') {
+        if (getSelectedId() || getMultiSelectedSupportIds().length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearSelection();
+          setHoveredId(null);
+          setHoveredCategory('none');
+        }
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        e.stopPropagation();
+        const allSupportIds = collectAllSupportIds();
+        selectAllSupports(allSupportIds);
+        return;
+      }
+
+      if (!isAltEvent(e)) return;
+      if (e.repeat) return;
+      if (altDownRef.current) return;
+      altDownRef.current = true;
+      console.log('[AltKey]', 'down', { key: e.key, code: e.code, time: performance.now() });
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!isAltEvent(e)) return;
+      if (!altDownRef.current) return;
+      altDownRef.current = false;
+      console.log('[AltKey]', 'up', { key: e.key, code: e.code, time: performance.now() });
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('keyup', onKeyUp, true);
+
+    const unregister = registerDeleteHandler(
+      () => {
+        if (mode !== 'support') return false;
+
+        const multiSelectedIds = getMultiSelectedSupportIds();
+        if (multiSelectedIds.length > 0) return true;
+
+        const category = getSelectedCategory();
+        const id = getSelectedId();
+        if (!id || !category) return false;
+        if (category === 'joint' || category === 'trunk' || category === 'leaf' || category === 'branch' || category === 'twig' || category === 'stick' || category === 'brace') return true;
+
+        if (category === 'knot') {
+          const leaves = getLeaves();
+          if (leaves.some(l => l.parentKnotId === id)) return true;
+
+          const branches = getBranches();
+          if (branches.some(b => b.parentKnotId === id)) return true;
+
+          const braces = getBraces();
+          if (braces.some(br => br.startKnotId === id || br.endKnotId === id)) return true;
+
+          return false;
+        }
+
+        return false;
+      },
+      () => {
+        const multiSelectedIds = Array.from(new Set(getMultiSelectedSupportIds()));
+        if (multiSelectedIds.length > 0) {
+          let anyDeleted = false;
+          for (const supportId of multiSelectedIds) {
+            const category = resolveSupportCategoryFromSnapshot(supportId);
+            if (!category) continue;
+            const deleted = deleteSelectionByCategoryAndId(category, supportId);
+            if (deleted) anyDeleted = true;
+          }
+
+          clearSelection();
+          setHoveredId(null);
+          setHoveredCategory('none');
+          if (anyDeleted) return;
+        }
+
+        const category = getSelectedCategory();
+        const id = getSelectedId();
+        if (!id || !category) return;
+
+        deleteSelectionByCategoryAndId(category, id);
 
         setHoveredId(null);
         setHoveredCategory('none');
