@@ -23,13 +23,14 @@ interface TrunkRendererProps {
     isHovered?: boolean; // Legacy prop
     suppressHover?: boolean;
     isInteractable?: boolean;
+    deferStraightShaftsToSceneBatch?: boolean;
     hidePlateContactPrimitives?: boolean;
     baseColor?: string;
     hoverColor?: string;
     selectedColor?: string;
 }
 
-export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
+export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
     // Use universal highlight hook
     const { pickRef, visuals } = useHighlight({
         id: trunk.id,
@@ -116,7 +117,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
         const isSegSelected = selectedId === seg.id;
 
         // Add Shaft
-        const canBatchShaft = !isSelected && seg.type !== 'bezier';
+        const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier';
 
         if (canBatchShaft) {
             batchedStraightShafts.push({
@@ -146,7 +147,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                     onClick={() => setSelectedId(seg.id)}
                 />
             );
-        } else {
+        } else if (!deferStraightShaftsToSceneBatch || isSelected) {
             shafts.push(
                 <ShaftRenderer
                     key={`shaft-${seg.id}`}

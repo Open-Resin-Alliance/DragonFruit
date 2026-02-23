@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '../../types';
 
 export interface InstancedShaft {
@@ -7,6 +8,8 @@ export interface InstancedShaft {
     start: Vec3;
     end: Vec3;
     diameter: number;
+    supportId?: string;
+    modelId?: string;
 }
 
 interface InstancedShaftGroupProps {
@@ -17,6 +20,9 @@ interface InstancedShaftGroupProps {
     transparent?: boolean;
     opacity?: number;
     radialSegments?: number;
+    onShaftClick?: (shaft: InstancedShaft, event: ThreeEvent<MouseEvent>) => void;
+    onShaftPointerMove?: (shaft: InstancedShaft, event: ThreeEvent<PointerEvent>) => void;
+    onShaftPointerOut?: (shaft: InstancedShaft | null, event: ThreeEvent<PointerEvent>) => void;
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -29,8 +35,12 @@ export function InstancedShaftGroup({
     transparent = false,
     opacity = 1,
     radialSegments = 20,
+    onShaftClick,
+    onShaftPointerMove,
+    onShaftPointerOut,
 }: InstancedShaftGroupProps) {
     const meshRef = useRef<THREE.InstancedMesh>(null);
+    const lastHoveredShaftRef = useRef<InstancedShaft | null>(null);
 
     const validShafts = useMemo(() => {
         return shafts.filter((shaft) => {
@@ -78,8 +88,42 @@ export function InstancedShaftGroup({
 
     if (validShafts.length === 0) return null;
 
+    const handleClick = (event: ThreeEvent<MouseEvent>) => {
+        if (!onShaftClick) return;
+        event.stopPropagation();
+        const instanceId = event.instanceId;
+        if (instanceId == null) return;
+        const shaft = validShafts[instanceId];
+        if (!shaft) return;
+        onShaftClick(shaft, event);
+    };
+
+    const handlePointerMove = (event: ThreeEvent<PointerEvent>) => {
+        if (!onShaftPointerMove) return;
+        event.stopPropagation();
+        const instanceId = event.instanceId;
+        if (instanceId == null) return;
+        const shaft = validShafts[instanceId];
+        if (!shaft) return;
+        lastHoveredShaftRef.current = shaft;
+        onShaftPointerMove(shaft, event);
+    };
+
+    const handlePointerOut = (event: ThreeEvent<PointerEvent>) => {
+        if (!onShaftPointerOut) return;
+        event.stopPropagation();
+        onShaftPointerOut(lastHoveredShaftRef.current, event);
+        lastHoveredShaftRef.current = null;
+    };
+
     return (
-        <instancedMesh ref={meshRef} args={[undefined, undefined, validShafts.length]}>
+        <instancedMesh
+            ref={meshRef}
+            args={[undefined, undefined, validShafts.length]}
+            onClick={onShaftClick ? handleClick : undefined}
+            onPointerMove={onShaftPointerMove ? handlePointerMove : undefined}
+            onPointerOut={onShaftPointerOut ? handlePointerOut : undefined}
+        >
             <cylinderGeometry args={[0.5, 0.5, 1, radialSegments]} />
             <meshStandardMaterial
                 color={color}

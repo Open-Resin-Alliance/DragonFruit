@@ -23,6 +23,8 @@ import { SupportMode } from './types';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
+import { emitSupportModelPointerHover, handleSupportClick } from './interaction/clickHandlers';
+import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -50,6 +52,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const isInteractable = mode === 'support';
     const suppressHover = isJointCreationActive || !isInteractable || braceAltActive;
     const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
+    const [sceneHoveredSupportId, setSceneHoveredSupportId] = React.useState<string | null>(null);
+    const pendingSceneHoverClearFrameRef = React.useRef<number | null>(null);
 
     useEffect(() => {
         const handleImmediateModelHover = (event: Event) => {
@@ -60,6 +64,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
         return () => {
             window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+        };
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (pendingSceneHoverClearFrameRef.current != null) {
+                cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
+                pendingSceneHoverClearFrameRef.current = null;
+            }
         };
     }, []);
 
@@ -142,10 +155,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const isEndpointSelected = state.selectedId === startKnot.id || state.selectedId === endKnot.id;
             const effectiveSelected = isBraceSelected || isSegmentSelected || isEndpointSelected;
 
-            const isBraceHovered = state.hoveredCategory === 'support' && state.hoveredId === brace.id;
+            const isBraceHovered = (state.hoveredCategory === 'support' && state.hoveredId === brace.id)
+                || sceneHoveredSupportId === brace.id;
             const isBezierBrace = brace.curve?.type === 'bezier';
 
-            if (effectiveSelected || isBraceHovered || isBezierBrace) continue;
+            if (effectiveSelected || isBezierBrace) continue;
 
             const color = dimNonSelected ? '#666666' : resolveBaseColor(brace.modelId);
             const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
@@ -156,6 +170,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 start: startKnot.pos,
                 end: endKnot.pos,
                 diameter,
+                supportId: brace.id,
+                modelId: brace.modelId,
             };
 
             if (shaftsForColor) {
@@ -166,7 +182,175 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.braces, state.knots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor]);
+    }, [state.braces, state.knots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor, sceneHoveredSupportId]);
+
+    const sceneBatchedTrunkShaftGroups = useMemo(() => {
+        const grouped = new Map<string, { color: string; hovered: boolean; shafts: InstancedShaft[] }>();
+
+        const rootsSettings = settings.roots;
+        const baseFlare = settings.baseFlare;
+        const baseFlareEnabled = baseFlare.enabled;
+
+        for (const trunk of Object.values(state.trunks)) {
+            const root = state.roots[trunk.rootId];
+            if (!root) continue;
+
+            const isTrunkSelected = state.selectedId === trunk.id;
+            const isChildSelected = trunk.segments.some((segment) =>
+                segment.id === state.selectedId
+                || segment.topJoint?.id === state.selectedId
+                || segment.bottomJoint?.id === state.selectedId,
+            );
+            const effectiveSelected = isTrunkSelected || isChildSelected;
+            const isTrunkHovered = (state.hoveredCategory === 'support' && state.hoveredId === trunk.id)
+                || sceneHoveredSupportId === trunk.id;
+
+            if (effectiveSelected) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(trunk.modelId);
+            const groupKey = `${color}|${isTrunkHovered ? 'hover' : 'idle'}`;
+            const shaftsForColor = grouped.get(groupKey)?.shafts ?? [];
+
+            const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
+            const diskHeight = rootsSettings.diskHeightMm;
+            const coneHeight = baseFlareEnabled ? baseFlare.heightMm : ((root as unknown as { height?: number }).height ?? 1.5);
+            const effectiveConeHeight = baseFlareEnabled ? coneHeight : 0;
+            let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
+
+            for (const segment of trunk.segments) {
+                if (segment.type === 'bezier') {
+                    if (segment.topJoint) {
+                        currentStart = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
+                    } else if (trunk.contactCone) {
+                        const socketPos = getFinalSocketPosition(trunk.contactCone);
+                        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+                    }
+                    continue;
+                }
+
+                let endPoint: THREE.Vector3;
+                if (segment.topJoint) {
+                    endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
+                } else if (trunk.contactCone) {
+                    const socketPos = getFinalSocketPosition(trunk.contactCone);
+                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+                } else {
+                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
+                }
+
+                shaftsForColor.push({
+                    id: segment.id,
+                    start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                    end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                    diameter: segment.diameter,
+                    supportId: trunk.id,
+                    modelId: trunk.modelId,
+                });
+
+                currentStart = endPoint;
+            }
+
+            if (shaftsForColor.length > 0) {
+                grouped.set(groupKey, {
+                    color,
+                    hovered: isTrunkHovered,
+                    shafts: shaftsForColor,
+                });
+            }
+        }
+
+        return Array.from(grouped.values());
+    }, [state.trunks, state.roots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor, settings.baseFlare, settings.roots, sceneHoveredSupportId]);
+
+    const sceneBatchedBranchShaftGroups = useMemo(() => {
+        const grouped = new Map<string, InstancedShaft[]>();
+
+        for (const branch of Object.values(state.branches)) {
+            const parentKnot = state.knots[branch.parentKnotId];
+            if (!parentKnot) continue;
+
+            const isBranchSelected = state.selectedId === branch.id;
+            const isKnotSelected = parentKnot.id === state.selectedId;
+            const isChildSelected = branch.segments.some((segment) =>
+                segment.id === state.selectedId
+                || segment.topJoint?.id === state.selectedId
+                || segment.bottomJoint?.id === state.selectedId,
+            );
+            const effectiveSelected = isBranchSelected || isKnotSelected || isChildSelected;
+            const isBranchHovered = (state.hoveredCategory === 'support' && state.hoveredId === branch.id)
+                || sceneHoveredSupportId === branch.id;
+
+            if (effectiveSelected) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(branch.modelId);
+            const shaftsForColor = grouped.get(color) ?? [];
+            let currentStart = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
+
+            for (const segment of branch.segments) {
+                if (segment.type === 'bezier') {
+                    if (segment.topJoint) {
+                        currentStart = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
+                    }
+                    continue;
+                }
+
+                let endPoint: THREE.Vector3;
+                if (segment.topJoint) {
+                    endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
+                } else if (branch.contactCone) {
+                    const socketPos = getFinalSocketPosition(branch.contactCone);
+                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+                } else {
+                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
+                }
+
+                shaftsForColor.push({
+                    id: segment.id,
+                    start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                    end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                    diameter: segment.diameter,
+                    supportId: branch.id,
+                    modelId: branch.modelId,
+                });
+
+                currentStart = endPoint;
+            }
+
+            if (shaftsForColor.length > 0) {
+                grouped.set(color, shaftsForColor);
+            }
+        }
+
+        return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
+    }, [state.branches, state.knots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor, sceneHoveredSupportId]);
+
+    const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
+        if (!shaft.supportId) return;
+        handleSupportClick(event, shaft.supportId, isInteractable);
+    }, [isInteractable]);
+
+    const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
+        if (pendingSceneHoverClearFrameRef.current != null) {
+            cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
+            pendingSceneHoverClearFrameRef.current = null;
+        }
+
+        const nextSupportId = shaft.supportId ?? null;
+        setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
+        emitSupportModelPointerHover(shaft.modelId ?? null);
+    }, []);
+
+    const handleSceneBatchedShaftPointerOut = React.useCallback(() => {
+        if (pendingSceneHoverClearFrameRef.current != null) {
+            cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
+        }
+
+        pendingSceneHoverClearFrameRef.current = requestAnimationFrame(() => {
+            pendingSceneHoverClearFrameRef.current = null;
+            setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
+            emitSupportModelPointerHover(null);
+        });
+    }, []);
 
     useEffect(() => {
         const root = groupRef.current;
@@ -205,6 +389,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             <BezierGizmoManager />
 
             {/* Render Trunks */}
+            {sceneBatchedTrunkShaftGroups.map((group) => (
+                <InstancedShaftGroup
+                    key={`scene-trunk-batch:${group.color}:${group.hovered ? 'hover' : 'idle'}:${group.shafts.length}`}
+                    shafts={group.shafts}
+                    color={group.color}
+                    emissive={group.hovered ? '#ffffff' : '#000000'}
+                    emissiveIntensity={group.hovered ? 0.3 : 0}
+                    onShaftClick={handleSceneBatchedShaftClick}
+                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
+                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                />
+            ))}
+
             {Object.values(state.trunks).map(trunk => {
                 const root = state.roots[trunk.rootId];
                 if (!root) return null;
@@ -216,6 +413,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     s.id === state.selectedId
                 );
                 const effectiveSelected = isTrunkSelected || isChildSelected;
+                const isTrunkHovered = (state.hoveredCategory === 'support' && state.hoveredId === trunk.id)
+                    || sceneHoveredSupportId === trunk.id;
 
                 return (
                     <group key={trunk.id}>
@@ -226,9 +425,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isSelected={effectiveSelected}
                         selectedId={effectiveSelected ? state.selectedId : null}
                         dimNonSelected={dimNonSelected}
+                        isHovered={isTrunkHovered}
                         baseColor={resolveBaseColor(trunk.modelId)}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
+                        deferStraightShaftsToSceneBatch={!effectiveSelected}
                         hidePlateContactPrimitives={hidePlateContactPrimitives}
                     />
                     </group>
@@ -236,6 +437,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {/* Render Branches */}
+            {sceneBatchedBranchShaftGroups.map((group) => (
+                <InstancedShaftGroup
+                    key={`scene-branch-batch:${group.color}:${group.shafts.length}`}
+                    shafts={group.shafts}
+                    color={group.color}
+                    onShaftClick={handleSceneBatchedShaftClick}
+                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
+                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                />
+            ))}
+
             {Object.values(state.branches).map(branch => {
                 const knot = state.knots[branch.parentKnotId];
                 if (!knot) return null;
@@ -248,6 +460,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     s.id === state.selectedId
                 );
                 const effectiveSelected = isBranchSelected || isKnotSelected || isChildSelected;
+                const isBranchHovered = (state.hoveredCategory === 'support' && state.hoveredId === branch.id)
+                    || sceneHoveredSupportId === branch.id;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -259,10 +473,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         isSelected={effectiveSelected}
                         selectedId={effectiveSelected ? state.selectedId : null}
                         dimNonSelected={dimNonSelected}
+                        isHovered={isBranchHovered}
                         baseColor={resolveBaseColor(branch.modelId)}
                         showKnots={showKnots}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
+                        deferStraightShaftsToSceneBatch={!effectiveSelected}
                     />
                     </group>
                 );
@@ -353,6 +569,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-brace-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
+                    onShaftClick={handleSceneBatchedShaftClick}
+                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
+                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
                 />
             ))}
 
@@ -365,7 +584,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const isSegmentSelected = state.selectedId === `braceSegment:${brace.id}`;
                 const isEndpointSelected = state.selectedId === startKnot.id || state.selectedId === endKnot.id;
                 const effectiveSelected = isBraceSelected || isSegmentSelected || isEndpointSelected;
-                const isBraceHovered = state.hoveredCategory === 'support' && state.hoveredId === brace.id;
+                const isBraceHovered = (state.hoveredCategory === 'support' && state.hoveredId === brace.id)
+                    || sceneHoveredSupportId === brace.id;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -382,7 +602,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         suppressHover={suppressHover}
                         isHovered={isBraceHovered}
                         isInteractable={isInteractable}
-                        deferStraightShaftToSceneBatch={!effectiveSelected && !isBraceHovered && brace.curve?.type !== 'bezier'}
+                        deferStraightShaftToSceneBatch={!effectiveSelected && brace.curve?.type !== 'bezier'}
                         debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
                     />
                     </group>

@@ -21,6 +21,7 @@ interface BranchRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  deferStraightShaftsToSceneBatch?: boolean;
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
@@ -36,6 +37,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   isHovered: propHovered, 
   suppressHover,
   isInteractable = true,
+  deferStraightShaftsToSceneBatch = false,
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
@@ -98,7 +100,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     const isSegSelected = selectedId === seg.id;
 
     // Add Shaft (straight or bezier)
-    const canBatchShaft = !isSelected && seg.type !== 'bezier';
+    const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier';
 
     if (canBatchShaft) {
       batchedStraightShafts.push({
@@ -128,7 +130,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           onClick={() => setSelectedId(seg.id)}
         />
       );
-    } else {
+    } else if (!deferStraightShaftsToSceneBatch || isSelected) {
       shafts.push(
         <ShaftRenderer
           key={`shaft-${seg.id}`}
