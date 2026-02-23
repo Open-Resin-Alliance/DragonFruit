@@ -25,6 +25,7 @@ import { SupportRenderer } from '@/supports/SupportRenderer';
 import { SupportBuilder } from '@/supports/rendering';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
+import { getModelIdForSupportEntityId } from '@/supports/state';
 import { subscribeToSupportBraceStore, getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
@@ -1019,12 +1020,38 @@ export function SceneCanvas({
   const prevModeRef = React.useRef<SupportMode | undefined>(mode);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
-  const [hoveredModelId, setHoveredModelId] = React.useState<string | null>(null);
+  const [hoveredMeshModelId, setHoveredMeshModelId] = React.useState<string | null>(null);
+  const [hoveredRaftModelId, setHoveredRaftModelId] = React.useState<string | null>(null);
+  const hoveredSupportModelId = React.useMemo(() => {
+    const category = supportStateForBounds.hoveredCategory;
+    if (category !== 'support' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
+      return null;
+    }
+    return getModelIdForSupportEntityId(supportStateForBounds.hoveredId);
+  }, [supportStateForBounds.hoveredCategory, supportStateForBounds.hoveredId]);
+  const hoveredModelId = React.useMemo(
+    () => hoveredRaftModelId ?? hoveredSupportModelId ?? hoveredMeshModelId,
+    [hoveredMeshModelId, hoveredRaftModelId, hoveredSupportModelId],
+  );
   const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
     lastHoveredModelPointRef.current = point;
   }, []);
   const onModelHoverModelChange = React.useCallback((id: string | null) => {
-    setHoveredModelId(id);
+    setHoveredMeshModelId(id);
+  }, []);
+
+  React.useEffect(() => {
+    const handleSupportRaftModelPointerHover = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null; category?: string | null }>;
+      if (customEvent.detail?.category !== 'raft') return;
+      setHoveredRaftModelId(customEvent.detail?.modelId ?? null);
+    };
+
+    window.addEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
+
+    return () => {
+      window.removeEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
+    };
   }, []);
 
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
@@ -2238,6 +2265,7 @@ export function SceneCanvas({
                       outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
                       suppressModelInteraction={suppressModelInteraction}
+                        externalHoveredModelId={hoveredModelId}
                     />
 
                     {/* Cross-section cap (fill) at the cut plane - Render per model */}
