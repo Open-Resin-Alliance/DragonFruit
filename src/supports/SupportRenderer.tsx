@@ -10,6 +10,7 @@ import { BraceRenderer } from './SupportTypes/Brace/BraceRenderer';
 import { TwigRenderer } from './SupportTypes/Twig/TwigRenderer';
 import { StickRenderer } from './SupportTypes/Stick/StickRenderer';
 import { SupportBraceRenderer } from './SupportTypes/SupportBrace/SupportBraceRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useSupportBraceStoreState } from './SupportTypes/SupportBrace/supportBraceStore';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
@@ -127,6 +128,45 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return baseHex;
         };
     }, [activeModelId, effectiveHoverModelId]);
+
+    const sceneBatchedBraceShaftGroups = useMemo(() => {
+        const grouped = new Map<string, InstancedShaft[]>();
+
+        for (const brace of Object.values(state.braces)) {
+            const startKnot = state.knots[brace.startKnotId];
+            const endKnot = state.knots[brace.endKnotId];
+            if (!startKnot || !endKnot) continue;
+
+            const isBraceSelected = state.selectedId === brace.id;
+            const isSegmentSelected = state.selectedId === `braceSegment:${brace.id}`;
+            const isEndpointSelected = state.selectedId === startKnot.id || state.selectedId === endKnot.id;
+            const effectiveSelected = isBraceSelected || isSegmentSelected || isEndpointSelected;
+
+            const isBraceHovered = state.hoveredCategory === 'support' && state.hoveredId === brace.id;
+            const isBezierBrace = brace.curve?.type === 'bezier';
+
+            if (effectiveSelected || isBraceHovered || isBezierBrace) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(brace.modelId);
+            const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
+
+            const shaftsForColor = grouped.get(color);
+            const shaft: InstancedShaft = {
+                id: `braceSegment:${brace.id}`,
+                start: startKnot.pos,
+                end: endKnot.pos,
+                diameter,
+            };
+
+            if (shaftsForColor) {
+                shaftsForColor.push(shaft);
+            } else {
+                grouped.set(color, [shaft]);
+            }
+        }
+
+        return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
+    }, [state.braces, state.knots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor]);
 
     useEffect(() => {
         const root = groupRef.current;
@@ -308,6 +348,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {/* Render Braces */}
+            {sceneBatchedBraceShaftGroups.map((group) => (
+                <InstancedShaftGroup
+                    key={`scene-brace-batch:${group.color}:${group.shafts.length}`}
+                    shafts={group.shafts}
+                    color={group.color}
+                />
+            ))}
+
             {Object.values(state.braces).map(brace => {
                 const startKnot = state.knots[brace.startKnotId];
                 const endKnot = state.knots[brace.endKnotId];
@@ -317,6 +365,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const isSegmentSelected = state.selectedId === `braceSegment:${brace.id}`;
                 const isEndpointSelected = state.selectedId === startKnot.id || state.selectedId === endKnot.id;
                 const effectiveSelected = isBraceSelected || isSegmentSelected || isEndpointSelected;
+                const isBraceHovered = state.hoveredCategory === 'support' && state.hoveredId === brace.id;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -331,7 +380,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         baseColor={resolveBaseColor(brace.modelId)}
                         showKnots={showKnots}
                         suppressHover={suppressHover}
+                        isHovered={isBraceHovered}
                         isInteractable={isInteractable}
+                        deferStraightShaftToSceneBatch={!effectiveSelected && !isBraceHovered && brace.curve?.type !== 'bezier'}
                         debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
                     />
                     </group>

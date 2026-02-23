@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Stick } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
@@ -59,6 +60,7 @@ export const StickRenderer = React.memo(function StickRenderer({
   }, []);
 
   const shafts: React.ReactNode[] = [];
+  const batchedStraightShafts: InstancedShaft[] = [];
 
   const joints = useMemo(() => {
     const map = new Map<string, { id: string; pos: { x: number; y: number; z: number }; diameter: number }>();
@@ -92,7 +94,16 @@ export const StickRenderer = React.memo(function StickRenderer({
 
     const isSegSelected = selectedId === seg.id;
 
-    if (seg.type === 'bezier') {
+    const canBatchShaft = !isSelected && seg.type !== 'bezier';
+
+    if (canBatchShaft) {
+      batchedStraightShafts.push({
+        id: seg.id,
+        start: startPosVec,
+        end: endPosVec,
+        diameter: seg.diameter,
+      });
+    } else if (seg.type === 'bezier') {
       const bezierColor = isSelected ? '#ff00ff' : visuals.color;
       shafts.push(
         <BezierRenderer
@@ -168,12 +179,18 @@ export const StickRenderer = React.memo(function StickRenderer({
   return (
     <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
       <group ref={pickRef as any}>
+        <InstancedShaftGroup
+          shafts={batchedStraightShafts}
+          color={visuals.color}
+          emissive={visuals.emissive}
+          emissiveIntensity={visuals.emissiveIntensity}
+        />
         {shafts}
         {coneA}
         {coneB}
       </group>
 
-      {joints.map((joint) => (
+      {isSelected && joints.map((joint) => (
         <JointRenderer
           key={`joint-${joint.id}`}
           joint={joint}

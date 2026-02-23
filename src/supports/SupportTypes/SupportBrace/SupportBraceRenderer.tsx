@@ -9,6 +9,7 @@ import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import type { SupportBrace } from './types';
 
@@ -75,6 +76,7 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, startZ));
 
     const shafts: React.ReactNode[] = [];
+    const batchedStraightShafts: InstancedShaft[] = [];
     const joints: React.ReactNode[] = [];
 
     supportBrace.segments.forEach((segment, index) => {
@@ -89,7 +91,20 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
 
         const segmentSelected = selectedId === segment.id;
 
-        if (segment.type === 'bezier') {
+        const diameterStart = isLast ? supportBrace.profile.terminalStartDiameterMm : undefined;
+        const diameterEnd = isLast ? supportBrace.profile.terminalEndDiameterMm : undefined;
+        const isUniformDiameter = (diameterStart == null && diameterEnd == null)
+            || (diameterStart != null && diameterEnd != null && Math.abs(diameterStart - diameterEnd) < 1e-6);
+        const canBatchShaft = !isSelected && segment.type !== 'bezier' && isUniformDiameter;
+
+        if (canBatchShaft) {
+            batchedStraightShafts.push({
+                id: segment.id,
+                start,
+                end,
+                diameter: segment.diameter,
+            });
+        } else if (segment.type === 'bezier') {
             const bezierColor = isSelected ? '#ff00ff' : visuals.color;
             shafts.push(
                 <BezierRenderer
@@ -100,8 +115,8 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
                     control1={segment.controlPoint1}
                     control2={segment.controlPoint2}
                     diameter={segment.diameter}
-                    diameterStart={isLast ? supportBrace.profile.terminalStartDiameterMm : undefined}
-                    diameterEnd={isLast ? supportBrace.profile.terminalEndDiameterMm : undefined}
+                    diameterStart={diameterStart}
+                    diameterEnd={diameterEnd}
                     resolution={segment.resolution}
                     color={bezierColor}
                     emissive={visuals.emissive}
@@ -120,8 +135,8 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
                     start={start}
                     end={end}
                     diameter={segment.diameter}
-                    diameterStart={isLast ? supportBrace.profile.terminalStartDiameterMm : undefined}
-                    diameterEnd={isLast ? supportBrace.profile.terminalEndDiameterMm : undefined}
+                    diameterStart={diameterStart}
+                    diameterEnd={diameterEnd}
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
@@ -133,7 +148,7 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
             );
         }
 
-        if (segment.topJoint) {
+        if (isSelected && segment.topJoint) {
             joints.push(
                 <JointRenderer
                     key={`joint-${segment.topJoint.id}`}
@@ -165,9 +180,17 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
                 />
             )}
 
-            <group ref={pickRef as React.RefObject<THREE.Group | null>}>{shafts}</group>
+            <group ref={pickRef as React.RefObject<THREE.Group | null>}>
+                <InstancedShaftGroup
+                    shafts={batchedStraightShafts}
+                    color={visuals.color}
+                    emissive={visuals.emissive}
+                    emissiveIntensity={visuals.emissiveIntensity}
+                />
+                {shafts}
+            </group>
 
-            {showKnot && (
+            {showKnot && isSelected && (
                 <KnotRenderer
                     knot={hostKnot}
                     color={visuals.color}

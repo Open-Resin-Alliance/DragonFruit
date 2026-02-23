@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { ContactDisk, Twig } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk/ContactDiskRenderer';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
@@ -60,6 +61,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   }, []);
 
   const shafts: React.ReactNode[] = [];
+  const batchedStraightShafts: InstancedShaft[] = [];
 
   const joints = useMemo(() => {
     const map = new Map<string, { id: string; pos: { x: number; y: number; z: number }; diameter: number }>();
@@ -106,7 +108,16 @@ export const TwigRenderer = React.memo(function TwigRenderer({
 
     const isSegSelected = selectedId === seg.id;
 
-    if (seg.type === 'bezier') {
+    const canBatchShaft = !isSelected && seg.type !== 'bezier' && Math.abs(diameterStart - diameterEnd) < 1e-6;
+
+    if (canBatchShaft) {
+      batchedStraightShafts.push({
+        id: seg.id,
+        start: startPosVec,
+        end: endPosVec,
+        diameter: seg.diameter,
+      });
+    } else if (seg.type === 'bezier') {
       const bezierColor = isSelected ? '#ff00ff' : visuals.color;
       shafts.push(
         <BezierRenderer
@@ -176,12 +187,18 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   return (
     <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
       <group ref={pickRef as React.Ref<THREE.Group>}>
+        <InstancedShaftGroup
+          shafts={batchedStraightShafts}
+          color={visuals.color}
+          emissive={visuals.emissive}
+          emissiveIntensity={visuals.emissiveIntensity}
+        />
         {shafts}
         {diskA}
         {diskB}
       </group>
 
-      {joints.map((joint) => (
+      {isSelected && joints.map((joint) => (
         <JointRenderer
           key={`joint-${joint.id}`}
           joint={joint}

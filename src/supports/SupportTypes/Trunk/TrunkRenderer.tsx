@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react';
 import { Trunk, Roots, Vec3 } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { validateBezierConstraints } from '../../Curves/BezierUtils';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
@@ -91,6 +92,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
 
     const shafts: React.ReactNode[] = [];
+    const batchedStraightShafts: InstancedShaft[] = [];
     const joints: React.ReactNode[] = [];
 
     trunk.segments.forEach((seg, index) => {
@@ -114,7 +116,16 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
         const isSegSelected = selectedId === seg.id;
 
         // Add Shaft
-        if (seg.type === 'bezier') {
+        const canBatchShaft = !isSelected && seg.type !== 'bezier';
+
+        if (canBatchShaft) {
+            batchedStraightShafts.push({
+                id: seg.id,
+                start: startPos,
+                end: endPos,
+                diameter: seg.diameter,
+            });
+        } else if (seg.type === 'bezier') {
             const bezierColor = isSelected ? '#ff00ff' : visuals.color;
             shafts.push(
                 <BezierRenderer
@@ -155,7 +166,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
         }
 
         // Add Joint
-        if (seg.topJoint) {
+        if (isSelected && seg.topJoint) {
             joints.push(
                 <JointRenderer
                     key={`joint-${seg.topJoint.id}`}
@@ -209,6 +220,12 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                         selectedColor={visuals.selectedColor}
                     />
                 )}
+                <InstancedShaftGroup
+                    shafts={batchedStraightShafts}
+                    color={visuals.color}
+                    emissive={visuals.emissive}
+                    emissiveIntensity={visuals.emissiveIntensity}
+                />
                 {shafts}
                 {coneRender}
             </group>

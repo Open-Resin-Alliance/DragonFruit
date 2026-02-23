@@ -5,6 +5,7 @@ import { useHighlight } from '../../interaction/useHighlight';
 import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { setSelectedId } from '../../state';
 
@@ -24,6 +25,7 @@ interface BraceRendererProps {
     isHovered?: boolean;
     suppressHover?: boolean;
     isInteractable?: boolean;
+    deferStraightShaftToSceneBatch?: boolean;
     debugSectionColors?: boolean;
     baseColor?: string;
     hoverColor?: string;
@@ -40,6 +42,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     isHovered: propHovered,
     suppressHover,
     isInteractable = true,
+    deferStraightShaftToSceneBatch = false,
     debugSectionColors = false,
     baseColor = '#ff8800',
     hoverColor,
@@ -69,6 +72,17 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const endVec = useMemo(() => new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z), [endKnot.pos.x, endKnot.pos.y, endKnot.pos.z]);
 
     const uniformBraceDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
+    const isBezierBrace = brace.curve?.type === 'bezier';
+
+    const batchedStraightShafts: InstancedShaft[] = useMemo(() => {
+        if (isSelected || isBezierBrace || deferStraightShaftToSceneBatch) return [];
+        return [{
+            id: segmentId,
+            start: startKnot.pos,
+            end: endKnot.pos,
+            diameter: uniformBraceDiameter,
+        }];
+    }, [isSelected, isBezierBrace, deferStraightShaftToSceneBatch, segmentId, startKnot.pos, endKnot.pos, uniformBraceDiameter]);
 
     const handleClick = (e: any) => {
         // Alt+click should behave like a shaft click for placement tools (Brace/Branch/etc.)
@@ -124,7 +138,13 @@ export const BraceRenderer = React.memo(function BraceRenderer({
         <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             <group ref={pickRef as any}>
                 <group>
-                    {brace.curve?.type === 'bezier' ? (
+                    <InstancedShaftGroup
+                        shafts={batchedStraightShafts}
+                        color={shaftColor}
+                        emissive={visuals.emissive}
+                        emissiveIntensity={visuals.emissiveIntensity}
+                    />
+                    {isSelected && isBezierBrace ? (
                         <BezierRenderer
                             id={segmentId}
                             start={startKnot.pos}
@@ -143,7 +163,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             isSelected={false}
                             onClick={() => setSelectedId(segmentId)}
                         />
-                    ) : (
+                    ) : isSelected ? (
                         <ShaftRenderer
                             id={segmentId}
                             start={startKnot.pos}
@@ -159,11 +179,11 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             isSelected={false}
                             onClick={() => setSelectedId(segmentId)}
                         />
-                    )}
+                    ) : null}
                 </group>
             </group>
 
-            {showKnots !== false && (
+            {showKnots !== false && isSelected && (
                 <KnotRenderer
                     knot={startKnot}
                     color={visuals.color}
@@ -174,7 +194,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                     isParentSelected={!!isSelected}
                 />
             )}
-            {showKnots !== false && (
+            {showKnots !== false && isSelected && (
                 <KnotRenderer
                     knot={endKnot}
                     color={visuals.color}

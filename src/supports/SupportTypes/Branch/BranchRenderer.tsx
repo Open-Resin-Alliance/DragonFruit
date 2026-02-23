@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Branch, Knot } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
@@ -73,6 +74,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   let currentStart = startPos.clone();
 
   const shafts: React.ReactNode[] = [];
+  const batchedStraightShafts: InstancedShaft[] = [];
   const joints: React.ReactNode[] = [];
 
   branch.segments.forEach((seg, index) => {
@@ -96,7 +98,16 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     const isSegSelected = selectedId === seg.id;
 
     // Add Shaft (straight or bezier)
-    if (seg.type === 'bezier') {
+    const canBatchShaft = !isSelected && seg.type !== 'bezier';
+
+    if (canBatchShaft) {
+      batchedStraightShafts.push({
+        id: seg.id,
+        start: startPosVec,
+        end: endPosVec,
+        diameter: seg.diameter,
+      });
+    } else if (seg.type === 'bezier') {
       const bezierColor = isSelected ? '#ff00ff' : visuals.color;
       shafts.push(
         <BezierRenderer
@@ -137,7 +148,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     }
 
     // Add Joint (if present)
-    if (seg.topJoint) {
+    if (isSelected && seg.topJoint) {
       joints.push(
         <JointRenderer
           key={`joint-${seg.topJoint.id}`}
@@ -181,6 +192,12 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
       {/* Branch Picking Group - Contains Shafts, Cone */}
       <group ref={pickRef as any}>
+        <InstancedShaftGroup
+          shafts={batchedStraightShafts}
+          color={visuals.color}
+          emissive={visuals.emissive}
+          emissiveIntensity={visuals.emissiveIntensity}
+        />
         {shafts}
         {coneRender}
       </group>
