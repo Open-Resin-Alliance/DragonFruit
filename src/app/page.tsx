@@ -78,6 +78,7 @@ import {
   undo,
 } from '@/history/historyStore';
 import type { HistoryDebugEvent } from '@/history/types';
+import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
@@ -520,11 +521,12 @@ export default function Home() {
   React.useEffect(() => {
     const fallbackDescription = (type: string) => {
       if (type === 'scene_models_snapshot_apply') return 'Scene Change';
-      return type.replaceAll('_', ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+      return formatHistoryLabel(type);
     };
 
     const unsubscribe = subscribeHistoryOperations(({ direction, action }) => {
-      const description = action.description?.trim() || fallbackDescription(action.type);
+      const sourceDescription = action.description?.trim() || fallbackDescription(action.type);
+      const description = formatHistoryLabel(sourceDescription);
 
       if (action.type === 'scene_models_snapshot_apply') {
         pendingHistoryTransformResyncRef.current = true;
@@ -2107,7 +2109,7 @@ export default function Home() {
 
   const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
     const targetModelId = scene.activeModelId;
-    const targetModelName = scene.activeModel?.name ?? targetModelId ?? 'Model';
+    const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
 
     if (operation === 'rotate' && pendingRotateGizmoCommitRef.current && targetModelId === pendingRotateGizmoCommitRef.current.modelId) {
       pendingTransformHistoryRef.current = {
@@ -2123,12 +2125,7 @@ export default function Home() {
     }
 
     if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
-      const operationLabel = operation === 'rotate'
-        ? 'Rotate'
-        : operation === 'move'
-          ? 'Move'
-          : 'Scale';
-      pendingTransformHistoryRef.current.description = `${operationLabel} Model ${targetModelName}`;
+      pendingTransformHistoryRef.current.description = `transform:${operation} ${targetModelName}`;
     }
 
     transformMgr.setIsTransforming(false);
@@ -2159,12 +2156,7 @@ export default function Home() {
     after: ModelTransform;
   }) => {
     const targetModel = scene.models.find((model) => model.id === payload.modelId);
-    const targetModelName = targetModel?.name ?? payload.modelId;
-    const operationLabel = payload.operation === 'rotate'
-      ? 'Rotate'
-      : payload.operation === 'move'
-        ? 'Move'
-        : 'Scale';
+    const targetModelName = (targetModel?.name ?? payload.modelId).trim();
 
     if (payload.operation === 'rotate') {
       pendingRotateGizmoCommitRef.current = {
@@ -2174,7 +2166,7 @@ export default function Home() {
           rotation: payload.before.rotation.clone(),
           scale: payload.before.scale.clone(),
         },
-        description: `${operationLabel} Model ${targetModelName}`,
+        description: `transform:${payload.operation} ${targetModelName}`,
       };
       skipNextTransformEndCommitRef.current = false;
       return;
@@ -2184,7 +2176,7 @@ export default function Home() {
       payload.modelId,
       payload.before,
       payload.after,
-      `${operationLabel} Model ${targetModelName}`,
+      `transform:${payload.operation} ${targetModelName}`,
     );
 
     skipNextTransformEndCommitRef.current = true;
@@ -2192,14 +2184,9 @@ export default function Home() {
 
   const handleTransformStart = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
+    const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
 
     if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
-      const operationLabel = operation === 'rotate'
-        ? 'Rotate'
-        : operation === 'move'
-          ? 'Move'
-          : 'Scale';
-      const targetModelName = scene.activeModel.name ?? scene.activeModelId;
       pendingTransformHistoryRef.current = {
         modelId: scene.activeModelId,
         before: {
@@ -2207,7 +2194,7 @@ export default function Home() {
           rotation: scene.activeModel.transform.rotation.clone(),
           scale: scene.activeModel.transform.scale.clone(),
         },
-        description: `${operationLabel} Model ${targetModelName}`,
+        description: `transform:${operation} ${targetModelName}`,
       };
     }
 
@@ -2220,7 +2207,7 @@ export default function Home() {
 
   const handleRotationComplete = () => {
     const targetModelId = scene.activeModelId;
-    const targetModelName = scene.activeModel?.name ?? targetModelId ?? 'Model';
+    const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
     if (!pendingTransformHistoryRef.current && targetModelId && scene.activeModel) {
       pendingTransformHistoryRef.current = {
         modelId: targetModelId,
@@ -2229,12 +2216,12 @@ export default function Home() {
           rotation: scene.activeModel.transform.rotation.clone(),
           scale: scene.activeModel.transform.scale.clone(),
         },
-        description: `Rotate Model ${targetModelName}`,
+        description: `transform:rotate ${targetModelName}`,
       };
     }
 
     if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
-      pendingTransformHistoryRef.current.description = `Rotate Model ${targetModelName}`;
+      pendingTransformHistoryRef.current.description = `transform:rotate ${targetModelName}`;
     }
 
     islands.clearScanData();
