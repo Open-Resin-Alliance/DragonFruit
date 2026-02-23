@@ -114,19 +114,24 @@ export function BezierRenderer({
     const { register, unregister, hit } = usePicking();
 
     const { altActive: braceAltActive } = useBracePlacementState();
+    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
 
     // Register with picking system
     useEffect(() => {
-        if (!groupRef.current) return;
+        if (!groupRef.current || !enableSegmentInteraction) {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+            return;
+        }
         
         // Only register if parent is selected (editable mode)
-        if (isParentSelected) {
-            pickIdRef.current = register({
-                category: 'segment',
-                objectId: id,
-                object: groupRef.current,
-            });
-        }
+        pickIdRef.current = register({
+            category: 'segment',
+            objectId: id,
+            object: groupRef.current,
+        });
         
         return () => {
             if (pickIdRef.current !== null) {
@@ -134,10 +139,10 @@ export function BezierRenderer({
                 pickIdRef.current = null;
             }
         };
-    }, [register, unregister, id, isParentSelected]);
+    }, [register, unregister, id, enableSegmentInteraction]);
 
     // Determine Hover State
-    const isPickingHovered = hit.category === 'segment' && hit.objectId === id;
+    const isPickingHovered = enableSegmentInteraction && hit.category === 'segment' && hit.objectId === id;
     const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
 
     const handleClick = (e: any) => {
@@ -154,16 +159,21 @@ export function BezierRenderer({
             }
         }
 
-        window.dispatchEvent(new CustomEvent('shaft-click', {
-            detail: {
-                segmentId: id,
-                point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
-                intersection: e
-            }
-        }));
+        if (altDown || ctrlDown || isParentSelected) {
+            window.dispatchEvent(new CustomEvent('shaft-click', {
+                detail: {
+                    segmentId: id,
+                    point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+                    intersection: e
+                }
+            }));
+        }
 
         // Ctrl is reserved for Support Brace placement and should not re-select segments.
         if (ctrlDown) return;
+
+        // When not in an editable context, let parent support handlers own the click.
+        if (!isParentSelected && !altDown) return;
 
         if (isParentSelected && onClick) {
             e.stopPropagation();
@@ -179,6 +189,8 @@ export function BezierRenderer({
     };
 
     const handlePointerMove = (e: any) => {
+        if (!enableSegmentInteraction) return;
+
         window.dispatchEvent(new CustomEvent('shaft-hover', {
             detail: {
                 segmentId: id,
@@ -189,6 +201,8 @@ export function BezierRenderer({
     };
 
     const handlePointerOut = () => {
+        if (!enableSegmentInteraction) return;
+
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
         }));
@@ -200,7 +214,12 @@ export function BezierRenderer({
 
     return (
         <group ref={groupRef}>
-            <mesh raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+            <mesh
+                raycast={raycast}
+                onClick={handleClick}
+                onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
+                onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
+            >
                 <primitive object={geometry} attach="geometry" />
                 <meshStandardMaterial 
                     color={finalColor} 

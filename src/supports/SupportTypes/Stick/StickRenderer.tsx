@@ -22,7 +22,7 @@ interface StickRendererProps {
   selectedColor?: string;
 }
 
-export function StickRenderer({
+export const StickRenderer = React.memo(function StickRenderer({
   stick,
   isSelected,
   selectedId,
@@ -37,6 +37,7 @@ export function StickRenderer({
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
     category: 'support',
+    enabled: !!isInteractable && !suppressHover,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -186,4 +187,6 @@ export function StickRenderer({
       ))}
     </group>
   );
-}
+});
+
+StickRenderer.displayName = 'StickRenderer';

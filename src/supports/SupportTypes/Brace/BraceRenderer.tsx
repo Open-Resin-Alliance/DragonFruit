@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import type { Brace, Knot } from '../../types';
 import { useHighlight } from '../../interaction/useHighlight';
@@ -6,7 +6,6 @@ import { handleSupportClick, emitSupportModelPointerHover } from '../../interact
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import { usePicking } from '@/components/picking';
 import { setSelectedId } from '../../state';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
@@ -31,7 +30,7 @@ interface BraceRendererProps {
     selectedColor?: string;
 }
 
-export function BraceRenderer({
+export const BraceRenderer = React.memo(function BraceRenderer({
     brace,
     startKnot,
     endKnot,
@@ -55,6 +54,7 @@ export function BraceRenderer({
     const { pickRef, visuals } = useHighlight({
         id: brace.id,
         category: 'support',
+        enabled: !!isInteractable && !suppressHover,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -64,28 +64,6 @@ export function BraceRenderer({
     });
 
     const shaftColor = visuals.color;
-
-    const segmentRef = useRef<THREE.Group>(null);
-    const pickIdRef = useRef<number | null>(null);
-    const { register, unregister } = usePicking();
-
-    useEffect(() => {
-        if (!segmentRef.current) return;
-        segmentRef.current.userData.segmentId = segmentId;
-
-        pickIdRef.current = register({
-            category: 'segment',
-            objectId: segmentId,
-            object: segmentRef.current,
-        });
-
-        return () => {
-            if (pickIdRef.current !== null) {
-                unregister(pickIdRef.current);
-                pickIdRef.current = null;
-            }
-        };
-    }, [register, unregister, segmentId]);
 
     const startVec = useMemo(() => new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z), [startKnot.pos.x, startKnot.pos.y, startKnot.pos.z]);
     const endVec = useMemo(() => new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z), [endKnot.pos.x, endKnot.pos.y, endKnot.pos.z]);
@@ -145,7 +123,7 @@ export function BraceRenderer({
     return (
         <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             <group ref={pickRef as any}>
-                <group ref={segmentRef}>
+                <group>
                     {brace.curve?.type === 'bezier' ? (
                         <BezierRenderer
                             id={segmentId}
@@ -209,4 +187,6 @@ export function BraceRenderer({
             )}
         </group>
     );
-}
+});
+
+BraceRenderer.displayName = 'BraceRenderer';

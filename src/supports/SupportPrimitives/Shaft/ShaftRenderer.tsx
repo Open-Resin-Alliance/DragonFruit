@@ -49,6 +49,7 @@ export function ShaftRenderer({
     const groupRef = useRef<THREE.Group>(null);
 
     const { altActive: braceAltActive } = useBracePlacementState();
+    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
     
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
@@ -57,7 +58,7 @@ export function ShaftRenderer({
     // Register with picking system
     // Always register so branch placement can detect shaft hovers/clicks
     useEffect(() => {
-        if (!groupRef.current || !enablePicking) {
+        if (!groupRef.current || !enablePicking || !enableSegmentInteraction) {
             if (pickIdRef.current !== null) {
                 unregister(pickIdRef.current);
                 pickIdRef.current = null;
@@ -80,10 +81,10 @@ export function ShaftRenderer({
                 pickIdRef.current = null;
             }
         };
-    }, [register, unregister, id, enablePicking]);
+    }, [register, unregister, id, enablePicking, enableSegmentInteraction]);
 
     // Determine Hover State
-    const isPickingHovered = hit.category === 'segment' && hit.objectId === id;
+    const isPickingHovered = enableSegmentInteraction && hit.category === 'segment' && hit.objectId === id;
     const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
 
     // Vector math
@@ -113,17 +114,22 @@ export function ShaftRenderer({
             }
         }
 
-        // Emit global event for branch placement
-        window.dispatchEvent(new CustomEvent('shaft-click', {
-            detail: {
-                segmentId: id,
-                point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
-                intersection: e
-            }
-        }));
+        if (altDown || ctrlDown || isParentSelected) {
+            // Emit global event for branch placement and editable-segment clicks only.
+            window.dispatchEvent(new CustomEvent('shaft-click', {
+                detail: {
+                    segmentId: id,
+                    point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+                    intersection: e
+                }
+            }));
+        }
 
         // Ctrl is reserved for Support Brace placement and should not re-select segments.
         if (ctrlDown) return;
+
+        // When not in an editable context, let parent support handlers own the click.
+        if (!isParentSelected && !altDown) return;
 
         if (isParentSelected && onClick) {
             e.stopPropagation();
@@ -144,6 +150,8 @@ export function ShaftRenderer({
     
     // Handle pointer move for branch placement preview
     const handlePointerMove = (e: any) => {
+        if (!enableSegmentInteraction) return;
+
         // Emit global event for branch placement preview
         window.dispatchEvent(new CustomEvent('shaft-hover', {
             detail: {
@@ -160,6 +168,8 @@ export function ShaftRenderer({
 
     // Handle pointer leaving shaft - clear branch preview
     const handlePointerOut = () => {
+        if (!enableSegmentInteraction) return;
+
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
         }));
@@ -172,8 +182,8 @@ export function ShaftRenderer({
             quaternion={quaternion} 
             scale={[1, length, 1]}
             onClick={handleClick}
-            onPointerMove={handlePointerMove}
-            onPointerOut={handlePointerOut}
+            onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
+            onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
         >
             <mesh raycast={raycast}>
                 <cylinderGeometry args={[radiusEnd, radiusStart, 1, 32]} />

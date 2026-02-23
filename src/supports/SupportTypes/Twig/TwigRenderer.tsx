@@ -23,7 +23,7 @@ interface TwigRendererProps {
   selectedColor?: string;
 }
 
-export function TwigRenderer({
+export const TwigRenderer = React.memo(function TwigRenderer({
   twig,
   isSelected,
   selectedId,
@@ -38,6 +38,7 @@ export function TwigRenderer({
   const { pickRef, visuals } = useHighlight({
     id: twig.id,
     category: 'support',
+    enabled: !!isInteractable && !suppressHover,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -194,4 +195,6 @@ export function TwigRenderer({
       ))}
     </group>
   );
-}
+});
+
+TwigRenderer.displayName = 'TwigRenderer';

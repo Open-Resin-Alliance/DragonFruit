@@ -2,6 +2,9 @@
 
 import React from 'react';
 import { X } from 'lucide-react';
+import { getSnapshot as getSupportSnapshot } from '@/supports/state';
+import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getPickingDiagnosticsSnapshot } from '@/components/picking/pickingDiagnostics';
 
 type DiagnosticsModalProps = {
   isOpen: boolean;
@@ -25,6 +28,53 @@ type RuntimeStats = {
   totalJsHeapBytes: number | null;
   heapLimitBytes: number | null;
   webglMode: string;
+  supportStats: SupportDiagnosticsStats;
+};
+
+type SupportDiagnosticsStats = {
+  roots: number;
+  trunks: number;
+  branches: number;
+  leaves: number;
+  twigs: number;
+  sticks: number;
+  braces: number;
+  supportBraces: number;
+  knots: number;
+  segmentCount: number;
+  jointCount: number;
+  estimatedRenderablePrimitives: number;
+  pickingRegisteredTotal: number;
+  pickingRegisteredSupportRelated: number;
+  pickingVisibleObjects: number;
+  pickingCachedObjects: number;
+  pickingAvgMs: number;
+  pickingLastMs: number;
+  pickingSyncAvgMs: number;
+  pickingPicksPerSecond: number;
+};
+
+const EMPTY_SUPPORT_STATS: SupportDiagnosticsStats = {
+  roots: 0,
+  trunks: 0,
+  branches: 0,
+  leaves: 0,
+  twigs: 0,
+  sticks: 0,
+  braces: 0,
+  supportBraces: 0,
+  knots: 0,
+  segmentCount: 0,
+  jointCount: 0,
+  estimatedRenderablePrimitives: 0,
+  pickingRegisteredTotal: 0,
+  pickingRegisteredSupportRelated: 0,
+  pickingVisibleObjects: 0,
+  pickingCachedObjects: 0,
+  pickingAvgMs: 0,
+  pickingLastMs: 0,
+  pickingSyncAvgMs: 0,
+  pickingPicksPerSecond: 0,
 };
 
 const GRAPH_WINDOW_SECONDS = 120;
@@ -47,6 +97,79 @@ function formatBytes(bytes: number | null): string {
 function formatPercent(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return 'N/A';
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function computeSupportDiagnostics(): SupportDiagnosticsStats {
+  const supportState = getSupportSnapshot();
+  const supportBraceState = getSupportBraceSnapshot();
+  const picking = getPickingDiagnosticsSnapshot();
+
+  const trunks = Object.values(supportState.trunks);
+  const branches = Object.values(supportState.branches);
+  const twigs = Object.values(supportState.twigs);
+  const sticks = Object.values(supportState.sticks);
+  const braces = Object.values(supportState.braces);
+  const supportBraces = Object.values(supportBraceState.supportBraces);
+
+  const segmentCount =
+    trunks.reduce((sum, trunk) => sum + trunk.segments.length, 0)
+    + branches.reduce((sum, branch) => sum + branch.segments.length, 0)
+    + twigs.reduce((sum, twig) => sum + twig.segments.length, 0)
+    + sticks.reduce((sum, stick) => sum + stick.segments.length, 0)
+    + supportBraces.reduce((sum, supportBrace) => sum + supportBrace.segments.length, 0)
+    + braces.length;
+
+  const uniqueJointIds = new Set<string>();
+  const collectSegmentJoints = (segments: Array<{ topJoint?: { id: string } | null; bottomJoint?: { id: string } | null }>) => {
+    for (const segment of segments) {
+      if (segment.topJoint?.id) uniqueJointIds.add(segment.topJoint.id);
+      if (segment.bottomJoint?.id) uniqueJointIds.add(segment.bottomJoint.id);
+    }
+  };
+
+  trunks.forEach((trunk) => collectSegmentJoints(trunk.segments));
+  branches.forEach((branch) => collectSegmentJoints(branch.segments));
+  twigs.forEach((twig) => collectSegmentJoints(twig.segments));
+  sticks.forEach((stick) => collectSegmentJoints(stick.segments));
+  supportBraces.forEach((supportBrace) => collectSegmentJoints(supportBrace.segments));
+
+  const estimatedRenderablePrimitives =
+    segmentCount
+    + uniqueJointIds.size
+    + Object.keys(supportState.knots).length
+    + Object.keys(supportState.roots).length
+    + Object.keys(supportState.leaves).length
+    + Object.keys(supportState.braces).length;
+
+  const supportRelatedPickers =
+    picking.registrationsByCategory.support
+    + picking.registrationsByCategory.segment
+    + picking.registrationsByCategory.joint
+    + picking.registrationsByCategory.knot
+    + picking.registrationsByCategory.raft;
+
+  return {
+    roots: Object.keys(supportState.roots).length,
+    trunks: trunks.length,
+    branches: branches.length,
+    leaves: Object.keys(supportState.leaves).length,
+    twigs: twigs.length,
+    sticks: sticks.length,
+    braces: braces.length,
+    supportBraces: supportBraces.length,
+    knots: Object.keys(supportState.knots).length,
+    segmentCount,
+    jointCount: uniqueJointIds.size,
+    estimatedRenderablePrimitives,
+    pickingRegisteredTotal: picking.totalRegistrations,
+    pickingRegisteredSupportRelated: supportRelatedPickers,
+    pickingVisibleObjects: picking.visiblePickObjects,
+    pickingCachedObjects: picking.cachedPickObjects,
+    pickingAvgMs: picking.avgPickDurationMs,
+    pickingLastMs: picking.lastPickDurationMs,
+    pickingSyncAvgMs: picking.avgSyncDurationMs,
+    pickingPicksPerSecond: picking.picksPerSecond,
+  };
 }
 
 function Sparkline({
@@ -110,6 +233,7 @@ export function DiagnosticsModal({
     totalJsHeapBytes: null,
     heapLimitBytes: null,
     webglMode: 'Unknown',
+    supportStats: EMPTY_SUPPORT_STATS,
   });
 
   React.useEffect(() => {
@@ -166,6 +290,7 @@ export function DiagnosticsModal({
           totalJsHeapBytes: perfMemory?.totalJSHeapSize ?? null,
           heapLimitBytes: perfMemory?.jsHeapSizeLimit ?? null,
           webglMode,
+          supportStats: computeSupportDiagnostics(),
         });
       }
 
@@ -252,6 +377,18 @@ export function DiagnosticsModal({
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>CPU Usage (est.)</div>
               <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.cpuUsageEstimate.toFixed(0)}%</div>
             </div>
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Support Segments</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.supportStats.segmentCount.toLocaleString()}</div>
+            </div>
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Support Pickers</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingRegisteredSupportRelated.toLocaleString()}</div>
+            </div>
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Picking Avg</div>
+              <div className="text-xl font-semibold" style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingAvgMs.toFixed(3)} ms</div>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -294,6 +431,40 @@ export function DiagnosticsModal({
                 <div>Total JS Heap: <span style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.totalJsHeapBytes)}</span></div>
                 <div>JS Heap Limit: <span style={{ color: 'var(--text-strong)' }}>{formatBytes(stats.heapLimitBytes)}</span></div>
                 <div>User Agent: <span style={{ color: 'var(--text-strong)' }}>{navigator.userAgent}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-[12px] font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Support Stats</div>
+              <div className="space-y-1 text-[12px]" style={{ color: 'var(--text-muted)' }}>
+                <div>Trunks: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.trunks.toLocaleString()}</span></div>
+                <div>Branches: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.branches.toLocaleString()}</span></div>
+                <div>Leaves: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.leaves.toLocaleString()}</span></div>
+                <div>Twigs: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.twigs.toLocaleString()}</span></div>
+                <div>Sticks: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.sticks.toLocaleString()}</span></div>
+                <div>Braces: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.braces.toLocaleString()}</span></div>
+                <div>Support Braces: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.supportBraces.toLocaleString()}</span></div>
+                <div>Roots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.roots.toLocaleString()}</span></div>
+                <div>Knots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.knots.toLocaleString()}</span></div>
+                <div>Segments: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.segmentCount.toLocaleString()}</span></div>
+                <div>Joints: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.jointCount.toLocaleString()}</span></div>
+                <div>Estimated Render Primitives: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.estimatedRenderablePrimitives.toLocaleString()}</span></div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+              <div className="text-[12px] font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>GPU Picking Stats</div>
+              <div className="space-y-1 text-[12px]" style={{ color: 'var(--text-muted)' }}>
+                <div>Total Registered: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingRegisteredTotal.toLocaleString()}</span></div>
+                <div>Support Registered: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingRegisteredSupportRelated.toLocaleString()}</span></div>
+                <div>Visible Pick Objects: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingVisibleObjects.toLocaleString()}</span></div>
+                <div>Cached Pick Objects: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingCachedObjects.toLocaleString()}</span></div>
+                <div>Pick Avg: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingAvgMs.toFixed(3)} ms</span></div>
+                <div>Pick Last: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingLastMs.toFixed(3)} ms</span></div>
+                <div>Sync Cache Avg: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingSyncAvgMs.toFixed(3)} ms</span></div>
+                <div>Pick Rate: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.pickingPicksPerSecond.toFixed(1)} /s</span></div>
               </div>
             </div>
           </div>

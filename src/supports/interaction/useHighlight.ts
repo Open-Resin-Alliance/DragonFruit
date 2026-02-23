@@ -4,6 +4,7 @@ import { PickableCategory } from '@/components/picking';
 export interface HighlightOptions {
     id: string;
     category: PickableCategory;
+    enabled?: boolean;
     isSelected?: boolean;
     suppressHover?: boolean;
     externalHover?: boolean; // Legacy/External override
@@ -19,6 +20,7 @@ export interface HighlightOptions {
 export function useHighlight({
     id,
     category,
+    enabled = true,
     isSelected = false,
     suppressHover = false,
     externalHover = false,
@@ -30,7 +32,8 @@ export function useHighlight({
     // Register with picking system and track hover
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
         category,
-        objectId: id
+        objectId: id,
+        enabled,
     });
 
     // Determine effective hover state

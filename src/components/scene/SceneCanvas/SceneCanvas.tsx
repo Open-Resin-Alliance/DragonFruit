@@ -21,8 +21,8 @@ import type { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/exp
 import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
-import { SupportRenderer } from '@/supports/SupportRenderer';
 import { SupportBuilder } from '@/supports/rendering';
+import { SupportBatchedRenderer } from '@/supports/rendering/SupportBatchedRenderer';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
@@ -2674,16 +2674,17 @@ export function SceneCanvas({
                 />
               )}
 
-              {/* Render supports (New V2 System) */}
-              {/* Note: SupportRenderer renders supports from store. TODO: Filter by active model or show all? */}
-              <SupportRenderer
-                mode={mode}
-                ref={supportsRef}
-                hidePlateContactPrimitives={hidePlateContactPrimitives}
+              {/* Render supports */}
+              <SupportBatchedRenderer
                 clipLower={clipLower}
                 clipUpper={clipUpper}
                 activeModelId={visualActiveModelId ?? null}
                 hoverModelId={hoveredModelId}
+                onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
+                onModelPointerHover={(modelId) => {
+                  const nextModelId = modelId || null;
+                  setHoveredSupportPointerModelId((prev) => (prev === nextModelId ? prev : nextModelId));
+                }}
               />
 
               <IslandOverlay

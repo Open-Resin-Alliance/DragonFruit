@@ -19,7 +19,7 @@ interface LeafRendererProps {
     selectedColor?: string;
 }
 
-export function LeafRenderer({
+export const LeafRenderer = React.memo(function LeafRenderer({
     leaf,
     parentKnot,
     isSelected,
@@ -35,6 +35,7 @@ export function LeafRenderer({
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
         category: 'support',
+        enabled: !!isInteractable && !suppressHover,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -104,4 +105,6 @@ export function LeafRenderer({
             )}
         </group>
     );
-}
+});
+
+LeafRenderer.displayName = 'LeafRenderer';

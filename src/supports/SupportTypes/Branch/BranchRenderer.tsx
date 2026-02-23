@@ -25,7 +25,7 @@ interface BranchRendererProps {
   selectedColor?: string;
 }
 
-export function BranchRenderer({ 
+export const BranchRenderer = React.memo(function BranchRenderer({ 
   branch, 
   parentKnot, 
   isSelected, 
@@ -43,6 +43,7 @@ export function BranchRenderer({
   const { pickRef, visuals } = useHighlight({
     id: branch.id,
     category: 'support',
+    enabled: !!isInteractable && !suppressHover,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -201,4 +202,6 @@ export function BranchRenderer({
       {joints}
     </group>
   );
-}
+});
+
+BranchRenderer.displayName = 'BranchRenderer';

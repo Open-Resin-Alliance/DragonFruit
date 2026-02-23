@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { RENDER_TARGET, TIMING } from './constants';
 import { majorityVote, encodePickId } from './pickingUtils';
+import { reportPickingRenderSample } from './pickingDiagnostics';
 import type { PickableRegistration, PickingConfig } from './types';
 
 interface PickingRendererProps {
@@ -151,8 +152,6 @@ export function PickingRenderer({
   }, [getPickingMaterial]);
 
   const syncPickObjectTransforms = useCallback((sourceObject: THREE.Object3D, pickObject: THREE.Object3D) => {
-    sourceObject.updateMatrixWorld(true);
-
     const queue: Array<{ source: THREE.Object3D; pick: THREE.Object3D }> = [{ source: sourceObject, pick: pickObject }];
 
     while (queue.length > 0) {
@@ -211,11 +210,18 @@ export function PickingRenderer({
   // Perform the pick render
   const performPick = useCallback((ndcX: number, ndcY: number) => {
     if (!renderTargetRef.current || !camera) return;
+
+    const pickStartMs = performance.now();
+
+    // Ensure scene graph world matrices are current once per pick (instead of once per registration).
+    scene.updateMatrixWorld(false);
     
     const pickScene = pickSceneRef.current;
 
     // Sync registration cache (add/remove/recreate only when needed).
+    const syncStartMs = performance.now();
     syncPickSceneCache();
+    const syncDurationMs = Math.max(0, performance.now() - syncStartMs);
     
     // Clone camera for picking (adjusted to render only the area under the mouse)
     // We'll use a small viewport centered on the mouse position
@@ -251,6 +257,7 @@ export function PickingRenderer({
     pickCameraRef.current = pickCamera;
     
     // Sync cached transforms and dynamic visibility.
+    let visiblePickObjects = 0;
     for (const [pickId, registration] of registrations.entries()) {
       const cached = pickObjectCacheRef.current.get(pickId);
       if (!cached || !registration.object) continue;
@@ -260,6 +267,8 @@ export function PickingRenderer({
       const includeCategory = categoryAllowed && !(registration.category === 'gizmo' && !config.includeGizmo);
       cached.pickObject.visible = includeCategory;
       if (!includeCategory) continue;
+
+      visiblePickObjects += 1;
 
       syncPickObjectTransforms(registration.object, cached.pickObject);
     }
@@ -287,10 +296,18 @@ export function PickingRenderer({
       : majorityVote(pixelBufferRef.current, previousWinnerRef.current);
     
     previousWinnerRef.current = winnerId;
+
+    const pickDurationMs = Math.max(0, performance.now() - pickStartMs);
+    reportPickingRenderSample({
+      pickDurationMs,
+      syncDurationMs,
+      cachedPickObjects: pickObjectCacheRef.current.size,
+      visiblePickObjects,
+    });
     
     // Report result
     onPick(winnerId, ndcX, ndcY);
-  }, [camera, gl, registrations, config, onPick, syncPickObjectTransforms, syncPickSceneCache]);
+  }, [camera, gl, scene, registrations, config, onPick, syncPickObjectTransforms, syncPickSceneCache]);
   
   // Run picking on each frame (throttled)
   useFrame((_, delta) => {

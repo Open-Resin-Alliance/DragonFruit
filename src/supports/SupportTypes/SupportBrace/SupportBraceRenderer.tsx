@@ -29,7 +29,7 @@ interface SupportBraceRendererProps {
     selectedColor?: string;
 }
 
-export function SupportBraceRenderer({
+export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     supportBrace,
     root,
     hostKnot,
@@ -48,6 +48,7 @@ export function SupportBraceRenderer({
     const { pickRef, visuals } = useHighlight({
         id: supportBrace.id,
         category: 'support',
+        enabled: !!isInteractable && !suppressHover,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -181,4 +182,6 @@ export function SupportBraceRenderer({
             {joints}
         </group>
     );
-}
+});
+
+SupportBraceRenderer.displayName = 'SupportBraceRenderer';

@@ -28,11 +28,12 @@ interface TrunkRendererProps {
     selectedColor?: string;
 }
 
-export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
+export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
     // Use universal highlight hook
     const { pickRef, visuals } = useHighlight({
         id: trunk.id,
         category: 'support',
+        enabled: !!isInteractable && !suppressHover,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -216,4 +217,6 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
             {joints}
         </group>
     );
-}
+});
+
+TrunkRenderer.displayName = 'TrunkRenderer';

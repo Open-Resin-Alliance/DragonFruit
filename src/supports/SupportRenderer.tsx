@@ -113,17 +113,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [clipLower, clipUpper]);
 
     const resolveBaseColor = useMemo(() => {
-        const blend = (baseHex: string, tintHex: string, strength: number) => {
-            return new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
-        };
+        const baseHex = '#a3a3a3';
+        const hoverTintHex = '#ff8800';
+        const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.5).getStyle();
 
         return (modelId?: string) => {
-            const baseHex = '#a3a3a3';
             const isSelectedModelSupport = !!activeModelId && !!modelId && modelId === activeModelId;
             if (isSelectedModelSupport) return '#ff8800';
 
             const isHoveredModelSupport = !activeModelId && !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
-            if (isHoveredModelSupport) return blend(baseHex, '#ff8800', 0.5);
+            if (isHoveredModelSupport) return hoveredColor;
 
             return baseHex;
         };
@@ -185,7 +184,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         trunk={trunk}
                         root={root}
                         isSelected={effectiveSelected}
-                        selectedId={state.selectedId}
+                        selectedId={effectiveSelected ? state.selectedId : null}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(trunk.modelId)}
                         suppressHover={suppressHover}
@@ -218,7 +217,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         branch={branch}
                         parentKnot={knot}
                         isSelected={effectiveSelected}
-                        selectedId={state.selectedId}
+                        selectedId={effectiveSelected ? state.selectedId : null}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(branch.modelId)}
                         showKnots={showKnots}
@@ -272,7 +271,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         key={twig.id}
                         twig={twig}
                         isSelected={effectiveSelected}
-                        selectedId={state.selectedId}
+                        selectedId={effectiveSelected ? state.selectedId : null}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(twig.modelId)}
                         suppressHover={suppressHover}
@@ -298,7 +297,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         key={stick.id}
                         stick={stick}
                         isSelected={effectiveSelected}
-                        selectedId={state.selectedId}
+                        selectedId={effectiveSelected ? state.selectedId : null}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(stick.modelId)}
                         suppressHover={suppressHover}
@@ -364,7 +363,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         root={root}
                         hostKnot={hostKnot}
                         isSelected={effectiveSelected}
-                        selectedId={state.selectedId}
+                        selectedId={effectiveSelected ? state.selectedId : null}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(supportBrace.modelId)}
                         showKnot={showKnot}
