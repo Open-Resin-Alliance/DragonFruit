@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import * as THREE from 'three';
+import { eulerFromGlobalEuler } from '@/utils/rotation';
 
 const EPSILON = 1e-5;
 const PLATFORM_SNAP_CLEARANCE_MM = 0.001;
@@ -35,7 +36,7 @@ export interface UseModelTransformReturn {
 export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTransformReturn {
   const [mode, setMode] = useState<TransformMode>('select');
   const [position, setPositionState] = useState<THREE.Vector3>(initialPosition || new THREE.Vector3(0, 0, 0));
-  const [rotation, setRotationState] = useState<THREE.Euler>(new THREE.Euler(0, 0, 0, 'XYZ'));
+  const [rotation, setRotationState] = useState<THREE.Euler>(eulerFromGlobalEuler({ x: 0, y: 0, z: 0 }));
   const [scale, setScaleState] = useState<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
   const [autoSnapEnabled, setAutoSnapEnabled] = useState<boolean>(true); // Auto-snap enabled by default
 
@@ -53,7 +54,7 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
       if (approxEqual(prev.x, x) && approxEqual(prev.y, y) && approxEqual(prev.z, z)) {
         return prev;
       }
-      return new THREE.Euler(x, y, z, 'XYZ');
+      return eulerFromGlobalEuler({ x, y, z });
     });
   }, []);
 
@@ -71,7 +72,7 @@ export function useModelTransform(initialPosition?: THREE.Vector3): UseModelTran
   }, []);
 
   const resetRotation = useCallback(() => {
-    setRotationState(new THREE.Euler(0, 0, 0, 'XYZ'));
+    setRotationState(eulerFromGlobalEuler({ x: 0, y: 0, z: 0 }));
   }, []);
 
   const resetScale = useCallback(() => {

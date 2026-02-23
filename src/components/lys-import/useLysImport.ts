@@ -5,6 +5,7 @@ import { LysConverter } from './LysConverter';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { loadFromLychee } from '@/supports/state';
 import { computeLowestZ } from '@/utils/geometry';
+import { eulerFromGlobalEuler, quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 
 function generateImportId(): string {
     const maybeCrypto = (globalThis as any)?.crypto;
@@ -16,7 +17,11 @@ function generateImportId(): string {
 
 function normalizeLycheeRotation(rotation: { x?: number; y?: number; z?: number } | null | undefined) {
     const x = Number.isFinite(rotation?.x) ? (rotation?.x as number) : 0;
-    return { x, y: 0, z: 0 };
+    const y = Number.isFinite(rotation?.y) ? (rotation?.y as number) : 0;
+    // const z = Number.isFinite(rotation?.z) ? (rotation?.z as number) : 0;
+    // For now, ignore Z rotation from Lychee as we don't have a clear strategy for applying it to the supports
+    // We can consider adding it back in the future if we implement a more complete support transform that includes rotation.
+    return { x, y, z: 0 };
 }
 
 function applySupportZOffset(importData: any, deltaZ: number) {
@@ -298,18 +303,14 @@ export function useLysImport() {
                     const position = targetObj.position || { x: 0, y: 0, z: 0 };
                     const scale = targetObj.scale || { x: 1, y: 1, z: 1 };
                     const rot = normalizeLycheeRotation(targetObj.rotation);
-                    const deg2rad = Math.PI / 180;
+                    const objectQuaternion = quaternionFromGlobalEulerDegrees(rot);
 
                     const ghostGroup = new THREE.Group();
                     // Match Stage A transform policy used by LysConverter:
                     // apply Z + rotation + scale before support generation; world XY is deferred.
                     ghostGroup.position.set(0, 0, position.z);
                     ghostGroup.scale.set(scale.x, scale.y, scale.z);
-                    ghostGroup.rotation.set(
-                        (rot.x || 0) * deg2rad,
-                        (rot.y || 0) * deg2rad,
-                        (rot.z || 0) * deg2rad
-                    );
+                    ghostGroup.quaternion.copy(objectQuaternion);
 
                     ghostMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
                     const mesh = new THREE.Mesh(data.geometry, ghostMaterial);
@@ -327,7 +328,7 @@ export function useLysImport() {
                     const position = targetObj.position || { x: 0, y: 0, z: 0 };
                     const scale = targetObj.scale || { x: 1, y: 1, z: 1 };
                     const rot = normalizeLycheeRotation(targetObj.rotation);
-                    const deg2rad = Math.PI / 180;
+                    const objectQuaternion = quaternionFromGlobalEulerDegrees(rot);
 
                     data.geometry.computeBoundingBox();
                     const bbox = data.geometry.boundingBox;
@@ -335,12 +336,7 @@ export function useLysImport() {
                         const geomCenter = bbox.getCenter(new THREE.Vector3());
                         const rotationScale = new THREE.Matrix4().compose(
                             new THREE.Vector3(0, 0, 0),
-                            new THREE.Quaternion().setFromEuler(new THREE.Euler(
-                                (rot.x || 0) * deg2rad,
-                                (rot.y || 0) * deg2rad,
-                                (rot.z || 0) * deg2rad,
-                                'XYZ'
-                            )),
+                            objectQuaternion,
                             new THREE.Vector3(scale.x || 1, scale.y || 1, scale.z || 1)
                         );
                         const centerOffset = new THREE.Matrix4().makeTranslation(-geomCenter.x, -geomCenter.y, -geomCenter.z);
@@ -397,12 +393,11 @@ export function useLysImport() {
                     }
                     if (targetObj.rotation) {
                         const normalizedRotation = normalizeLycheeRotation(targetObj.rotation);
-                        const deg2rad = Math.PI / 180;
-                        lycheeTransform.rotation.set(
-                            normalizedRotation.x * deg2rad,
-                            normalizedRotation.y * deg2rad,
-                            normalizedRotation.z * deg2rad
-                        );
+                        lycheeTransform.rotation.copy(eulerFromGlobalEuler({
+                            x: normalizedRotation.x * Math.PI / 180,
+                            y: normalizedRotation.y * Math.PI / 180,
+                            z: normalizedRotation.z * Math.PI / 180,
+                        }));
                         console.log(`[useLysImport] Extracted Rotation (Deg): ${targetObj.rotation.x}, ${targetObj.rotation.y}, ${targetObj.rotation.z}`);
                         console.log(`[useLysImport] Applied Rotation (Deg): ${normalizedRotation.x}, ${normalizedRotation.y}, ${normalizedRotation.z}`);
                     }

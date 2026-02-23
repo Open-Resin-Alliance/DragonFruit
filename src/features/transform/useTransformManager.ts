@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { useModelTransform } from '@/hooks/useModelTransform';
 import { computeLowestZ, computeBoundsZ } from '@/utils/geometry';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 
 interface TransformManagerProps {
@@ -66,7 +67,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     const rotScaleMatrix = new THREE.Matrix4();
     rotScaleMatrix.compose(
       new THREE.Vector3(0, 0, 0),
-      new THREE.Quaternion().setFromEuler(currentT.rotation),
+      quaternionFromGlobalEuler(currentT.rotation),
       currentT.scale
     );
 
@@ -127,9 +128,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     const rotScaleMatrix = new THREE.Matrix4();
     rotScaleMatrix.compose(
       new THREE.Vector3(0, 0, 0),
-      new THREE.Quaternion().setFromEuler(
-        new THREE.Euler(transform.rotation.x, transform.rotation.y, transform.rotation.z)
-      ),
+      quaternionFromGlobalEuler(transform.rotation),
       new THREE.Vector3(transform.scale.x, transform.scale.y, transform.scale.z)
     );
 

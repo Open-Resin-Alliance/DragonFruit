@@ -19,6 +19,7 @@ import {
 import { clampMeshSmoothingBrushSizeMm, getMeshSmoothingSettings } from '@/features/mesh-smoothing/settings';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 export function StlMesh({
   geometry,
@@ -353,7 +354,7 @@ export function StlMesh({
     <group
       ref={meshRef}
       position={transform?.position || new THREE.Vector3(0, 0, 0)}
-      rotation={transform?.rotation || new THREE.Euler(0, 0, 0)}
+      quaternion={transform ? quaternionFromGlobalEuler(transform.rotation) : new THREE.Quaternion()}
       scale={transform?.scale || new THREE.Vector3(1, 1, 1)}
     >
       <mesh

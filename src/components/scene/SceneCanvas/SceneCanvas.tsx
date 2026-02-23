@@ -77,6 +77,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
@@ -2341,7 +2342,7 @@ export function SceneCanvas({
                           const center = model.geometry.center;
 
                           const matrix = new THREE.Matrix4();
-                          matrix.compose(t.position, new THREE.Quaternion().setFromEuler(t.rotation), t.scale);
+                          matrix.compose(t.position, quaternionFromGlobalEuler(t.rotation), t.scale);
                           const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
                           matrix.multiply(offsetMatrix);
                           return matrix;
@@ -2362,7 +2363,7 @@ export function SceneCanvas({
                     <group
                       key={`duplicate-preview-${index}`}
                       position={previewTransform.position}
-                      rotation={previewTransform.rotation}
+                      quaternion={quaternionFromGlobalEuler(previewTransform.rotation)}
                       scale={previewTransform.scale}
                       raycast={() => null}
                     >
@@ -2393,7 +2394,7 @@ export function SceneCanvas({
                     <group
                       key="duplicate-source-preview"
                       position={duplicateActivePreviewTransform.position}
-                      rotation={duplicateActivePreviewTransform.rotation}
+                      quaternion={quaternionFromGlobalEuler(duplicateActivePreviewTransform.rotation)}
                       scale={duplicateActivePreviewTransform.scale}
                       raycast={() => null}
                     >
@@ -2428,7 +2429,7 @@ export function SceneCanvas({
                       <group
                         key={`arrange-array-preview-${item.model.id}`}
                         position={item.transform.position}
-                        rotation={item.transform.rotation}
+                        quaternion={quaternionFromGlobalEuler(item.transform.rotation)}
                         scale={item.transform.scale}
                         raycast={() => null}
                       >

@@ -10,6 +10,7 @@ import { computeFootprint } from '../geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '../geometry/computeRaftOuterBoundary';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 interface FootprintBorderRendererProps {
   modelGeometry: GeometryWithBounds | null;
@@ -147,7 +148,7 @@ export default function FootprintBorderRenderer({
       const transformMatrix = new THREE.Matrix4();
       transformMatrix.compose(
         modelTransform.position,
-        new THREE.Quaternion().setFromEuler(modelTransform.rotation),
+        quaternionFromGlobalEuler(modelTransform.rotation),
         modelTransform.scale
       );
       const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);

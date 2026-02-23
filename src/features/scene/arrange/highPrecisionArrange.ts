@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { convexHull2d } from '@/supports/Rafts/Crenelated/geometry/convexHull2d';
 import type { ArrangeAnchorMode } from '@/components/controls/ArrangePanel';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 /**
  * High-Precision Arrange (2.5D SAT Nesting)
@@ -144,12 +145,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
 
     const matrix = new THREE.Matrix4().compose(
       new THREE.Vector3(0, 0, 0),
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(
-        t.rotation.x,
-        t.rotation.y,
-        rotationZ,
-        t.rotation.order,
-      )),
+      quaternionFromGlobalEuler({ x: t.rotation.x, y: t.rotation.y, z: rotationZ }),
       t.scale,
     );
 
