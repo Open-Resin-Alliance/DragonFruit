@@ -39,6 +39,12 @@ import {
   type CameraProjectionMode,
 } from '@/components/settings/cameraProjectionPreferences';
 import {
+  DEFAULT_CAMERA_FEEL_SETTINGS,
+  getSavedCameraFeelSettings,
+  saveCameraFeelSettings,
+  type CameraFeelPreset,
+} from '@/components/settings/cameraFeelPreferences';
+import {
   DEFAULT_WORKSPACE_CAMERA_SETTINGS,
   getSavedWorkspaceCameraSettings,
   saveWorkspaceCameraSettings,
@@ -159,6 +165,7 @@ export function SettingsModal({
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
   const [draftSelectionHighlightMode, setDraftSelectionHighlightMode] = useState(selectionHighlightMode);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
+  const [draftCameraFeelPreset, setDraftCameraFeelPreset] = useState<CameraFeelPreset>(() => getSavedCameraFeelSettings().preset);
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
   const [draftThemeColors, setDraftThemeColors] = useState<ThemeCustomColors>(getSavedThemeCustomColors());
@@ -183,6 +190,7 @@ export function SettingsModal({
     setDraftSelectedTintStrength(selectedTintStrength);
     setDraftSelectionHighlightMode(selectionHighlightMode);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
+    setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
     setDraftThemePreference(getSavedThemePreference());
     setDraftThemePreset(getSavedThemePreset());
     setDraftThemeColors(getSavedThemeCustomColors());
@@ -240,6 +248,7 @@ export function SettingsModal({
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
     setDraftSelectionHighlightMode('tint');
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
+    setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
     setDraftThemePreference('system');
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
@@ -271,6 +280,7 @@ export function SettingsModal({
     setDebugPrimitivesPanelVisibleEnabled(draftDebugPrimitivesPanelVisible);
     saveSpaceMouseSettings(draftSpaceMouseSettings);
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
+    saveCameraFeelSettings({ preset: draftCameraFeelPreset });
     saveWorkspaceCameraSettings({
       defaults: draftWorkspaceCameraDefaults,
       selectionHighlightDefaults: draftWorkspaceSelectionHighlightDefaults,
@@ -306,6 +316,7 @@ export function SettingsModal({
     draftDebugPrimitivesPanelVisible,
     draftSpaceMouseSettings,
     draftCameraProjectionMode,
+    draftCameraFeelPreset,
     draftWorkspaceCameraDefaults,
     draftWorkspaceSelectionHighlightDefaults,
     draftView3dSettings,
@@ -622,6 +633,8 @@ export function SettingsModal({
                 <CameraSettingsTab
                   cameraProjectionMode={draftCameraProjectionMode}
                   onCameraProjectionModeChange={setDraftCameraProjectionMode}
+                  cameraFeelPreset={draftCameraFeelPreset}
+                  onCameraFeelPresetChange={setDraftCameraFeelPreset}
                   selectionHighlightMode={draftSelectionHighlightMode}
                   onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                 />

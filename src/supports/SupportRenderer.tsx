@@ -30,6 +30,7 @@ import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactD
 
 interface SupportRendererProps {
     mode?: SupportMode;
+    navigationLodActive?: boolean;
     hidePlateContactPrimitives?: boolean;
     clipLower?: number | null;
     clipUpper?: number | null;

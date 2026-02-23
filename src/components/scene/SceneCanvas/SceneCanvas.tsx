@@ -70,6 +70,12 @@ import {
   subscribeToCameraProjectionSettings,
   type CameraProjectionMode,
 } from '@/components/settings/cameraProjectionPreferences';
+import {
+  DEFAULT_CAMERA_FEEL_SETTINGS,
+  getSavedCameraFeelSettings,
+  subscribeToCameraFeelSettings,
+  type CameraFeelPreset,
+} from '@/components/settings/cameraFeelPreferences';
 import { DEFAULT_VIEW3D_SETTINGS, type View3DSettings } from '@/components/settings/view3dPreferences';
 import {
   computeApproxModelWorldBounds,
@@ -847,6 +853,11 @@ export function SceneCanvas({
     () => getSavedCameraProjectionSettings().mode,
     () => DEFAULT_CAMERA_PROJECTION_SETTINGS.mode,
   );
+  const cameraFeelPreset = React.useSyncExternalStore(
+    subscribeToCameraFeelSettings,
+    () => getSavedCameraFeelSettings().preset,
+    () => DEFAULT_CAMERA_FEEL_SETTINGS.preset,
+  );
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -978,6 +989,12 @@ export function SceneCanvas({
   }, []);
 
   const cameraRef = React.useRef<THREE.Camera | null>(null);
+  const orbitControlsRef = React.useRef<{
+    target: THREE.Vector3;
+    rotateSpeed: number;
+    panSpeed: number;
+    zoomSpeed: number;
+  } | null>(null);
   const suppressNextCanvasClickRef = React.useRef(false);
   const marqueePointerIdRef = React.useRef<number | null>(null);
   const orbitInteractionActiveRef = React.useRef(false);
@@ -2139,14 +2156,104 @@ export function SceneCanvas({
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
 
+  const updateOrbitControlSpeeds = React.useCallback(() => {
+    const controls = orbitControlsRef.current;
+    const camera = cameraRef.current;
+    if (!controls || !camera) return;
+
+    const distanceToTarget = camera.position.distanceTo(controls.target);
+    const sceneScale = Math.max(
+      activeBuildVolumeSettings.widthMm,
+      activeBuildVolumeSettings.depthMm,
+      activeBuildVolumeSettings.maxZMm,
+      1,
+    );
+
+    const normalizedDistance = THREE.MathUtils.clamp(distanceToTarget / Math.max(1, sceneScale * 0.75), 0.35, 3.6);
+    const feelTuningByPreset: Record<CameraFeelPreset, {
+      accelerationExponent: number;
+      rotateBase: number;
+      panBase: number;
+      zoomBase: number;
+      rotateMin: number;
+      rotateMax: number;
+      panMin: number;
+      panMax: number;
+      zoomMin: number;
+      zoomMax: number;
+      responseLerp: number;
+    }> = {
+      precise: {
+        accelerationExponent: 0.5,
+        rotateBase: 0.72,
+        panBase: 0.82,
+        zoomBase: 0.82,
+        rotateMin: 0.45,
+        rotateMax: 1.45,
+        panMin: 0.45,
+        panMax: 1.9,
+        zoomMin: 0.5,
+        zoomMax: 2.0,
+        responseLerp: 0.14,
+      },
+      balanced: {
+        accelerationExponent: 0.42,
+        rotateBase: 0.85,
+        panBase: 1.0,
+        zoomBase: 0.95,
+        rotateMin: 0.6,
+        rotateMax: 1.9,
+        panMin: 0.65,
+        panMax: 2.4,
+        zoomMin: 0.65,
+        zoomMax: 2.6,
+        responseLerp: 0.2,
+      },
+      fast: {
+        accelerationExponent: 0.34,
+        rotateBase: 1.03,
+        panBase: 1.2,
+        zoomBase: 1.15,
+        rotateMin: 0.75,
+        rotateMax: 2.25,
+        panMin: 0.8,
+        panMax: 2.8,
+        zoomMin: 0.85,
+        zoomMax: 3.0,
+        responseLerp: 0.26,
+      },
+    };
+
+    const tuning = feelTuningByPreset[cameraFeelPreset] ?? feelTuningByPreset.balanced;
+    const acceleration = Math.pow(normalizedDistance, tuning.accelerationExponent);
+
+    const targetRotateSpeed = THREE.MathUtils.clamp(tuning.rotateBase * acceleration, tuning.rotateMin, tuning.rotateMax);
+    const targetPanSpeed = THREE.MathUtils.clamp(tuning.panBase * acceleration, tuning.panMin, tuning.panMax);
+    const targetZoomSpeed = THREE.MathUtils.clamp(tuning.zoomBase * acceleration, tuning.zoomMin, tuning.zoomMax);
+
+    controls.rotateSpeed = THREE.MathUtils.lerp(controls.rotateSpeed, targetRotateSpeed, tuning.responseLerp);
+    controls.panSpeed = THREE.MathUtils.lerp(controls.panSpeed, targetPanSpeed, tuning.responseLerp);
+    controls.zoomSpeed = THREE.MathUtils.lerp(controls.zoomSpeed, targetZoomSpeed, tuning.responseLerp);
+  }, [
+    activeBuildVolumeSettings.depthMm,
+    activeBuildVolumeSettings.maxZMm,
+    activeBuildVolumeSettings.widthMm,
+    cameraFeelPreset,
+  ]);
+
+  React.useEffect(() => {
+    updateOrbitControlSpeeds();
+  }, [updateOrbitControlSpeeds]);
+
   const handleOrbitChange = React.useCallback(() => {
     if (orbitInteractionActiveRef.current) {
       orbitInteractionMovedRef.current = true;
     }
+    updateOrbitControlSpeeds();
     updateCameraBelowBuildPlate();
     onCameraChange?.();
     window.dispatchEvent(new Event('picking-orbit-change'));
-  }, [onCameraChange, updateCameraBelowBuildPlate]);
+  }, [onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
 
   const handleOrbitStart = React.useCallback(() => {
     orbitInteractionActiveRef.current = true;
@@ -2911,8 +3018,15 @@ export function SceneCanvas({
           radius={60}
         />
         <OrbitControls
+          ref={orbitControlsRef as React.RefObject<any>}
           makeDefault
-          enableDamping={false}
+          enableDamping
+          dampingFactor={cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
+          rotateSpeed={cameraFeelPreset === 'precise' ? 0.72 : cameraFeelPreset === 'fast' ? 1.03 : 0.85}
+          panSpeed={cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.2 : 1.0}
+          zoomSpeed={cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.15 : 0.95}
+          screenSpacePanning
+          zoomToCursor
           enablePan
           enabled={
             models.length > 0
