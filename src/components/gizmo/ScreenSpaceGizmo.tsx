@@ -6,6 +6,29 @@ import * as THREE from 'three';
 import { TransformGizmo } from './TransformGizmo';
 import type { TransformGizmoProps } from './types';
 
+function toPositionArray(position: TransformGizmoProps['position']): [number, number, number] {
+  return Array.isArray(position)
+    ? position
+    : [position.x, position.y, position.z];
+}
+
+function computeScreenSpaceScale(
+  camera: THREE.Camera,
+  position: [number, number, number],
+  scaleFactor: number,
+): number {
+  const point = new THREE.Vector3(position[0], position[1], position[2]);
+  if ((camera as any).isOrthographicCamera) {
+    const ortho = camera as THREE.OrthographicCamera;
+    const worldHeight = (ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom);
+    return worldHeight * scaleFactor;
+  }
+
+  const perspective = camera as THREE.PerspectiveCamera;
+  const distance = perspective.position.distanceTo(point);
+  return distance * scaleFactor;
+}
+
 /**
  * ScreenSpaceGizmo - Wrapper that makes the gizmo maintain constant screen size
  * 
@@ -17,44 +40,61 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   scaleFactor?: number;
 }) {
   const { camera } = useThree();
-  const [scale, setScale] = useState(1);
-  const [livePosition, setLivePosition] = useState<[number, number, number]>([0, 0, 0]);
   const scaleFactor = props.scaleFactor ?? 0.04;
+
+  const resolveCurrentPosition = React.useCallback((): [number, number, number] => {
+    const meshPos = props.meshRef?.current?.position;
+    if (meshPos) {
+      return [meshPos.x, meshPos.y, meshPos.z];
+    }
+    return toPositionArray(props.position);
+  }, [props.meshRef, props.position]);
+
+  const initialPosition = React.useMemo(() => resolveCurrentPosition(), [resolveCurrentPosition]);
+  const [livePosition, setLivePosition] = useState<[number, number, number]>(initialPosition);
+  const livePositionRef = React.useRef<[number, number, number]>(initialPosition);
+
+  const [scale, setScale] = useState<number>(() => computeScreenSpaceScale(camera, initialPosition, scaleFactor));
+  const scaleRef = React.useRef<number>(computeScreenSpaceScale(camera, initialPosition, scaleFactor));
+
+  React.useLayoutEffect(() => {
+    const nextPosition = resolveCurrentPosition();
+    const prev = livePositionRef.current;
+    if (prev[0] !== nextPosition[0] || prev[1] !== nextPosition[1] || prev[2] !== nextPosition[2]) {
+      livePositionRef.current = nextPosition;
+      setLivePosition(nextPosition);
+    }
+
+    const nextScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor);
+    if (Math.abs(nextScale - scaleRef.current) > 1e-4) {
+      scaleRef.current = nextScale;
+      setScale(nextScale);
+    }
+  }, [camera, resolveCurrentPosition, scaleFactor]);
   
   // Update scale and position every frame based on mesh position
   useFrame(() => {
-    let position: THREE.Vector3;
-    
-    // Read position directly from mesh if available (bypasses React state)
-    if (props.meshRef?.current) {
-      position = props.meshRef.current.position;
-      // Only update state if position actually changed
-      if (position.x !== livePosition[0] || position.y !== livePosition[1] || position.z !== livePosition[2]) {
-        setLivePosition([position.x, position.y, position.z]);
-      }
-    } else if (Array.isArray(props.position)) {
-      position = new THREE.Vector3(...props.position);
-    } else {
-      position = props.position as THREE.Vector3;
-    }
-    
-    let newScale: number;
-    if ((camera as any).isOrthographicCamera) {
-      const ortho = camera as THREE.OrthographicCamera;
-      const worldHeight = (ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom);
-      newScale = worldHeight * scaleFactor;
-    } else {
-      const distance = camera.position.distanceTo(position);
-      newScale = distance * scaleFactor;
+    const nextPosition = resolveCurrentPosition();
+    const prevPosition = livePositionRef.current;
+    if (
+      prevPosition[0] !== nextPosition[0]
+      || prevPosition[1] !== nextPosition[1]
+      || prevPosition[2] !== nextPosition[2]
+    ) {
+      livePositionRef.current = nextPosition;
+      setLivePosition(nextPosition);
     }
 
-    if (Math.abs(newScale - scale) > 1e-4) {
+    const newScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor);
+    if (Math.abs(newScale - scaleRef.current) > 1e-4) {
+      scaleRef.current = newScale;
       setScale(newScale);
     }
   });
 
-  // Use live position from mesh if available, otherwise use props
-  const gizmoPosition = props.meshRef?.current ? livePosition : props.position;
+  // Always use live position so selection changes can paint at the correct
+  // location immediately (before first animation frame).
+  const gizmoPosition = livePosition;
 
   return <TransformGizmo {...props} position={gizmoPosition} size={scale} />;
 }

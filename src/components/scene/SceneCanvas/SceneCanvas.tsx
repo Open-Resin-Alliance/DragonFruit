@@ -2544,7 +2544,11 @@ export function SceneCanvas({
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && (
                 <UnifiedGizmo
                   meshRef={activeGroupRef as React.RefObject<THREE.Mesh>}
-                  position={[transform?.position.x ?? 0, transform?.position.y ?? 0, transform?.position.z ?? 0]}
+                  position={[
+                    activeModelTransform?.position.x ?? 0,
+                    activeModelTransform?.position.y ?? 0,
+                    activeModelTransform?.position.z ?? 0,
+                  ]}
                   rotation={[0, 0, 0]}
                   enableMove
                   enableRotate
