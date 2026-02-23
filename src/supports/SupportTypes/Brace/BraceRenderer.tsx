@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Brace, Knot } from '../../types';
 import { useHighlight } from '../../interaction/useHighlight';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
@@ -126,6 +126,14 @@ export function BraceRenderer({
         handleSupportClick(e, brace.id, !!isInteractable);
     };
 
+    const handlePointerMove = React.useCallback(() => {
+        emitSupportModelPointerHover(brace.modelId ?? null);
+    }, [brace.modelId]);
+
+    const handlePointerOut = React.useCallback(() => {
+        emitSupportModelPointerHover(null);
+    }, []);
+
     const straight = useMemo(() => {
         const dir = endVec.clone().sub(startVec);
         const len = dir.length();
@@ -135,7 +143,7 @@ export function BraceRenderer({
     if (straight.length < 0.001) return null;
 
     return (
-        <group onClick={handleClick}>
+        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             <group ref={pickRef as any}>
                 <group ref={segmentRef}>
                     {brace.curve?.type === 'bezier' ? (

@@ -120,8 +120,6 @@ export function StlMesh({
   // Note: This works because StlMesh is rendered inside PickingProvider
   const { hit } = usePicking(); // Import usePicking at top if not already used inside StlMesh
   const [isPointerHovered, setIsPointerHovered] = React.useState(false);
-  const hoverRafRef = React.useRef<number | null>(null);
-  const pendingHoverStateRef = React.useRef<boolean>(false);
   const { camera } = useThree();
 
   const smoothingScratchLocalPointRef = React.useRef(new THREE.Vector3());
@@ -208,22 +206,7 @@ export function StlMesh({
   }, [disableRaycast]);
 
   const schedulePointerHover = React.useCallback((next: boolean) => {
-    pendingHoverStateRef.current = next;
-    if (hoverRafRef.current != null) return;
-
-    hoverRafRef.current = requestAnimationFrame(() => {
-      hoverRafRef.current = null;
-      setIsPointerHovered((prev) => (prev === pendingHoverStateRef.current ? prev : pendingHoverStateRef.current));
-    });
-  }, []);
-
-  React.useEffect(() => {
-    return () => {
-      if (hoverRafRef.current != null) {
-        cancelAnimationFrame(hoverRafRef.current);
-        hoverRafRef.current = null;
-      }
-    };
+    setIsPointerHovered((prev) => (prev === next ? prev : next));
   }, []);
 
   // Use a group for proper gizmo positioning
@@ -231,7 +214,8 @@ export function StlMesh({
   const baseShaderType: MeshShaderType = shaderType === 'opaque_wire_mesh' ? 'soft_clay' : shaderType;
   const showOpaqueWireOverlay = shaderType === 'opaque_wire_mesh';
   const hasGpuModelHoverId = hit.category === 'model' && typeof hit.objectId === 'string' && hit.objectId.length > 0;
-  const isBlockingHoverCategory = hit.category === 'gizmo' || hit.category === 'support';
+  const isGizmoHoverCategory = hit.category === 'gizmo';
+  const isSupportLikeHoverCategory = hit.category === 'support' || hit.category === 'segment' || hit.category === 'joint' || hit.category === 'knot' || hit.category === 'raft';
   const shouldSuppressModelInteraction = !!suppressModelInteraction;
   const isExternallyHoveredModel = !shouldSuppressModelInteraction
     && !!externalHoveredModelId
@@ -239,7 +223,7 @@ export function StlMesh({
   const isHoveredModel = isExternallyHoveredModel || (!shouldSuppressModelInteraction && (
     hasGpuModelHoverId
       ? hit.objectId === modelId
-      : (!isBlockingHoverCategory && isPointerHovered)
+      : (!isGizmoHoverCategory && isPointerHovered)
   ));
   const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
@@ -391,29 +375,9 @@ export function StlMesh({
 
           console.log('[SceneCanvas] Mesh clicked, mode:', mode, 'id:', modelId);
 
-          // Model selection in prepare mode - dispatch custom event
+          // Prepare mode selection is handled on pointer-down for lower latency.
           if (mode === 'prepare') {
-            e.stopPropagation();
-            window.__modelClickedThisFrame = true;
-            window.requestAnimationFrame(() => {
-              window.__modelClickedThisFrame = false;
-            });
-            window.dispatchEvent(
-              new CustomEvent('model-clicked', {
-                detail: { modelId: modelId },
-              }),
-            );
-
-            // Update active model in parent state
-            if (onActiveModelChange) {
-              const native = (e as unknown as { nativeEvent?: MouseEvent }).nativeEvent;
-              const selectionMode = native?.ctrlKey || native?.metaKey
-                ? 'toggle'
-                : native?.shiftKey
-                  ? 'add'
-                  : 'single';
-              onActiveModelChange(modelId, { selectionMode });
-            }
+            return;
           }
 
           if (mode === 'support' && onActiveModelChange && !isActiveModel) {
@@ -433,7 +397,7 @@ export function StlMesh({
           }
         }}
         onPointerMove={(e) => {
-          if (shouldSuppressModelInteraction || isBlockingHoverCategory) {
+          if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
             schedulePointerHover(false);
             onModelHoverPointChange?.(null);
             onModelHoverModelChange?.(null);
@@ -443,16 +407,18 @@ export function StlMesh({
           const isTopMostIntersection = e.intersections[0]?.object === e.object;
           if (!isTopMostIntersection) {
             schedulePointerHover(false);
-            onModelHoverModelChange?.(null);
             return;
           }
 
           schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
           onModelHoverModelChange?.(modelId);
+          window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+            detail: { modelId },
+          }));
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
-            if (isBlockingHoverCategory) {
+            if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
               setMeshSmoothingHover(null, null);
             } else {
               const normal = e.face?.normal
@@ -485,7 +451,7 @@ export function StlMesh({
             }
 
             // Mute hover if hovering a gizmo OR support (using GPU picking for accuracy)
-            if (isBlockingHoverCategory) {
+            if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
               onSupportHover(null);
               return;
             }
@@ -493,10 +459,20 @@ export function StlMesh({
             onSupportHover(e);
           }
         }}
-        onPointerOut={() => {
+        onPointerOut={(e) => {
+          const stillOverAnyModel = Array.isArray(e.intersections)
+            && e.intersections.some((entry) => !!entry?.object?.userData?.modelId);
+
+          if (stillOverAnyModel) {
+            return;
+          }
+
           schedulePointerHover(false);
           onModelHoverPointChange?.(null);
           onModelHoverModelChange?.(null);
+          window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+            detail: { modelId: null },
+          }));
 
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {
             setMeshSmoothingHover(null, null);
@@ -507,6 +483,30 @@ export function StlMesh({
           }
         }}
         onPointerDown={(e) => {
+          if (!shouldSuppressModelInteraction && mode === 'prepare' && e.button === 0) {
+            e.stopPropagation();
+            window.__modelClickGuardUntil = performance.now() + 320;
+            window.__modelClickedThisFrame = true;
+            window.setTimeout(() => {
+              window.__modelClickedThisFrame = false;
+            }, 340);
+            window.dispatchEvent(
+              new CustomEvent('model-clicked', {
+                detail: { modelId: modelId },
+              }),
+            );
+
+            if (onActiveModelChange) {
+              const native = (e as unknown as { nativeEvent?: MouseEvent }).nativeEvent;
+              const selectionMode = native?.ctrlKey || native?.metaKey
+                ? 'toggle'
+                : native?.shiftKey
+                  ? 'add'
+                  : 'single';
+              onActiveModelChange(modelId, { selectionMode });
+            }
+          }
+
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel && e.button === 0) {
             const normal = e.face?.normal
               ? e.face.normal

@@ -126,6 +126,21 @@ export default function LineRaftRenderer({
 }: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const handleImmediateModelHover = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
+    };
+
+    window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    return () => {
+      window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    };
+  }, []);
+
+  const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
 
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'line') return null;
@@ -143,7 +158,7 @@ export default function LineRaftRenderer({
     const resolveTintStrength = (modelId: string) => {
       if (!colorized) return 0;
       if (activeModelId) return modelId === activeModelId ? 1 : 0;
-      if (hoverModelId) return modelId === hoverModelId ? 0.5 : 0;
+      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       return hoverized ? 0.5 : 1;
     };
 
@@ -330,7 +345,7 @@ export default function LineRaftRenderer({
     }
 
     return meshes;
-  }, [activeModelId, colorized, hoverModelId, hoverized, raft, supportState]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, raft, supportState]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;

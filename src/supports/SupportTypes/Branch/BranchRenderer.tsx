@@ -5,7 +5,7 @@ import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { setSelectedId } from '../../state';
@@ -55,6 +55,14 @@ export function BranchRenderer({
   const handleClick = (e: any) => {
     handleSupportClick(e, branch.id, !!isInteractable);
   };
+
+  const handlePointerMove = React.useCallback(() => {
+    emitSupportModelPointerHover(branch.modelId ?? null);
+  }, [branch.modelId]);
+
+  const handlePointerOut = React.useCallback(() => {
+    emitSupportModelPointerHover(null);
+  }, []);
 
   // Start point is the Knot position
   const startPos = parentKnot.pos 
@@ -169,7 +177,7 @@ export function BranchRenderer({
   }
 
   return (
-    <group onClick={handleClick}>
+    <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
       {/* Branch Picking Group - Contains Shafts, Cone */}
       <group ref={pickRef as any}>
         {shafts}

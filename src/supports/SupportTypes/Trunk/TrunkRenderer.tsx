@@ -8,7 +8,7 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { validateBezierConstraints } from '../../Curves/BezierUtils';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
@@ -51,6 +51,14 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
     const handleClick = (e: any) => {
         handleSupportClick(e, trunk.id, !!isInteractable);
     };
+
+    const handlePointerMove = React.useCallback(() => {
+        emitSupportModelPointerHover(trunk.modelId ?? null);
+    }, [trunk.modelId]);
+
+    const handlePointerOut = React.useCallback(() => {
+        emitSupportModelPointerHover(null);
+    }, []);
 
     // --- Roots parameters for segment start calculation ---
     const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
@@ -187,7 +195,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
     }
 
     return (
-        <group onClick={handleClick}>
+        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             {/* Trunk Picking Group - Contains Roots, Shafts, Cones */}
             <group ref={pickRef as any}>
                 {!hidePlateContactPrimitives && (

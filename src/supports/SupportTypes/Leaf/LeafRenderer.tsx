@@ -1,7 +1,7 @@
 import React from 'react';
 import { Leaf, Knot } from '../../types';
 import { ContactConeRenderer } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 
@@ -64,8 +64,16 @@ export function LeafRenderer({
         handleSupportClick(e, leaf.id, !!isInteractable);
     };
 
+    const handlePointerMove = React.useCallback(() => {
+        emitSupportModelPointerHover(leaf.modelId ?? null);
+    }, [leaf.modelId]);
+
+    const handlePointerOut = React.useCallback(() => {
+        emitSupportModelPointerHover(null);
+    }, []);
+
     return (
-        <group onClick={handleClick}>
+        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             <group ref={pickRef as any}>
                 {leaf.contactCone && (
                     <ContactConeRenderer

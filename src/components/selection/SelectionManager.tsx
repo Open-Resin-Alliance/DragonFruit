@@ -52,9 +52,13 @@ export function SelectionManager({
     const handleCanvasClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'CANVAS') {
+        const modelClickGuardUntil = window.__modelClickGuardUntil ?? 0;
+        if (performance.now() < modelClickGuardUntil) {
+          return;
+        }
+
         // If model-clicked event fired this frame, it was a direct mesh click - already handled
         if (window.__modelClickedThisFrame) {
-          window.__modelClickedThisFrame = false;
           return;
         }
 
@@ -85,6 +89,7 @@ export function SelectionManager({
 declare global {
   interface Window {
     __modelClickedThisFrame?: boolean;
+    __modelClickGuardUntil?: number;
     __gizmoDragEndedThisFrame?: boolean;
   }
 }

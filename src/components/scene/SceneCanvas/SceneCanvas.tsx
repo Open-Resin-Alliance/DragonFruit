@@ -1022,15 +1022,17 @@ export function SceneCanvas({
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
   const [hoveredMeshModelId, setHoveredMeshModelId] = React.useState<string | null>(null);
   const [hoveredRaftModelId, setHoveredRaftModelId] = React.useState<string | null>(null);
-  const hoveredSupportModelId = React.useMemo(() => {
+  const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
+  const hoveredSupportModelIdFromStore = React.useMemo(() => {
     const category = supportStateForBounds.hoveredCategory;
     if (category !== 'support' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
       return null;
     }
     return getModelIdForSupportEntityId(supportStateForBounds.hoveredId);
   }, [supportStateForBounds.hoveredCategory, supportStateForBounds.hoveredId]);
+  const hoveredSupportModelId = hoveredSupportPointerModelId ?? hoveredSupportModelIdFromStore;
   const hoveredModelId = React.useMemo(
-    () => hoveredRaftModelId ?? hoveredSupportModelId ?? hoveredMeshModelId,
+    () => hoveredMeshModelId ?? hoveredRaftModelId ?? hoveredSupportModelId,
     [hoveredMeshModelId, hoveredRaftModelId, hoveredSupportModelId],
   );
   const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
@@ -1043,8 +1045,15 @@ export function SceneCanvas({
   React.useEffect(() => {
     const handleSupportRaftModelPointerHover = (event: Event) => {
       const customEvent = event as CustomEvent<{ modelId?: string | null; category?: string | null }>;
-      if (customEvent.detail?.category !== 'raft') return;
-      setHoveredRaftModelId(customEvent.detail?.modelId ?? null);
+      const category = customEvent.detail?.category;
+      if (category === 'raft') {
+        setHoveredRaftModelId(customEvent.detail?.modelId ?? null);
+        return;
+      }
+
+      if (category === 'support') {
+        setHoveredSupportPointerModelId(customEvent.detail?.modelId ?? null);
+      }
     };
 
     window.addEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
@@ -1059,11 +1068,12 @@ export function SceneCanvas({
     if (!modelId || !onActiveModelChange) return;
 
     onActiveModelChange(modelId);
+    window.__modelClickGuardUntil = performance.now() + 320;
     window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId } }));
     window.__modelClickedThisFrame = true;
-    window.requestAnimationFrame(() => {
+    window.setTimeout(() => {
       window.__modelClickedThisFrame = false;
-    });
+    }, 340);
   }, [mode, onActiveModelChange]);
 
   React.useEffect(() => {
@@ -1927,8 +1937,13 @@ export function SceneCanvas({
       }
 
       // If model was just clicked, ignore this background click
+      const modelClickGuardUntil = window.__modelClickGuardUntil ?? 0;
+      if (performance.now() < modelClickGuardUntil) {
+        console.log('[Canvas] Ignoring click (model click guard active)');
+        return;
+      }
+
       if (window.__modelClickedThisFrame) {
-        window.__modelClickedThisFrame = false;
         console.log('[Canvas] Ignoring click (model clicked this frame)');
         return;
       }
@@ -2055,10 +2070,11 @@ export function SceneCanvas({
     }
 
     // Consume the click generated at pointer-up so single-click deselect logic doesn't race this selection.
+    window.__modelClickGuardUntil = performance.now() + 320;
     window.__modelClickedThisFrame = true;
-    window.requestAnimationFrame(() => {
+    window.setTimeout(() => {
       window.__modelClickedThisFrame = false;
-    });
+    }, 340);
 
     e.preventDefault();
     e.stopPropagation();

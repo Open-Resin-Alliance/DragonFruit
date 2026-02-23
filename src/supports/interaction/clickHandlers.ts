@@ -1,6 +1,15 @@
 import { selectSupport, selectJoint } from './SupportSelection';
 import { setSelectedId, getModelIdForSupportEntityId } from '../state';
 
+export function emitSupportModelPointerHover(modelId: string | null) {
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+        detail: {
+            modelId,
+            category: 'support',
+        },
+    }));
+}
+
 /**
  * Logic for handling clicks on Support objects (Trunks, Branches).
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.

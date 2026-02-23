@@ -34,6 +34,21 @@ export default function RaftRenderer({
 }: RaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const handleImmediateModelHover = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
+    };
+
+    window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    return () => {
+      window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    };
+  }, []);
+
+  const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
 
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'solid') return null;
@@ -51,7 +66,7 @@ export default function RaftRenderer({
     const resolveTintStrength = (modelId: string) => {
       if (!colorized) return 0;
       if (activeModelId) return modelId === activeModelId ? 1 : 0;
-      if (hoverModelId) return modelId === hoverModelId ? 0.5 : 0;
+      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       return hoverized ? 0.5 : 1;
     };
 
@@ -104,7 +119,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [activeModelId, colorized, hoverModelId, hoverized, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;

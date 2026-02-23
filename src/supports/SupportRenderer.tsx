@@ -48,6 +48,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const isInteractable = mode === 'support';
     const suppressHover = isJointCreationActive || !isInteractable || braceAltActive;
+    const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
+
+    useEffect(() => {
+        const handleImmediateModelHover = (event: Event) => {
+            const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+            setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
+        };
+
+        window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+        return () => {
+            window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+        };
+    }, []);
+
+    const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
 
     useSupportHistoryHandlers();
 
@@ -107,12 +122,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const isSelectedModelSupport = !!activeModelId && !!modelId && modelId === activeModelId;
             if (isSelectedModelSupport) return '#ff8800';
 
-            const isHoveredModelSupport = !activeModelId && !!hoverModelId && !!modelId && modelId === hoverModelId;
+            const isHoveredModelSupport = !activeModelId && !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
             if (isHoveredModelSupport) return blend(baseHex, '#ff8800', 0.5);
 
             return baseHex;
         };
-    }, [activeModelId, hoverModelId]);
+    }, [activeModelId, effectiveHoverModelId]);
 
     useEffect(() => {
         const root = groupRef.current;

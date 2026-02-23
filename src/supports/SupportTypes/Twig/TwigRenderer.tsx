@@ -6,7 +6,7 @@ import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk/ContactDiskRenderer';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 
@@ -49,6 +49,14 @@ export function TwigRenderer({
   const handleClick = (e: unknown) => {
     handleSupportClick(e, twig.id, !!isInteractable);
   };
+
+  const handlePointerMove = React.useCallback(() => {
+    emitSupportModelPointerHover(twig.modelId ?? null);
+  }, [twig.modelId]);
+
+  const handlePointerOut = React.useCallback(() => {
+    emitSupportModelPointerHover(null);
+  }, []);
 
   const shafts: React.ReactNode[] = [];
 
@@ -165,7 +173,7 @@ export function TwigRenderer({
   );
 
   return (
-    <group onClick={handleClick}>
+    <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
       <group ref={pickRef as React.Ref<THREE.Group>}>
         {shafts}
         {diskA}

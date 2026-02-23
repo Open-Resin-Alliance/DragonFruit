@@ -5,7 +5,7 @@ import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 
@@ -48,6 +48,14 @@ export function StickRenderer({
   const handleClick = (e: any) => {
     handleSupportClick(e, stick.id, !!isInteractable);
   };
+
+  const handlePointerMove = React.useCallback(() => {
+    emitSupportModelPointerHover(stick.modelId ?? null);
+  }, [stick.modelId]);
+
+  const handlePointerOut = React.useCallback(() => {
+    emitSupportModelPointerHover(null);
+  }, []);
 
   const shafts: React.ReactNode[] = [];
 
@@ -157,7 +165,7 @@ export function StickRenderer({
   );
 
   return (
-    <group onClick={handleClick}>
+    <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
       <group ref={pickRef as any}>
         {shafts}
         {coneA}

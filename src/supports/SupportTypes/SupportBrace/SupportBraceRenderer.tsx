@@ -4,7 +4,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { Knot, Roots } from '../../types';
 import { setSelectedId } from '../../state';
 import { useHighlight } from '../../interaction/useHighlight';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
@@ -59,6 +59,14 @@ export function SupportBraceRenderer({
     const handleClick = (e: ThreeEvent<MouseEvent>) => {
         handleSupportClick(e, supportBrace.id, !!isInteractable);
     };
+
+    const handlePointerMove = React.useCallback(() => {
+        emitSupportModelPointerHover(supportBrace.modelId ?? null);
+    }, [supportBrace.modelId]);
+
+    const handlePointerOut = React.useCallback(() => {
+        emitSupportModelPointerHover(null);
+    }, []);
 
     const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
     const startZ = root.diskHeight + root.coneHeight;
@@ -145,7 +153,7 @@ export function SupportBraceRenderer({
     const shaftDiameter = supportBrace.segments[0]?.diameter ?? supportBrace.profile.bodyDiameterMm;
 
     return (
-        <group onClick={handleClick}>
+        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             {!hidePlateContactPrimitives && (
                 <RootsRenderer
                     root={root}
