@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 type TransformLike = {
   position: THREE.Vector3;
@@ -113,7 +114,7 @@ export function computeApproxModelWorldBounds(
   centerOffsetScratch.set(-geometryData.center.x, -geometryData.center.y, -geometryData.center.z);
   centeredBoxScratch.translate(centerOffsetScratch);
 
-  matrixScratch.compose(transform.position, quaternionScratch.setFromEuler(transform.rotation), transform.scale);
+  matrixScratch.compose(transform.position, quaternionScratch.copy(quaternionFromGlobalEuler(transform.rotation)), transform.scale);
   target.copy(centeredBoxScratch).applyMatrix4(matrixScratch);
   return target;
 }
@@ -136,7 +137,7 @@ export function computePreciseModelWorldBounds(
     return target;
   }
 
-  matrixScratch.compose(transform.position, quaternionScratch.setFromEuler(transform.rotation), transform.scale);
+  matrixScratch.compose(transform.position, quaternionScratch.copy(quaternionFromGlobalEuler(transform.rotation)), transform.scale);
   const e = matrixScratch.elements;
   const points = cacheEntry.centeredPositions;
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 type GeometryLike = Pick<GeometryWithBounds, 'geometry' | 'center'>;
 
@@ -94,7 +95,7 @@ export function computeProjectedFootprintSize(
 
   matrixScratch.compose(
     new THREE.Vector3(0, 0, 0),
-    quaternionScratch.setFromEuler(rotation),
+    quaternionScratch.copy(quaternionFromGlobalEuler(rotation)),
     scale,
   );
   const e = matrixScratch.elements;

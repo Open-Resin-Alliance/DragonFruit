@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { runIslandScan, runScanlineScan, type ScanResults } from './ScanOrchestrator';
 import { computeIslandMarkers, type IslandMarker } from './islandOverlayLogic';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 interface TransformState {
   position: THREE.Vector3;
@@ -74,9 +75,7 @@ export function useIslandManager({ geom, transform, layerHeightMm }: IslandManag
 
     transformedGeom.translate(-centerOffset.x, -centerOffset.y, -centerOffset.z);
 
-    const quaternion = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(transform.rotation.x, transform.rotation.y, transform.rotation.z)
-    );
+    const quaternion = quaternionFromGlobalEuler(transform.rotation);
     const matrix = new THREE.Matrix4().compose(
       new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z),
       quaternion,
