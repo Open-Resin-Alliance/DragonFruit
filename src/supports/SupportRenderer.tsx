@@ -39,6 +39,14 @@ interface SupportRendererProps {
     hoverModelId?: string | null;
 }
 
+interface SupportShaftSet {
+    supportId: string;
+    modelId?: string;
+    shafts: InstancedShaft[];
+}
+
+const BATCHED_SHAFT_RADIAL_SEGMENTS = 12;
+
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
@@ -142,50 +150,60 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
     }, [activeModelId, effectiveHoverModelId]);
 
-    const sceneBatchedBraceShaftGroups = useMemo(() => {
-        const grouped = new Map<string, InstancedShaft[]>();
+    const selectedTrunkIds = useMemo(() => {
+        const selected = new Set<string>();
+        const selectedId = state.selectedId;
+        if (!selectedId) return selected;
 
-        for (const brace of Object.values(state.braces)) {
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
-            if (!startKnot || !endKnot) continue;
-
-            const isBraceSelected = state.selectedId === brace.id;
-            const isSegmentSelected = state.selectedId === `braceSegment:${brace.id}`;
-            const isEndpointSelected = state.selectedId === startKnot.id || state.selectedId === endKnot.id;
-            const effectiveSelected = isBraceSelected || isSegmentSelected || isEndpointSelected;
-
-            const isBraceHovered = (state.hoveredCategory === 'support' && state.hoveredId === brace.id)
-                || sceneHoveredSupportId === brace.id;
-            const isBezierBrace = brace.curve?.type === 'bezier';
-
-            if (effectiveSelected || isBezierBrace) continue;
-
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(brace.modelId);
-            const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
-
-            const shaftsForColor = grouped.get(color);
-            const shaft: InstancedShaft = {
-                id: `braceSegment:${brace.id}`,
-                start: startKnot.pos,
-                end: endKnot.pos,
-                diameter,
-                supportId: brace.id,
-                modelId: brace.modelId,
-            };
-
-            if (shaftsForColor) {
-                shaftsForColor.push(shaft);
-            } else {
-                grouped.set(color, [shaft]);
-            }
+        for (const trunk of Object.values(state.trunks)) {
+            const isTrunkSelected = selectedId === trunk.id;
+            const isChildSelected = trunk.segments.some((segment) =>
+                segment.id === selectedId
+                || segment.topJoint?.id === selectedId
+                || segment.bottomJoint?.id === selectedId,
+            );
+            if (isTrunkSelected || isChildSelected) selected.add(trunk.id);
         }
 
-        return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.braces, state.knots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor, sceneHoveredSupportId]);
+        return selected;
+    }, [state.trunks, state.selectedId]);
 
-    const sceneBatchedTrunkShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { color: string; hovered: boolean; shafts: InstancedShaft[] }>();
+    const selectedBranchIds = useMemo(() => {
+        const selected = new Set<string>();
+        const selectedId = state.selectedId;
+        if (!selectedId) return selected;
+
+        for (const branch of Object.values(state.branches)) {
+            const isBranchSelected = selectedId === branch.id;
+            const isKnotSelected = branch.parentKnotId === selectedId;
+            const isChildSelected = branch.segments.some((segment) =>
+                segment.id === selectedId
+                || segment.topJoint?.id === selectedId
+                || segment.bottomJoint?.id === selectedId,
+            );
+            if (isBranchSelected || isKnotSelected || isChildSelected) selected.add(branch.id);
+        }
+
+        return selected;
+    }, [state.branches, state.selectedId]);
+
+    const selectedBraceIds = useMemo(() => {
+        const selected = new Set<string>();
+        const selectedId = state.selectedId;
+        if (!selectedId) return selected;
+
+        for (const brace of Object.values(state.braces)) {
+            const isBraceSelected = selectedId === brace.id;
+            const isSegmentSelected = selectedId === `braceSegment:${brace.id}`;
+            const isEndpointSelected = selectedId === brace.startKnotId || selectedId === brace.endKnotId;
+            if (isBraceSelected || isSegmentSelected || isEndpointSelected) selected.add(brace.id);
+        }
+
+        return selected;
+    }, [state.braces, state.selectedId]);
+
+    const trunkShaftsBySupport = useMemo(() => {
+        const result = new Map<string, SupportShaftSet>();
 
         const rootsSettings = settings.roots;
         const baseFlare = settings.baseFlare;
@@ -195,21 +213,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const root = state.roots[trunk.rootId];
             if (!root) continue;
 
-            const isTrunkSelected = state.selectedId === trunk.id;
-            const isChildSelected = trunk.segments.some((segment) =>
-                segment.id === state.selectedId
-                || segment.topJoint?.id === state.selectedId
-                || segment.bottomJoint?.id === state.selectedId,
-            );
-            const effectiveSelected = isTrunkSelected || isChildSelected;
-            const isTrunkHovered = (state.hoveredCategory === 'support' && state.hoveredId === trunk.id)
-                || sceneHoveredSupportId === trunk.id;
-
-            if (effectiveSelected) continue;
-
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(trunk.modelId);
-            const groupKey = `${color}|${isTrunkHovered ? 'hover' : 'idle'}`;
-            const shaftsForColor = grouped.get(groupKey)?.shafts ?? [];
+            const shafts: InstancedShaft[] = [];
 
             const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
             const diskHeight = rootsSettings.diskHeightMm;
@@ -238,7 +242,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
                 }
 
-                shaftsForColor.push({
+                shafts.push({
                     id: segment.id,
                     start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
                     end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
@@ -250,40 +254,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 currentStart = endPoint;
             }
 
-            if (shaftsForColor.length > 0) {
-                grouped.set(groupKey, {
-                    color,
-                    hovered: isTrunkHovered,
-                    shafts: shaftsForColor,
+            if (shafts.length > 0) {
+                result.set(trunk.id, {
+                    supportId: trunk.id,
+                    modelId: trunk.modelId,
+                    shafts,
                 });
             }
         }
 
-        return Array.from(grouped.values());
-    }, [state.trunks, state.roots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor, settings.baseFlare, settings.roots, sceneHoveredSupportId]);
+        return result;
+    }, [state.trunks, state.roots, settings.baseFlare, settings.roots]);
 
-    const sceneBatchedBranchShaftGroups = useMemo(() => {
-        const grouped = new Map<string, InstancedShaft[]>();
+    const branchShaftsBySupport = useMemo(() => {
+        const result = new Map<string, SupportShaftSet>();
 
         for (const branch of Object.values(state.branches)) {
             const parentKnot = state.knots[branch.parentKnotId];
             if (!parentKnot) continue;
 
-            const isBranchSelected = state.selectedId === branch.id;
-            const isKnotSelected = parentKnot.id === state.selectedId;
-            const isChildSelected = branch.segments.some((segment) =>
-                segment.id === state.selectedId
-                || segment.topJoint?.id === state.selectedId
-                || segment.bottomJoint?.id === state.selectedId,
-            );
-            const effectiveSelected = isBranchSelected || isKnotSelected || isChildSelected;
-            const isBranchHovered = (state.hoveredCategory === 'support' && state.hoveredId === branch.id)
-                || sceneHoveredSupportId === branch.id;
-
-            if (effectiveSelected) continue;
-
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(branch.modelId);
-            const shaftsForColor = grouped.get(color) ?? [];
+            const shafts: InstancedShaft[] = [];
             let currentStart = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
 
             for (const segment of branch.segments) {
@@ -304,7 +294,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
                 }
 
-                shaftsForColor.push({
+                shafts.push({
                     id: segment.id,
                     start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
                     end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
@@ -316,13 +306,132 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 currentStart = endPoint;
             }
 
+            if (shafts.length > 0) {
+                result.set(branch.id, {
+                    supportId: branch.id,
+                    modelId: branch.modelId,
+                    shafts,
+                });
+            }
+        }
+
+        return result;
+    }, [state.branches, state.knots]);
+
+    const braceShaftsBySupport = useMemo(() => {
+        const result = new Map<string, SupportShaftSet>();
+
+        for (const brace of Object.values(state.braces)) {
+            if (brace.curve?.type === 'bezier') continue;
+
+            const startKnot = state.knots[brace.startKnotId];
+            const endKnot = state.knots[brace.endKnotId];
+            if (!startKnot || !endKnot) continue;
+
+            const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
+            result.set(brace.id, {
+                supportId: brace.id,
+                modelId: brace.modelId,
+                shafts: [{
+                    id: `braceSegment:${brace.id}`,
+                    start: startKnot.pos,
+                    end: endKnot.pos,
+                    diameter,
+                    supportId: brace.id,
+                    modelId: brace.modelId,
+                }],
+            });
+        }
+
+        return result;
+    }, [state.braces, state.knots]);
+
+    const sceneBatchedBraceShaftGroups = useMemo(() => {
+        const grouped = new Map<string, InstancedShaft[]>();
+
+        for (const brace of Object.values(state.braces)) {
+            const shaftSet = braceShaftsBySupport.get(brace.id);
+            if (!shaftSet) continue;
+
+            if (selectedBraceIds.has(brace.id)) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+
+            const shaftsForColor = grouped.get(color);
+            if (shaftsForColor) {
+                shaftsForColor.push(...shaftSet.shafts);
+            } else {
+                grouped.set(color, [...shaftSet.shafts]);
+            }
+        }
+
+        return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
+    }, [state.braces, dimNonSelected, resolveBaseColor, braceShaftsBySupport, selectedBraceIds]);
+
+    const sceneBatchedTrunkShaftGroups = useMemo(() => {
+        const grouped = new Map<string, InstancedShaft[]>();
+
+        for (const trunk of Object.values(state.trunks)) {
+            const shaftSet = trunkShaftsBySupport.get(trunk.id);
+            if (!shaftSet) continue;
+
+            if (selectedTrunkIds.has(trunk.id)) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const shaftsForColor = grouped.get(color) ?? [];
+            shaftsForColor.push(...shaftSet.shafts);
+
+            if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
+        }
+
+        return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
+    }, [state.trunks, dimNonSelected, resolveBaseColor, trunkShaftsBySupport, selectedTrunkIds]);
+
+    const sceneBatchedBranchShaftGroups = useMemo(() => {
+        const grouped = new Map<string, InstancedShaft[]>();
+
+        for (const branch of Object.values(state.branches)) {
+            const shaftSet = branchShaftsBySupport.get(branch.id);
+            if (!shaftSet) continue;
+
+            if (selectedBranchIds.has(branch.id)) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const shaftsForColor = grouped.get(color) ?? [];
+            shaftsForColor.push(...shaftSet.shafts);
+
             if (shaftsForColor.length > 0) {
                 grouped.set(color, shaftsForColor);
             }
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.branches, state.knots, state.selectedId, state.hoveredCategory, state.hoveredId, dimNonSelected, resolveBaseColor, sceneHoveredSupportId]);
+    }, [state.branches, dimNonSelected, resolveBaseColor, branchShaftsBySupport, selectedBranchIds]);
+
+    const hoveredSupportShaftSet = useMemo(() => {
+        const hoveredSupportId = sceneHoveredSupportId ?? (state.hoveredCategory === 'support' ? state.hoveredId : null);
+        if (!hoveredSupportId) return null;
+
+        const trunkSet = trunkShaftsBySupport.get(hoveredSupportId);
+        if (trunkSet) return trunkSet;
+
+        const branchSet = branchShaftsBySupport.get(hoveredSupportId);
+        if (branchSet) return branchSet;
+
+        const braceSet = braceShaftsBySupport.get(hoveredSupportId);
+        if (braceSet) return braceSet;
+
+        return null;
+    }, [sceneHoveredSupportId, state.hoveredCategory, state.hoveredId, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport]);
+
+    const hoveredSupportOverlayShafts = useMemo(() => {
+        if (!hoveredSupportShaftSet) return [] as InstancedShaft[];
+
+        return hoveredSupportShaftSet.shafts.map((shaft) => ({
+            ...shaft,
+            diameter: shaft.diameter * 1.02,
+        }));
+    }, [hoveredSupportShaftSet]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
         if (!shaft.supportId) return;
@@ -391,16 +500,29 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Trunks */}
             {sceneBatchedTrunkShaftGroups.map((group) => (
                 <InstancedShaftGroup
-                    key={`scene-trunk-batch:${group.color}:${group.hovered ? 'hover' : 'idle'}:${group.shafts.length}`}
+                    key={`scene-trunk-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
-                    emissive={group.hovered ? '#ffffff' : '#000000'}
-                    emissiveIntensity={group.hovered ? 0.3 : 0}
+                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
                 />
             ))}
+
+            {hoveredSupportOverlayShafts.length > 0 && hoveredSupportShaftSet && (
+                <InstancedShaftGroup
+                    key={`scene-hover-overlay:${hoveredSupportShaftSet.supportId}:${hoveredSupportOverlayShafts.length}`}
+                    shafts={hoveredSupportOverlayShafts}
+                    color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportShaftSet.modelId)}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    onShaftClick={handleSceneBatchedShaftClick}
+                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
+                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                />
+            )}
 
             {Object.values(state.trunks).map(trunk => {
                 const root = state.roots[trunk.rootId];
@@ -442,6 +564,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-branch-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
+                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
@@ -569,6 +692,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-brace-batch:${group.color}:${group.shafts.length}`}
                     shafts={group.shafts}
                     color={group.color}
+                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
                     onShaftClick={handleSceneBatchedShaftClick}
                     onShaftPointerMove={handleSceneBatchedShaftPointerMove}
                     onShaftPointerOut={handleSceneBatchedShaftPointerOut}
