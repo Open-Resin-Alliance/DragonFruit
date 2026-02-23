@@ -7,6 +7,7 @@ import { runIslandScan, type ScanResults, type ScanParams } from './steps/voxeli
 import { type BasinFillSimulator } from './steps/expansion/BasinFillSimulator'; // Type only here
 import { BasinFillProxy } from './steps/expansion/BasinFillProxy';
 import { MeshClassifier, type MeshClassificationResult, type ClassificationOutput } from './steps/Step5_MeshClassification';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 export type StepStatus = 'pending' | 'running' | 'complete' | 'verified';
 
@@ -107,9 +108,7 @@ export function useIslandVolumeAnalysis(
         transformedGeom.translate(-centerOffset.x, -centerOffset.y, -centerOffset.z);
 
         // Apply World Transform (Excluding X/Y translation, as the visualizer handles that via group position)
-        const quaternion = new THREE.Quaternion().setFromEuler(
-            new THREE.Euler(transform.rotation.x, transform.rotation.y, transform.rotation.z)
-        );
+        const quaternion = quaternionFromGlobalEuler(transform.rotation);
         const matrix = new THREE.Matrix4().compose(
             new THREE.Vector3(0, 0, transform.position.z), // Keep Z for lift, but zero X/Y
             quaternion,

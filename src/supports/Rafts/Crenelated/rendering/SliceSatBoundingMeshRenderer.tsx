@@ -7,6 +7,7 @@ import { useSyncExternalStore } from 'react';
 import { getRaftSettings, subscribeToRaftStore } from '../RaftState';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { ModelTransform } from '@/hooks/useModelTransform';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 interface SliceSatBoundingMeshRendererProps {
   modelGeometry: GeometryWithBounds | null;
@@ -820,7 +821,7 @@ export default function SliceSatBoundingMeshRenderer({
     const transformMatrix = new THREE.Matrix4();
     transformMatrix.compose(
       modelTransform.position,
-      new THREE.Quaternion().setFromEuler(modelTransform.rotation),
+      quaternionFromGlobalEuler(modelTransform.rotation),
       modelTransform.scale,
     );
     transformMatrix.multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
@@ -1024,7 +1025,7 @@ export default function SliceSatBoundingMeshRenderer({
     return (
       <group
         position={modelTransform.position}
-        rotation={modelTransform.rotation}
+        quaternion={quaternionFromGlobalEuler(modelTransform.rotation)}
         scale={modelTransform.scale}
         renderOrder={7}
       >
