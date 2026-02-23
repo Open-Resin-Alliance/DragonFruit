@@ -1512,7 +1512,7 @@ export function setHoveredId(id: string | null) {
     notify();
 }
 
-export function setHoveredCategory(category: 'model' | 'support' | 'joint' | 'raft' | 'gizmo' | 'none') {
+export function setHoveredCategory(category: 'model' | 'support' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none') {
     if (state.hoveredCategory === category) return;
     state = { ...state, hoveredCategory: category };
     notify();

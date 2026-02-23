@@ -345,6 +345,25 @@ export default function LineRaftRenderer({
     onModelPointerSelect(modelId, e);
   }, [onModelPointerSelect]);
 
+  const handlePointerMove = React.useCallback((e: any) => {
+    const modelId = e?.object?.userData?.modelId ?? null;
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+      detail: {
+        modelId,
+        category: 'raft',
+      },
+    }));
+  }, []);
+
+  const handlePointerOut = React.useCallback(() => {
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+      detail: {
+        modelId: null,
+        category: 'raft',
+      },
+    }));
+  }, []);
+
   const groupRef = React.useRef<THREE.Group>(null);
   React.useEffect(() => {
     const group = groupRef.current;
@@ -361,5 +380,5 @@ export default function LineRaftRenderer({
   }, [raftMeshes]);
 
   if (raft.bottomMode !== 'line') return null;
-  return <group ref={groupRef} position={[0, 0, 0]} onClick={handleClick} />;
+  return <group ref={groupRef} position={[0, 0, 0]} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut} />;
 }

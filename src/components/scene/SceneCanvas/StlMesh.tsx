@@ -63,6 +63,7 @@ export function StlMesh({
   outOfBoundsMax,
   outOfBoundsStripeColor,
   suppressModelInteraction,
+  externalHoveredModelId,
 }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
@@ -113,6 +114,7 @@ export function StlMesh({
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
   suppressModelInteraction?: boolean;
+  externalHoveredModelId?: string | null;
 }) {
   // Access GPU picking state to detect gizmo hover
   // Note: This works because StlMesh is rendered inside PickingProvider
@@ -231,11 +233,14 @@ export function StlMesh({
   const hasGpuModelHoverId = hit.category === 'model' && typeof hit.objectId === 'string' && hit.objectId.length > 0;
   const isBlockingHoverCategory = hit.category === 'gizmo' || hit.category === 'support';
   const shouldSuppressModelInteraction = !!suppressModelInteraction;
-  const isHoveredModel = !shouldSuppressModelInteraction && (
+  const isExternallyHoveredModel = !shouldSuppressModelInteraction
+    && !!externalHoveredModelId
+    && externalHoveredModelId === modelId;
+  const isHoveredModel = isExternallyHoveredModel || (!shouldSuppressModelInteraction && (
     hasGpuModelHoverId
       ? hit.objectId === modelId
       : (!isBlockingHoverCategory && isPointerHovered)
-  );
+  ));
   const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
   const dimmedBaseOpacity = isSupportDimmed

@@ -87,7 +87,7 @@ function PickingModeConfigSync({ mode }: { mode?: SupportMode }) {
 
     setConfig({
       includeGizmo: true,
-      allowedCategories: ['model', 'gizmo'],
+      allowedCategories: ['model', 'gizmo', 'support', 'joint', 'knot', 'segment', 'raft'],
     });
   }, [mode, setConfig]);
 
