@@ -92,6 +92,15 @@ function cloneTransform(transform: ModelTransform): ModelTransform {
   };
 }
 
+function transformsEqual(a: ModelTransform, b: ModelTransform): boolean {
+  const EPSILON = 1e-5;
+  return a.position.distanceToSquared(b.position) <= EPSILON
+    && Math.abs(a.rotation.x - b.rotation.x) <= EPSILON
+    && Math.abs(a.rotation.y - b.rotation.y) <= EPSILON
+    && Math.abs(a.rotation.z - b.rotation.z) <= EPSILON
+    && a.scale.distanceToSquared(b.scale) <= EPSILON;
+}
+
 function cloneLoadedModel(model: LoadedModel): LoadedModel {
   return {
     ...model,
@@ -443,6 +452,12 @@ export function useSceneCollectionManager() {
   const [models, setModels] = useState<LoadedModel[]>([]);
   const [activeModelId, setActiveModelId] = useState<string | null>(null);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const modelsRef = useRef<LoadedModel[]>([]);
+  const activeModelIdRef = useRef<string | null>(null);
+  const selectedModelIdsRef = useRef<string[]>([]);
+  modelsRef.current = models;
+  activeModelIdRef.current = activeModelId;
+  selectedModelIdsRef.current = selectedModelIds;
   const [modelClipboard, setModelClipboard] = useState<ModelClipboardEntry[]>([]);
   const [recentOpenedFiles, setRecentOpenedFiles] = useState<RecentOpenedFileEntry[]>([]);
   const [importProgress, setImportProgress] = useState<ImportProgressState>({
@@ -771,10 +786,11 @@ export function useSceneCollectionManager() {
     };
   }, [applySceneSnapshot]);
 
-  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot) => {
+  const pushSceneSnapshotHistory = useCallback((before: SceneSnapshot, after: SceneSnapshot, description?: string) => {
     const key = storeSceneSnapshotPair({ before, after });
     pushHistory({
       type: SCENE_MODELS_SNAPSHOT_APPLY,
+      description,
       payload: { key } satisfies SceneSnapshotPayload,
     });
   }, []);
@@ -1153,6 +1169,34 @@ export function useSceneCollectionManager() {
     ));
   }, []);
 
+  const commitModelTransformHistory = useCallback((id: string, beforeTransform: ModelTransform, afterTransform: ModelTransform, description?: string) => {
+    if (transformsEqual(beforeTransform, afterTransform)) return;
+
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+
+    const modelExists = currentModels.some((m) => m.id === id);
+    if (!modelExists) return;
+
+    const beforeModels = currentModels.map((m) => (
+      m.id === id
+        ? { ...m, transform: cloneTransform(beforeTransform) }
+        : m
+    ));
+
+    const afterModels = currentModels.map((m) => (
+      m.id === id
+        ? { ...m, transform: cloneTransform(afterTransform) }
+        : m
+    ));
+
+    const before = captureSceneSnapshot(beforeModels, currentActiveModelId, currentSelectedModelIds);
+    const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds);
+    const targetModelName = currentModels.find((m) => m.id === id)?.name ?? id;
+    pushSceneSnapshotHistory(before, after, description ?? `Transform Model ${targetModelName}`);
+  }, [pushSceneSnapshotHistory]);
+
   const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
     if (updates.length === 0) return;
 
@@ -1171,7 +1215,7 @@ export function useSceneCollectionManager() {
     setModels(nextModels);
 
     const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
-    pushSceneSnapshotHistory(before, after);
+    pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
@@ -1293,7 +1337,10 @@ export function useSceneCollectionManager() {
     setSelectedModelIds(nextSelectedModelIds);
 
     const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds);
-    pushSceneSnapshotHistory(before, after);
+    const deletedLabel = existing.length === 1
+      ? `Delete Model ${existing[0].name}`
+      : `Delete ${existing.length} Models`;
+    pushSceneSnapshotHistory(before, after, deletedLabel);
 
     // Clean up associated supports.
     const supportState = getSnapshot();
@@ -1394,7 +1441,7 @@ export function useSceneCollectionManager() {
     setSelectedModelIds([id]);
 
     const after = captureSceneSnapshot(nextModels, id, [id]);
-    pushSceneSnapshotHistory(before, after);
+    pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
 
     return id;
   }, [activeModelId, cloneGeometryWithBounds, generateId, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds]);
@@ -1589,7 +1636,7 @@ export function useSceneCollectionManager() {
       setSelectedModelIds(createdIds);
 
       const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds);
-      pushSceneSnapshotHistory(before, after);
+      pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
     }
 
     return createdIds;
@@ -1660,7 +1707,7 @@ export function useSceneCollectionManager() {
 
       const nextSelected = [sourceId, ...createdIds];
       const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected);
-      pushSceneSnapshotHistory(before, after);
+      pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? `Duplicate Model ${source.name}` : `Duplicate ${createdIds.length} Models`);
     }
 
     return createdIds;
@@ -2057,6 +2104,7 @@ export function useSceneCollectionManager() {
     loadFiles,
     onFileChange,
     updateModelTransform,
+    commitModelTransformHistory,
     updateModelTransforms,
     setModelVisibility,
     renameModel,

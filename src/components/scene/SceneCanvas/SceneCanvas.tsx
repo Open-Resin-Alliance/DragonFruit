@@ -672,6 +672,8 @@ export function SceneCanvas({
   transformMode,
   transform,
   onTransformChange,
+  onTransformStart,
+  onGizmoTransformCommit,
   onTransformChangeEnd, // Was onTransformEnd in previous code, checking usage
   onTransformEnd,
   crossSectionMode,
@@ -754,6 +756,13 @@ export function SceneCanvas({
   transformMode?: TransformMode;
   transform?: ModelTransform;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
+  onTransformStart?: (operation: 'move' | 'rotate' | 'scale') => void;
+  onGizmoTransformCommit?: (payload: {
+    modelId: string;
+    operation: 'move' | 'rotate' | 'scale';
+    before: ModelTransform;
+    after: ModelTransform;
+  }) => void;
   onTransformChangeEnd?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   onTransformEnd?: (operation: 'move' | 'rotate' | 'scale') => void;
   crossSectionMode?: 'smooth' | 'rasterized';
@@ -896,6 +905,11 @@ export function SceneCanvas({
   const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
   const postGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
+  const gizmoTransformStartSnapshotRef = React.useRef<{
+    modelId: string;
+    operation: 'move' | 'rotate' | 'scale';
+    before: ModelTransform;
+  } | null>(null);
 
   const startOutOfBoundsRotateGrace = React.useCallback(() => {
     setOutOfBoundsRotateGraceActive(true);
@@ -2192,6 +2206,21 @@ export function SceneCanvas({
                       activeGroupRef.current.position.add(delta);
                     }
                   }}
+                  onMoveStart={() => {
+                    onTransformStart?.('move');
+                    if (activeModelId && activeModel) {
+                      const sourceTransform = transform ?? activeModel.transform;
+                      gizmoTransformStartSnapshotRef.current = {
+                        modelId: activeModelId,
+                        operation: 'move',
+                        before: {
+                          position: sourceTransform.position.clone(),
+                          rotation: sourceTransform.rotation.clone(),
+                          scale: sourceTransform.scale.clone(),
+                        },
+                      };
+                    }
+                  }}
                   onMoveEnd={() => {
                     markGizmoDragEnded();
                     if (activeGroupRef.current && onTransformChange) {
@@ -2200,13 +2229,48 @@ export function SceneCanvas({
                         activeGroupRef.current.rotation.clone(),
                         activeGroupRef.current.scale.clone(),
                       );
+
+                      const startSnapshot = gizmoTransformStartSnapshotRef.current;
+                      if (startSnapshot && startSnapshot.modelId === activeModelId) {
+                        onGizmoTransformCommit?.({
+                          modelId: activeModelId,
+                          operation: startSnapshot.operation,
+                          before: {
+                            position: startSnapshot.before.position.clone(),
+                            rotation: startSnapshot.before.rotation.clone(),
+                            scale: startSnapshot.before.scale.clone(),
+                          },
+                          after: {
+                            position: activeGroupRef.current.position.clone(),
+                            rotation: activeGroupRef.current.rotation.clone(),
+                            scale: activeGroupRef.current.scale.clone(),
+                          },
+                        });
+                      }
                     }
+                    gizmoTransformStartSnapshotRef.current = null;
+                    onTransformEnd?.('move');
                   }}
                   onRotate={(axis, angle) => {
                     if (activeGroupRef.current) {
                       const worldAxis = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
                       const quaternion = new THREE.Quaternion().setFromAxisAngle(worldAxis, -angle);
                       activeGroupRef.current.quaternion.premultiply(quaternion);
+                    }
+                  }}
+                  onRotateStart={() => {
+                    onTransformStart?.('rotate');
+                    if (activeModelId && activeModel) {
+                      const sourceTransform = transform ?? activeModel.transform;
+                      gizmoTransformStartSnapshotRef.current = {
+                        modelId: activeModelId,
+                        operation: 'rotate',
+                        before: {
+                          position: sourceTransform.position.clone(),
+                          rotation: sourceTransform.rotation.clone(),
+                          scale: sourceTransform.scale.clone(),
+                        },
+                      };
                     }
                   }}
                   onRotateEnd={() => {
@@ -2217,12 +2281,44 @@ export function SceneCanvas({
                         activeGroupRef.current.rotation.clone(),
                         activeGroupRef.current.scale.clone(),
                       );
+
+                      const startSnapshot = gizmoTransformStartSnapshotRef.current;
+                      if (startSnapshot && startSnapshot.modelId === activeModelId) {
+                        onGizmoTransformCommit?.({
+                          modelId: activeModelId,
+                          operation: startSnapshot.operation,
+                          before: {
+                            position: startSnapshot.before.position.clone(),
+                            rotation: startSnapshot.before.rotation.clone(),
+                            scale: startSnapshot.before.scale.clone(),
+                          },
+                          after: {
+                            position: activeGroupRef.current.position.clone(),
+                            rotation: activeGroupRef.current.rotation.clone(),
+                            scale: activeGroupRef.current.scale.clone(),
+                          },
+                        });
+                      }
                     }
+                    gizmoTransformStartSnapshotRef.current = null;
                     onTransformEnd?.('rotate');
                   }}
                   onScaleStart={() => {
+                    onTransformStart?.('scale');
                     if (activeGroupRef.current) {
                       initialScaleRef.current.copy(activeGroupRef.current.scale);
+                    }
+                    if (activeModelId && activeModel) {
+                      const sourceTransform = transform ?? activeModel.transform;
+                      gizmoTransformStartSnapshotRef.current = {
+                        modelId: activeModelId,
+                        operation: 'scale',
+                        before: {
+                          position: sourceTransform.position.clone(),
+                          rotation: sourceTransform.rotation.clone(),
+                          scale: sourceTransform.scale.clone(),
+                        },
+                      };
                     }
                   }}
                   onScale={(axis, factor) => {
@@ -2245,7 +2341,27 @@ export function SceneCanvas({
                         activeGroupRef.current.rotation.clone(),
                         activeGroupRef.current.scale.clone(),
                       );
+
+                      const startSnapshot = gizmoTransformStartSnapshotRef.current;
+                      if (startSnapshot && startSnapshot.modelId === activeModelId) {
+                        onGizmoTransformCommit?.({
+                          modelId: activeModelId,
+                          operation: startSnapshot.operation,
+                          before: {
+                            position: startSnapshot.before.position.clone(),
+                            rotation: startSnapshot.before.rotation.clone(),
+                            scale: startSnapshot.before.scale.clone(),
+                          },
+                          after: {
+                            position: activeGroupRef.current.position.clone(),
+                            rotation: activeGroupRef.current.rotation.clone(),
+                            scale: activeGroupRef.current.scale.clone(),
+                          },
+                        });
+                      }
                     }
+                    gizmoTransformStartSnapshotRef.current = null;
+                    onTransformEnd?.('scale');
                   }}
                 />
               )}
