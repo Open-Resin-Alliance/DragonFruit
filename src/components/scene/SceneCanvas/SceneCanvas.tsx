@@ -42,7 +42,7 @@ import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacem
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
 import { SupportBracePlacementController } from '@/supports/SupportTypes/SupportBrace/SupportBracePlacementController';
 import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
-import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { clearSelection, selectAllSupports } from '@/supports/interaction/SupportSelection';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
@@ -1653,8 +1653,121 @@ export function SceneCanvas({
     return selectedIds;
   }, [buildVolumeBounds, computeModelWorldBounds, modelWorldBounds, models]);
 
+  const resolveMarqueeSelectedSupportIds = React.useCallback((selection: {
+    start: { x: number; y: number };
+    current: { x: number; y: number };
+  }) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const camera = cameraRef.current;
+    if (!rect || !camera) return [] as string[];
+
+    const minX = Math.min(selection.start.x, selection.current.x);
+    const maxX = Math.max(selection.start.x, selection.current.x);
+    const minY = Math.min(selection.start.y, selection.current.y);
+    const maxY = Math.max(selection.start.y, selection.current.y);
+
+    const point = new THREE.Vector3();
+    const projected = new THREE.Vector3();
+    const selectedSupportIds: string[] = [];
+
+    const pushIfProjectedInside = (id: string, points: Array<{ x: number; y: number; z: number }>) => {
+      if (!id || points.length === 0) return;
+
+      point.set(0, 0, 0);
+      for (const p of points) {
+        point.x += p.x;
+        point.y += p.y;
+        point.z += p.z;
+      }
+
+      point.multiplyScalar(1 / points.length);
+      projected.copy(point).project(camera);
+
+      if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || !Number.isFinite(projected.z)) {
+        return;
+      }
+      if (projected.z < -1 || projected.z > 1) return;
+
+      const sx = ((projected.x + 1) * 0.5) * rect.width;
+      const sy = ((1 - projected.y) * 0.5) * rect.height;
+      if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+        selectedSupportIds.push(id);
+      }
+    };
+
+    const segmentPoints = (segments: Array<{
+      topJoint?: { pos?: { x: number; y: number; z: number } };
+      bottomJoint?: { pos?: { x: number; y: number; z: number } };
+    }>) => {
+      const points: Array<{ x: number; y: number; z: number }> = [];
+      for (const segment of segments) {
+        const top = segment.topJoint?.pos;
+        const bottom = segment.bottomJoint?.pos;
+        if (top) points.push(top);
+        if (bottom) points.push(bottom);
+      }
+      return points;
+    };
+
+    for (const root of Object.values(supportStateForBounds.roots)) {
+      pushIfProjectedInside(root.id, [root.transform.pos]);
+    }
+
+    for (const trunk of Object.values(supportStateForBounds.trunks)) {
+      const points = segmentPoints(trunk.segments);
+      if (trunk.contactCone) {
+        points.push(trunk.contactCone.pos);
+        points.push(getFinalSocketPosition(trunk.contactCone));
+      }
+      pushIfProjectedInside(trunk.id, points);
+    }
+
+    for (const branch of Object.values(supportStateForBounds.branches)) {
+      const points = segmentPoints(branch.segments);
+      if (branch.contactCone) {
+        points.push(branch.contactCone.pos);
+        points.push(getFinalSocketPosition(branch.contactCone));
+      }
+      pushIfProjectedInside(branch.id, points);
+    }
+
+    for (const leaf of Object.values(supportStateForBounds.leaves)) {
+      if (!leaf.contactCone) continue;
+      pushIfProjectedInside(leaf.id, [leaf.contactCone.pos, getFinalSocketPosition(leaf.contactCone)]);
+    }
+
+    for (const twig of Object.values(supportStateForBounds.twigs)) {
+      const points = segmentPoints(twig.segments);
+      points.push(twig.contactDiskA.pos, twig.contactDiskB.pos);
+      pushIfProjectedInside(twig.id, points);
+    }
+
+    for (const stick of Object.values(supportStateForBounds.sticks)) {
+      const points = segmentPoints(stick.segments);
+      points.push(stick.contactConeA.pos, stick.contactConeB.pos);
+      points.push(getFinalSocketPosition(stick.contactConeA), getFinalSocketPosition(stick.contactConeB));
+      pushIfProjectedInside(stick.id, points);
+    }
+
+    for (const brace of Object.values(supportStateForBounds.braces)) {
+      const startKnot = supportStateForBounds.knots[brace.startKnotId];
+      const endKnot = supportStateForBounds.knots[brace.endKnotId];
+      const points: Array<{ x: number; y: number; z: number }> = [];
+      if (startKnot?.pos) points.push(startKnot.pos);
+      if (endKnot?.pos) points.push(endKnot.pos);
+      pushIfProjectedInside(brace.id, points);
+    }
+
+    for (const supportBrace of Object.values(supportBraceStateForBounds.supportBraces)) {
+      const points = segmentPoints(supportBrace.segments);
+      pushIfProjectedInside(supportBrace.id, points);
+    }
+
+    return selectedSupportIds;
+  }, [supportBraceStateForBounds.supportBraces, supportStateForBounds]);
+
   const marqueeCandidateIdSet = React.useMemo(() => {
-    if (!marqueeSelection) return new Set<string>();
+    if (!marqueeSelection || mode !== 'prepare') return new Set<string>();
 
     const dragDx = marqueeSelection.current.x - marqueeSelection.start.x;
     const dragDy = marqueeSelection.current.y - marqueeSelection.start.y;
@@ -1662,7 +1775,7 @@ export function SceneCanvas({
     if (dragDistanceSq < 16) return new Set<string>();
 
     return new Set(resolveMarqueeSelectedIds(marqueeSelection));
-  }, [marqueeSelection, resolveMarqueeSelectedIds]);
+  }, [marqueeSelection, mode, resolveMarqueeSelectedIds]);
 
   const duplicatePreviewMeshOffset = React.useMemo(() => {
     if (!duplicatePreviewModel) return null;
@@ -2058,15 +2171,15 @@ export function SceneCanvas({
   }, []);
 
   const handleMarqueePointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (mode !== 'prepare') return;
-    if (e.button !== 0 || !e.altKey) return;
+    if (mode !== 'prepare' && mode !== 'support') return;
+    if (e.button !== 0) return;
     if (isGizmoDragging || isPostGizmoInteractionGuardActive) return;
+    if (hoveredModelId || supportStateForBounds.hoveredCategory !== 'none') return;
 
     const clamped = clampPointToContainer(e.clientX, e.clientY);
     if (!clamped) return;
 
     marqueePointerIdRef.current = e.pointerId;
-    suppressNextCanvasClickRef.current = true;
 
     setMarqueeSelection({
       start: { x: clamped.x, y: clamped.y },
@@ -2082,7 +2195,7 @@ export function SceneCanvas({
     } catch {
       // no-op: pointer capture can fail in edge cases; marquee still works without it
     }
-  }, [clampPointToContainer, isGizmoDragging, isPostGizmoInteractionGuardActive, mode]);
+  }, [clampPointToContainer, hoveredModelId, isGizmoDragging, isPostGizmoInteractionGuardActive, mode, supportStateForBounds.hoveredCategory]);
 
   const handleMarqueePointerMoveCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (marqueePointerIdRef.current == null) return;
@@ -2129,32 +2242,40 @@ export function SceneCanvas({
       return;
     }
 
-    if (!onMarqueeSelectionChange) return;
+    suppressNextCanvasClickRef.current = true;
 
-    const selectedIds = resolveMarqueeSelectedIds(currentSelection);
+    if (mode === 'prepare') {
+      if (!onMarqueeSelectionChange) return;
 
-    onMarqueeSelectionChange(selectedIds);
+      const selectedIds = resolveMarqueeSelectedIds(currentSelection);
+      onMarqueeSelectionChange(selectedIds);
 
-    if (selectedIds.length > 0) {
-      window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: selectedIds[0] } }));
-    } else {
-      window.dispatchEvent(new CustomEvent('model-deselected'));
+      if (selectedIds.length > 0) {
+        window.dispatchEvent(new CustomEvent('model-clicked', { detail: { modelId: selectedIds[0] } }));
+      } else {
+        window.dispatchEvent(new CustomEvent('model-deselected'));
+      }
+
+      // Consume the click generated at pointer-up so single-click deselect logic doesn't race this selection.
+      window.__modelClickGuardUntil = performance.now() + 48;
+      window.__modelClickedThisFrame = true;
+      window.setTimeout(() => {
+        window.__modelClickedThisFrame = false;
+      }, 0);
+    } else if (mode === 'support') {
+      const selectedSupportIds = resolveMarqueeSelectedSupportIds(currentSelection);
+      selectAllSupports(selectedSupportIds);
     }
-
-    // Consume the click generated at pointer-up so single-click deselect logic doesn't race this selection.
-    window.__modelClickGuardUntil = performance.now() + 48;
-    window.__modelClickedThisFrame = true;
-    window.setTimeout(() => {
-      window.__modelClickedThisFrame = false;
-    }, 0);
 
     e.preventDefault();
     e.stopPropagation();
     if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
   }, [
     marqueeSelection,
+    mode,
     onMarqueeSelectionChange,
     resolveMarqueeSelectedIds,
+    resolveMarqueeSelectedSupportIds,
   ]);
 
   React.useEffect(() => {
