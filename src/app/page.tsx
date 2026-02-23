@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { Redo2, Undo2 } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -32,6 +33,7 @@ import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothin
 import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
+import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -121,7 +123,7 @@ export default function Home() {
     before: ModelTransform;
     description: string;
   } | null>(null);
-  const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string } | null>(null);
+  const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
@@ -517,15 +519,13 @@ export default function Home() {
     };
 
     const unsubscribe = subscribeHistoryOperations(({ direction, action }) => {
-      const verb = direction === 'undo' ? 'Undid Action' : 'Redid Action';
       const description = action.description?.trim() || fallbackDescription(action.type);
-      const text = `${verb}: ${description}`;
 
       if (action.type === 'scene_models_snapshot_apply') {
         pendingHistoryTransformResyncRef.current = true;
       }
 
-      setHistoryActionToast({ id: Date.now(), text });
+      setHistoryActionToast({ id: Date.now(), text: description, direction });
       setIsHistoryActionToastVisible(true);
 
       if (historyActionToastFadeTimeoutRef.current !== null) {
@@ -676,23 +676,6 @@ export default function Home() {
       window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
       window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
     };
-  }, []);
-
-  const historyDebugEventsNewestFirst = React.useMemo(
-    () => [...historyDebugEvents].reverse(),
-    [historyDebugEvents],
-  );
-
-  const formatHistoryDebugTimestamp = React.useCallback((ts: number) => {
-    try {
-      return new Date(ts).toLocaleTimeString();
-    } catch {
-      return String(ts);
-    }
-  }, []);
-
-  const formatHistoryDebugKind = React.useCallback((kind: HistoryDebugEvent['kind']) => {
-    return kind.replaceAll('-', ' ').replace(/\b\w/g, (m) => m.toUpperCase());
   }, []);
 
   React.useEffect(() => {
@@ -2227,13 +2210,6 @@ export default function Home() {
   }, [scene]);
 
   React.useEffect(() => {
-    if (scene.mode === 'prepare') return;
-    if (!isSelectAllModelsActive) return;
-    setIsSelectAllModelsActive(false);
-    scene.clearModelSelection();
-  }, [isSelectAllModelsActive, scene]);
-
-  React.useEffect(() => {
     const unregister = registerDeleteHandler(
       () => scene.mode === 'prepare' && scene.selectedModelIds.length > 0,
       () => {
@@ -2288,7 +2264,6 @@ export default function Home() {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key.toLowerCase() !== 'a') return;
       if (isEditableTarget(event.target)) return;
-      if (scene.mode !== 'prepare') return;
       if (scene.models.length === 0) return;
 
       // Prevent browser-level "select all text in the app" behavior and arm model select-all.
@@ -3294,122 +3269,22 @@ export default function Home() {
         selectedPolygons={selectedPolygons}
       />
 
-      {isHistoryDebugOpen && (
-        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 p-4 backdrop-blur-[1px]">
-          <div
-            className="w-[min(900px,96vw)] max-h-[88vh] overflow-hidden rounded-xl border shadow-2xl"
-            style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 8%)',
-              borderColor: 'var(--border-subtle)',
-            }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="History Debug"
-          >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  History Debug Log
-                </div>
-                <div className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Hotkey: Ctrl+Shift+C
-                </div>
-              </div>
-
-              <button
-                type="button"
-                className="rounded-md border px-2.5 py-1 text-xs font-semibold"
-                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
-                onClick={() => setIsHistoryDebugOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <span className="rounded-full border px-2 py-1 text-[11px] font-semibold" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                Undo Stack: {historyStackCounts.undo}
-              </span>
-              <span className="rounded-full border px-2 py-1 text-[11px] font-semibold" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                Redo Stack: {historyStackCounts.redo}
-              </span>
-              <span className="rounded-full border px-2 py-1 text-[11px] font-semibold" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                Events: {historyDebugEvents.length}
-              </span>
-
-              <div className="ml-auto flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-md border px-2.5 py-1 text-[11px] font-semibold"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
-                  onClick={() => {
-                    clearHistoryDebugEvents();
-                  }}
-                >
-                  Clear Event Log
-                </button>
-                <button
-                  type="button"
-                  className="rounded-md border px-2.5 py-1 text-[11px] font-semibold"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}
-                  onClick={() => {
-                    clearHistory();
-                  }}
-                >
-                  Clear Undo/Redo Stacks
-                </button>
-                <button
-                  type="button"
-                  className="rounded-md border px-2.5 py-1 text-[11px] font-semibold"
-                  style={{ borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 40%)', color: 'var(--text-strong)' }}
-                  onClick={() => {
-                    clearHistory();
-                    clearHistoryDebugEvents();
-                  }}
-                >
-                  Clear All
-                </button>
-              </div>
-            </div>
-
-            <div className="max-h-[60vh] overflow-auto px-4 py-3">
-              {historyDebugEventsNewestFirst.length === 0 ? (
-                <div className="rounded-lg border p-3 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                  No history events yet.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {historyDebugEventsNewestFirst.map((event) => (
-                    <div
-                      key={event.id}
-                      className="rounded-lg border px-3 py-2"
-                      style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), black 8%)' }}
-                    >
-                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                        <span className="rounded-full border px-2 py-0.5 font-semibold" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-strong)' }}>
-                          {formatHistoryDebugKind(event.kind)}
-                        </span>
-                        <span style={{ color: 'var(--text-muted)' }}>{formatHistoryDebugTimestamp(event.timestamp)}</span>
-                        <span style={{ color: 'var(--text-muted)' }}>Undo {event.undoCount}</span>
-                        <span style={{ color: 'var(--text-muted)' }}>Redo {event.redoCount}</span>
-                      </div>
-
-                      {(event.actionType || event.actionDescription) && (
-                        <div className="mt-1 text-xs" style={{ color: 'var(--text-strong)' }}>
-                          <span className="font-semibold">{event.actionDescription || event.actionType}</span>
-                          {event.actionDescription && event.actionType ? (
-                            <span style={{ color: 'var(--text-muted)' }}> · {event.actionType}</span>
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <HistoryDebugModal
+        isOpen={isHistoryDebugOpen}
+        onClose={() => setIsHistoryDebugOpen(false)}
+        historyDebugEvents={historyDebugEvents}
+        historyStackCounts={historyStackCounts}
+        onClearEventLog={() => {
+          clearHistoryDebugEvents();
+        }}
+        onClearUndoRedoStacks={() => {
+          clearHistory();
+        }}
+        onClearAll={() => {
+          clearHistory();
+          clearHistoryDebugEvents();
+        }}
+      />
 
       {showArrangeBlockingOverlay && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">
@@ -3455,16 +3330,25 @@ export default function Home() {
       {historyActionToast && (
         <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
           <div
-            className="rounded-full border px-5 py-2 text-sm font-semibold shadow-lg"
+            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
             style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
+              borderColor: historyActionToast.direction === 'undo'
+                ? 'color-mix(in srgb, #fbbf24, var(--border-subtle) 50%)'
+                : 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)',
+              background: historyActionToast.direction === 'undo'
+                ? 'color-mix(in srgb, #fbbf24, var(--surface-0) 90%)'
+                : 'color-mix(in srgb, #60a5fa, var(--surface-0) 90%)',
               color: 'var(--text-strong)',
               opacity: isHistoryActionToastVisible ? 1 : 0,
               transform: `translateY(${isHistoryActionToastVisible ? '0px' : '8px'})`,
               transition: 'opacity 220ms ease, transform 220ms ease',
             }}
           >
+            {historyActionToast.direction === 'undo' ? (
+              <Undo2 className="h-4 w-4 motion-safe:animate-pulse" />
+            ) : (
+              <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
+            )}
             {historyActionToast.text}
           </div>
         </div>
