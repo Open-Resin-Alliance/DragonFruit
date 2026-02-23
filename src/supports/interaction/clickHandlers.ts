@@ -1,5 +1,5 @@
 import { selectSupport, selectJoint } from './SupportSelection';
-import { setSelectedId, getModelIdForSupportEntityId } from '../state';
+import { setSelectedId } from '../state';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
@@ -62,15 +62,6 @@ export function emitSupportModelPointerHover(modelId: string | null) {
  */
 export function handleSupportClick(e: any, id: string, isInteractable: boolean) {
     if (!isInteractable) {
-        const modelId = getModelIdForSupportEntityId(id);
-        if (modelId) {
-            window.dispatchEvent(new CustomEvent('support-model-pointer-select', {
-                detail: {
-                    supportId: id,
-                    modelId,
-                },
-            }));
-        }
         return;
     }
     

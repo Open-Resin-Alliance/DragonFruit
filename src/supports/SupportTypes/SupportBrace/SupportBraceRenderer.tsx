@@ -50,6 +50,8 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     hoverColor,
     selectedColor = '#80fffd',
 }: SupportBraceRendererProps) {
+    const highDetailPrimitiveSegments = 24;
+    const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
 
     const { pickRef, visuals } = useHighlight({
@@ -187,8 +189,8 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
-                    radialSegments={useLowDetailPrimitives ? 10 : 32}
-                    sphereSegments={useLowDetailPrimitives ? 10 : 32}
+                    radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                    sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                 />
             )}
 

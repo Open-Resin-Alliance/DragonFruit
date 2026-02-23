@@ -44,8 +44,8 @@ export function RootsRenderer({
     diskColor,
     coneColor,
     diskMaterialOverride,
-    radialSegments = 32,
-    sphereSegments = 32,
+    radialSegments = 24,
+    sphereSegments = 24,
 }: RootsRendererProps & { raftOverride?: { bottomMode: 'off' | 'solid' | 'line'; thickness: number } }) {
     const storeRaft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);

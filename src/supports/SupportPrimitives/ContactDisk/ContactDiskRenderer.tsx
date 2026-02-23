@@ -31,8 +31,8 @@ export function ContactDiskRenderer({
     color = '#ff8800',
     transparent = false,
     opacity = 1,
-    radialSegments = 32,
-    sphereSegments = 32,
+    radialSegments = 24,
+    sphereSegments = 24,
     raycast
 }: ContactDiskRendererProps) {
     

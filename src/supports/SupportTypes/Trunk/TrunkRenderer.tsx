@@ -32,6 +32,8 @@ interface TrunkRendererProps {
 }
 
 export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
+    const highDetailPrimitiveSegments = 24;
+    const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
 
     // Use universal highlight hook
@@ -203,8 +205,8 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                 color={visuals.color}
                 emissive={visuals.emissive}
                 emissiveIntensity={visuals.emissiveIntensity}
-                radialSegments={useLowDetailPrimitives ? 10 : 32}
-                sphereSegments={useLowDetailPrimitives ? 10 : 32}
+                radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                 socketJointId={trunk.contactCone.socketJointId}
                 isInteractable={isInteractable}
                 isParentSelected={isSelected}
@@ -228,8 +230,8 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                         emissive={visuals.emissive}
                         emissiveIntensity={visuals.emissiveIntensity}
                         selectedColor={visuals.selectedColor}
-                        radialSegments={useLowDetailPrimitives ? 10 : 32}
-                        sphereSegments={useLowDetailPrimitives ? 10 : 32}
+                        radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                        sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                     />
                 )}
                 <InstancedShaftGroup

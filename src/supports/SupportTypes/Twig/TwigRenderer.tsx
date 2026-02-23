@@ -40,6 +40,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   hoverColor,
   selectedColor = '#80fffd',
 }: TwigRendererProps) {
+  const highDetailPrimitiveSegments = 24;
+  const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
 
   const { pickRef, visuals } = useHighlight({
@@ -174,8 +176,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
       profile={twig.contactDiskA.profile}
       contactDiameterMm={twig.contactDiskA.contactDiameterMm}
       overrideThickness={twig.contactDiskA.diskLengthOverride}
-      radialSegments={useLowDetailPrimitives ? 10 : 32}
-      sphereSegments={useLowDetailPrimitives ? 10 : 32}
+      radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+      sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       color={visuals.color}
     />
   );
@@ -188,8 +190,8 @@ export const TwigRenderer = React.memo(function TwigRenderer({
       profile={twig.contactDiskB.profile}
       contactDiameterMm={twig.contactDiskB.contactDiameterMm}
       overrideThickness={twig.contactDiskB.diskLengthOverride}
-      radialSegments={useLowDetailPrimitives ? 10 : 32}
-      sphereSegments={useLowDetailPrimitives ? 10 : 32}
+      radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+      sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       color={visuals.color}
     />
   );

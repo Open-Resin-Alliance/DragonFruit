@@ -23,6 +23,7 @@ interface ShaftRendererProps {
     isParentSelected?: boolean;
     onClick?: (e: any) => void;
     onPointerMove?: (e: any) => void;
+    radialSegments?: number;
 }
 
 export function ShaftRenderer({ 
@@ -42,7 +43,8 @@ export function ShaftRenderer({
     isSelected,
     isParentSelected,
     onClick,
-    onPointerMove
+    onPointerMove,
+    radialSegments = 16,
 }: ShaftRendererProps) {
     const radiusStart = (diameterStart ?? diameter) / 2;
     const radiusEnd = (diameterEnd ?? diameter) / 2;
@@ -186,7 +188,7 @@ export function ShaftRenderer({
             onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
         >
             <mesh raycast={raycast}>
-                <cylinderGeometry args={[radiusEnd, radiusStart, 1, 32]} />
+                <cylinderGeometry args={[radiusEnd, radiusStart, 1, radialSegments]} />
                 <meshStandardMaterial 
                     color={finalColor} 
                     emissive={finalEmissive} 

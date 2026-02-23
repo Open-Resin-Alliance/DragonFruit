@@ -34,7 +34,7 @@ export function InstancedShaftGroup({
     emissiveIntensity = 0,
     transparent = false,
     opacity = 1,
-    radialSegments = 20,
+    radialSegments = 12,
     onShaftClick,
     onShaftPointerMove,
     onShaftPointerOut,

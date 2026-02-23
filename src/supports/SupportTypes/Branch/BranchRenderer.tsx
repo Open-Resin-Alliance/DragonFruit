@@ -44,6 +44,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   hoverColor,
   selectedColor = '#80fffd',
 }: BranchRendererProps) {
+  const highDetailPrimitiveSegments = 24;
+  const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
 
   // Use universal highlight hook (matches TrunkRenderer pattern)
@@ -187,8 +189,8 @@ export const BranchRenderer = React.memo(function BranchRenderer({
         color={visuals.color}
         emissive={visuals.emissive}
         emissiveIntensity={visuals.emissiveIntensity}
-        radialSegments={useLowDetailPrimitives ? 10 : 32}
-        sphereSegments={useLowDetailPrimitives ? 10 : 32}
+        radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+        sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
         socketJointId={branch.contactCone.socketJointId}
         isInteractable={isInteractable}
         isParentSelected={isSelected}

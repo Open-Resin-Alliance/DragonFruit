@@ -11,6 +11,7 @@ import { TwigRenderer } from './SupportTypes/Twig/TwigRenderer';
 import { StickRenderer } from './SupportTypes/Stick/StickRenderer';
 import { SupportBraceRenderer } from './SupportTypes/SupportBrace/SupportBraceRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from './SupportPrimitives/Shaft/InstancedShaftGroup';
+import { InstancedJointGroup, type InstancedJoint } from './SupportPrimitives/Joint/InstancedJointGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useSupportBraceStoreState } from './SupportTypes/SupportBrace/supportBraceStore';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
@@ -46,9 +47,17 @@ interface SupportShaftSet {
     shafts: InstancedShaft[];
 }
 
-const BATCHED_SHAFT_RADIAL_SEGMENTS = 12;
-const BATCHED_SHAFT_LOW_RADIAL_SEGMENTS = 8;
+interface SupportJointSet {
+    supportId: string;
+    modelId?: string;
+    joints: InstancedJoint[];
+}
+
+const BATCHED_SHAFT_RADIAL_SEGMENTS = 10;
+const BATCHED_SHAFT_LOW_RADIAL_SEGMENTS = 6;
 const BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD = 1200;
+const BATCHED_JOINT_WIDTH_SEGMENTS = 12;
+const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -607,6 +616,296 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return result;
     }, [supportBraceState.supportBraces, state.roots, state.knots, restrictToActiveModel, activeModelId]);
 
+    const trunkJointsBySupport = useMemo(() => {
+        const result = new Map<string, SupportJointSet>();
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (restrictToActiveModel && trunk.modelId !== activeModelId) continue;
+
+            const seen = new Set<string>();
+            const joints: InstancedJoint[] = [];
+
+            for (const segment of trunk.segments) {
+                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
+                    seen.add(segment.bottomJoint.id);
+                    joints.push({
+                        id: segment.bottomJoint.id,
+                        pos: segment.bottomJoint.pos,
+                        diameter: segment.bottomJoint.diameter,
+                    });
+                }
+
+                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
+                    seen.add(segment.topJoint.id);
+                    joints.push({
+                        id: segment.topJoint.id,
+                        pos: segment.topJoint.pos,
+                        diameter: segment.topJoint.diameter,
+                    });
+                }
+            }
+
+            if (joints.length > 0) {
+                result.set(trunk.id, {
+                    supportId: trunk.id,
+                    modelId: trunk.modelId,
+                    joints,
+                });
+            }
+        }
+
+        return result;
+    }, [state.trunks, restrictToActiveModel, activeModelId]);
+
+    const branchJointsBySupport = useMemo(() => {
+        const result = new Map<string, SupportJointSet>();
+
+        for (const branch of Object.values(state.branches)) {
+            if (restrictToActiveModel && branch.modelId !== activeModelId) continue;
+
+            const seen = new Set<string>();
+            const joints: InstancedJoint[] = [];
+
+            for (const segment of branch.segments) {
+                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
+                    seen.add(segment.bottomJoint.id);
+                    joints.push({
+                        id: segment.bottomJoint.id,
+                        pos: segment.bottomJoint.pos,
+                        diameter: segment.bottomJoint.diameter,
+                    });
+                }
+
+                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
+                    seen.add(segment.topJoint.id);
+                    joints.push({
+                        id: segment.topJoint.id,
+                        pos: segment.topJoint.pos,
+                        diameter: segment.topJoint.diameter,
+                    });
+                }
+            }
+
+            if (joints.length > 0) {
+                result.set(branch.id, {
+                    supportId: branch.id,
+                    modelId: branch.modelId,
+                    joints,
+                });
+            }
+        }
+
+        return result;
+    }, [state.branches, restrictToActiveModel, activeModelId]);
+
+    const twigJointsBySupport = useMemo(() => {
+        const result = new Map<string, SupportJointSet>();
+
+        for (const twig of Object.values(state.twigs)) {
+            if (restrictToActiveModel && twig.modelId !== activeModelId) continue;
+
+            const seen = new Set<string>();
+            const joints: InstancedJoint[] = [];
+
+            for (const segment of twig.segments) {
+                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
+                    seen.add(segment.bottomJoint.id);
+                    joints.push({
+                        id: segment.bottomJoint.id,
+                        pos: segment.bottomJoint.pos,
+                        diameter: segment.bottomJoint.diameter,
+                    });
+                }
+
+                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
+                    seen.add(segment.topJoint.id);
+                    joints.push({
+                        id: segment.topJoint.id,
+                        pos: segment.topJoint.pos,
+                        diameter: segment.topJoint.diameter,
+                    });
+                }
+            }
+
+            if (joints.length > 0) {
+                result.set(twig.id, {
+                    supportId: twig.id,
+                    modelId: twig.modelId,
+                    joints,
+                });
+            }
+        }
+
+        return result;
+    }, [state.twigs, restrictToActiveModel, activeModelId]);
+
+    const stickJointsBySupport = useMemo(() => {
+        const result = new Map<string, SupportJointSet>();
+
+        for (const stick of Object.values(state.sticks)) {
+            if (restrictToActiveModel && stick.modelId !== activeModelId) continue;
+
+            const seen = new Set<string>();
+            const joints: InstancedJoint[] = [];
+
+            for (const segment of stick.segments) {
+                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
+                    seen.add(segment.bottomJoint.id);
+                    joints.push({
+                        id: segment.bottomJoint.id,
+                        pos: segment.bottomJoint.pos,
+                        diameter: segment.bottomJoint.diameter,
+                    });
+                }
+
+                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
+                    seen.add(segment.topJoint.id);
+                    joints.push({
+                        id: segment.topJoint.id,
+                        pos: segment.topJoint.pos,
+                        diameter: segment.topJoint.diameter,
+                    });
+                }
+            }
+
+            if (joints.length > 0) {
+                result.set(stick.id, {
+                    supportId: stick.id,
+                    modelId: stick.modelId,
+                    joints,
+                });
+            }
+        }
+
+        return result;
+    }, [state.sticks, restrictToActiveModel, activeModelId]);
+
+    const supportBraceJointsBySupport = useMemo(() => {
+        const result = new Map<string, SupportJointSet>();
+
+        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+            if (restrictToActiveModel && supportBrace.modelId !== activeModelId) continue;
+
+            const seen = new Set<string>();
+            const joints: InstancedJoint[] = [];
+
+            for (const segment of supportBrace.segments) {
+                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
+                    seen.add(segment.bottomJoint.id);
+                    joints.push({
+                        id: segment.bottomJoint.id,
+                        pos: segment.bottomJoint.pos,
+                        diameter: segment.bottomJoint.diameter,
+                    });
+                }
+
+                if (segment.topJoint && !seen.has(segment.topJoint.id)) {
+                    seen.add(segment.topJoint.id);
+                    joints.push({
+                        id: segment.topJoint.id,
+                        pos: segment.topJoint.pos,
+                        diameter: segment.topJoint.diameter,
+                    });
+                }
+            }
+
+            if (joints.length > 0) {
+                result.set(supportBrace.id, {
+                    supportId: supportBrace.id,
+                    modelId: supportBrace.modelId,
+                    joints,
+                });
+            }
+        }
+
+        return result;
+    }, [supportBraceState.supportBraces, restrictToActiveModel, activeModelId]);
+
+    const sceneBatchedJointGroups = useMemo(() => {
+        const grouped = new Map<string, InstancedJoint[]>();
+
+        const pushJoints = (color: string, joints: InstancedJoint[]) => {
+            const existing = grouped.get(color);
+            if (existing) {
+                existing.push(...joints);
+            } else {
+                grouped.set(color, [...joints]);
+            }
+        };
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (restrictToActiveModel && trunk.modelId !== activeModelId) continue;
+            if (selectedTrunkIds.has(trunk.id)) continue;
+            const jointSet = trunkJointsBySupport.get(trunk.id);
+            if (!jointSet) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(trunk.modelId);
+            pushJoints(color, jointSet.joints);
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (restrictToActiveModel && branch.modelId !== activeModelId) continue;
+            if (selectedBranchIds.has(branch.id)) continue;
+            const jointSet = branchJointsBySupport.get(branch.id);
+            if (!jointSet) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(branch.modelId);
+            pushJoints(color, jointSet.joints);
+        }
+
+        for (const twig of Object.values(state.twigs)) {
+            if (restrictToActiveModel && twig.modelId !== activeModelId) continue;
+            if (selectedTwigIds.has(twig.id)) continue;
+            const jointSet = twigJointsBySupport.get(twig.id);
+            if (!jointSet) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(twig.modelId);
+            pushJoints(color, jointSet.joints);
+        }
+
+        for (const stick of Object.values(state.sticks)) {
+            if (restrictToActiveModel && stick.modelId !== activeModelId) continue;
+            if (selectedStickIds.has(stick.id)) continue;
+            const jointSet = stickJointsBySupport.get(stick.id);
+            if (!jointSet) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(stick.modelId);
+            pushJoints(color, jointSet.joints);
+        }
+
+        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+            if (restrictToActiveModel && supportBrace.modelId !== activeModelId) continue;
+            if (selectedSupportBraceIds.has(supportBrace.id)) continue;
+            const jointSet = supportBraceJointsBySupport.get(supportBrace.id);
+            if (!jointSet) continue;
+
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(supportBrace.modelId);
+            pushJoints(color, jointSet.joints);
+        }
+
+        return Array.from(grouped.entries()).map(([color, joints]) => ({ color, joints }));
+    }, [
+        state.trunks,
+        state.branches,
+        state.twigs,
+        state.sticks,
+        supportBraceState.supportBraces,
+        restrictToActiveModel,
+        activeModelId,
+        selectedTrunkIds,
+        selectedBranchIds,
+        selectedTwigIds,
+        selectedStickIds,
+        selectedSupportBraceIds,
+        trunkJointsBySupport,
+        branchJointsBySupport,
+        twigJointsBySupport,
+        stickJointsBySupport,
+        supportBraceJointsBySupport,
+        dimNonSelected,
+        resolveBaseColor,
+    ]);
+
     const sceneBatchedTwigShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
 
@@ -758,6 +1057,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         : BATCHED_SHAFT_RADIAL_SEGMENTS;
 
     const hoveredSupportShaftSet = useMemo(() => {
+        if (!isInteractable) return null;
+
         const hoveredSupportId = sceneHoveredSupportId ?? (state.hoveredCategory === 'support' ? state.hoveredId : null);
         if (!hoveredSupportId) return null;
 
@@ -780,7 +1081,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (supportBraceSet) return supportBraceSet;
 
         return null;
-    }, [sceneHoveredSupportId, state.hoveredCategory, state.hoveredId, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, supportBraceShaftsBySupport]);
+    }, [isInteractable, sceneHoveredSupportId, state.hoveredCategory, state.hoveredId, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, supportBraceShaftsBySupport]);
 
     const hoveredSupportOverlayShafts = useMemo(() => {
         if (!hoveredSupportShaftSet) return [] as InstancedShaft[];
@@ -792,11 +1093,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [hoveredSupportShaftSet]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
+        if (!isInteractable) return;
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
     }, [isInteractable]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
+        if (!isInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
@@ -807,9 +1110,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = shaft.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(shaft.modelId ?? null);
-    }, []);
+    }, [isInteractable]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback(() => {
+        if (!isInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
@@ -821,7 +1125,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
             emitSupportModelPointerHover(null);
         });
-    }, []);
+    }, [isInteractable]);
 
     useEffect(() => {
         const root = groupRef.current;
@@ -866,9 +1170,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={handleSceneBatchedShaftClick}
-                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
-                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            ))}
+
+            {sceneBatchedJointGroups.map((group) => (
+                <InstancedJointGroup
+                    key={`scene-joint-batch:${group.color}:${group.joints.length}`}
+                    joints={group.joints}
+                    color={group.color}
+                    widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
+                    heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
                 />
             ))}
 
@@ -880,9 +1194,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     emissive="#ffffff"
                     emissiveIntensity={0.3}
                     radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
-                    onShaftClick={handleSceneBatchedShaftClick}
-                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
-                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             )}
 
@@ -931,9 +1245,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={handleSceneBatchedShaftClick}
-                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
-                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1044,9 +1358,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={handleSceneBatchedShaftClick}
-                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
-                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1089,9 +1403,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={handleSceneBatchedShaftClick}
-                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
-                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1102,9 +1416,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={handleSceneBatchedShaftClick}
-                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
-                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1195,9 +1509,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={handleSceneBatchedShaftClick}
-                    onShaftPointerMove={handleSceneBatchedShaftPointerMove}
-                    onShaftPointerOut={handleSceneBatchedShaftPointerOut}
+                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
         </group>
