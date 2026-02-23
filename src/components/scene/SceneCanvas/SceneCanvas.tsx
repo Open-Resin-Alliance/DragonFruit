@@ -24,11 +24,18 @@ import type { SupportMode } from '@/supports/types';
 import { SupportRenderer } from '@/supports/SupportRenderer';
 import { SupportBuilder } from '@/supports/rendering';
 import type { SupportData } from '@/supports/rendering';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
+import { subscribeToSupportBraceStore, getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
 import SliceSatBoundingMeshRenderer from '@/supports/Rafts/Crenelated/rendering/SliceSatBoundingMeshRenderer';
+import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
+import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
+import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
@@ -853,6 +860,24 @@ export function SceneCanvas({
     getMeshSmoothingLoadingState,
   );
 
+  const supportStateForBounds = React.useSyncExternalStore(
+    subscribeSupportState,
+    getSupportSnapshot,
+    getSupportSnapshot,
+  );
+
+  const supportBraceStateForBounds = React.useSyncExternalStore(
+    subscribeToSupportBraceStore,
+    getSupportBraceSnapshot,
+    getSupportBraceSnapshot,
+  );
+
+  const raftSettingsForBounds = React.useSyncExternalStore(
+    subscribeToRaftStore,
+    getRaftSettings,
+    getRaftSettings,
+  );
+
 
   const models = React.useMemo<LoadedModel[]>(() => {
     if (modelsProp.length > 0) return modelsProp;
@@ -1013,6 +1038,152 @@ export function SceneCanvas({
   const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
 
+  const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
+    const bounds = new THREE.Box3();
+    let hasAny = false;
+
+    const expandByRadius = (pos: { x: number; y: number; z: number } | THREE.Vector3, radiusMm: number) => {
+      const p = pos instanceof THREE.Vector3 ? pos : new THREE.Vector3(pos.x, pos.y, pos.z);
+      const r = Math.max(0, radiusMm);
+      bounds.expandByPoint(new THREE.Vector3(p.x - r, p.y - r, p.z - r));
+      bounds.expandByPoint(new THREE.Vector3(p.x + r, p.y + r, p.z + r));
+      hasAny = true;
+    };
+
+    const rootsForModel = Object.values(supportStateForBounds.roots).filter((root) => root.modelId === modelId);
+    for (const root of rootsForModel) {
+      const rootRadius = Math.max(0.001, root.diameter / 2);
+      const rootBase = root.transform.pos;
+      const rootTop = {
+        x: root.transform.pos.x,
+        y: root.transform.pos.y,
+        z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+      };
+      expandByRadius(rootBase, rootRadius);
+      expandByRadius(rootTop, rootRadius);
+    }
+
+    const modelKnotIds = new Set<string>();
+    for (const branch of Object.values(supportStateForBounds.branches)) {
+      if (branch.modelId === modelId) modelKnotIds.add(branch.parentKnotId);
+    }
+    for (const leaf of Object.values(supportStateForBounds.leaves)) {
+      if (leaf.modelId === modelId) modelKnotIds.add(leaf.parentKnotId);
+    }
+    for (const brace of Object.values(supportStateForBounds.braces)) {
+      if (brace.modelId !== modelId) continue;
+      modelKnotIds.add(brace.startKnotId);
+      modelKnotIds.add(brace.endKnotId);
+    }
+    for (const supportBrace of Object.values(supportBraceStateForBounds.supportBraces)) {
+      if (supportBrace.modelId === modelId) modelKnotIds.add(supportBrace.hostKnotId);
+    }
+
+    for (const knotId of modelKnotIds) {
+      const knot = supportStateForBounds.knots[knotId] ?? supportBraceStateForBounds.knots[knotId];
+      if (!knot?.pos) continue;
+      expandByRadius(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
+    }
+
+    for (const trunk of Object.values(supportStateForBounds.trunks)) {
+      if (trunk.modelId !== modelId) continue;
+      for (const seg of trunk.segments) {
+        if (seg.topJoint?.pos) expandByRadius(seg.topJoint.pos, Math.max(0.001, (seg.topJoint.diameter ?? seg.diameter) / 2));
+        if (seg.bottomJoint?.pos) expandByRadius(seg.bottomJoint.pos, Math.max(0.001, (seg.bottomJoint.diameter ?? seg.diameter) / 2));
+      }
+      if (trunk.contactCone) {
+        expandByRadius(trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+        const socket = getFinalSocketPosition(trunk.contactCone);
+        expandByRadius(socket, Math.max(0.001, trunk.contactCone.profile.bodyDiameterMm / 2));
+      }
+    }
+
+    for (const branch of Object.values(supportStateForBounds.branches)) {
+      if (branch.modelId !== modelId) continue;
+      for (const seg of branch.segments) {
+        if (seg.topJoint?.pos) expandByRadius(seg.topJoint.pos, Math.max(0.001, (seg.topJoint.diameter ?? seg.diameter) / 2));
+        if (seg.bottomJoint?.pos) expandByRadius(seg.bottomJoint.pos, Math.max(0.001, (seg.bottomJoint.diameter ?? seg.diameter) / 2));
+      }
+      if (branch.contactCone) {
+        expandByRadius(branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
+        const socket = getFinalSocketPosition(branch.contactCone);
+        expandByRadius(socket, Math.max(0.001, branch.contactCone.profile.bodyDiameterMm / 2));
+      }
+    }
+
+    for (const leaf of Object.values(supportStateForBounds.leaves)) {
+      if (leaf.modelId !== modelId || !leaf.contactCone) continue;
+      expandByRadius(leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
+      const socket = getFinalSocketPosition(leaf.contactCone);
+      expandByRadius(socket, Math.max(0.001, leaf.contactCone.profile.bodyDiameterMm / 2));
+    }
+
+    for (const twig of Object.values(supportStateForBounds.twigs)) {
+      if (twig.modelId !== modelId) continue;
+      for (const seg of twig.segments) {
+        if (seg.topJoint?.pos) expandByRadius(seg.topJoint.pos, Math.max(0.001, (seg.topJoint.diameter ?? seg.diameter) / 2));
+        if (seg.bottomJoint?.pos) expandByRadius(seg.bottomJoint.pos, Math.max(0.001, (seg.bottomJoint.diameter ?? seg.diameter) / 2));
+      }
+      expandByRadius(twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
+      expandByRadius(twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
+    }
+
+    for (const stick of Object.values(supportStateForBounds.sticks)) {
+      if (stick.modelId !== modelId) continue;
+      for (const seg of stick.segments) {
+        if (seg.topJoint?.pos) expandByRadius(seg.topJoint.pos, Math.max(0.001, (seg.topJoint.diameter ?? seg.diameter) / 2));
+        if (seg.bottomJoint?.pos) expandByRadius(seg.bottomJoint.pos, Math.max(0.001, (seg.bottomJoint.diameter ?? seg.diameter) / 2));
+      }
+      expandByRadius(stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
+      expandByRadius(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
+      expandByRadius(getFinalSocketPosition(stick.contactConeA), Math.max(0.001, stick.contactConeA.profile.bodyDiameterMm / 2));
+      expandByRadius(getFinalSocketPosition(stick.contactConeB), Math.max(0.001, stick.contactConeB.profile.bodyDiameterMm / 2));
+    }
+
+    for (const supportBrace of Object.values(supportBraceStateForBounds.supportBraces)) {
+      if (supportBrace.modelId !== modelId) continue;
+      for (const seg of supportBrace.segments) {
+        if (seg.topJoint?.pos) expandByRadius(seg.topJoint.pos, Math.max(0.001, (seg.topJoint.diameter ?? seg.diameter) / 2));
+        if (seg.bottomJoint?.pos) expandByRadius(seg.bottomJoint.pos, Math.max(0.001, (seg.bottomJoint.diameter ?? seg.diameter) / 2));
+      }
+    }
+
+    if (rootsForModel.length > 0 && raftSettingsForBounds.bottomMode !== 'off') {
+      const circles: SupportBaseCircle[] = rootsForModel.map((root) => ({
+        x: root.transform.pos.x,
+        y: root.transform.pos.y,
+        r: root.diameter / 2,
+      }));
+
+      const chamferInset = raftSettingsForBounds.bottomMode === 'line'
+        ? Math.max(0, raftSettingsForBounds.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsForBounds.chamferAngle))))
+        : 0;
+
+      const baseProfile = computeFootprint(circles, {
+        marginMm: 0.2 + chamferInset,
+        samplesPerCircle: 24,
+      });
+
+      if (baseProfile && baseProfile.length >= 3) {
+        const outerProfile = raftSettingsForBounds.wallEnabled
+          ? computeRaftOuterBoundary(baseProfile, raftSettingsForBounds)
+          : baseProfile;
+
+        const raftTopZ = raftSettingsForBounds.bottomMode === 'line'
+          ? raftSettingsForBounds.lineHeightMm
+          : raftSettingsForBounds.thickness;
+        const raftMaxZ = raftTopZ + (raftSettingsForBounds.wallEnabled ? raftSettingsForBounds.wallHeight : 0);
+
+        for (const p of outerProfile) {
+          expandByRadius({ x: p.x, y: p.y, z: 0 }, 0);
+          expandByRadius({ x: p.x, y: p.y, z: raftMaxZ }, 0);
+        }
+      }
+    }
+
+    return hasAny ? bounds : null;
+  }, [raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
+
   const computeModelWorldBounds = React.useCallback((
     model: LoadedModel,
     modelTransformOverride?: ModelTransform,
@@ -1020,22 +1191,28 @@ export function SceneCanvas({
   ) => {
     const t = modelTransformOverride ?? model.transform;
 
+    let meshBounds: THREE.Box3;
+
     if (shouldUsePreciseBoundsForTransform(t)) {
-      return computePreciseModelWorldBounds(model.geometry, t);
+      meshBounds = computePreciseModelWorldBounds(model.geometry, t);
+    } else {
+      const approxBounds = computeApproxModelWorldBounds(model.geometry, t);
+      if (!volumeBounds) {
+        meshBounds = approxBounds;
+      } else if (!isBoundsOutsideVolume(approxBounds, volumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
+        meshBounds = approxBounds;
+      } else {
+        meshBounds = computePreciseModelWorldBounds(model.geometry, t);
+      }
     }
 
-    const approxBounds = computeApproxModelWorldBounds(model.geometry, t);
-    if (!volumeBounds) {
-      return approxBounds;
+    const supportRaftBounds = computeSupportAndRaftWorldBounds(model.id);
+    if (!supportRaftBounds) {
+      return meshBounds;
     }
 
-    // Fast path: if conservative bounds are clearly inside volume, skip precise pass.
-    if (!isBoundsOutsideVolume(approxBounds, volumeBounds, BUILD_VOLUME_BOUNDS_EPS_MM)) {
-      return approxBounds;
-    }
-
-    return computePreciseModelWorldBounds(model.geometry, t);
-  }, [BUILD_VOLUME_BOUNDS_EPS_MM]);
+    return meshBounds.clone().union(supportRaftBounds);
+  }, [BUILD_VOLUME_BOUNDS_EPS_MM, computeSupportAndRaftWorldBounds]);
 
   const buildVolumeBounds = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled) return null;
