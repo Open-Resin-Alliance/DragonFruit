@@ -22,7 +22,7 @@ import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansi
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
 import { SupportBuilder } from '@/supports/rendering';
-import { SupportBatchedRenderer } from '@/supports/rendering/SupportBatchedRenderer';
+import { SupportRenderer } from '@/supports/SupportRenderer';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
@@ -2721,20 +2721,18 @@ export function SceneCanvas({
               )}
 
               {/* Render supports */}
-              <SupportBatchedRenderer
+              <SupportRenderer
+                ref={supportsRef as React.RefObject<THREE.Group>}
+                mode={mode}
+                hidePlateContactPrimitives={hidePlateContactPrimitives}
                 clipLower={clipLower}
                 clipUpper={clipUpper}
+                supportColorsByModelId={supportColorsByModelId}
+                hoverTintColor={hoverTintColor}
+                hoverTintStrength={hoverTintStrength}
+                selectedTintStrength={selectedTintStrength}
                 activeModelId={visualActiveModelId ?? null}
                 hoverModelId={hoveredModelId}
-                onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
-                onModelPointerHover={(modelId) => {
-                  if (isOrbitInteracting || spaceMouseNavigationActive) {
-                    setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
-                    return;
-                  }
-                  const nextModelId = modelId || null;
-                  setHoveredSupportPointerModelId((prev) => (prev === nextModelId ? prev : nextModelId));
-                }}
               />
 
               <IslandOverlay
