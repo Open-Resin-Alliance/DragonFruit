@@ -635,6 +635,102 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return result;
     }, [supportBraceState.supportBraces, state.roots, state.knots, restrictToActiveModel, activeModelId]);
 
+    const contactConesBySupport = useMemo(() => {
+        const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (restrictToActiveModel && trunk.modelId !== activeModelId) continue;
+            if (!trunk.contactCone) continue;
+
+            result.set(trunk.id, {
+                supportId: trunk.id,
+                modelId: trunk.modelId,
+                cones: [{
+                    id: trunk.contactCone.id,
+                    supportId: trunk.id,
+                    modelId: trunk.modelId,
+                    pos: trunk.contactCone.pos,
+                    normal: trunk.contactCone.normal,
+                    surfaceNormal: trunk.contactCone.surfaceNormal,
+                    diskLengthOverride: trunk.contactCone.diskLengthOverride,
+                    profile: trunk.contactCone.profile,
+                }],
+            });
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (restrictToActiveModel && branch.modelId !== activeModelId) continue;
+            if (!branch.contactCone) continue;
+
+            result.set(branch.id, {
+                supportId: branch.id,
+                modelId: branch.modelId,
+                cones: [{
+                    id: branch.contactCone.id,
+                    supportId: branch.id,
+                    modelId: branch.modelId,
+                    pos: branch.contactCone.pos,
+                    normal: branch.contactCone.normal,
+                    surfaceNormal: branch.contactCone.surfaceNormal,
+                    diskLengthOverride: branch.contactCone.diskLengthOverride,
+                    profile: branch.contactCone.profile,
+                }],
+            });
+        }
+
+        for (const stick of Object.values(state.sticks)) {
+            if (restrictToActiveModel && stick.modelId !== activeModelId) continue;
+
+            result.set(stick.id, {
+                supportId: stick.id,
+                modelId: stick.modelId,
+                cones: [
+                    {
+                        id: stick.contactConeA.id,
+                        supportId: stick.id,
+                        modelId: stick.modelId,
+                        pos: stick.contactConeA.pos,
+                        normal: stick.contactConeA.normal,
+                        surfaceNormal: stick.contactConeA.surfaceNormal,
+                        diskLengthOverride: stick.contactConeA.diskLengthOverride,
+                        profile: stick.contactConeA.profile,
+                    },
+                    {
+                        id: stick.contactConeB.id,
+                        supportId: stick.id,
+                        modelId: stick.modelId,
+                        pos: stick.contactConeB.pos,
+                        normal: stick.contactConeB.normal,
+                        surfaceNormal: stick.contactConeB.surfaceNormal,
+                        diskLengthOverride: stick.contactConeB.diskLengthOverride,
+                        profile: stick.contactConeB.profile,
+                    },
+                ],
+            });
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (restrictToActiveModel && leaf.modelId !== activeModelId) continue;
+
+            result.set(leaf.id, {
+                supportId: leaf.id,
+                modelId: leaf.modelId,
+                cones: [{
+                    id: leaf.contactCone.id,
+                    supportId: leaf.id,
+                    modelId: leaf.modelId,
+                    pos: leaf.contactCone.pos,
+                    normal: leaf.contactCone.normal,
+                    surfaceNormal: leaf.contactCone.surfaceNormal,
+                    diskLengthOverride: leaf.contactCone.diskLengthOverride,
+                    profile: leaf.contactCone.profile,
+                }],
+            });
+        }
+
+        return result;
+    }, [state.trunks, state.branches, state.sticks, state.leaves, restrictToActiveModel, activeModelId]);
+
     const trunkJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
 
@@ -651,6 +747,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.bottomJoint.id,
                         pos: segment.bottomJoint.pos,
                         diameter: segment.bottomJoint.diameter,
+                        supportId: trunk.id,
+                        modelId: trunk.modelId,
                     });
                 }
 
@@ -660,6 +758,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.topJoint.id,
                         pos: segment.topJoint.pos,
                         diameter: segment.topJoint.diameter,
+                        supportId: trunk.id,
+                        modelId: trunk.modelId,
                     });
                 }
             }
@@ -692,6 +792,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.bottomJoint.id,
                         pos: segment.bottomJoint.pos,
                         diameter: segment.bottomJoint.diameter,
+                        supportId: branch.id,
+                        modelId: branch.modelId,
                     });
                 }
 
@@ -701,6 +803,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.topJoint.id,
                         pos: segment.topJoint.pos,
                         diameter: segment.topJoint.diameter,
+                        supportId: branch.id,
+                        modelId: branch.modelId,
                     });
                 }
             }
@@ -733,6 +837,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.bottomJoint.id,
                         pos: segment.bottomJoint.pos,
                         diameter: segment.bottomJoint.diameter,
+                        supportId: twig.id,
+                        modelId: twig.modelId,
                     });
                 }
 
@@ -742,6 +848,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.topJoint.id,
                         pos: segment.topJoint.pos,
                         diameter: segment.topJoint.diameter,
+                        supportId: twig.id,
+                        modelId: twig.modelId,
                     });
                 }
             }
@@ -774,6 +882,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.bottomJoint.id,
                         pos: segment.bottomJoint.pos,
                         diameter: segment.bottomJoint.diameter,
+                        supportId: stick.id,
+                        modelId: stick.modelId,
                     });
                 }
 
@@ -783,6 +893,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.topJoint.id,
                         pos: segment.topJoint.pos,
                         diameter: segment.topJoint.diameter,
+                        supportId: stick.id,
+                        modelId: stick.modelId,
                     });
                 }
             }
@@ -815,6 +927,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.bottomJoint.id,
                         pos: segment.bottomJoint.pos,
                         diameter: segment.bottomJoint.diameter,
+                        supportId: supportBrace.id,
+                        modelId: supportBrace.modelId,
                     });
                 }
 
@@ -824,6 +938,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         id: segment.topJoint.id,
                         pos: segment.topJoint.pos,
                         diameter: segment.topJoint.diameter,
+                        supportId: supportBrace.id,
+                        modelId: supportBrace.modelId,
                     });
                 }
             }
@@ -1110,76 +1226,39 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
 
         for (const trunk of Object.values(state.trunks)) {
-            if (restrictToActiveModel && trunk.modelId !== activeModelId) continue;
             if (selectedTrunkIds.has(trunk.id)) continue;
-            if (!trunk.contactCone) continue;
+            const coneSet = contactConesBySupport.get(trunk.id);
+            if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(trunk.modelId);
-            pushCone(color, {
-                id: trunk.contactCone.id,
-                supportId: trunk.id,
-                modelId: trunk.modelId,
-                pos: trunk.contactCone.pos,
-                normal: trunk.contactCone.normal,
-                surfaceNormal: trunk.contactCone.surfaceNormal,
-                diskLengthOverride: trunk.contactCone.diskLengthOverride,
-                profile: trunk.contactCone.profile,
-            });
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
         for (const branch of Object.values(state.branches)) {
-            if (restrictToActiveModel && branch.modelId !== activeModelId) continue;
             if (selectedBranchIds.has(branch.id)) continue;
-            if (!branch.contactCone) continue;
+            const coneSet = contactConesBySupport.get(branch.id);
+            if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(branch.modelId);
-            pushCone(color, {
-                id: branch.contactCone.id,
-                supportId: branch.id,
-                modelId: branch.modelId,
-                pos: branch.contactCone.pos,
-                normal: branch.contactCone.normal,
-                surfaceNormal: branch.contactCone.surfaceNormal,
-                diskLengthOverride: branch.contactCone.diskLengthOverride,
-                profile: branch.contactCone.profile,
-            });
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
         for (const stick of Object.values(state.sticks)) {
-            if (restrictToActiveModel && stick.modelId !== activeModelId) continue;
             if (selectedStickIds.has(stick.id)) continue;
+            const coneSet = contactConesBySupport.get(stick.id);
+            if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(stick.modelId);
-            const stickCones = [stick.contactConeA, stick.contactConeB];
-            for (const cone of stickCones) {
-                pushCone(color, {
-                    id: cone.id,
-                    supportId: stick.id,
-                    modelId: stick.modelId,
-                    pos: cone.pos,
-                    normal: cone.normal,
-                    surfaceNormal: cone.surfaceNormal,
-                    diskLengthOverride: cone.diskLengthOverride,
-                    profile: cone.profile,
-                });
-            }
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
         for (const leaf of Object.values(state.leaves)) {
-            if (restrictToActiveModel && leaf.modelId !== activeModelId) continue;
             if (selectedLeafIds.has(leaf.id)) continue;
+            const coneSet = contactConesBySupport.get(leaf.id);
+            if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(leaf.modelId);
-            pushCone(color, {
-                id: leaf.contactCone.id,
-                supportId: leaf.id,
-                modelId: leaf.modelId,
-                pos: leaf.contactCone.pos,
-                normal: leaf.contactCone.normal,
-                surfaceNormal: leaf.contactCone.surfaceNormal,
-                diskLengthOverride: leaf.contactCone.diskLengthOverride,
-                profile: leaf.contactCone.profile,
-            });
+            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
         return Array.from(grouped.entries()).map(([color, cones]) => ({ color, cones }));
@@ -1188,8 +1267,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         state.branches,
         state.sticks,
         state.leaves,
-        restrictToActiveModel,
-        activeModelId,
+        contactConesBySupport,
         selectedTrunkIds,
         selectedBranchIds,
         selectedStickIds,
@@ -1264,6 +1342,63 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             diameter: shaft.diameter * 1.02,
         }));
     }, [hoveredSupportShaftSet]);
+
+    const hoveredSupportConeSet = useMemo(() => {
+        if (!isInteractable) return null;
+
+        const hoveredSupportId = sceneHoveredSupportId ?? (state.hoveredCategory === 'support' ? state.hoveredId : null);
+        if (!hoveredSupportId) return null;
+
+        return contactConesBySupport.get(hoveredSupportId) ?? null;
+    }, [isInteractable, sceneHoveredSupportId, state.hoveredCategory, state.hoveredId, contactConesBySupport]);
+
+    const hoveredSupportOverlayCones = useMemo(() => {
+        if (!hoveredSupportConeSet) return [] as InstancedContactCone[];
+        return hoveredSupportConeSet.cones;
+    }, [hoveredSupportConeSet]);
+
+    const hoveredSupportJointSet = useMemo(() => {
+        if (!isInteractable) return null;
+
+        const hoveredSupportId = sceneHoveredSupportId ?? (state.hoveredCategory === 'support' ? state.hoveredId : null);
+        if (!hoveredSupportId) return null;
+
+        const trunkSet = trunkJointsBySupport.get(hoveredSupportId);
+        if (trunkSet) return trunkSet;
+
+        const branchSet = branchJointsBySupport.get(hoveredSupportId);
+        if (branchSet) return branchSet;
+
+        const twigSet = twigJointsBySupport.get(hoveredSupportId);
+        if (twigSet) return twigSet;
+
+        const stickSet = stickJointsBySupport.get(hoveredSupportId);
+        if (stickSet) return stickSet;
+
+        const supportBraceSet = supportBraceJointsBySupport.get(hoveredSupportId);
+        if (supportBraceSet) return supportBraceSet;
+
+        return null;
+    }, [
+        isInteractable,
+        sceneHoveredSupportId,
+        state.hoveredCategory,
+        state.hoveredId,
+        trunkJointsBySupport,
+        branchJointsBySupport,
+        twigJointsBySupport,
+        stickJointsBySupport,
+        supportBraceJointsBySupport,
+    ]);
+
+    const hoveredSupportOverlayJoints = useMemo(() => {
+        if (!hoveredSupportJointSet) return [] as InstancedJoint[];
+
+        return hoveredSupportJointSet.joints.map((joint) => ({
+            ...joint,
+            diameter: joint.diameter * 1.06,
+        }));
+    }, [hoveredSupportJointSet]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
         if (!isInteractable) return;
@@ -1340,6 +1475,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         emitSupportModelPointerHover(cone.modelId ?? null);
     }, [isInteractable]);
 
+    const handleSceneBatchedJointClick = React.useCallback((joint: InstancedJoint, event: { nativeEvent?: Event }) => {
+        if (!isInteractable) return;
+        if (!joint.supportId) return;
+        handleSupportClick(event, joint.supportId, isInteractable);
+    }, [isInteractable]);
+
+    const handleSceneBatchedJointPointerMove = React.useCallback((joint: InstancedJoint) => {
+        if (!isInteractable) return;
+        if (orbitInteractionActiveRef.current) return;
+
+        if (pendingSceneHoverClearFrameRef.current != null) {
+            cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
+            pendingSceneHoverClearFrameRef.current = null;
+        }
+
+        const nextSupportId = joint.supportId ?? null;
+        setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
+        emitSupportModelPointerHover(joint.modelId ?? null);
+    }, [isInteractable]);
+
     useEffect(() => {
         const root = groupRef.current;
         if (!root) return;
@@ -1396,6 +1551,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     color={group.color}
                     widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
                     heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
+                    onJointClick={isInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1432,6 +1590,34 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
                     onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
                     onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
+
+            {hoveredSupportOverlayCones.length > 0 && hoveredSupportConeSet && (
+                <InstancedContactConeGroup
+                    key={`scene-cone-hover-overlay:${hoveredSupportConeSet.supportId}:${hoveredSupportOverlayCones.length}`}
+                    cones={hoveredSupportOverlayCones}
+                    color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportConeSet.modelId)}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    onConeClick={isInteractable ? handleSceneBatchedConeClick : undefined}
+                    onConePointerMove={isInteractable ? handleSceneBatchedConePointerMove : undefined}
+                    onConePointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
+
+            {hoveredSupportOverlayJoints.length > 0 && hoveredSupportJointSet && (
+                <InstancedJointGroup
+                    key={`scene-joint-hover-overlay:${hoveredSupportJointSet.supportId}:${hoveredSupportOverlayJoints.length}`}
+                    joints={hoveredSupportOverlayJoints}
+                    color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportJointSet.modelId)}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
+                    heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
+                    onJointClick={isInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             )}
 
