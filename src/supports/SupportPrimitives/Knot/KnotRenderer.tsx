@@ -11,6 +11,7 @@ interface KnotRendererProps {
     color?: string;
     emissive?: string;
     emissiveIntensity?: number;
+    selectedColor?: string;
     onClick?: (e: any) => void;
     onSelect?: (id: string) => void;
     transparent?: boolean;
@@ -26,6 +27,7 @@ export function KnotRenderer({
     color: propColor = '#ff8800',
     emissive: propEmissive = '#000000',
     emissiveIntensity: propEmissiveIntensity = 0,
+    selectedColor: _selectedColor,
     onClick,
     onSelect,
     transparent = false,
@@ -122,9 +124,6 @@ export function KnotRenderer({
     const handlePointerLeave = () => {
         document.body.style.cursor = '';
     };
-
-    // Hide entirely when parent is not selected — eliminates all sphere geometry from render
-    if (!isParentSelected) return null;
 
     const hitboxRadius = radius * 2.0;
 

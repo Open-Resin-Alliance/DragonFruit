@@ -3146,6 +3146,7 @@ export default function Home() {
           <SceneCanvas
             models={scene.models}
             activeModelId={displayActiveModelId}
+            visualActiveModelId={scene.activeModelId}
             selectedModelIds={scene.selectedModelIds}
             clipLower={slicing.clipLower}
             clipUpper={slicing.clipUpper}

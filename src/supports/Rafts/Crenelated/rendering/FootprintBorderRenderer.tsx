@@ -14,6 +14,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 interface FootprintBorderRendererProps {
   modelGeometry: GeometryWithBounds | null;
   modelTransform: ModelTransform | null | undefined;
+  color?: string;
 }
 
 /**
@@ -100,7 +101,8 @@ function offsetPolygonOutward(polygon: THREE.Vector2[], distance: number): THREE
  */
 export default function FootprintBorderRenderer({
   modelGeometry,
-  modelTransform
+  modelTransform,
+  color = '#3b82f6',
 }: FootprintBorderRendererProps) {
   const FOOTPRINT_BORDER_Z = 0.001;
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
@@ -246,7 +248,7 @@ export default function FootprintBorderRenderer({
 
   return (
     <primitive object={new THREE.Line(borderLine, new THREE.LineBasicMaterial({
-      color: '#3b82f6',
+      color,
       linewidth: 5,
       opacity: 0.5,
       transparent: true

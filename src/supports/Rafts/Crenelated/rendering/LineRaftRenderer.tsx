@@ -109,7 +109,11 @@ function buildNonCrossingEdges(points: THREE.Vector2[], maxDegree: number, maxLe
   return chosen;
 }
 
-export default function LineRaftRenderer() {
+interface LineRaftRendererProps {
+  colorized?: boolean;
+}
+
+export default function LineRaftRenderer({ colorized = true }: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
@@ -226,7 +230,10 @@ export default function LineRaftRenderer() {
       // Interior network only: keep this unioned mesh flat to avoid sloppy chamfer stitching.
       borderProfile: null,
     });
-    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
+    const beamColor = colorized ? '#f97316' : '#a3a3a3';
+    const wallColor = colorized ? '#22c55e' : '#a3a3a3';
+
+    unionMesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
     unionMesh.castShadow = false;
     unionMesh.receiveShadow = true;
 
@@ -243,7 +250,7 @@ export default function LineRaftRenderer() {
           heightMm: beamHeight,
           chamferAngleDeg: 90,
         });
-        mesh.material = new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
+        mesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
         mesh.castShadow = false;
         mesh.receiveShadow = true;
         beamMeshes.push(mesh);
@@ -253,7 +260,7 @@ export default function LineRaftRenderer() {
     // Perimeter border beam: single manifold ring mesh (chamfered outer edge).
     if (hasBorderRing) {
       const borderMesh = generatePerimeterBorderBeam(profile, { widthMm: raft.lineWidthMm, heightMm: beamHeight, chamferAngleDeg: raft.chamferAngle });
-      borderMesh.material = new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
+      borderMesh.material = new THREE.MeshStandardMaterial({ color: beamColor, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
       borderMesh.castShadow = false;
       borderMesh.receiveShadow = true;
       beamMeshes.push(borderMesh);
@@ -279,14 +286,14 @@ export default function LineRaftRenderer() {
               thickness: beamHeight,
             });
 
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#22c55e', roughness: 0.9, metalness: 0.0 });
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9, metalness: 0.0 });
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
       }
     }
 
     return { beamMeshes, wallMesh } as const;
-  }, [raft, supportState]);
+  }, [colorized, raft, supportState]);
 
   const groupRef = React.useRef<THREE.Group>(null);
   React.useEffect(() => {

@@ -20,6 +20,9 @@ interface BranchRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  baseColor?: string;
+  hoverColor?: string;
+  selectedColor?: string;
 }
 
 export function BranchRenderer({ 
@@ -31,7 +34,10 @@ export function BranchRenderer({
   showKnots,
   isHovered: propHovered, 
   suppressHover,
-  isInteractable = true 
+  isInteractable = true,
+  baseColor = '#ff8800',
+  hoverColor,
+  selectedColor = '#80fffd',
 }: BranchRendererProps) {
   // Use universal highlight hook (matches TrunkRenderer pattern)
   const { pickRef, visuals } = useHighlight({
@@ -40,8 +46,9 @@ export function BranchRenderer({
     isSelected,
     suppressHover,
     externalHover: propHovered,
-    baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-    selectedColor: '#80fffd'
+    baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+    selectedColor,
+    hoverColor,
   });
 
   // Handle Click
@@ -81,9 +88,7 @@ export function BranchRenderer({
 
     // Add Shaft (straight or bezier)
     if (seg.type === 'bezier') {
-      // Bezier segments appear Magenta when parent selected, otherwise standard color
       const bezierColor = isSelected ? '#ff00ff' : visuals.color;
-
       shafts.push(
         <BezierRenderer
           key={`shaft-${seg.id}`}
@@ -97,6 +102,7 @@ export function BranchRenderer({
           color={bezierColor}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -113,6 +119,7 @@ export function BranchRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -133,6 +140,7 @@ export function BranchRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
         />
@@ -175,6 +183,7 @@ export function BranchRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
         />

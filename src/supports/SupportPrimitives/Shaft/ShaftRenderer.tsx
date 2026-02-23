@@ -14,6 +14,7 @@ interface ShaftRendererProps {
     color?: string;
     emissive?: string;
     emissiveIntensity?: number;
+    selectedColor?: string;
     transparent?: boolean;
     opacity?: number;
     raycast?: any;
@@ -137,7 +138,7 @@ export function ShaftRenderer({
         }
     };
 
-    const finalColor = isSelected ? '#ffffff' : color; // White when selected, otherwise inherited (Cyan/Orange)
+    const finalColor = isSelected ? '#ffffff' : color;
     const finalEmissive = isSelected ? '#444444' : (isHovered ? '#ffffff' : emissive);
     const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.3 : emissiveIntensity);
     

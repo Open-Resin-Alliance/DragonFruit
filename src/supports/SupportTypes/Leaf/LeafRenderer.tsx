@@ -14,6 +14,9 @@ interface LeafRendererProps {
     isHovered?: boolean;
     suppressHover?: boolean;
     isInteractable?: boolean;
+    baseColor?: string;
+    hoverColor?: string;
+    selectedColor?: string;
 }
 
 export function LeafRenderer({
@@ -25,6 +28,9 @@ export function LeafRenderer({
     isHovered: propHovered,
     suppressHover,
     isInteractable = true,
+    baseColor = '#ff8800',
+    hoverColor,
+    selectedColor = '#80fffd',
 }: LeafRendererProps) {
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
@@ -32,8 +38,9 @@ export function LeafRenderer({
         isSelected,
         suppressHover,
         externalHover: propHovered,
-        baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-        selectedColor: '#80fffd',
+        baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+        selectedColor,
+        hoverColor,
     });
 
     const handleClick = (e: any) => {
@@ -82,6 +89,7 @@ export function LeafRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={!!isSelected}
                 />
