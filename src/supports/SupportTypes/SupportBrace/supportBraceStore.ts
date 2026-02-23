@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { SupportBraceBuildResult, SupportBraceState } from './types';
+import * as THREE from 'three';
+import type { Vec3, Segment } from '../../types';
 
 const listeners = new Set<() => void>();
 
@@ -108,6 +110,95 @@ export function removeSupportBrace(id: string): SupportBraceBuildResult | null {
         root,
         hostKnot,
     };
+}
+
+function transformVec3(value: Vec3, matrix: THREE.Matrix4): Vec3 {
+    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix4(matrix);
+    return { x: v.x, y: v.y, z: v.z };
+}
+
+function transformDirection(value: Vec3, normalMatrix: THREE.Matrix3): Vec3 {
+    const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix3(normalMatrix);
+    if (v.lengthSq() <= 1e-12) return value;
+    v.normalize();
+    return { x: v.x, y: v.y, z: v.z };
+}
+
+function transformSegment(segment: Segment, matrix: THREE.Matrix4, normalMatrix: THREE.Matrix3): Segment {
+    const next: Segment = {
+        ...segment,
+        topJoint: segment.topJoint
+            ? { ...segment.topJoint, pos: transformVec3(segment.topJoint.pos, matrix) }
+            : segment.topJoint,
+        bottomJoint: segment.bottomJoint
+            ? { ...segment.bottomJoint, pos: transformVec3(segment.bottomJoint.pos, matrix) }
+            : segment.bottomJoint,
+    };
+
+    if (segment.type === 'bezier') {
+        next.controlPoint1 = transformVec3(segment.controlPoint1, matrix);
+        next.controlPoint2 = transformVec3(segment.controlPoint2, matrix);
+        next.startTangent = transformDirection(segment.startTangent, normalMatrix);
+        next.endTangent = transformDirection(segment.endTangent, normalMatrix);
+    }
+
+    return next;
+}
+
+export function transformSupportBracesForModel(modelId: string, deltaMatrix: THREE.Matrix4) {
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
+
+    let changed = false;
+    let nextSupportBraces = state.supportBraces;
+    let nextRoots = state.roots;
+    let nextKnots = state.knots;
+
+    for (const supportBrace of Object.values(state.supportBraces)) {
+        if (supportBrace.modelId !== modelId) continue;
+
+        if (!changed) {
+            nextSupportBraces = { ...state.supportBraces };
+            nextRoots = { ...state.roots };
+            nextKnots = { ...state.knots };
+            changed = true;
+        }
+
+        const transformedSupportBrace = {
+            ...supportBrace,
+            segments: supportBrace.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+        };
+
+        nextSupportBraces[supportBrace.id] = transformedSupportBrace;
+
+        const root = state.roots[supportBrace.rootId];
+        if (root) {
+            nextRoots[root.id] = {
+                ...root,
+                transform: {
+                    ...root.transform,
+                    pos: transformVec3(root.transform.pos, deltaMatrix),
+                },
+            };
+        }
+
+        const hostKnot = state.knots[supportBrace.hostKnotId];
+        if (hostKnot) {
+            nextKnots[hostKnot.id] = {
+                ...hostKnot,
+                pos: transformVec3(hostKnot.pos, deltaMatrix),
+            };
+        }
+    }
+
+    if (!changed) return;
+
+    state = {
+        ...state,
+        supportBraces: nextSupportBraces,
+        roots: nextRoots,
+        knots: nextKnots,
+    };
+    notify();
 }
 
 export function useSupportBraceStoreState() {

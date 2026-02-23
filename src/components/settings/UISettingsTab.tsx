@@ -80,7 +80,7 @@ export function UISettingsTab({
 					Theme
 				</h3>
 				<p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>
-					Choose how Dragonfruit appears across the app.
+					Choose how DragonFruit appears across the app.
 				</p>
 
 				<div className="grid grid-cols-[120px_1fr] items-center gap-2">
@@ -91,7 +91,7 @@ export function UISettingsTab({
 						value={themePreset}
 						onChange={(e) => onThemePresetChange(e.target.value as ThemePreset)}
 					>
-						<option value="dragonfruit-dark">Default Dragonfruit Dark</option>
+						<option value="dragonfruit-dark">Default DragonFruit Dark</option>
 					</Select>
 				</div>
 

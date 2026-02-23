@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronDown, ChevronUp, LayoutGrid, Loader2, Minus, Plus, RotateCw } from 'lucide-react';
+import { LayoutGrid, Loader2, Minus, Plus, RotateCw } from 'lucide-react';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { Button, Card, CardHeader, IconButton, Select } from '@/components/ui/primitives';
 
@@ -35,6 +35,7 @@ interface ArrangePanelProps {
   modelCount: number;
   selectedModelCount: number;
   isApplying?: boolean;
+  disableArrangeActions?: boolean;
 }
 
 type MiniStepperFieldProps = {
@@ -55,44 +56,21 @@ function MiniStepperField({ value, onChange, min, max, disabled = false }: MiniS
   }, [max, min, onChange]);
 
   return (
-    <div
-      className="relative min-w-0"
-      onWheel={(e) => {
-        if (disabled) return;
-        e.preventDefault();
-        const delta = e.deltaY < 0 ? 1 : -1;
-        apply(clamped + delta);
-      }}
-    >
+    <div className="min-w-0" onWheel={(e) => {
+      if (disabled) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 1 : -1;
+      apply(clamped + delta);
+    }}>
       <NumberInput
         value={clamped}
         onChange={apply}
+        min={min}
+        max={max}
+        step={1}
         disabled={disabled}
         className="ui-input h-8 w-full min-w-0 pl-1.5 pr-5 text-xs text-center no-spinners"
       />
-
-      <div className="absolute inset-y-0 right-0.5 flex w-4 flex-col items-center justify-center gap-0.5">
-        <button
-          type="button"
-          className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
-          onClick={() => apply(clamped + 1)}
-          disabled={disabled || clamped >= max}
-          tabIndex={-1}
-          aria-label="Increase value"
-        >
-          <ChevronUp className="h-2.5 w-2.5" />
-        </button>
-        <button
-          type="button"
-          className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10 disabled:opacity-50"
-          onClick={() => apply(clamped - 1)}
-          disabled={disabled || clamped <= min}
-          tabIndex={-1}
-          aria-label="Decrease value"
-        >
-          <ChevronDown className="h-2.5 w-2.5" />
-        </button>
-      </div>
     </div>
   );
 }
@@ -125,8 +103,39 @@ export function ArrangePanel({
   modelCount,
   selectedModelCount,
   isApplying = false,
+  disableArrangeActions = false,
 }: ArrangePanelProps) {
   const [expanded, setExpanded] = React.useState(true);
+  const isArrangeAllDisabled = modelCount <= 1 || isApplying || disableArrangeActions;
+  const isArrangeSelectedDisabled = selectedModelCount === 0 || isApplying || disableArrangeActions;
+  const panelCardStyle: React.CSSProperties = {
+    borderColor: 'var(--border-subtle)',
+    background: 'var(--surface-1)',
+  };
+
+  const disabledActionStyle: React.CSSProperties = {
+    background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+    borderColor: 'color-mix(in srgb, var(--border-subtle), black 10%)',
+    color: 'color-mix(in srgb, var(--text-muted), var(--surface-2) 18%)',
+  };
+
+  const accentCardStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 76%)',
+    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 95%)',
+  };
+
+  const activeModeStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+    background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
+    color: 'var(--text-strong)',
+  };
+
+  const disabledModeStyle: React.CSSProperties = {
+    borderColor: 'color-mix(in srgb, var(--border-subtle), black 10%)',
+    background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+    color: 'color-mix(in srgb, var(--text-muted), var(--surface-2) 18%)',
+  };
+
   const sanitizeNumber = React.useCallback((value: number, fallback: number) => (
     Number.isFinite(value) ? value : fallback
   ), []);
@@ -176,7 +185,7 @@ export function ArrangePanel({
 
       {expanded && (
         <div className="px-2 pb-2 space-y-2 sm:px-2.5 sm:pb-2.5">
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={accentCardStyle}>
             <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Layout mode</div>
             <div className="grid grid-cols-2 gap-1">
               <button
@@ -184,13 +193,7 @@ export function ArrangePanel({
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('auto')}
                 disabled={isApplying}
-                style={layoutMode === 'auto'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
+                style={isApplying ? disabledModeStyle : (layoutMode === 'auto' ? activeModeStyle : undefined)}
               >
                 Auto
               </button>
@@ -199,13 +202,7 @@ export function ArrangePanel({
                 className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                 onClick={() => onLayoutModeChange('array')}
                 disabled={isApplying}
-                style={layoutMode === 'array'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                      color: 'var(--text-strong)',
-                    }
-                  : undefined}
+                style={isApplying ? disabledModeStyle : (layoutMode === 'array' ? activeModeStyle : undefined)}
               >
                 Manual
               </button>
@@ -213,7 +210,7 @@ export function ArrangePanel({
           </div>
 
           {layoutMode === 'auto' && (
-            <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="rounded-md border p-2" style={accentCardStyle}>
               <div className="ui-meta mb-1" style={{ color: 'var(--text-muted)' }}>Arrange mode</div>
               <div className="grid grid-cols-2 gap-1">
                 <button
@@ -221,13 +218,7 @@ export function ArrangePanel({
                   className="ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]"
                   onClick={() => onPrecisionModeChange('standard')}
                   disabled={isApplying}
-                  style={precisionMode === 'standard'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                        color: 'var(--text-strong)',
-                      }
-                    : undefined}
+                  style={isApplying ? disabledModeStyle : (precisionMode === 'standard' ? activeModeStyle : undefined)}
                   title="Current arrange algorithm"
                 >
                   Standard
@@ -240,13 +231,7 @@ export function ArrangePanel({
                     onAllowRotateOnZChange(true);
                   }}
                   disabled={isApplying}
-                  style={precisionMode === 'high_precision'
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 85%)',
-                        color: 'var(--text-strong)',
-                      }
-                    : undefined}
+                  style={isApplying ? disabledModeStyle : (precisionMode === 'high_precision' ? activeModeStyle : undefined)}
                   title="Hull-based SAT packing for tighter fit"
                 >
                   High-Precision
@@ -256,7 +241,7 @@ export function ArrangePanel({
           )}
 
           {layoutMode === 'auto' ? (
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={panelCardStyle}>
             <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>Arrange distance (mm)</label>
             <div className="mt-1 flex min-w-0 items-center gap-1">
               <IconButton
@@ -271,6 +256,7 @@ export function ArrangePanel({
               <NumberInput
                 value={spacingMm}
                 onChange={setClampedSpacing}
+                showStepper={false}
                 onWheel={(e) => {
                   if (isApplying) return;
                   e.preventDefault();
@@ -292,7 +278,7 @@ export function ArrangePanel({
           </div>
 
           ) : (
-            <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="rounded-md border p-2" style={panelCardStyle}>
               <div className="grid grid-cols-[24px_minmax(0,1fr)_minmax(0,1fr)] gap-1 items-center text-[10px] uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>
                 <span />
                 <span className="text-center">Count</span>
@@ -325,7 +311,7 @@ export function ArrangePanel({
             </div>
           )}
 
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+          <div className="rounded-md border p-2" style={panelCardStyle}>
             <div className="ui-meta" style={{ color: 'var(--text-muted)' }}>Placement anchor</div>
             <Select
               value={anchorMode}
@@ -345,7 +331,7 @@ export function ArrangePanel({
             <button
               type="button"
               className="w-full rounded-md border px-2 py-2 text-left transition-colors disabled:opacity-60"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+              style={allowRotateOnZ ? accentCardStyle : panelCardStyle}
               onClick={() => onAllowRotateOnZChange(!allowRotateOnZ)}
               disabled={isApplying || precisionMode === 'high_precision'}
               title={precisionMode === 'high_precision'
@@ -377,11 +363,16 @@ export function ArrangePanel({
           <div className="grid grid-cols-2 gap-2">
             <Button
               onClick={onApplyAll}
-              variant="accent"
+              variant={isArrangeAllDisabled ? 'secondary' : 'primary'}
               size="sm"
               className="w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight"
-              disabled={modelCount <= 1 || isApplying}
-              title={modelCount <= 1 ? 'Need at least 2 visible models to arrange' : 'Arrange all visible models'}
+              disabled={isArrangeAllDisabled}
+              style={isArrangeAllDisabled ? disabledActionStyle : undefined}
+              title={disableArrangeActions
+                ? 'Reduce Total Copies to 1 before arranging'
+                : (modelCount <= 1
+                  ? 'Need at least 2 visible models to arrange'
+                  : 'Arrange all visible models')}
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">
@@ -395,11 +386,16 @@ export function ArrangePanel({
 
             <Button
               onClick={onApplySelected}
-              variant="secondary"
+              variant={isArrangeSelectedDisabled ? 'secondary' : 'accent'}
               size="sm"
               className="w-full !min-h-8 px-1.5 py-1 text-[10px] sm:text-[11px] whitespace-normal text-center leading-tight"
-              disabled={selectedModelCount <= 1 || isApplying}
-              title={selectedModelCount <= 1 ? 'Select at least 2 visible models to arrange' : 'Arrange selected models only'}
+              disabled={isArrangeSelectedDisabled}
+              style={isArrangeSelectedDisabled ? disabledActionStyle : undefined}
+              title={disableArrangeActions
+                ? 'Reduce Total Copies to 1 before arranging'
+                : (selectedModelCount === 0
+                  ? 'Select a model to arrange selected'
+                  : 'Arrange selected models only')}
             >
               {isApplying ? (
                 <span className="inline-flex items-center gap-1.5">

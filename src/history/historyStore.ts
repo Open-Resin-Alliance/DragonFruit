@@ -1,9 +1,14 @@
-import { HistoryAction, HistoryHandler, HistorySubscriber, HistoryDirection } from './types';
+import { HistoryAction, HistoryHandler, HistorySubscriber, HistoryDirection, HistoryDebugEvent, HistoryDebugEventKind } from './types';
 
 const undoStack: HistoryAction[] = [];
 const redoStack: HistoryAction[] = [];
 const handlerMap = new Map<string, Set<HistoryHandler>>();
 const subscribers = new Set<HistorySubscriber>();
+const historyOperationSubscribers = new Set<(payload: { direction: HistoryDirection; action: HistoryAction }) => void>();
+const historyDebugSubscribers = new Set<HistorySubscriber>();
+const historyDebugLog: HistoryDebugEvent[] = [];
+const HISTORY_DEBUG_LOG_LIMIT = 600;
+let historyDebugIdCounter = 1;
 
 function notifySubscribers() {
   subscribers.forEach((listener) => {
@@ -15,32 +20,83 @@ function notifySubscribers() {
   });
 }
 
+function notifyHistoryOperation(direction: HistoryDirection, action: HistoryAction) {
+  historyOperationSubscribers.forEach((listener) => {
+    try {
+      listener({ direction, action: structuredClone(action) });
+    } catch (err) {
+      console.error('[HistoryStore] operation subscriber error', err);
+    }
+  });
+}
+
+function notifyHistoryDebugSubscribers() {
+  historyDebugSubscribers.forEach((listener) => {
+    try {
+      listener();
+    } catch (err) {
+      console.error('[HistoryStore] debug subscriber error', err);
+    }
+  });
+}
+
+function appendHistoryDebugEvent(kind: HistoryDebugEventKind, action?: HistoryAction) {
+  historyDebugLog.push({
+    id: historyDebugIdCounter++,
+    timestamp: Date.now(),
+    kind,
+    actionType: action?.type,
+    actionDescription: action?.description,
+    undoCount: undoStack.length,
+    redoCount: redoStack.length,
+  });
+
+  while (historyDebugLog.length > HISTORY_DEBUG_LOG_LIMIT) {
+    historyDebugLog.shift();
+  }
+
+  notifyHistoryDebugSubscribers();
+}
+
 export function pushHistory(action: HistoryAction) {
   undoStack.push(structuredClone(action));
   redoStack.length = 0;
+  appendHistoryDebugEvent('push', action);
   notifySubscribers();
 }
 
 export function undo() {
   const action = undoStack.pop();
-  if (!action) return;
+  if (!action) {
+    appendHistoryDebugEvent('undo-empty');
+    return;
+  }
   const handled = dispatch(action, 'undo');
   if (handled) {
     redoStack.push(structuredClone(action));
+    notifyHistoryOperation('undo', action);
+    appendHistoryDebugEvent('undo', action);
     notifySubscribers();
   } else {
+    appendHistoryDebugEvent('undo-handler-missing', action);
     console.warn('[HistoryStore] undo handler missing for action', action.type);
   }
 }
 
 export function redo() {
   const action = redoStack.pop();
-  if (!action) return;
+  if (!action) {
+    appendHistoryDebugEvent('redo-empty');
+    return;
+  }
   const handled = dispatch(action, 'redo');
   if (handled) {
     undoStack.push(structuredClone(action));
+    notifyHistoryOperation('redo', action);
+    appendHistoryDebugEvent('redo', action);
     notifySubscribers();
   } else {
+    appendHistoryDebugEvent('redo-handler-missing', action);
     console.warn('[HistoryStore] redo handler missing for action', action.type);
   }
 }
@@ -48,7 +104,18 @@ export function redo() {
 export function clearHistory() {
   undoStack.length = 0;
   redoStack.length = 0;
+  appendHistoryDebugEvent('clear-history');
   notifySubscribers();
+}
+
+export function getHistoryDebugEvents() {
+  return historyDebugLog.map((event) => ({ ...event }));
+}
+
+export function clearHistoryDebugEvents() {
+  historyDebugLog.length = 0;
+  historyDebugIdCounter = 1;
+  appendHistoryDebugEvent('clear-debug-log');
 }
 
 export function registerHistoryHandler(type: string, handler: HistoryHandler) {
@@ -67,6 +134,16 @@ export function registerHistoryHandler(type: string, handler: HistoryHandler) {
 export function subscribeHistory(listener: HistorySubscriber) {
   subscribers.add(listener);
   return () => subscribers.delete(listener);
+}
+
+export function subscribeHistoryOperations(listener: (payload: { direction: HistoryDirection; action: HistoryAction }) => void) {
+  historyOperationSubscribers.add(listener);
+  return () => historyOperationSubscribers.delete(listener);
+}
+
+export function subscribeHistoryDebug(listener: HistorySubscriber) {
+  historyDebugSubscribers.add(listener);
+  return () => historyDebugSubscribers.delete(listener);
 }
 
 export function getUndoCount() {

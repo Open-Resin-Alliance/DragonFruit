@@ -144,3 +144,43 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
     "showViolationWarning": true
   }
   ```
+
+### `dragonfruit-backups:auto-sync-enabled`
+
+- **Description**: Whether automated GitHub backup sync is enabled.
+- **Location**: `src/components/settings/BackupsSettingsTab.tsx`
+- **Schema**: string boolean (`'true' | 'false'`).
+- **Example**:
+  ```json
+  "true"
+  ```
+
+### `dragonfruit-backups:auto-sync-minutes`
+
+- **Description**: Auto-sync interval in minutes.
+- **Location**: `src/components/settings/BackupsSettingsTab.tsx`
+- **Schema**: stringified integer range `[1, 240]`.
+- **Example**:
+  ```json
+  "15"
+  ```
+
+### `dragonfruit-backups:client-id`
+
+- **Description**: Stable per-browser client identifier for backup snapshots.
+- **Location**: `src/components/settings/BackupsSettingsTab.tsx`
+- **Schema**: UUID-ish string.
+- **Example**:
+  ```json
+  "1fd0fd91-a186-4178-aef2-d7ea61ee0f42"
+  ```
+
+### `dragonfruit-backups:last-sync-at`
+
+- **Description**: Local timestamp of the most recent successful sync attempt.
+- **Location**: `src/components/settings/BackupsSettingsTab.tsx`
+- **Schema**: ISO-8601 datetime string.
+- **Example**:
+  ```json
+  "2026-02-22T06:10:00.000Z"
+  ```

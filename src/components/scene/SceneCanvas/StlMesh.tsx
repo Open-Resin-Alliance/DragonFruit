@@ -46,6 +46,7 @@ export function StlMesh({
   suppressNextClickRef,
   modelId,
   isSelected,
+  isMarqueeCandidate,
   isBranchPlacementActive,
   isLeafPlacementActive,
   isBracePlacementActive,
@@ -91,6 +92,8 @@ export function StlMesh({
   modelId: string;
   /** Whether model is selected (tints material) */
   isSelected?: boolean;
+  /** Whether model is currently inside marquee drag window */
+  isMarqueeCandidate?: boolean;
   /** Whether branch placement mode is active (Alt held) */
   isBranchPlacementActive?: boolean;
   /** Whether leaf placement mode is active (Alt+Shift held) */
@@ -231,6 +234,7 @@ export function StlMesh({
       ? hit.objectId === modelId
       : (!isBlockingHoverCategory && isPointerHovered)
   );
+  const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
   const dimmedBaseOpacity = isSupportDimmed
     ? Math.min(0.95, Math.max(0.04, supportNonSelectedOpacity))
@@ -286,12 +290,12 @@ export function StlMesh({
       return base.clone().lerp(tint, selectionStrength).getStyle();
     }
 
-    if (isHoveredModel) {
+    if (isHoveredModel || isMarqueeHovered) {
       return base.clone().lerp(tint, hoverStrength).getStyle();
     }
 
     return base.getStyle();
-  }, [hasVertexColorAttribute, hoverTintColor, hoverTintStrength, isHoveredModel, isSelected, meshColor, selectedTintStrength]);
+  }, [hasVertexColorAttribute, hoverTintColor, hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, meshColor, selectedTintStrength]);
 
   const outOfBoundsMaterial = React.useMemo(() => {
     if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
@@ -384,6 +388,9 @@ export function StlMesh({
           if (mode === 'prepare') {
             e.stopPropagation();
             window.__modelClickedThisFrame = true;
+            window.requestAnimationFrame(() => {
+              window.__modelClickedThisFrame = false;
+            });
             window.dispatchEvent(
               new CustomEvent('model-clicked', {
                 detail: { modelId: modelId },
@@ -540,7 +547,7 @@ export function StlMesh({
           <MeshShaderMaterial
             shaderType={baseShaderType}
             isSelected={!!isSelected}
-            isHovered={isHoveredModel}
+            isHovered={isHoveredModel || isMarqueeHovered}
             useVertexColors={hasVertexColorAttribute}
             hoverTintColor={hoverTintColor}
             hoverTintStrength={hoverTintStrength}

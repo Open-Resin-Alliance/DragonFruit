@@ -325,6 +325,11 @@ button:not(:disabled),
 button:disabled,
 .ui-button:disabled {
   cursor: not-allowed;
+  background: color-mix(in srgb, var(--surface-1), black 8%);
+  border-color: color-mix(in srgb, var(--border-subtle), black 10%);
+  color: color-mix(in srgb, var(--text-muted), var(--surface-2) 18%);
+  box-shadow: none;
+  opacity: 1;
 }
 
 .ui-label {
@@ -605,11 +610,15 @@ input[type="number"].no-spinners {
   );
 }
 
-/* Themed number stepper controls */
+/* Themed number stepper controls (global) */
+input[type="number"]:not(.no-spinners),
 .ui-number-input {
   accent-color: var(--accent);
+  color-scheme: dark;
 }
 
+input[type="number"]:not(.no-spinners)::-webkit-inner-spin-button,
+input[type="number"]:not(.no-spinners)::-webkit-outer-spin-button,
 .ui-number-input::-webkit-inner-spin-button,
 .ui-number-input::-webkit-outer-spin-button {
   opacity: 1;
@@ -621,6 +630,8 @@ input[type="number"].no-spinners {
   cursor: pointer;
 }
 
+input[type="number"]:not(.no-spinners):hover::-webkit-inner-spin-button,
+input[type="number"]:not(.no-spinners):hover::-webkit-outer-spin-button,
 .ui-number-input:hover::-webkit-inner-spin-button,
 .ui-number-input:hover::-webkit-outer-spin-button {
   background: color-mix(in srgb, var(--surface-2), var(--accent) 16%);
