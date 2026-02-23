@@ -22,6 +22,7 @@ interface BranchRendererProps {
   suppressHover?: boolean;
   isInteractable?: boolean;
   deferStraightShaftsToSceneBatch?: boolean;
+  deferInteractionToSceneBatch?: boolean;
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
@@ -38,6 +39,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   suppressHover,
   isInteractable = true,
   deferStraightShaftsToSceneBatch = false,
+  deferInteractionToSceneBatch = false,
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
@@ -46,7 +48,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const { pickRef, visuals } = useHighlight({
     id: branch.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -191,7 +193,11 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   }
 
   return (
-    <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+    <group
+      onClick={handleClick}
+      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+    >
       {/* Branch Picking Group - Contains Shafts, Cone */}
       <group ref={pickRef as any}>
         <InstancedShaftGroup

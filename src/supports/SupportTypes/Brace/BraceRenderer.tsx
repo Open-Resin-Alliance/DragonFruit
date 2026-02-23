@@ -26,6 +26,7 @@ interface BraceRendererProps {
     suppressHover?: boolean;
     isInteractable?: boolean;
     deferStraightShaftToSceneBatch?: boolean;
+    deferInteractionToSceneBatch?: boolean;
     debugSectionColors?: boolean;
     baseColor?: string;
     hoverColor?: string;
@@ -43,6 +44,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     suppressHover,
     isInteractable = true,
     deferStraightShaftToSceneBatch = false,
+    deferInteractionToSceneBatch = false,
     debugSectionColors = false,
     baseColor = '#ff8800',
     hoverColor,
@@ -57,7 +59,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const { pickRef, visuals } = useHighlight({
         id: brace.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover,
+        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -135,7 +137,11 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     if (straight.length < 0.001) return null;
 
     return (
-        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+        <group
+            onClick={handleClick}
+            onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+            onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+        >
             <group ref={pickRef as any}>
                 <group>
                     <InstancedShaftGroup
