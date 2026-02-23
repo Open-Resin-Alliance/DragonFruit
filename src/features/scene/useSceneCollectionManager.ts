@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { loadFromLychee } from '@/supports/state';
+import { getSnapshot, loadFromLychee, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -419,7 +419,6 @@ type DebugPrimitiveType =
 
 type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
 
-import { getSnapshot } from '@/supports/state';
 import { deleteSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
 
@@ -761,6 +760,17 @@ export function useSceneCollectionManager() {
   const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
+    const currentModels = modelsRef.current;
+    const nextById = new Map(snapshot.models.map((model) => [model.id, model] as const));
+
+    for (const currentModel of currentModels) {
+      const nextModel = nextById.get(currentModel.id);
+      if (!nextModel) continue;
+      if (transformsEqual(currentModel.transform, nextModel.transform)) continue;
+
+      transformSupportsForModel(currentModel.id, currentModel.transform, nextModel.transform);
+    }
+
     setModels(snapshot.models.map(cloneLoadedModel));
     setActiveModelId(snapshot.activeModelId);
     setSelectedModelIds([...snapshot.selectedModelIds]);
@@ -1164,6 +1174,11 @@ export function useSceneCollectionManager() {
 
   // Model Management
   const updateModelTransform = useCallback((id: string, transform: ModelTransform) => {
+    const currentModel = modelsRef.current.find((m) => m.id === id);
+    if (currentModel && !transformsEqual(currentModel.transform, transform)) {
+      transformSupportsForModel(id, currentModel.transform, transform);
+    }
+
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, transform } : m
     ));
@@ -1200,23 +1215,32 @@ export function useSceneCollectionManager() {
   const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
     if (updates.length === 0) return;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
 
     const updateMap = new Map<string, ModelTransform>();
     updates.forEach((entry) => {
       updateMap.set(entry.id, entry.transform);
+
+      const currentModel = currentModels.find((model) => model.id === entry.id);
+      if (!currentModel) return;
+      if (transformsEqual(currentModel.transform, entry.transform)) return;
+      transformSupportsForModel(entry.id, currentModel.transform, entry.transform);
     });
 
-    const nextModels = models.map((m) => {
+    const nextModels = currentModels.map((m) => {
       const nextTransform = updateMap.get(m.id);
       return nextTransform ? { ...m, transform: nextTransform } : m;
     });
 
     setModels(nextModels);
 
-    const after = captureSceneSnapshot(nextModels, activeModelId, selectedModelIds);
+    const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
     pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
-  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds]);
+  }, [pushSceneSnapshotHistory]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
     setModels(prev => prev.map(m =>
