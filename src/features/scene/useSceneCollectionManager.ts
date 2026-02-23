@@ -14,6 +14,7 @@ import type { SupportMode } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
@@ -2024,7 +2025,7 @@ export function useSceneCollectionManager() {
     for (const model of models) {
       const matrix = new THREE.Matrix4().compose(
         model.transform.position,
-        new THREE.Quaternion().setFromEuler(model.transform.rotation),
+        quaternionFromGlobalEuler(model.transform.rotation),
         model.transform.scale,
       );
       registerMeshForAutoBrace(model.id, model.geometry.geometry, matrix);
@@ -2079,7 +2080,7 @@ export function useSceneCollectionManager() {
       const t = model.transform;
       const matrix = new THREE.Matrix4().compose(
         t.position,
-        new THREE.Quaternion().setFromEuler(t.rotation),
+        quaternionFromGlobalEuler(t.rotation),
         t.scale
       );
 
