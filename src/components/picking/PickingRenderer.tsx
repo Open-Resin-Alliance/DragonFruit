@@ -73,6 +73,7 @@ export function PickingRenderer({
   const previousMouseNdcRef = useRef<{ x: number; y: number } | null>(null);
   const previousCameraWorldMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
   const previousProjectionMatrixRef = useRef<THREE.Matrix4>(new THREE.Matrix4());
+  const smoothedFrameMsRef = useRef<number>(1000 / 60);
 
   const disposePickObject = useCallback((pickId: number) => {
     const cached = pickObjectCacheRef.current.get(pickId);
@@ -292,9 +293,12 @@ export function PickingRenderer({
   }, [camera, gl, registrations, config, onPick, syncPickObjectTransforms, syncPickSceneCache]);
   
   // Run picking on each frame (throttled)
-  useFrame(() => {
+  useFrame((_, delta) => {
     if (!config.enabled || isPaused) return;
     if (!mouseNDC.current) return;
+
+    const frameMs = Math.max(1, delta * 1000);
+    smoothedFrameMsRef.current = THREE.MathUtils.lerp(smoothedFrameMsRef.current, frameMs, 0.15);
     
     const now = performance.now();
     const prevMouse = previousMouseNdcRef.current;
@@ -322,11 +326,27 @@ export function PickingRenderer({
     // If pointer is idle and unchanged, keep the last hit result and skip GPU picking work.
     if (isIdleHover && !moved && !sceneMoved) return;
 
-    const effectiveHoverHz = isIdleHover
-      ? Math.max(6, Math.floor(config.hoverUpdateRate * 0.33))
-      : config.hoverUpdateRate;
+    const measuredFps = 1000 / Math.max(1, smoothedFrameMsRef.current);
+    const dynamicMaxHz = 120;
+
+    const activeHoverHz = Math.min(
+      dynamicMaxHz,
+      Math.max(1, Math.max(config.hoverUpdateRate, measuredFps)),
+    );
+
+    const idleHoverHz = Math.max(
+      8,
+      Math.min(dynamicMaxHz, Math.max(config.hoverUpdateRate * 0.5, activeHoverHz * 0.5)),
+    );
+
+    const activeDragHz = Math.min(
+      dynamicMaxHz,
+      Math.max(1, Math.max(config.dragUpdateRate, measuredFps)),
+    );
+
+    const effectiveHoverHz = isIdleHover ? idleHoverHz : activeHoverHz;
     const minInterval = isDragging
-      ? 1000 / Math.max(1, config.dragUpdateRate)
+      ? 1000 / Math.max(1, activeDragHz)
       : 1000 / Math.max(1, effectiveHoverHz);
     
     if (now - lastPickTimeRef.current < minInterval) return;
