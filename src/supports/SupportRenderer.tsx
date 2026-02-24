@@ -1727,10 +1727,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!root) return null;
 
                 const effectiveSelected = selectedTrunkIds.has(trunk.id);
+                const hasBezierSegment = trunk.segments.some((s) => s.type === 'bezier');
+                const renderDetailedTrunk = effectiveSelected || hasBezierSegment;
+                if (!renderDetailedTrunk) return null;
+
                 const isTrunkHovered = (state.hoveredCategory === 'support' && state.hoveredId === trunk.id)
                     || sceneHoveredSupportId === trunk.id
                     || marqueeHoveredSupportId === trunk.id;
-                const hasBezierSegment = trunk.segments.some((s) => s.type === 'bezier');
                 const deferTrunkInteractionToSceneBatch = !effectiveSelected && !hasBezierSegment;
 
                 return (
@@ -1775,10 +1778,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!knot) return null;
 
                 const effectiveSelected = selectedBranchIds.has(branch.id);
+                const hasBezierSegment = branch.segments.some((s) => s.type === 'bezier');
+                const renderDetailedBranch = effectiveSelected || hasBezierSegment;
+                if (!renderDetailedBranch) return null;
+
                 const isBranchHovered = (state.hoveredCategory === 'support' && state.hoveredId === branch.id)
                     || sceneHoveredSupportId === branch.id
                     || marqueeHoveredSupportId === branch.id;
-                const hasBezierSegment = branch.segments.some((s) => s.type === 'bezier');
                 const deferBranchInteractionToSceneBatch = !effectiveSelected && !hasBezierSegment;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
@@ -1811,6 +1817,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!knot) return null;
 
                 const effectiveSelected = selectedLeafIds.has(leaf.id);
+                if (!effectiveSelected) return null;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -1835,10 +1842,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {Object.values(state.twigs).map(twig => {
                 if (restrictToActiveModel && twig.modelId !== activeModelId) return null;
                 const effectiveSelected = selectedTwigIds.has(twig.id);
+                const isTwigBatchable = twigShaftsBySupport.has(twig.id);
+                const renderDetailedTwig = effectiveSelected || !isTwigBatchable;
+                if (!renderDetailedTwig) return null;
+
                 const isTwigHovered = (state.hoveredCategory === 'support' && state.hoveredId === twig.id)
                     || sceneHoveredSupportId === twig.id
                     || marqueeHoveredSupportId === twig.id;
-                const deferTwigInteractionToSceneBatch = !effectiveSelected && twigShaftsBySupport.has(twig.id);
+                const deferTwigInteractionToSceneBatch = !effectiveSelected && isTwigBatchable;
 
                 return (
                     <group key={twig.id}>
@@ -1852,7 +1863,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         baseColor={resolveBaseColor(twig.modelId)}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected && twigShaftsBySupport.has(twig.id)}
+                        deferStraightShaftsToSceneBatch={!effectiveSelected && isTwigBatchable}
                         deferInteractionToSceneBatch={deferTwigInteractionToSceneBatch}
                     />
                     </group>
@@ -1875,10 +1886,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {Object.values(state.sticks).map(stick => {
                 if (restrictToActiveModel && stick.modelId !== activeModelId) return null;
                 const effectiveSelected = selectedStickIds.has(stick.id);
+                const isStickBatchable = stickShaftsBySupport.has(stick.id);
+                const renderDetailedStick = effectiveSelected || !isStickBatchable;
+                if (!renderDetailedStick) return null;
+
                 const isStickHovered = (state.hoveredCategory === 'support' && state.hoveredId === stick.id)
                     || sceneHoveredSupportId === stick.id
                     || marqueeHoveredSupportId === stick.id;
-                const deferStickInteractionToSceneBatch = !effectiveSelected && stickShaftsBySupport.has(stick.id);
+                const deferStickInteractionToSceneBatch = !effectiveSelected && isStickBatchable;
 
                 return (
                     <group key={stick.id}>
@@ -1892,7 +1907,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         baseColor={resolveBaseColor(stick.modelId)}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected && stickShaftsBySupport.has(stick.id)}
+                        deferStraightShaftsToSceneBatch={!effectiveSelected && isStickBatchable}
                         deferInteractionToSceneBatch={deferStickInteractionToSceneBatch}
                         deferContactConesToSceneBatch={!effectiveSelected}
                     />
@@ -1932,10 +1947,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!startKnot || !endKnot) return null;
 
                 const effectiveSelected = selectedBraceIds.has(brace.id);
+                const isBraceBatchable = braceShaftsBySupport.has(brace.id);
+                const renderDetailedBrace = effectiveSelected || !isBraceBatchable;
+                if (!renderDetailedBrace) return null;
+
                 const isBraceHovered = (state.hoveredCategory === 'support' && state.hoveredId === brace.id)
                     || sceneHoveredSupportId === brace.id
                     || marqueeHoveredSupportId === brace.id;
-                const deferBraceInteractionToSceneBatch = !effectiveSelected && brace.curve?.type !== 'bezier';
+                const deferBraceInteractionToSceneBatch = !effectiveSelected && isBraceBatchable;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -1952,7 +1971,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         suppressHover={suppressHover}
                         isHovered={isBraceHovered}
                         isInteractable={isInteractable}
-                        deferStraightShaftToSceneBatch={!effectiveSelected && brace.curve?.type !== 'bezier'}
+                        deferStraightShaftToSceneBatch={!effectiveSelected && isBraceBatchable}
                         deferInteractionToSceneBatch={deferBraceInteractionToSceneBatch}
                         debugSectionColors={settings.autoBracing.debugSectionColorsEnabled}
                     />
@@ -1968,10 +1987,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 if (!root || !hostKnot) return null;
 
                 const effectiveSelected = selectedSupportBraceIds.has(supportBrace.id);
+                const isSupportBraceBatchable = supportBraceShaftsBySupport.has(supportBrace.id);
+                const renderDetailedSupportBrace = effectiveSelected || !isSupportBraceBatchable;
+                if (!renderDetailedSupportBrace) return null;
+
                 const isSupportBraceHovered = (state.hoveredCategory === 'support' && state.hoveredId === supportBrace.id)
                     || sceneHoveredSupportId === supportBrace.id
                     || marqueeHoveredSupportId === supportBrace.id;
-                const deferSupportBraceInteractionToSceneBatch = !effectiveSelected && supportBraceShaftsBySupport.has(supportBrace.id);
+                const deferSupportBraceInteractionToSceneBatch = !effectiveSelected && isSupportBraceBatchable;
                 const showKnot = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -1989,7 +2012,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         showKnot={showKnot}
                         suppressHover={suppressHover}
                         isInteractable={isInteractable}
-                        deferStraightShaftsToSceneBatch={!effectiveSelected && supportBraceShaftsBySupport.has(supportBrace.id)}
+                        deferStraightShaftsToSceneBatch={!effectiveSelected && isSupportBraceBatchable}
                         deferInteractionToSceneBatch={deferSupportBraceInteractionToSceneBatch}
                         hidePlateContactPrimitives={hidePlateContactPrimitivesEffective}
                     />
