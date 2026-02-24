@@ -1028,6 +1028,8 @@ export function SceneCanvas({
   // Reusable work matrices to avoid GC pressure during drag
   const _dragWorkCurrent = React.useRef(new THREE.Matrix4());
   const _dragWorkInvBefore = React.useRef(new THREE.Matrix4());
+  const _dragWorkPosition = React.useRef(new THREE.Vector3());
+  const modelDropOffsetsRef = React.useRef<Record<string, number>>({});
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1708,12 +1710,18 @@ export function SceneCanvas({
     const dragGroup = supportDragGroupRef?.current;
     if (!beforeMat || !group || !dragGroup) return;
 
-    const cur = _dragWorkCurrent.current.compose(group.position, group.quaternion, group.scale);
+    const logicalPosition = _dragWorkPosition.current.copy(group.position);
+    const modelDropOffsetZ = activeModelId ? (modelDropOffsetsRef.current[activeModelId] ?? 0) : 0;
+    if (mode === 'prepare' && modelDropOffsetZ > 0.0001) {
+      logicalPosition.z -= modelDropOffsetZ;
+    }
+
+    const cur = _dragWorkCurrent.current.compose(logicalPosition, group.quaternion, group.scale);
     const inv = _dragWorkInvBefore.current.copy(beforeMat).invert();
     // delta = currentMatrix * inverse(beforeMatrix)
     dragGroup.matrix.multiplyMatrices(cur, inv);
     dragGroup.matrixAutoUpdate = false;
-  }, [activeGroupRef]);
+  }, [activeGroupRef, activeModelId, mode, supportDragGroupRef]);
 
   const selectedModelIdSet = React.useMemo(() => {
     return new Set(selectedModelIds ?? []);
@@ -2058,6 +2066,24 @@ export function SceneCanvas({
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
   const dynamicDpr = (isIntroAnimating || isDropAnimating) ? ([1, 1.5] as [number, number]) : ([1, 10] as [number, number]);
+
+  React.useEffect(() => {
+    modelDropOffsetsRef.current = entryDropOffsets;
+  }, [entryDropOffsets]);
+
+  const stopActiveModelDropAnimation = React.useCallback(() => {
+    if (!activeModelId) return;
+
+    delete entryAnimRef.current[activeModelId];
+    delete pendingEntryAnimRef.current[activeModelId];
+
+    setEntryDropOffsets((previous) => {
+      if (previous[activeModelId] == null) return previous;
+      const next = { ...previous };
+      delete next[activeModelId];
+      return next;
+    });
+  }, [activeModelId]);
 
   React.useEffect(() => {
     const prevMode = prevTransformModeRef.current;
@@ -3350,6 +3376,7 @@ export function SceneCanvas({
                 selectedTintStrength={selectedTintStrength}
                 activeModelId={visualActiveModelId ?? null}
                 hoverModelId={hoveredModelId}
+                modelDropOffsetsById={entryDropOffsets}
               />
               </group>{/* end supportDragGroupRef */}
 
@@ -3401,6 +3428,7 @@ export function SceneCanvas({
                     }
                   }}
                   onMoveStart={() => {
+                    stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
                     onTransformStart?.('move');
                     if (activeModelId && activeModel) {
@@ -3456,6 +3484,7 @@ export function SceneCanvas({
                     }
                   }}
                   onRotateStart={() => {
+                    stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
                     onTransformStart?.('rotate');
                     if (activeModelId && activeModel) {
@@ -3499,6 +3528,7 @@ export function SceneCanvas({
                     onTransformEnd?.('rotate');
                   }}
                   onScaleStart={() => {
+                    stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
                     onTransformStart?.('scale');
                     if (activeGroupRef.current) {

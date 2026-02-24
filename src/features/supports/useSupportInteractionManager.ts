@@ -36,7 +36,7 @@ import {
 } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK } from '@/supports/history/actionTypes';
+import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE } from '@/supports/history/actionTypes';
 import { clearSelection, getMultiSelectedSupportIds, selectAllSupports } from '@/supports/interaction/SupportSelection';
 import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 
@@ -209,21 +209,25 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   useEffect(() => {
     if (mode !== 'support') return;
 
-    const deleteSelectionByCategoryAndId = (category: string, id: string): boolean => {
+    const deleteSelectionByCategoryAndId = (category: string, id: string, recordHistory = true): boolean => {
       if (category === 'joint') {
         const result = removeJointById(id);
         if (!result) return false;
         if (result.kind === 'trunk') {
-          pushHistory({
-            type: SUPPORT_UPDATE_TRUNK,
-            payload: { before: result.before, after: result.after },
-          });
+          if (recordHistory) {
+            pushHistory({
+              type: SUPPORT_UPDATE_TRUNK,
+              payload: { before: result.before, after: result.after },
+            });
+          }
           setSelectedId(result.trunkId);
         } else {
-          pushHistory({
-            type: SUPPORT_UPDATE_BRANCH,
-            payload: { before: result.before, after: result.after },
-          });
+          if (recordHistory) {
+            pushHistory({
+              type: SUPPORT_UPDATE_BRANCH,
+              payload: { before: result.before, after: result.after },
+            });
+          }
           setSelectedId(result.branchId);
         }
         return true;
@@ -232,18 +236,20 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if (category === 'trunk') {
         const snapshots = removeTrunk(id);
         if (!snapshots) return false;
-        pushHistory({
-          type: SUPPORT_REMOVE_TRUNK,
-          payload: {
-            trunk: snapshots.trunk,
-            root: snapshots.root ?? undefined,
-            branches: snapshots.branches,
-            braces: snapshots.braces,
-            supportBraces: snapshots.supportBraces,
-            leaves: snapshots.leaves,
-            knots: snapshots.knots,
-          },
-        });
+        if (recordHistory) {
+          pushHistory({
+            type: SUPPORT_REMOVE_TRUNK,
+            payload: {
+              trunk: snapshots.trunk,
+              root: snapshots.root ?? undefined,
+              branches: snapshots.branches,
+              braces: snapshots.braces,
+              supportBraces: snapshots.supportBraces,
+              leaves: snapshots.leaves,
+              knots: snapshots.knots,
+            },
+          });
+        }
         setSelectedId(null);
         return true;
       }
@@ -251,10 +257,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if (category === 'leaf') {
         const snapshots = removeLeaf(id);
         if (!snapshots) return false;
-        pushHistory({
-          type: SUPPORT_REMOVE_LEAF,
-          payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
-        });
+        if (recordHistory) {
+          pushHistory({
+            type: SUPPORT_REMOVE_LEAF,
+            payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
+          });
+        }
         setSelectedId(null);
         return true;
       }
@@ -265,10 +273,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         if (leaf) {
           const snapshots = removeLeaf(leaf.id);
           if (!snapshots) return false;
-          pushHistory({
-            type: SUPPORT_REMOVE_LEAF,
-            payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
-          });
+          if (recordHistory) {
+            pushHistory({
+              type: SUPPORT_REMOVE_LEAF,
+              payload: { leaf: snapshots.leaf, knot: snapshots.knot ?? undefined },
+            });
+          }
           setSelectedId(null);
           return true;
         }
@@ -302,14 +312,16 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
             }
           }
 
-          pushHistory({
-            type: SUPPORT_REMOVE_BRANCH,
-            payload: {
-              ...snapshots,
-              trunkUpdate,
-              knotUpdates,
-            },
-          });
+          if (recordHistory) {
+            pushHistory({
+              type: SUPPORT_REMOVE_BRANCH,
+              payload: {
+                ...snapshots,
+                trunkUpdate,
+                knotUpdates,
+              },
+            });
+          }
           setSelectedId(null);
           return true;
         }
@@ -319,10 +331,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         if (brace) {
           const snapshots = removeBrace(brace.id);
           if (!snapshots) return false;
-          pushHistory({
-            type: SUPPORT_REMOVE_BRACE,
-            payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
-          });
+          if (recordHistory) {
+            pushHistory({
+              type: SUPPORT_REMOVE_BRACE,
+              payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
+            });
+          }
           setSelectedId(null);
           return true;
         }
@@ -358,14 +372,16 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           }
         }
 
-        pushHistory({
-          type: SUPPORT_REMOVE_BRANCH,
-          payload: {
-            ...snapshots,
-            trunkUpdate,
-            knotUpdates,
-          },
-        });
+        if (recordHistory) {
+          pushHistory({
+            type: SUPPORT_REMOVE_BRANCH,
+            payload: {
+              ...snapshots,
+              trunkUpdate,
+              knotUpdates,
+            },
+          });
+        }
         setSelectedId(null);
         return true;
       }
@@ -373,10 +389,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if (category === 'twig') {
         const snapshots = removeTwig(id);
         if (!snapshots) return false;
-        pushHistory({
-          type: SUPPORT_REMOVE_TWIG,
-          payload: snapshots,
-        });
+        if (recordHistory) {
+          pushHistory({
+            type: SUPPORT_REMOVE_TWIG,
+            payload: snapshots,
+          });
+        }
         setSelectedId(null);
         return true;
       }
@@ -384,10 +402,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if (category === 'stick') {
         const snapshots = removeStick(id);
         if (!snapshots) return false;
-        pushHistory({
-          type: SUPPORT_REMOVE_STICK,
-          payload: snapshots,
-        });
+        if (recordHistory) {
+          pushHistory({
+            type: SUPPORT_REMOVE_STICK,
+            payload: snapshots,
+          });
+        }
         setSelectedId(null);
         return true;
       }
@@ -395,10 +415,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if (category === 'brace') {
         const snapshots = removeBrace(id);
         if (!snapshots) return false;
-        pushHistory({
-          type: SUPPORT_REMOVE_BRACE,
-          payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
-        });
+        if (recordHistory) {
+          pushHistory({
+            type: SUPPORT_REMOVE_BRACE,
+            payload: { brace: snapshots.brace, startKnot: snapshots.startKnot ?? undefined, endKnot: snapshots.endKnot ?? undefined },
+          });
+        }
         setSelectedId(null);
         return true;
       }
@@ -481,12 +503,30 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       () => {
         const multiSelectedIds = Array.from(new Set(getMultiSelectedSupportIds()));
         if (multiSelectedIds.length > 0) {
+          const beforeSupportSnapshot = structuredClone(getSnapshot());
+          const beforeSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
           let anyDeleted = false;
           for (const supportId of multiSelectedIds) {
             const category = resolveSupportCategoryFromSnapshot(supportId);
             if (!category) continue;
-            const deleted = deleteSelectionByCategoryAndId(category, supportId);
+            const deleted = deleteSelectionByCategoryAndId(category, supportId, false);
             if (deleted) anyDeleted = true;
+          }
+
+          if (anyDeleted) {
+            const afterSupportSnapshot = structuredClone(getSnapshot());
+            const afterSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
+
+            pushHistory({
+              type: SUPPORT_AUTO_BRACE_REPLACE,
+              description: `Delete ${multiSelectedIds.length} supports`,
+              payload: {
+                before: beforeSupportSnapshot,
+                after: afterSupportSnapshot,
+                supportBraceBefore: beforeSupportBraceSnapshot,
+                supportBraceAfter: afterSupportBraceSnapshot,
+              },
+            });
           }
 
           clearSelection();

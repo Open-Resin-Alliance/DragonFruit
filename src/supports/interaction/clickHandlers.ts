@@ -92,6 +92,17 @@ export function emitSupportModelPointerHover(modelId: string | null) {
     });
 }
 
+export function emitSupportModelPointerSelect(modelId: string | null) {
+    if (typeof window === 'undefined') return;
+    if (!modelId) return;
+
+    window.dispatchEvent(new CustomEvent('support-model-pointer-select', {
+        detail: {
+            modelId,
+        },
+    }));
+}
+
 /**
  * Logic for handling clicks on Support objects (Trunks, Branches).
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.

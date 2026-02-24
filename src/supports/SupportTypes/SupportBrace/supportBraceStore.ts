@@ -27,6 +27,11 @@ export function getSupportBraceSnapshot(): SupportBraceState {
     return state;
 }
 
+export function setSupportBraceSnapshot(next: SupportBraceState) {
+    state = next;
+    notify();
+}
+
 export function resetSupportBraceStore() {
     state = { ...initialState };
     notify();

@@ -26,7 +26,7 @@ import { ContactDisk, SupportMode } from './types';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
-import { emitSupportModelPointerHover, handleSupportClick } from './interaction/clickHandlers';
+import { emitSupportModelPointerHover, emitSupportModelPointerSelect, handleSupportClick } from './interaction/clickHandlers';
 import { getEmptySelectedSupportIdsSnapshot, getSelectedSupportIds, subscribeSupportMultiSelection } from './interaction/supportMultiSelection';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
@@ -44,6 +44,7 @@ interface SupportRendererProps {
     selectedTintStrength?: number;
     activeModelId?: string | null;
     hoverModelId?: string | null;
+    modelDropOffsetsById?: Record<string, number>;
 }
 
 interface SupportShaftSet {
@@ -66,7 +67,7 @@ const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null, modelDropOffsetsById }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedSupportIds = useSyncExternalStore(
         subscribeSupportMultiSelection,
@@ -88,6 +89,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
 
     const isInteractable = mode === 'support' && !navigationLodActive;
+    const isPreparePointerInteractable = mode === 'prepare' && !navigationLodActive;
+    const isPointerInteractable = isInteractable || isPreparePointerInteractable;
     const hidePlateContactPrimitivesEffective = hidePlateContactPrimitives;
     const restrictToActiveModel = mode === 'support' && !!activeModelId;
     const suppressHover = isJointCreationActive || !isInteractable || braceAltActive;
@@ -241,6 +244,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return dimNonSelected ? '#666666' : resolveBaseColor(modelId);
     }, [hasSupportMultiSelection, useMultiSelectionDetail, selectedSupportIdSet, dimNonSelected, resolveBaseColor]);
+
+    const resolveModelDropOffsetZ = React.useCallback((modelId?: string) => {
+        if (!modelId) return 0;
+        return modelDropOffsetsById?.[modelId] ?? 0;
+    }, [modelDropOffsetsById]);
+
+    const applyDropToVec3Like = React.useCallback((pos: { x: number; y: number; z: number }, modelId?: string) => {
+        const zOffset = resolveModelDropOffsetZ(modelId);
+        if (Math.abs(zOffset) < 1e-6) return pos;
+        return {
+            x: pos.x,
+            y: pos.y,
+            z: pos.z + zOffset,
+        };
+    }, [resolveModelDropOffsetZ]);
 
     const selectedTrunkIds = useMemo(() => {
         const selected = new Set<string>();
@@ -1057,10 +1075,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         const pushJoints = (color: string, joints: InstancedJoint[]) => {
             const existing = grouped.get(color);
+            const adjusted = joints.map((joint) => ({
+                ...joint,
+                pos: applyDropToVec3Like(joint.pos, joint.modelId),
+            }));
             if (existing) {
-                existing.push(...joints);
+                existing.push(...adjusted);
             } else {
-                grouped.set(color, [...joints]);
+                grouped.set(color, adjusted);
             }
         };
 
@@ -1133,6 +1155,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         twigJointsBySupport,
         stickJointsBySupport,
         supportBraceJointsBySupport,
+        applyDropToVec3Like,
         dimNonSelected,
         resolveBaseColor,
         resolveSceneSupportColor,
@@ -1149,12 +1172,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const color = resolveSceneSupportColor(shaftSet.modelId, twig.id);
             const shaftsForColor = grouped.get(color) ?? [];
-            shaftsForColor.push(...shaftSet.shafts);
+            shaftsForColor.push(...shaftSet.shafts.map((shaft) => ({
+                ...shaft,
+                start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                end: applyDropToVec3Like(shaft.end, shaft.modelId),
+            })));
             if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
+    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1167,12 +1194,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const color = resolveSceneSupportColor(shaftSet.modelId, stick.id);
             const shaftsForColor = grouped.get(color) ?? [];
-            shaftsForColor.push(...shaftSet.shafts);
+            shaftsForColor.push(...shaftSet.shafts.map((shaft) => ({
+                ...shaft,
+                start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                end: applyDropToVec3Like(shaft.end, shaft.modelId),
+            })));
             if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.sticks, stickShaftsBySupport, selectedStickIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
+    }, [state.sticks, stickShaftsBySupport, selectedStickIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
 
     const sceneBatchedSupportBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1185,12 +1216,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const color = resolveSceneSupportColor(shaftSet.modelId, supportBrace.id);
             const shaftsForColor = grouped.get(color) ?? [];
-            shaftsForColor.push(...shaftSet.shafts);
+            shaftsForColor.push(...shaftSet.shafts.map((shaft) => ({
+                ...shaft,
+                start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                end: applyDropToVec3Like(shaft.end, shaft.modelId),
+            })));
             if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
+    }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1206,14 +1241,22 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const shaftsForColor = grouped.get(color);
             if (shaftsForColor) {
-                shaftsForColor.push(...shaftSet.shafts);
+                shaftsForColor.push(...shaftSet.shafts.map((shaft) => ({
+                    ...shaft,
+                    start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                    end: applyDropToVec3Like(shaft.end, shaft.modelId),
+                })));
             } else {
-                grouped.set(color, [...shaftSet.shafts]);
+                grouped.set(color, shaftSet.shafts.map((shaft) => ({
+                    ...shaft,
+                    start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                    end: applyDropToVec3Like(shaft.end, shaft.modelId),
+                })));
             }
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
+    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1227,13 +1270,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const color = resolveSceneSupportColor(shaftSet.modelId, trunk.id);
             const shaftsForColor = grouped.get(color) ?? [];
-            shaftsForColor.push(...shaftSet.shafts);
+            shaftsForColor.push(...shaftSet.shafts.map((shaft) => ({
+                ...shaft,
+                start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                end: applyDropToVec3Like(shaft.end, shaft.modelId),
+            })));
 
             if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
+    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
 
     const sceneBatchedBranchShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1247,7 +1294,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             const color = resolveSceneSupportColor(shaftSet.modelId, branch.id);
             const shaftsForColor = grouped.get(color) ?? [];
-            shaftsForColor.push(...shaftSet.shafts);
+            shaftsForColor.push(...shaftSet.shafts.map((shaft) => ({
+                ...shaft,
+                start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                end: applyDropToVec3Like(shaft.end, shaft.modelId),
+            })));
 
             if (shaftsForColor.length > 0) {
                 grouped.set(color, shaftsForColor);
@@ -1255,7 +1306,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.branches, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
+    }, [state.branches, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
@@ -1283,11 +1334,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 id: root.id,
                 supportId: trunk.id,
                 modelId: trunk.modelId,
-                basePos: {
+                basePos: applyDropToVec3Like({
                     x: root.transform.pos.x,
                     y: root.transform.pos.y,
                     z: root.transform.pos.z + verticalOffset,
-                },
+                }, trunk.modelId),
                 bottomRadius,
                 topRadius,
                 effectiveDiskHeight,
@@ -1309,6 +1360,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         dimNonSelected,
         resolveBaseColor,
         resolveSceneSupportColor,
+        applyDropToVec3Like,
         selectedTrunkIds,
         restrictToActiveModel,
         activeModelId,
@@ -1329,7 +1381,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, trunk.id);
-            coneSet.cones.forEach((cone) => pushCone(color, cone));
+            coneSet.cones.forEach((cone) => pushCone(color, {
+                ...cone,
+                pos: applyDropToVec3Like(cone.pos, cone.modelId),
+            }));
         }
 
         for (const branch of Object.values(state.branches)) {
@@ -1338,7 +1393,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, branch.id);
-            coneSet.cones.forEach((cone) => pushCone(color, cone));
+            coneSet.cones.forEach((cone) => pushCone(color, {
+                ...cone,
+                pos: applyDropToVec3Like(cone.pos, cone.modelId),
+            }));
         }
 
         for (const stick of Object.values(state.sticks)) {
@@ -1347,7 +1405,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, stick.id);
-            coneSet.cones.forEach((cone) => pushCone(color, cone));
+            coneSet.cones.forEach((cone) => pushCone(color, {
+                ...cone,
+                pos: applyDropToVec3Like(cone.pos, cone.modelId),
+            }));
         }
 
         for (const leaf of Object.values(state.leaves)) {
@@ -1356,7 +1417,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!coneSet) continue;
 
             const color = resolveSceneSupportColor(coneSet.modelId, leaf.id);
-            coneSet.cones.forEach((cone) => pushCone(color, cone));
+            coneSet.cones.forEach((cone) => pushCone(color, {
+                ...cone,
+                pos: applyDropToVec3Like(cone.pos, cone.modelId),
+            }));
         }
 
         return Array.from(grouped.entries()).map(([color, cones]) => ({ color, cones }));
@@ -1370,6 +1434,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         selectedBranchIds,
         selectedStickIds,
         selectedLeafIds,
+        applyDropToVec3Like,
         dimNonSelected,
         resolveBaseColor,
         resolveSceneSupportColor,
@@ -1438,9 +1503,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return hoveredSupportShaftSet.shafts.map((shaft) => ({
             ...shaft,
+            start: applyDropToVec3Like(shaft.start, shaft.modelId),
+            end: applyDropToVec3Like(shaft.end, shaft.modelId),
             diameter: shaft.diameter * 1.02,
         }));
-    }, [hoveredSupportShaftSet]);
+    }, [hoveredSupportShaftSet, applyDropToVec3Like]);
 
     const hoveredSupportConeSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -1453,8 +1520,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const hoveredSupportOverlayCones = useMemo(() => {
         if (!hoveredSupportConeSet) return [] as InstancedContactCone[];
-        return hoveredSupportConeSet.cones;
-    }, [hoveredSupportConeSet]);
+        return hoveredSupportConeSet.cones.map((cone) => ({
+            ...cone,
+            pos: applyDropToVec3Like(cone.pos, cone.modelId),
+        }));
+    }, [hoveredSupportConeSet, applyDropToVec3Like]);
 
     const hoveredSupportJointSet = useMemo(() => {
         if (!isInteractable) return null;
@@ -1496,18 +1566,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return hoveredSupportJointSet.joints.map((joint) => ({
             ...joint,
+            pos: applyDropToVec3Like(joint.pos, joint.modelId),
             diameter: joint.diameter * 1.06,
         }));
-    }, [hoveredSupportJointSet]);
+    }, [hoveredSupportJointSet, applyDropToVec3Like]);
 
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
+        if (isPreparePointerInteractable) {
+            emitSupportModelPointerSelect(shaft.modelId ?? null);
+            return;
+        }
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
-    }, [isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
@@ -1518,10 +1593,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = shaft.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(shaft.modelId ?? null);
-    }, [isInteractable]);
+    }, [isPointerInteractable]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback(() => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
@@ -1533,16 +1608,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
             emitSupportModelPointerHover(null);
         });
-    }, [isInteractable]);
+    }, [isPointerInteractable]);
 
     const handleSceneBatchedRootClick = React.useCallback((root: InstancedRoot, event: { nativeEvent?: Event }) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
+        if (isPreparePointerInteractable) {
+            emitSupportModelPointerSelect(root.modelId ?? null);
+            return;
+        }
         if (!root.supportId) return;
         handleSupportClick(event, root.supportId, isInteractable);
-    }, [isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
 
     const handleSceneBatchedRootPointerMove = React.useCallback((root: InstancedRoot) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
@@ -1553,16 +1632,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = root.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(root.modelId ?? null);
-    }, [isInteractable]);
+    }, [isPointerInteractable]);
 
     const handleSceneBatchedConeClick = React.useCallback((cone: InstancedContactCone, event: { nativeEvent?: Event }) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
+        if (isPreparePointerInteractable) {
+            emitSupportModelPointerSelect(cone.modelId ?? null);
+            return;
+        }
         if (!cone.supportId) return;
         handleSupportClick(event, cone.supportId, isInteractable);
-    }, [isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
 
     const handleSceneBatchedConePointerMove = React.useCallback((cone: InstancedContactCone) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
@@ -1573,16 +1656,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = cone.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(cone.modelId ?? null);
-    }, [isInteractable]);
+    }, [isPointerInteractable]);
 
     const handleSceneBatchedJointClick = React.useCallback((joint: InstancedJoint, event: { nativeEvent?: Event }) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
+        if (isPreparePointerInteractable) {
+            emitSupportModelPointerSelect(joint.modelId ?? null);
+            return;
+        }
         if (!joint.supportId) return;
         handleSupportClick(event, joint.supportId, isInteractable);
-    }, [isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
 
     const handleSceneBatchedJointPointerMove = React.useCallback((joint: InstancedJoint) => {
-        if (!isInteractable) return;
+        if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
@@ -1593,7 +1680,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = joint.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(joint.modelId ?? null);
-    }, [isInteractable]);
+    }, [isPointerInteractable]);
 
     useEffect(() => {
         const root = groupRef.current;
@@ -1638,9 +1725,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
-                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1651,9 +1738,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     color={group.color}
                     widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
                     heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
-                    onJointClick={isInteractable ? handleSceneBatchedJointClick : undefined}
-                    onJointPointerMove={isInteractable ? handleSceneBatchedJointPointerMove : undefined}
-                    onJointPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1662,9 +1749,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-trunk-root-batch:${group.color}:${group.roots.length}`}
                     roots={group.roots}
                     color={group.color}
-                    onRootClick={isInteractable ? handleSceneBatchedRootClick : undefined}
-                    onRootPointerMove={isInteractable ? handleSceneBatchedRootPointerMove : undefined}
-                    onRootPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1673,9 +1760,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     key={`scene-cone-batch:${group.color}:${group.cones.length}`}
                     cones={group.cones}
                     color={group.color}
-                    onConeClick={isInteractable ? handleSceneBatchedConeClick : undefined}
-                    onConePointerMove={isInteractable ? handleSceneBatchedConePointerMove : undefined}
-                    onConePointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
+                    onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1687,9 +1774,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     emissive="#ffffff"
                     emissiveIntensity={0.3}
                     radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
-                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
-                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             )}
 
@@ -1700,9 +1787,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportConeSet.modelId)}
                     emissive="#ffffff"
                     emissiveIntensity={0.3}
-                    onConeClick={isInteractable ? handleSceneBatchedConeClick : undefined}
-                    onConePointerMove={isInteractable ? handleSceneBatchedConePointerMove : undefined}
-                    onConePointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
+                    onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             )}
 
@@ -1715,9 +1802,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     emissiveIntensity={0.3}
                     widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
                     heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
-                    onJointClick={isInteractable ? handleSceneBatchedJointClick : undefined}
-                    onJointPointerMove={isInteractable ? handleSceneBatchedJointPointerMove : undefined}
-                    onJointPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             )}
 
@@ -1766,9 +1853,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
-                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1876,9 +1963,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
-                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1921,9 +2008,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
-                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -1934,9 +2021,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
-                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
 
@@ -2026,9 +2113,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={group.shafts}
                     color={group.color}
                     radialSegments={sceneBatchedShaftRadialSegments}
-                    onShaftClick={isInteractable ? handleSceneBatchedShaftClick : undefined}
-                    onShaftPointerMove={isInteractable ? handleSceneBatchedShaftPointerMove : undefined}
-                    onShaftPointerOut={isInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
             ))}
         </group>
