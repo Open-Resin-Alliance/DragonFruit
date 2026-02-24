@@ -218,14 +218,18 @@ export function StlMesh({
   const isGizmoHoverCategory = hit.category === 'gizmo';
   const isSupportLikeHoverCategory = hit.category === 'support' || hit.category === 'segment' || hit.category === 'joint' || hit.category === 'knot' || hit.category === 'raft';
   const shouldSuppressModelInteraction = !!suppressModelInteraction;
+  const hasExternalHoverSource = externalHoveredModelId !== undefined;
   const isExternallyHoveredModel = !shouldSuppressModelInteraction
     && !!externalHoveredModelId
     && externalHoveredModelId === modelId;
-  const isHoveredModel = isExternallyHoveredModel || (!shouldSuppressModelInteraction && (
+  const isHoveredModelFromPicking = !shouldSuppressModelInteraction && (
     hasGpuModelHoverId
       ? hit.objectId === modelId
       : (!isGizmoHoverCategory && isPointerHovered)
-  ));
+  );
+  const isHoveredModel = hasExternalHoverSource
+    ? isExternallyHoveredModel
+    : (isExternallyHoveredModel || isHoveredModelFromPicking);
   const isMarqueeHovered = !shouldSuppressModelInteraction && !!isMarqueeCandidate;
   const isSupportDimmed = typeof supportNonSelectedOpacity === 'number';
   const dimmedBaseOpacity = isSupportDimmed
