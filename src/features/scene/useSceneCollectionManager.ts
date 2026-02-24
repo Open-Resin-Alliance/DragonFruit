@@ -1174,9 +1174,10 @@ export function useSceneCollectionManager() {
   // Model Management
   const updateModelTransform = useCallback((id: string, transform: ModelTransform) => {
     const currentModel = modelsRef.current.find((m) => m.id === id);
-    if (currentModel && !transformsEqual(currentModel.transform, transform)) {
-      transformSupportsForModel(id, currentModel.transform, transform);
-    }
+    if (!currentModel) return;
+    if (transformsEqual(currentModel.transform, transform)) return;
+
+    transformSupportsForModel(id, currentModel.transform, transform);
 
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, transform } : m

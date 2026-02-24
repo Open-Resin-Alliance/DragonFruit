@@ -765,10 +765,11 @@ function transformSegment(segment: Segment, matrix: THREE.Matrix4, normalMatrix:
     };
 
     if (segment.type === 'bezier') {
-        next.controlPoint1 = transformVec3(segment.controlPoint1, matrix);
-        next.controlPoint2 = transformVec3(segment.controlPoint2, matrix);
-        next.startTangent = transformDirection(segment.startTangent, normalMatrix);
-        next.endTangent = transformDirection(segment.endTangent, normalMatrix);
+        const bezierNext = next as BezierSegment;
+        bezierNext.controlPoint1 = transformVec3(segment.controlPoint1, matrix);
+        bezierNext.controlPoint2 = transformVec3(segment.controlPoint2, matrix);
+        bezierNext.startTangent = transformDirection(segment.startTangent, normalMatrix);
+        bezierNext.endTangent = transformDirection(segment.endTangent, normalMatrix);
     }
 
     return next;
@@ -844,10 +845,14 @@ export function transformSupportsForModel(
     let nextBraces = state.braces;
     let nextKnots = state.knots;
 
+    const touchedRootIds = new Set<string>();
     const touchedSegmentIds = new Set<string>();
     const touchedKnotIds = new Set<string>();
     const touchedLeafIds = new Set<string>();
     const touchedBraceIds = new Set<string>();
+    const affectedBranchIds = new Set<string>();
+    const affectedLeafIds = new Set<string>();
+    const affectedBraceIds = new Set<string>();
 
     for (const root of Object.values(state.roots)) {
         if (root.modelId !== modelId) continue;
@@ -855,6 +860,7 @@ export function transformSupportsForModel(
             nextRoots = { ...state.roots };
             changed = true;
         }
+        touchedRootIds.add(root.id);
         nextRoots[root.id] = {
             ...root,
             transform: {
@@ -881,33 +887,92 @@ export function transformSupportsForModel(
         nextTrunks[trunk.id] = nextTrunk;
     }
 
-    for (const branch of Object.values(state.branches)) {
-        if (branch.modelId !== modelId) continue;
+    let expandedGraph = true;
+    while (expandedGraph) {
+        expandedGraph = false;
+
+        for (const branch of Object.values(state.branches)) {
+            if (affectedBranchIds.has(branch.id)) continue;
+
+            const parentKnot = state.knots[branch.parentKnotId];
+            const isConnectedToMovedGraph = touchedKnotIds.has(branch.parentKnotId)
+                || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
+
+            if (branch.modelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedBranchIds.add(branch.id);
+            touchedKnotIds.add(branch.parentKnotId);
+            branch.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
+            expandedGraph = true;
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (affectedLeafIds.has(leaf.id)) continue;
+
+            const parentKnot = state.knots[leaf.parentKnotId];
+            const isConnectedToMovedGraph = touchedKnotIds.has(leaf.parentKnotId)
+                || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
+
+            if (leaf.modelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedLeafIds.add(leaf.id);
+            touchedKnotIds.add(leaf.parentKnotId);
+            touchedLeafIds.add(leaf.id);
+            expandedGraph = true;
+        }
+
+        for (const brace of Object.values(state.braces)) {
+            if (affectedBraceIds.has(brace.id)) continue;
+
+            const startKnot = state.knots[brace.startKnotId];
+            const endKnot = state.knots[brace.endKnotId];
+            const startParentShaftId = startKnot?.parentShaftId;
+            const endParentShaftId = endKnot?.parentShaftId;
+            const isConnectedToMovedGraph = touchedKnotIds.has(brace.startKnotId)
+                || touchedKnotIds.has(brace.endKnotId)
+                || (!!startParentShaftId && (touchedSegmentIds.has(startParentShaftId)
+                    || (startParentShaftId.startsWith('braceSegment:')
+                        && touchedBraceIds.has(startParentShaftId.slice('braceSegment:'.length)))))
+                || (!!endParentShaftId && (touchedSegmentIds.has(endParentShaftId)
+                    || (endParentShaftId.startsWith('braceSegment:')
+                        && touchedBraceIds.has(endParentShaftId.slice('braceSegment:'.length)))));
+
+            if (brace.modelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedBraceIds.add(brace.id);
+            touchedKnotIds.add(brace.startKnotId);
+            touchedKnotIds.add(brace.endKnotId);
+            touchedBraceIds.add(brace.id);
+            touchedSegmentIds.add(`braceSegment:${brace.id}`);
+            expandedGraph = true;
+        }
+    }
+
+    for (const branchId of affectedBranchIds) {
+        const branch = state.branches[branchId];
+        if (!branch) continue;
+
         if (!changed) {
             nextBranches = { ...state.branches };
             changed = true;
         }
 
-        touchedKnotIds.add(branch.parentKnotId);
-        branch.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-        const nextBranch: Branch = {
+        nextBranches[branch.id] = {
             ...branch,
             segments: branch.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
             contactCone: branch.contactCone ? transformContactCone(branch.contactCone, deltaMatrix, normalMatrix) : branch.contactCone,
         };
-
-        nextBranches[branch.id] = nextBranch;
     }
 
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.modelId !== modelId) continue;
+    for (const leafId of affectedLeafIds) {
+        const leaf = state.leaves[leafId];
+        if (!leaf) continue;
+
         if (!changed) {
             nextLeaves = { ...state.leaves };
             changed = true;
         }
 
-        touchedKnotIds.add(leaf.parentKnotId);
-        touchedLeafIds.add(leaf.id);
         nextLeaves[leaf.id] = {
             ...leaf,
             contactCone: transformContactCone(leaf.contactCone, deltaMatrix, normalMatrix),
@@ -946,16 +1011,14 @@ export function transformSupportsForModel(
         };
     }
 
-    for (const brace of Object.values(state.braces)) {
-        if (brace.modelId !== modelId) continue;
+    for (const braceId of affectedBraceIds) {
+        const brace = state.braces[braceId];
+        if (!brace) continue;
+
         if (!changed) {
             nextBraces = { ...state.braces };
             changed = true;
         }
-
-        touchedKnotIds.add(brace.startKnotId);
-        touchedKnotIds.add(brace.endKnotId);
-        touchedBraceIds.add(brace.id);
 
         nextBraces[brace.id] = {
             ...brace,
@@ -1010,7 +1073,7 @@ export function transformSupportsForModel(
         notify();
     }
 
-    transformSupportBracesForModel(modelId, deltaMatrix);
+    transformSupportBracesForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds);
 }
 
 export function removeRootById(rootId: string): Roots | null {

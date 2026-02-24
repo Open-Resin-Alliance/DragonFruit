@@ -639,8 +639,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
             if (restrictToActiveModel && supportBrace.modelId !== activeModelId) continue;
 
-            const root = state.roots[supportBrace.rootId];
-            const hostKnot = state.knots[supportBrace.hostKnotId];
+            const root = supportBraceState.roots[supportBrace.rootId];
+            const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
             if (!root || !hostKnot) continue;
 
             const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
@@ -688,7 +688,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [supportBraceState.supportBraces, state.roots, state.knots, restrictToActiveModel, activeModelId]);
+    }, [supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, restrictToActiveModel, activeModelId]);
 
     const contactConesBySupport = useMemo(() => {
         const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
@@ -1949,8 +1949,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Support Braces */}
             {Object.values(supportBraceState.supportBraces).map((supportBrace) => {
                 if (restrictToActiveModel && supportBrace.modelId !== activeModelId) return null;
-                const root = state.roots[supportBrace.rootId];
-                const hostKnot = state.knots[supportBrace.hostKnotId];
+                const root = supportBraceState.roots[supportBrace.rootId];
+                const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
                 if (!root || !hostKnot) return null;
 
                 const isSupportBraceSelected = selectedSupportIdSet.has(supportBrace.id) || state.selectedId === supportBrace.id;

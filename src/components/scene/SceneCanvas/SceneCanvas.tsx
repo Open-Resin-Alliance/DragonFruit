@@ -721,6 +721,8 @@ export function SceneCanvas({
   selectionHighlightMode,
   blockSupportPlacement,
   supportsRef,
+  supportDragGroupRef,
+  supportRenderRevision,
   ghostData,
   duplicatePreviewModel,
   duplicatePreviewTransforms,
@@ -811,6 +813,8 @@ export function SceneCanvas({
   selectionHighlightMode?: SelectionHighlightMode;
   blockSupportPlacement?: boolean;
   supportsRef?: React.RefObject<THREE.Group | null>;
+  supportDragGroupRef?: React.RefObject<THREE.Group | null>;
+  supportRenderRevision?: number;
   ghostData?: any;
   duplicatePreviewModel?: LoadedModel | null;
   duplicatePreviewTransforms?: Array<{
@@ -975,6 +979,24 @@ export function SceneCanvas({
     operation: 'move' | 'rotate' | 'scale';
     before: ModelTransform;
   } | null>(null);
+
+  // --- Live support group transform during gizmo drag ---
+  const gizmoDragBeforeMatrixRef = React.useRef<THREE.Matrix4 | null>(null);
+  // Reusable work matrices to avoid GC pressure during drag
+  const _dragWorkCurrent = React.useRef(new THREE.Matrix4());
+  const _dragWorkInvBefore = React.useRef(new THREE.Matrix4());
+
+  React.useEffect(() => {
+    if (isGizmoDragging) return;
+
+    const dragGroup = supportDragGroupRef?.current;
+    if (dragGroup) {
+      dragGroup.matrix.identity();
+      dragGroup.matrixAutoUpdate = true;
+    }
+
+    gizmoDragBeforeMatrixRef.current = null;
+  }, [isGizmoDragging, supportDragGroupRef]);
 
   const startOutOfBoundsRotateGrace = React.useCallback(() => {
     setOutOfBoundsRotateGraceActive(true);
@@ -1606,6 +1628,30 @@ export function SceneCanvas({
     if (!activeModelId) return null;
     return models.find((m) => m.id === activeModelId) ?? null;
   }, [models, activeModelId]);
+
+  // --- Support drag group helpers (must be after activeModel/activeGroupRef) ---
+  const captureGizmoDragBeforeMatrix = React.useCallback(() => {
+    const source = transform ?? activeModel?.transform;
+    if (!source) return;
+    gizmoDragBeforeMatrixRef.current = new THREE.Matrix4().compose(
+      source.position,
+      quaternionFromGlobalEuler(source.rotation),
+      source.scale,
+    );
+  }, [activeModel?.transform, transform]);
+
+  const applySupportGroupDelta = React.useCallback(() => {
+    const beforeMat = gizmoDragBeforeMatrixRef.current;
+    const group = activeGroupRef.current;
+    const dragGroup = supportDragGroupRef?.current;
+    if (!beforeMat || !group || !dragGroup) return;
+
+    const cur = _dragWorkCurrent.current.compose(group.position, group.quaternion, group.scale);
+    const inv = _dragWorkInvBefore.current.copy(beforeMat).invert();
+    // delta = currentMatrix * inverse(beforeMatrix)
+    dragGroup.matrix.multiplyMatrices(cur, inv);
+    dragGroup.matrixAutoUpdate = false;
+  }, [activeGroupRef]);
 
   const selectedModelIdSet = React.useMemo(() => {
     return new Set(selectedModelIds ?? []);
@@ -3171,6 +3217,8 @@ export function SceneCanvas({
               )}
 
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
+              {/* Wrap all support/raft geometry in a drag group so they move as one during gizmo drags */}
+              <group ref={supportDragGroupRef ?? undefined}>
               {!hideRaftPrimitives && (
                 <>
                   <RaftRenderer
@@ -3197,6 +3245,24 @@ export function SceneCanvas({
                   />
                 </>
               )}
+
+              {/* Render supports */}
+              <SupportRenderer
+                key={`support-render-rev:${supportRenderRevision ?? 0}`}
+                ref={supportsRef as React.RefObject<THREE.Group>}
+                mode={mode}
+                navigationLodActive={navigationLodActive}
+                hidePlateContactPrimitives={hidePlateContactPrimitives}
+                clipLower={clipLower}
+                clipUpper={clipUpper}
+                supportColorsByModelId={supportColorsByModelId}
+                hoverTintColor={hoverTintColor}
+                hoverTintStrength={hoverTintStrength}
+                selectedTintStrength={selectedTintStrength}
+                activeModelId={visualActiveModelId ?? null}
+                hoverModelId={hoveredModelId}
+              />
+              </group>{/* end supportDragGroupRef */}
 
               {satDebugTargets.map((entry) => (
                 <SliceSatBoundingMeshRenderer
@@ -3229,6 +3295,7 @@ export function SceneCanvas({
                   onMove={(delta) => {
                     if (activeGroupRef.current) {
                       activeGroupRef.current.position.add(delta);
+                      applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live && onTransformChange) {
                         onTransformChange(live.position, live.rotation, live.scale);
@@ -3236,6 +3303,7 @@ export function SceneCanvas({
                     }
                   }}
                   onMoveStart={() => {
+                    captureGizmoDragBeforeMatrix();
                     onTransformStart?.('move');
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
@@ -3282,9 +3350,15 @@ export function SceneCanvas({
                       const worldAxis = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
                       const quaternion = new THREE.Quaternion().setFromAxisAngle(worldAxis, -angle);
                       activeGroupRef.current.quaternion.premultiply(quaternion);
+                      applySupportGroupDelta();
+                      const live = captureActiveGroupTransform();
+                      if (live && onTransformChange) {
+                        onTransformChange(live.position, live.rotation, live.scale);
+                      }
                     }
                   }}
                   onRotateStart={() => {
+                    captureGizmoDragBeforeMatrix();
                     onTransformStart?.('rotate');
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
@@ -3327,6 +3401,7 @@ export function SceneCanvas({
                     onTransformEnd?.('rotate');
                   }}
                   onScaleStart={() => {
+                    captureGizmoDragBeforeMatrix();
                     onTransformStart?.('scale');
                     if (activeGroupRef.current) {
                       initialScaleRef.current.copy(activeGroupRef.current.scale);
@@ -3354,6 +3429,7 @@ export function SceneCanvas({
                         if (axis === 'y') activeGroupRef.current.scale.y *= factor;
                         if (axis === 'z') activeGroupRef.current.scale.z *= factor;
                       }
+                      applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live && onTransformChange) {
                         onTransformChange(live.position, live.rotation, live.scale);
@@ -3389,22 +3465,6 @@ export function SceneCanvas({
                   }}
                 />
               )}
-
-              {/* Render supports */}
-              <SupportRenderer
-                ref={supportsRef as React.RefObject<THREE.Group>}
-                mode={mode}
-                navigationLodActive={navigationLodActive}
-                hidePlateContactPrimitives={hidePlateContactPrimitives}
-                clipLower={clipLower}
-                clipUpper={clipUpper}
-                supportColorsByModelId={supportColorsByModelId}
-                hoverTintColor={hoverTintColor}
-                hoverTintStrength={hoverTintStrength}
-                selectedTintStrength={selectedTintStrength}
-                activeModelId={visualActiveModelId ?? null}
-                hoverModelId={hoveredModelId}
-              />
 
               <IslandOverlay
                 markers={islandMarkers ?? []}
