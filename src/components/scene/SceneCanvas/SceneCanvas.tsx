@@ -1962,9 +1962,22 @@ export function SceneCanvas({
     return bounds.getCenter(new THREE.Vector3());
   }, [activeModel, computeModelWorldBounds]);
 
+  const supportAutoTargetModelIdRef = React.useRef<string | null | undefined>(undefined);
+
   React.useEffect(() => {
-    if (mode !== 'support') return;
+    if (mode !== 'support') {
+      supportAutoTargetModelIdRef.current = undefined;
+      return;
+    }
     if (spaceMouseNavigationActive) return;
+
+    const currentModelId = activeModelId ?? null;
+    const hasModelContextChanged = supportAutoTargetModelIdRef.current !== currentModelId;
+    if (!hasModelContextChanged) {
+      return;
+    }
+
+    supportAutoTargetModelIdRef.current = currentModelId;
 
     if (selectedSpaceMousePivotPoint) {
       setOrbitTargetFromPoint(selectedSpaceMousePivotPoint);
