@@ -2169,7 +2169,9 @@ export function SceneCanvas({
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
-  const dynamicDpr = (isIntroAnimating || isDropAnimating) ? ([1, 1.5] as [number, number]) : ([1, 10] as [number, number]);
+  const dynamicDpr = (isIntroAnimating || isDropAnimating || isGizmoDragging)
+    ? ([1, 1.5] as [number, number])
+    : ([1, 10] as [number, number]);
 
   React.useEffect(() => {
     modelDropOffsetsRef.current = entryDropOffsets;
@@ -2625,7 +2627,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = plateContactCullActive;
   const hideRaftPrimitives = plateContactCullActive;
-  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive;
+  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive || isGizmoDragging;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';

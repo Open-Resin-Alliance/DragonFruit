@@ -61,6 +61,7 @@ export function TransformGizmo({
   onScale,
   onScaleEnd,
   onDragStateChange,
+  rootRef,
 }: TransformGizmoProps) {
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
@@ -89,6 +90,13 @@ export function TransformGizmo({
       }
     });
   }, []);
+
+  const setGizmoRootRef = React.useCallback((node: THREE.Group | null) => {
+    gizmoRootRef.current = node;
+    if (rootRef) {
+      rootRef.current = node;
+    }
+  }, [rootRef]);
 
   if (!visible) return null;
 
@@ -196,7 +204,7 @@ export function TransformGizmo({
   };
 
   return (
-    <group ref={gizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
+    <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
       {/* Center plane - XY movement only */}
       {enableMove && showCenter && (
         <GizmoCenter

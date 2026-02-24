@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { TransformGizmo } from './TransformGizmo';
@@ -41,6 +41,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
 }) {
   const { camera } = useThree();
   const scaleFactor = props.scaleFactor ?? 0.04;
+  const gizmoRootRef = React.useRef<THREE.Group | null>(null);
 
   const resolveCurrentPosition = React.useCallback((): [number, number, number] => {
     const meshPos = props.meshRef?.current?.position;
@@ -51,50 +52,54 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   }, [props.meshRef, props.position]);
 
   const initialPosition = React.useMemo(() => resolveCurrentPosition(), [resolveCurrentPosition]);
-  const [livePosition, setLivePosition] = useState<[number, number, number]>(initialPosition);
-  const livePositionRef = React.useRef<[number, number, number]>(initialPosition);
-
-  const [scale, setScale] = useState<number>(() => computeScreenSpaceScale(camera, initialPosition, scaleFactor));
-  const scaleRef = React.useRef<number>(computeScreenSpaceScale(camera, initialPosition, scaleFactor));
+  const initialScale = React.useMemo(
+    () => computeScreenSpaceScale(camera, initialPosition, scaleFactor),
+    [camera, initialPosition, scaleFactor],
+  );
+  const lastPositionRef = React.useRef<[number, number, number]>(initialPosition);
+  const lastScaleRef = React.useRef<number>(initialScale);
 
   React.useLayoutEffect(() => {
+    const root = gizmoRootRef.current;
+    if (!root) return;
+
     const nextPosition = resolveCurrentPosition();
-    const prev = livePositionRef.current;
+    const prev = lastPositionRef.current;
     if (prev[0] !== nextPosition[0] || prev[1] !== nextPosition[1] || prev[2] !== nextPosition[2]) {
-      livePositionRef.current = nextPosition;
-      setLivePosition(nextPosition);
+      lastPositionRef.current = nextPosition;
+      root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
     }
 
     const nextScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor);
-    if (Math.abs(nextScale - scaleRef.current) > 1e-4) {
-      scaleRef.current = nextScale;
-      setScale(nextScale);
+    if (Math.abs(nextScale - lastScaleRef.current) > 1e-4) {
+      lastScaleRef.current = nextScale;
+      root.scale.setScalar(nextScale);
     }
   }, [camera, resolveCurrentPosition, scaleFactor]);
   
-  // Update scale and position every frame based on mesh position
+  // Imperative per-frame sync keeps gizmo visually glued to the target
+  // without React state scheduling overhead.
   useFrame(() => {
+    const root = gizmoRootRef.current;
+    if (!root) return;
+
     const nextPosition = resolveCurrentPosition();
-    const prevPosition = livePositionRef.current;
+    const prevPosition = lastPositionRef.current;
     if (
       prevPosition[0] !== nextPosition[0]
       || prevPosition[1] !== nextPosition[1]
       || prevPosition[2] !== nextPosition[2]
     ) {
-      livePositionRef.current = nextPosition;
-      setLivePosition(nextPosition);
+      lastPositionRef.current = nextPosition;
+      root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
     }
 
     const newScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor);
-    if (Math.abs(newScale - scaleRef.current) > 1e-4) {
-      scaleRef.current = newScale;
-      setScale(newScale);
+    if (Math.abs(newScale - lastScaleRef.current) > 1e-4) {
+      lastScaleRef.current = newScale;
+      root.scale.setScalar(newScale);
     }
   });
 
-  // Always use live position so selection changes can paint at the correct
-  // location immediately (before first animation frame).
-  const gizmoPosition = livePosition;
-
-  return <TransformGizmo {...props} position={gizmoPosition} size={scale} />;
+  return <TransformGizmo {...props} position={initialPosition} size={initialScale} rootRef={gizmoRootRef} />;
 }
