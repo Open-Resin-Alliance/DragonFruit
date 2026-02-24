@@ -116,6 +116,7 @@ export function CameraSettingsTab({
             </div>
             <div className="flex items-center gap-1.5">
               {([
+                { key: 'raw', label: 'Raw' },
                 { key: 'precise', label: 'Precise' },
                 { key: 'balanced', label: 'Balanced' },
                 { key: 'fast', label: 'Fast' },

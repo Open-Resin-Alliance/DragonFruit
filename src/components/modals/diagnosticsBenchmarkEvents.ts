@@ -27,7 +27,7 @@ export type DiagnosticsBenchmarkResult = {
   finishedAtIso: string;
   totalDurationMs: number;
   projectionMode: 'orthographic' | 'perspective';
-  cameraFeelPreset: 'precise' | 'balanced' | 'fast';
+  cameraFeelPreset: 'raw' | 'precise' | 'balanced' | 'fast';
   phases: DiagnosticsBenchmarkPhaseResult[];
   overall: DiagnosticsBenchmarkStats;
 };
