@@ -115,6 +115,7 @@ export default function Home() {
   const supportsRef = React.useRef<THREE.Group | null>(null);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
+  const supportDragResetRafRef = React.useRef<number | null>(null);
 
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
@@ -2149,13 +2150,22 @@ export default function Home() {
       }
     }
 
-    // Now that support state reflects the final positions, reset the GPU group offset
-    const dragGroup = supportDragGroupRef.current;
-    if (dragGroup) {
-      dragGroup.matrix.identity();
-      dragGroup.matrixAutoUpdate = true;
+    // Reset temporary drag matrix on the next frame so support store updates
+    // are visible first, avoiding a release-frame pop.
+    if (typeof window !== 'undefined') {
+      if (supportDragResetRafRef.current !== null) {
+        window.cancelAnimationFrame(supportDragResetRafRef.current);
+      }
+      supportDragResetRafRef.current = window.requestAnimationFrame(() => {
+        const dragGroup = supportDragGroupRef.current;
+        if (dragGroup) {
+          dragGroup.matrix.identity();
+          dragGroup.matrixAutoUpdate = true;
+        }
+        setSupportRenderRevision((v) => v + 1);
+        supportDragResetRafRef.current = null;
+      });
     }
-    setSupportRenderRevision((v) => v + 1);
 
     const targetModelId = scene.activeModelId;
     const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
@@ -2232,6 +2242,11 @@ export default function Home() {
   }, [scene]);
 
   const handleTransformStart = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
+    if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
+      window.cancelAnimationFrame(supportDragResetRafRef.current);
+      supportDragResetRafRef.current = null;
+    }
+
     if (!scene.activeModelId || !scene.activeModel) return;
     const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
 
@@ -2253,6 +2268,15 @@ export default function Home() {
 
     transformMgr.setIsTransforming(true);
   }, [scene.activeModel, scene.activeModelId, transformMgr]);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
+        window.cancelAnimationFrame(supportDragResetRafRef.current);
+        supportDragResetRafRef.current = null;
+      }
+    };
+  }, []);
 
   const handleRotationComplete = () => {
     const targetModelId = scene.activeModelId;
