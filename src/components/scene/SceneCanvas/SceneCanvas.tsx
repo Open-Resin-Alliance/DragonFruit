@@ -3,7 +3,7 @@
 import React from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
-import { useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { CrossSectionCap } from '@/components/scene/CrossSectionCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
@@ -202,6 +202,77 @@ function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
   }, [camera, controls, mode, set, size.height, size.width]);
 
   return null;
+}
+
+function OrbitPivotIndicator({
+  visible,
+  color = '#58ff6a',
+}: {
+  visible: boolean;
+  color?: string;
+}) {
+  const { controls } = useThree();
+  const markerRef = React.useRef<THREE.Points>(null);
+  const markerPoint = React.useMemo(() => new Float32Array([0, 0, 0]), []);
+  const markerTexture = React.useMemo(() => {
+    if (typeof document === 'undefined') return null;
+
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size * 0.42, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      markerTexture?.dispose();
+    };
+  }, [markerTexture]);
+
+  useFrame(() => {
+    if (!visible) return;
+    if (!markerRef.current) return;
+    if (!controls || typeof controls !== 'object' || !('target' in controls)) return;
+
+    const orbit = controls as unknown as { target: THREE.Vector3 };
+    markerRef.current.position.copy(orbit.target);
+  });
+
+  if (!visible) return null;
+
+  return (
+    <points ref={markerRef} raycast={() => null} renderOrder={32}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          args={[markerPoint, 3]}
+        />
+      </bufferGeometry>
+      <pointsMaterial
+        color={color}
+        size={8}
+        sizeAttenuation={false}
+        map={markerTexture}
+        alphaTest={0.5}
+        transparent
+        opacity={0.6}
+        depthTest={false}
+        depthWrite={false}
+      />
+    </points>
+  );
 }
 
 function CameraModeEntryFramingController({
@@ -881,7 +952,19 @@ export function SceneCanvas({
   const orbitInteractionMovedRef = React.useRef(false);
   const benchmarkRunIdRef = React.useRef<string | null>(null);
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
+  const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
+    const isOrbitInRotateState = React.useCallback(() => {
+      const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
+      const state = orbitControls?.state;
+      // OrbitControls internal states:
+      // ROTATE=0, DOLLY=1, PAN=2, TOUCH_ROTATE=3, TOUCH_PAN=4,
+      // TOUCH_DOLLY_PAN=5, TOUCH_DOLLY_ROTATE=6.
+      // We only want to hide on explicit pan modes.
+      if (state == null) return true;
+      return state !== 2 && state !== 4 && state !== 5;
+    }, []);
+
   const [mouseOrbitDragRunId, setMouseOrbitDragRunId] = React.useState(0);
   const [marqueeSelection, setMarqueeSelection] = React.useState<{
     start: { x: number; y: number };
@@ -891,17 +974,11 @@ export function SceneCanvas({
   const activeBuildVolumeSettings = view3dSettings ?? DEFAULT_VIEW3D_SETTINGS;
 
   const buildVolumeCenterTarget = React.useMemo(() => {
-    if (activeBuildVolumeSettings.enabled) {
-      const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
-      const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
-      const centerZ = activeBuildVolumeSettings.maxZMm * 0.5;
-      return new THREE.Vector3(centerX, centerY, centerZ);
-    }
-    return new THREE.Vector3(0, 0, 0);
+    const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
+    const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
+    return new THREE.Vector3(centerX, centerY, 10);
   }, [
     activeBuildVolumeSettings.depthMm,
-    activeBuildVolumeSettings.enabled,
-    activeBuildVolumeSettings.maxZMm,
     activeBuildVolumeSettings.originMode,
     activeBuildVolumeSettings.widthMm,
   ]);
@@ -2742,6 +2819,8 @@ export function SceneCanvas({
     const orbitActive = orbitInteractionActiveRef.current;
     if (orbitActive) {
       orbitInteractionMovedRef.current = true;
+      const rotating = isOrbitInRotateState();
+      setIsOrbitRotating((prev) => (prev === rotating ? prev : rotating));
     }
     updateOrbitControlSpeeds();
     updateCameraBelowBuildPlate();
@@ -2749,15 +2828,16 @@ export function SceneCanvas({
     if (orbitActive) {
       window.dispatchEvent(new Event('picking-orbit-change'));
     }
-  }, [onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
+  }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
 
   const handleOrbitStart = React.useCallback(() => {
     orbitInteractionActiveRef.current = true;
     orbitInteractionMovedRef.current = false;
+    setIsOrbitRotating(isOrbitInRotateState());
     setIsOrbitInteracting(true);
     setMouseOrbitDragRunId((id) => id + 1);
     window.dispatchEvent(new Event('picking-orbit-start'));
-  }, []);
+  }, [isOrbitInRotateState]);
 
   const handleOrbitEnd = React.useCallback(() => {
     if (mode === 'prepare' && orbitInteractionActiveRef.current && orbitInteractionMovedRef.current) {
@@ -2766,6 +2846,7 @@ export function SceneCanvas({
     orbitInteractionActiveRef.current = false;
     orbitInteractionMovedRef.current = false;
     setIsOrbitInteracting(false);
+    setIsOrbitRotating(false);
 
     updateCameraBelowBuildPlate();
     onCameraEnd?.();
@@ -3606,6 +3687,7 @@ export function SceneCanvas({
           target={orbitTarget}
           mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }}
         />
+        <OrbitPivotIndicator visible={isOrbitInteracting && isOrbitRotating} />
         <SpaceMouseController
           pivotPoint={selectedSpaceMousePivotPoint}
           pivotCandidates={spaceMousePivotCandidates}
