@@ -113,14 +113,18 @@ export default function Home() {
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
+  // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
+  const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
 
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
   const [displayActiveModelId, setDisplayActiveModelId] = React.useState<string | null>(null);
+  const [supportRenderRevision, setSupportRenderRevision] = React.useState(0);
   const pendingTransformHistoryRef = React.useRef<{ modelId: string; before: ModelTransform; description?: string } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
   const pendingHistoryTransformResyncRef = React.useRef(false);
   const skipNextTransformEndCommitRef = React.useRef(false);
+  const transformEndFlushedRef = React.useRef(false);
   const pendingRotateGizmoCommitRef = React.useRef<{
     modelId: string;
     before: ModelTransform;
@@ -860,6 +864,16 @@ export default function Home() {
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
   useEffect(() => {
+    if (transformMgr.isTransforming) return;
+
+    // Skip if handleTransformEnd already flushed the final transform synchronously.
+    // The persistence effect would otherwise re-apply the delta because React state
+    // (scene.activeModel) hasn't committed yet while modelsRef is still stale.
+    if (transformEndFlushedRef.current) {
+      transformEndFlushedRef.current = false;
+      return;
+    }
+
     // Only update if the local transform state has been synchronized with the new model
     // This prevents overwriting the new model's transform with the old transform state on load
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
@@ -927,6 +941,7 @@ export default function Home() {
     transformMgr.transform.scale.x,
     transformMgr.transform.scale.y,
     transformMgr.transform.scale.z,
+    transformMgr.isTransforming,
     isFiniteTransform,
   ]);
 
@@ -2108,6 +2123,40 @@ export default function Home() {
   };
 
   const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
+    // Flush the final model transform into the store synchronously so
+    // transformSupportsForModel() recalculates all support positions before
+    // we reset the visual drag-group matrix. This eliminates the 1-frame
+    // flash where supports snap back to their pre-drag positions.
+    if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
+      const pending = transformMgr.pendingTransformRef.current;
+      const current = (
+        pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+      )
+        ? {
+            position: pending.pos.clone(),
+            rotation: pending.rot.clone(),
+            scale: pending.scl.clone(),
+          }
+        : transformMgr.transform;
+      if (isFiniteTransform(current)) {
+        scene.updateModelTransform(scene.activeModelId, {
+          position: current.position.clone(),
+          rotation: current.rotation.clone(),
+          scale: current.scale.clone(),
+        });
+        // Prevent the persistence effect from applying the same delta a second time
+        transformEndFlushedRef.current = true;
+      }
+    }
+
+    // Now that support state reflects the final positions, reset the GPU group offset
+    const dragGroup = supportDragGroupRef.current;
+    if (dragGroup) {
+      dragGroup.matrix.identity();
+      dragGroup.matrixAutoUpdate = true;
+    }
+    setSupportRenderRevision((v) => v + 1);
+
     const targetModelId = scene.activeModelId;
     const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
 
@@ -3213,6 +3262,8 @@ export default function Home() {
             crossSectionMode={slicing.crossSectionMode}
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
+            supportDragGroupRef={supportDragGroupRef}
+            supportRenderRevision={supportRenderRevision}
             ghostData={ghostData}
             duplicatePreviewModel={
               isDuplicating

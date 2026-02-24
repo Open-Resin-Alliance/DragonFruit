@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { SupportBraceBuildResult, SupportBraceState } from './types';
 import * as THREE from 'three';
-import type { Vec3, Segment } from '../../types';
+import type { Vec3, Segment, BezierSegment } from '../../types';
 
 const listeners = new Set<() => void>();
 
@@ -136,16 +136,23 @@ function transformSegment(segment: Segment, matrix: THREE.Matrix4, normalMatrix:
     };
 
     if (segment.type === 'bezier') {
-        next.controlPoint1 = transformVec3(segment.controlPoint1, matrix);
-        next.controlPoint2 = transformVec3(segment.controlPoint2, matrix);
-        next.startTangent = transformDirection(segment.startTangent, normalMatrix);
-        next.endTangent = transformDirection(segment.endTangent, normalMatrix);
+        const bezierNext = next as BezierSegment;
+        bezierNext.controlPoint1 = transformVec3(segment.controlPoint1, matrix);
+        bezierNext.controlPoint2 = transformVec3(segment.controlPoint2, matrix);
+        bezierNext.startTangent = transformDirection(segment.startTangent, normalMatrix);
+        bezierNext.endTangent = transformDirection(segment.endTangent, normalMatrix);
     }
 
     return next;
 }
 
-export function transformSupportBracesForModel(modelId: string, deltaMatrix: THREE.Matrix4) {
+export function transformSupportBracesForModel(
+    modelId: string,
+    deltaMatrix: THREE.Matrix4,
+    affectedRootIds?: Set<string>,
+    affectedKnotIds?: Set<string>,
+    affectedSegmentIds?: Set<string>,
+) {
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
     let changed = false;
@@ -154,7 +161,11 @@ export function transformSupportBracesForModel(modelId: string, deltaMatrix: THR
     let nextKnots = state.knots;
 
     for (const supportBrace of Object.values(state.supportBraces)) {
-        if (supportBrace.modelId !== modelId) continue;
+        const hostKnot = state.knots[supportBrace.hostKnotId];
+        const isConnectedToMovedGraph = (affectedRootIds?.has(supportBrace.rootId) ?? false)
+            || (affectedKnotIds?.has(supportBrace.hostKnotId) ?? false)
+            || (!!hostKnot && (affectedSegmentIds?.has(hostKnot.parentShaftId) ?? false));
+        if (supportBrace.modelId !== modelId && !isConnectedToMovedGraph) continue;
 
         if (!changed) {
             nextSupportBraces = { ...state.supportBraces };
@@ -181,7 +192,6 @@ export function transformSupportBracesForModel(modelId: string, deltaMatrix: THR
             };
         }
 
-        const hostKnot = state.knots[supportBrace.hostKnotId];
         if (hostKnot) {
             nextKnots[hostKnot.id] = {
                 ...hostKnot,
