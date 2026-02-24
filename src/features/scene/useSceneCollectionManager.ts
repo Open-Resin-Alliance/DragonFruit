@@ -1761,7 +1761,7 @@ export function useSceneCollectionManager() {
         },
       });
       if (result && result.geometry) {
-        const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId } = result;
+        const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId, supportData } = result;
 
         // Process geometry (bounds, center, normals, BVH)
         const processed = await processGeometry(rawGeom, { center: false });
@@ -1795,6 +1795,17 @@ export function useSceneCollectionManager() {
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
         setSelectedModelIds([model.id]);
+
+        if (supportData) {
+          if (typeof window !== 'undefined') {
+            requestAnimationFrame(() => {
+              loadFromLychee(supportData);
+            });
+          } else {
+            loadFromLychee(supportData);
+          }
+        }
+
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
       } else {
         const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';

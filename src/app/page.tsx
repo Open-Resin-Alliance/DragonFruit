@@ -116,6 +116,7 @@ export default function Home() {
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
+  const supportDragResetSecondRafRef = React.useRef<number | null>(null);
 
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
@@ -2155,14 +2156,22 @@ export default function Home() {
     if (typeof window !== 'undefined') {
       if (supportDragResetRafRef.current !== null) {
         window.cancelAnimationFrame(supportDragResetRafRef.current);
+        supportDragResetRafRef.current = null;
+      }
+      if (supportDragResetSecondRafRef.current !== null) {
+        window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
+        supportDragResetSecondRafRef.current = null;
       }
       supportDragResetRafRef.current = window.requestAnimationFrame(() => {
-        const dragGroup = supportDragGroupRef.current;
-        if (dragGroup) {
-          dragGroup.matrix.identity();
-          dragGroup.matrixAutoUpdate = true;
-        }
-        setSupportRenderRevision((v) => v + 1);
+        supportDragResetSecondRafRef.current = window.requestAnimationFrame(() => {
+          const dragGroup = supportDragGroupRef.current;
+          if (dragGroup) {
+            dragGroup.matrix.identity();
+            dragGroup.matrixAutoUpdate = true;
+          }
+          setSupportRenderRevision((v) => v + 1);
+          supportDragResetSecondRafRef.current = null;
+        });
         supportDragResetRafRef.current = null;
       });
     }
@@ -2246,6 +2255,10 @@ export default function Home() {
       window.cancelAnimationFrame(supportDragResetRafRef.current);
       supportDragResetRafRef.current = null;
     }
+    if (typeof window !== 'undefined' && supportDragResetSecondRafRef.current !== null) {
+      window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
+      supportDragResetSecondRafRef.current = null;
+    }
 
     if (!scene.activeModelId || !scene.activeModel) return;
     const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
@@ -2274,6 +2287,10 @@ export default function Home() {
       if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
         window.cancelAnimationFrame(supportDragResetRafRef.current);
         supportDragResetRafRef.current = null;
+      }
+      if (typeof window !== 'undefined' && supportDragResetSecondRafRef.current !== null) {
+        window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
+        supportDragResetSecondRafRef.current = null;
       }
     };
   }, []);

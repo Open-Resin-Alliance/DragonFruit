@@ -1,5 +1,6 @@
 import type { Roots, Trunk, Leaf, Knot, Branch, Brace, Twig, Stick, SupportState } from '../types';
 import type { SupportBraceBuildResult } from '../SupportTypes/SupportBrace/types';
+import type { SupportBraceState } from '../SupportTypes/SupportBrace/types';
 
 export const SUPPORT_ADD_TRUNK = 'support:add-trunk' as const;
 export const SUPPORT_REMOVE_TRUNK = 'support:remove-trunk' as const;
@@ -127,4 +128,6 @@ export interface SupportReplaceTrunkPayload {
 export interface SupportReplaceStatePayload {
   before: SupportState;
   after: SupportState;
+  supportBraceBefore?: SupportBraceState;
+  supportBraceAfter?: SupportBraceState;
 }
