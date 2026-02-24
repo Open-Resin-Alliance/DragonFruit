@@ -1070,6 +1070,9 @@ export function SceneCanvas({
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
+    // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
+    if (isGizmoDragging) return null;
+
     const bounds = new THREE.Box3();
     let hasAny = false;
     const BUILD_PLATE_Z = 0;
@@ -1214,7 +1217,7 @@ export function SceneCanvas({
     }
 
     return hasAny ? bounds : null;
-  }, [raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
+  }, [isGizmoDragging, raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
 
   const computeModelWorldBounds = React.useCallback((
     model: LoadedModel,
@@ -1260,7 +1263,13 @@ export function SceneCanvas({
     );
   }, [activeBuildVolumeSettings]);
 
+  const cachedModelWorldBoundsRef = React.useRef<Map<string, THREE.Box3>>(new Map());
+
   const modelWorldBounds = React.useMemo(() => {
+    if (isGizmoDragging) {
+      return cachedModelWorldBoundsRef.current;
+    }
+
     const map = new Map<string, THREE.Box3>();
     for (const model of models) {
       if (!model.visible) continue;
@@ -1270,8 +1279,9 @@ export function SceneCanvas({
           : model.transform;
       map.set(model.id, computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds));
     }
+    cachedModelWorldBoundsRef.current = map;
     return map;
-  }, [activeModelId, buildVolumeBounds, computeModelWorldBounds, models, transform]);
+  }, [activeModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, models, transform]);
 
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
@@ -1889,11 +1899,11 @@ export function SceneCanvas({
   const selectedSpaceMousePivotPoint = React.useMemo(() => {
     if (!activeModel?.visible) return null;
 
-    const bounds = computeModelWorldBounds(activeModel);
+    const bounds = modelWorldBounds.get(activeModel.id) ?? computeModelWorldBounds(activeModel);
     if (bounds.isEmpty()) return null;
 
     return bounds.getCenter(new THREE.Vector3());
-  }, [activeModel, computeModelWorldBounds]);
+  }, [activeModel, computeModelWorldBounds, modelWorldBounds]);
 
   const supportAutoTargetModelIdRef = React.useRef<string | null | undefined>(undefined);
 
@@ -1931,13 +1941,13 @@ export function SceneCanvas({
 
     for (const model of models) {
       if (!model.visible) continue;
-      const bounds = computeModelWorldBounds(model);
+      const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model);
       if (bounds.isEmpty()) continue;
       centers.push(bounds.getCenter(new THREE.Vector3()));
     }
 
     return centers;
-  }, [computeModelWorldBounds, models]);
+  }, [computeModelWorldBounds, modelWorldBounds, models]);
 
   const [entryDropOffsets, setEntryDropOffsets] = React.useState<Record<string, number>>({});
   const [modeEntryFramingRunId, setModeEntryFramingRunId] = React.useState(0);
@@ -2912,6 +2922,60 @@ export function SceneCanvas({
     };
   }, [activeGroupRef]);
 
+  const pendingTransformChangeRef = React.useRef<{
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  } | null>(null);
+  const pendingTransformChangeRafRef = React.useRef<number | null>(null);
+
+  const flushPendingTransformChange = React.useCallback(() => {
+    if (pendingTransformChangeRafRef.current !== null) {
+      cancelAnimationFrame(pendingTransformChangeRafRef.current);
+      pendingTransformChangeRafRef.current = null;
+    }
+
+    const pending = pendingTransformChangeRef.current;
+    if (!pending || !onTransformChange) return;
+
+    pendingTransformChangeRef.current = null;
+    onTransformChange(pending.position, pending.rotation, pending.scale);
+  }, [onTransformChange]);
+
+  const scheduleTransformChange = React.useCallback((live: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }) => {
+    if (!onTransformChange) return;
+
+    pendingTransformChangeRef.current = {
+      position: live.position.clone(),
+      rotation: live.rotation.clone(),
+      scale: live.scale.clone(),
+    };
+
+    if (pendingTransformChangeRafRef.current !== null) return;
+
+    pendingTransformChangeRafRef.current = requestAnimationFrame(() => {
+      pendingTransformChangeRafRef.current = null;
+      const pending = pendingTransformChangeRef.current;
+      if (!pending) return;
+      pendingTransformChangeRef.current = null;
+      onTransformChange(pending.position, pending.rotation, pending.scale);
+    });
+  }, [onTransformChange]);
+
+  React.useEffect(() => {
+    return () => {
+      if (pendingTransformChangeRafRef.current !== null) {
+        cancelAnimationFrame(pendingTransformChangeRafRef.current);
+      }
+      pendingTransformChangeRafRef.current = null;
+      pendingTransformChangeRef.current = null;
+    };
+  }, []);
+
   return (
     <div
       style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -3310,8 +3374,8 @@ export function SceneCanvas({
                       activeGroupRef.current.position.add(delta);
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
-                      if (live && onTransformChange) {
-                        onTransformChange(live.position, live.rotation, live.scale);
+                      if (live) {
+                        scheduleTransformChange(live);
                       }
                     }
                   }}
@@ -3336,6 +3400,7 @@ export function SceneCanvas({
                     markGizmoDragEnded();
                     const live = captureActiveGroupTransform();
                     if (live && onTransformChange) {
+                      flushPendingTransformChange();
                       onTransformChange(live.position, live.rotation, live.scale);
 
                       const startSnapshot = gizmoTransformStartSnapshotRef.current;
@@ -3369,8 +3434,8 @@ export function SceneCanvas({
                       activeGroupRef.current.quaternion.premultiply(quaternion);
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
-                      if (live && onTransformChange) {
-                        onTransformChange(live.position, live.rotation, live.scale);
+                      if (live) {
+                        scheduleTransformChange(live);
                       }
                     }
                   }}
@@ -3395,6 +3460,7 @@ export function SceneCanvas({
                     markGizmoDragEnded();
                     const live = captureActiveGroupTransform();
                     if (live && onTransformChange) {
+                      flushPendingTransformChange();
                       onTransformChange(live.position, live.rotation, live.scale);
 
                       const startSnapshot = gizmoTransformStartSnapshotRef.current;
@@ -3453,8 +3519,8 @@ export function SceneCanvas({
                       }
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
-                      if (live && onTransformChange) {
-                        onTransformChange(live.position, live.rotation, live.scale);
+                      if (live) {
+                        scheduleTransformChange(live);
                       }
                     }
                   }}
@@ -3462,6 +3528,7 @@ export function SceneCanvas({
                     markGizmoDragEnded();
                     const live = captureActiveGroupTransform();
                     if (live && onTransformChange) {
+                      flushPendingTransformChange();
                       onTransformChange(live.position, live.rotation, live.scale);
 
                       const startSnapshot = gizmoTransformStartSnapshotRef.current;
