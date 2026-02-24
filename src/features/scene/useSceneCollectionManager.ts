@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromLychee, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -1172,12 +1172,22 @@ export function useSceneCollectionManager() {
   }, [loadFiles]);
 
   // Model Management
-  const updateModelTransform = useCallback((id: string, transform: ModelTransform) => {
+  const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
     const currentModel = modelsRef.current.find((m) => m.id === id);
     if (!currentModel) return;
-    if (transformsEqual(currentModel.transform, transform)) return;
 
-    transformSupportsForModel(id, currentModel.transform, transform);
+    if (previousTransformOverride && modelsRef.current.length === 1) {
+      reassignAllSupportModelIds(id);
+    }
+
+    const beforeTransform = previousTransformOverride ?? currentModel.transform;
+    if (transformsEqual(beforeTransform, transform)) return;
+
+    if (previousTransformOverride && modelsRef.current.length === 1) {
+      transformAllSupportsForSingleModel(beforeTransform, transform);
+    } else {
+      transformSupportsForModel(id, beforeTransform, transform);
+    }
 
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, transform } : m
@@ -1883,6 +1893,11 @@ export function useSceneCollectionManager() {
 
       console.log('[SceneCollection] Converting Lychee file...');
       const converted = LysConverter.convert(json, getSettings());
+
+      const targetModelId = activeModelIdRef.current ?? modelsRef.current[0]?.id ?? null;
+      if (targetModelId) {
+        LysConverter.reassignModelId(converted, targetModelId);
+      }
 
       console.log('[SceneCollection] Loading into Store...');
       loadFromLychee(converted);

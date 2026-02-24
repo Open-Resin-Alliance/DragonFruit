@@ -216,6 +216,93 @@ export function transformSupportBracesForModel(
     notify();
 }
 
+export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4): boolean {
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
+
+    const supportBraceEntries = Object.values(state.supportBraces);
+    if (supportBraceEntries.length === 0) return false;
+
+    const nextSupportBraces = { ...state.supportBraces };
+    const nextRoots = { ...state.roots };
+    const nextKnots = { ...state.knots };
+
+    for (const supportBrace of supportBraceEntries) {
+        nextSupportBraces[supportBrace.id] = {
+            ...supportBrace,
+            segments: supportBrace.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+        };
+
+        const root = state.roots[supportBrace.rootId];
+        if (root) {
+            nextRoots[root.id] = {
+                ...root,
+                transform: {
+                    ...root.transform,
+                    pos: transformVec3(root.transform.pos, deltaMatrix),
+                },
+            };
+        }
+
+        const hostKnot = state.knots[supportBrace.hostKnotId];
+        if (hostKnot) {
+            nextKnots[hostKnot.id] = {
+                ...hostKnot,
+                pos: transformVec3(hostKnot.pos, deltaMatrix),
+            };
+        }
+    }
+
+    state = {
+        ...state,
+        supportBraces: nextSupportBraces,
+        roots: nextRoots,
+        knots: nextKnots,
+    };
+    notify();
+    return true;
+}
+
+export function reassignAllSupportBraceModelIds(modelId: string): boolean {
+    if (!modelId) return false;
+
+    let changed = false;
+    let nextSupportBraces = state.supportBraces;
+    let nextRoots = state.roots;
+
+    for (const supportBrace of Object.values(state.supportBraces)) {
+        if (supportBrace.modelId === modelId) continue;
+
+        if (!changed) {
+            nextSupportBraces = { ...state.supportBraces };
+            nextRoots = { ...state.roots };
+            changed = true;
+        }
+
+        nextSupportBraces[supportBrace.id] = {
+            ...supportBrace,
+            modelId,
+        };
+
+        const root = state.roots[supportBrace.rootId];
+        if (root && root.modelId !== modelId) {
+            nextRoots[root.id] = {
+                ...root,
+                modelId,
+            };
+        }
+    }
+
+    if (!changed) return false;
+
+    state = {
+        ...state,
+        supportBraces: nextSupportBraces,
+        roots: nextRoots,
+    };
+    notify();
+    return true;
+}
+
 export function useSupportBraceStoreState() {
     return useSyncExternalStore(
         subscribeToSupportBraceStore,

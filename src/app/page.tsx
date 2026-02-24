@@ -121,7 +121,6 @@ export default function Home() {
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
   const [displayActiveModelId, setDisplayActiveModelId] = React.useState<string | null>(null);
-  const [supportRenderRevision, setSupportRenderRevision] = React.useState(0);
   const pendingTransformHistoryRef = React.useRef<{ modelId: string; before: ModelTransform; description?: string } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
   const pendingHistoryTransformResyncRef = React.useRef(false);
@@ -2131,6 +2130,7 @@ export default function Home() {
     // flash where supports snap back to their pre-drag positions.
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
       const pending = transformMgr.pendingTransformRef.current;
+      const pendingHistory = pendingTransformHistoryRef.current;
       const current = (
         pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
       )
@@ -2141,11 +2141,21 @@ export default function Home() {
           }
         : transformMgr.transform;
       if (isFiniteTransform(current)) {
+        const explicitBeforeTransform = (
+          pendingHistory && pendingHistory.modelId === scene.activeModelId
+        )
+          ? {
+              position: pendingHistory.before.position.clone(),
+              rotation: pendingHistory.before.rotation.clone(),
+              scale: pendingHistory.before.scale.clone(),
+            }
+          : undefined;
+
         scene.updateModelTransform(scene.activeModelId, {
           position: current.position.clone(),
           rotation: current.rotation.clone(),
           scale: current.scale.clone(),
-        });
+        }, explicitBeforeTransform);
         // Prevent the persistence effect from applying the same delta a second time
         transformEndFlushedRef.current = true;
       }
@@ -2169,7 +2179,6 @@ export default function Home() {
             dragGroup.matrix.identity();
             dragGroup.matrixAutoUpdate = true;
           }
-          setSupportRenderRevision((v) => v + 1);
           supportDragResetSecondRafRef.current = null;
         });
         supportDragResetRafRef.current = null;
@@ -3304,7 +3313,6 @@ export default function Home() {
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
-            supportRenderRevision={supportRenderRevision}
             ghostData={ghostData}
             duplicatePreviewModel={
               isDuplicating

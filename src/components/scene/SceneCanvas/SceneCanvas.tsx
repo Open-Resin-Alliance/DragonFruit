@@ -764,7 +764,6 @@ export function SceneCanvas({
   blockSupportPlacement,
   supportsRef,
   supportDragGroupRef,
-  supportRenderRevision,
   ghostData,
   duplicatePreviewModel,
   duplicatePreviewTransforms,
@@ -856,7 +855,6 @@ export function SceneCanvas({
   blockSupportPlacement?: boolean;
   supportsRef?: React.RefObject<THREE.Group | null>;
   supportDragGroupRef?: React.RefObject<THREE.Group | null>;
-  supportRenderRevision?: number;
   ghostData?: any;
   duplicatePreviewModel?: LoadedModel | null;
   duplicatePreviewTransforms?: Array<{
@@ -1025,42 +1023,74 @@ export function SceneCanvas({
   // --- Live support group transform during gizmo drag ---
   const gizmoDragBeforeMatrixRef = React.useRef<THREE.Matrix4 | null>(null);
   const supportDragResetFallbackTimeoutRef = React.useRef<number | null>(null);
+  const supportDragResetRafRef = React.useRef<number | null>(null);
+  const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   // Reusable work matrices to avoid GC pressure during drag
   const _dragWorkCurrent = React.useRef(new THREE.Matrix4());
   const _dragWorkInvBefore = React.useRef(new THREE.Matrix4());
   const _dragWorkPosition = React.useRef(new THREE.Vector3());
   const modelDropOffsetsRef = React.useRef<Record<string, number>>({});
 
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
+  const cancelPendingSupportDragResets = React.useCallback(() => {
+    if (supportDragResetRafRef.current !== null) {
+      cancelAnimationFrame(supportDragResetRafRef.current);
+      supportDragResetRafRef.current = null;
+    }
+
+    if (supportDragResetSecondRafRef.current !== null) {
+      cancelAnimationFrame(supportDragResetSecondRafRef.current);
+      supportDragResetSecondRafRef.current = null;
+    }
 
     if (supportDragResetFallbackTimeoutRef.current !== null) {
       window.clearTimeout(supportDragResetFallbackTimeoutRef.current);
       supportDragResetFallbackTimeoutRef.current = null;
     }
+  }, []);
+
+  const resetSupportDragGroupNow = React.useCallback(() => {
+    const dragGroup = supportDragGroupRef?.current;
+    if (dragGroup) {
+      dragGroup.matrix.identity();
+      dragGroup.matrixAutoUpdate = true;
+    }
+    gizmoDragBeforeMatrixRef.current = null;
+  }, [supportDragGroupRef]);
+
+  const scheduleSupportDragGroupReset = React.useCallback(() => {
+    cancelPendingSupportDragResets();
+
+    // Two-frame defer allows model/support committed transforms to land first,
+    // then clears any leftover temporary drag matrix deterministically.
+    supportDragResetRafRef.current = requestAnimationFrame(() => {
+      supportDragResetSecondRafRef.current = requestAnimationFrame(() => {
+        resetSupportDragGroupNow();
+        supportDragResetSecondRafRef.current = null;
+      });
+      supportDragResetRafRef.current = null;
+    });
+
+    // Backstop in case RAF chain is interrupted.
+    supportDragResetFallbackTimeoutRef.current = window.setTimeout(() => {
+      resetSupportDragGroupNow();
+      supportDragResetFallbackTimeoutRef.current = null;
+    }, 180);
+  }, [cancelPendingSupportDragResets, resetSupportDragGroupNow]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    cancelPendingSupportDragResets();
 
     if (isGizmoDragging) return;
 
-    // Fallback only: if gizmo end callbacks are skipped/interrupted,
-    // ensure the temporary drag matrix is eventually cleared.
-    // Delaying avoids a release-frame pop before final transform commit.
-    supportDragResetFallbackTimeoutRef.current = window.setTimeout(() => {
-      const dragGroup = supportDragGroupRef?.current;
-      if (dragGroup) {
-        dragGroup.matrix.identity();
-        dragGroup.matrixAutoUpdate = true;
-      }
-      gizmoDragBeforeMatrixRef.current = null;
-      supportDragResetFallbackTimeoutRef.current = null;
-    }, 120);
+    // Defensive reset path for any missed/late gizmo end callback ordering.
+    scheduleSupportDragGroupReset();
 
     return () => {
-      if (supportDragResetFallbackTimeoutRef.current !== null) {
-        window.clearTimeout(supportDragResetFallbackTimeoutRef.current);
-        supportDragResetFallbackTimeoutRef.current = null;
-      }
+      cancelPendingSupportDragResets();
     };
-  }, [isGizmoDragging, supportDragGroupRef]);
+  }, [cancelPendingSupportDragResets, isGizmoDragging, scheduleSupportDragGroupReset]);
 
   const startOutOfBoundsRotateGrace = React.useCallback(() => {
     setOutOfBoundsRotateGraceActive(true);
@@ -3363,7 +3393,6 @@ export function SceneCanvas({
 
               {/* Render supports */}
               <SupportRenderer
-                key={`support-render-rev:${supportRenderRevision ?? 0}`}
                 ref={supportsRef as React.RefObject<THREE.Group>}
                 mode={mode}
                 navigationLodActive={navigationLodActive}
@@ -3470,6 +3499,7 @@ export function SceneCanvas({
                     }
                     gizmoTransformStartSnapshotRef.current = null;
                     onTransformEnd?.('move');
+                    scheduleSupportDragGroupReset();
                   }}
                   onRotate={(axis, angle) => {
                     if (activeGroupRef.current) {
@@ -3526,6 +3556,7 @@ export function SceneCanvas({
                     }
                     gizmoTransformStartSnapshotRef.current = null;
                     onTransformEnd?.('rotate');
+                    scheduleSupportDragGroupReset();
                   }}
                   onScaleStart={() => {
                     stopActiveModelDropAnimation();
@@ -3590,6 +3621,7 @@ export function SceneCanvas({
                     }
                     gizmoTransformStartSnapshotRef.current = null;
                     onTransformEnd?.('scale');
+                    scheduleSupportDragGroupReset();
                   }}
                 />
               )}
