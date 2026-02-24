@@ -982,20 +982,40 @@ export function SceneCanvas({
 
   // --- Live support group transform during gizmo drag ---
   const gizmoDragBeforeMatrixRef = React.useRef<THREE.Matrix4 | null>(null);
+  const supportDragResetFallbackTimeoutRef = React.useRef<number | null>(null);
   // Reusable work matrices to avoid GC pressure during drag
   const _dragWorkCurrent = React.useRef(new THREE.Matrix4());
   const _dragWorkInvBefore = React.useRef(new THREE.Matrix4());
 
   React.useEffect(() => {
-    if (isGizmoDragging) return;
+    if (typeof window === 'undefined') return;
 
-    const dragGroup = supportDragGroupRef?.current;
-    if (dragGroup) {
-      dragGroup.matrix.identity();
-      dragGroup.matrixAutoUpdate = true;
+    if (supportDragResetFallbackTimeoutRef.current !== null) {
+      window.clearTimeout(supportDragResetFallbackTimeoutRef.current);
+      supportDragResetFallbackTimeoutRef.current = null;
     }
 
-    gizmoDragBeforeMatrixRef.current = null;
+    if (isGizmoDragging) return;
+
+    // Fallback only: if gizmo end callbacks are skipped/interrupted,
+    // ensure the temporary drag matrix is eventually cleared.
+    // Delaying avoids a release-frame pop before final transform commit.
+    supportDragResetFallbackTimeoutRef.current = window.setTimeout(() => {
+      const dragGroup = supportDragGroupRef?.current;
+      if (dragGroup) {
+        dragGroup.matrix.identity();
+        dragGroup.matrixAutoUpdate = true;
+      }
+      gizmoDragBeforeMatrixRef.current = null;
+      supportDragResetFallbackTimeoutRef.current = null;
+    }, 120);
+
+    return () => {
+      if (supportDragResetFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(supportDragResetFallbackTimeoutRef.current);
+        supportDragResetFallbackTimeoutRef.current = null;
+      }
+    };
   }, [isGizmoDragging, supportDragGroupRef]);
 
   const startOutOfBoundsRotateGrace = React.useCallback(() => {
@@ -3237,12 +3257,6 @@ export function SceneCanvas({
                     navigationLodActive={navigationLodActive}
                     onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   />
-                  <FootprintBorderRenderer
-                    modelGeometry={activeModel ? activeModel.geometry : null}
-                    modelTransform={activeModelTransform}
-                    modelId={visualActiveModelId ?? hoveredModelId ?? null}
-                    color={supportHoverTintColor}
-                  />
                 </>
               )}
 
@@ -3263,6 +3277,15 @@ export function SceneCanvas({
                 hoverModelId={hoveredModelId}
               />
               </group>{/* end supportDragGroupRef */}
+
+              {!hideRaftPrimitives && !isGizmoDragging && (
+                <FootprintBorderRenderer
+                  modelGeometry={activeModel ? activeModel.geometry : null}
+                  modelTransform={activeModelTransform}
+                  modelId={visualActiveModelId ?? hoveredModelId ?? null}
+                  color={supportHoverTintColor}
+                />
+              )}
 
               {satDebugTargets.map((entry) => (
                 <SliceSatBoundingMeshRenderer
