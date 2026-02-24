@@ -1,4 +1,4 @@
-export type CameraFeelPreset = 'precise' | 'balanced' | 'fast';
+export type CameraFeelPreset = 'raw' | 'precise' | 'balanced' | 'fast';
 
 export type CameraFeelSettings = {
   preset: CameraFeelPreset;
@@ -12,7 +12,7 @@ export const DEFAULT_CAMERA_FEEL_SETTINGS: CameraFeelSettings = {
 };
 
 function normalizePreset(input: unknown): CameraFeelPreset {
-  if (input === 'precise' || input === 'fast') return input;
+  if (input === 'raw' || input === 'precise' || input === 'fast') return input;
   return 'balanced';
 }
 

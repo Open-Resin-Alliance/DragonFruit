@@ -224,6 +224,7 @@ function CameraModeEntryFramingController({
   const completedRestoreRunIdRef = React.useRef(0);
   const animatingRef = React.useRef(false);
   const rafRef = React.useRef<number | null>(null);
+  const savedDampingRef = React.useRef<boolean | null>(null);
   const cameraSnapshotRef = React.useRef<{
     position: THREE.Vector3;
     target: THREE.Vector3;
@@ -267,15 +268,21 @@ function CameraModeEntryFramingController({
     let startTime: number | null = null;
     const orbit = controls as unknown as {
       target: THREE.Vector3;
+      enableDamping?: boolean;
       update: () => void;
     };
+
+    if (savedDampingRef.current === null && typeof orbit.enableDamping === 'boolean') {
+      savedDampingRef.current = orbit.enableDamping;
+      orbit.enableDamping = false;
+    }
 
     const tick = (now: number) => {
       if (!animatingRef.current) return;
       if (startTime == null) startTime = now;
 
       const t = Math.min(1, (now - startTime) / durationMs);
-      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const eased = THREE.MathUtils.smootherstep(t, 0, 1);
 
       camera.position.lerpVectors(startPos, endPos, eased);
       orbit.target.lerpVectors(startTarget, endTarget, eased);
@@ -293,6 +300,10 @@ function CameraModeEntryFramingController({
       } else {
         animatingRef.current = false;
         rafRef.current = null;
+        if (savedDampingRef.current !== null && typeof orbit.enableDamping === 'boolean') {
+          orbit.enableDamping = savedDampingRef.current;
+          savedDampingRef.current = null;
+        }
         onComplete?.();
       }
     };
@@ -422,8 +433,13 @@ function CameraModeEntryFramingController({
   React.useEffect(() => {
     return () => {
       cancelAnimation();
+      const orbit = controls as unknown as { enableDamping?: boolean };
+      if (savedDampingRef.current !== null && orbit && typeof orbit.enableDamping === 'boolean') {
+        orbit.enableDamping = savedDampingRef.current;
+        savedDampingRef.current = null;
+      }
     };
-  }, [cancelAnimation]);
+  }, [cancelAnimation, controls]);
 
   return null;
 }
@@ -458,6 +474,7 @@ function SupportModeCameraRestoreController({
   const activeRunIdRef = React.useRef<number | null>(null);
   const animatingRef = React.useRef(false);
   const rafRef = React.useRef<number | null>(null);
+  const savedDampingRef = React.useRef<boolean | null>(null);
 
   const cancelAnimation = React.useCallback(() => {
     animatingRef.current = false;
@@ -521,8 +538,14 @@ function SupportModeCameraRestoreController({
 
     const orbit = controls as unknown as {
       target: THREE.Vector3;
+      enableDamping?: boolean;
       update: () => void;
     };
+
+    if (savedDampingRef.current === null && typeof orbit.enableDamping === 'boolean') {
+      savedDampingRef.current = orbit.enableDamping;
+      orbit.enableDamping = false;
+    }
 
     activeRunIdRef.current = restorePreSupportRunId;
     cancelAnimation();
@@ -544,7 +567,7 @@ function SupportModeCameraRestoreController({
       if (startTime == null) startTime = now;
 
       const t = Math.min(1, (now - startTime) / duration);
-      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const eased = THREE.MathUtils.smootherstep(t, 0, 1);
 
       camera.position.lerpVectors(startPos, endPos, eased);
       orbit.target.lerpVectors(startTarget, endTarget, eased);
@@ -562,6 +585,10 @@ function SupportModeCameraRestoreController({
       } else {
         animatingRef.current = false;
         rafRef.current = null;
+        if (savedDampingRef.current !== null && typeof orbit.enableDamping === 'boolean') {
+          orbit.enableDamping = savedDampingRef.current;
+          savedDampingRef.current = null;
+        }
         activeRunIdRef.current = null;
         restoredPreSupportRunIdRef.current = restorePreSupportRunId;
         preSupportSnapshotRef.current = null;
@@ -594,8 +621,14 @@ function SupportModeCameraRestoreController({
 
     const orbit = controls as unknown as {
       target: THREE.Vector3;
+      enableDamping?: boolean;
       update: () => void;
     };
+
+    if (savedDampingRef.current === null && typeof orbit.enableDamping === 'boolean') {
+      savedDampingRef.current = orbit.enableDamping;
+      orbit.enableDamping = false;
+    }
 
     activeRunIdRef.current = restoreSupportRunId;
     cancelAnimation();
@@ -617,7 +650,7 @@ function SupportModeCameraRestoreController({
       if (startTime == null) startTime = now;
 
       const t = Math.min(1, (now - startTime) / duration);
-      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const eased = THREE.MathUtils.smootherstep(t, 0, 1);
 
       camera.position.lerpVectors(startPos, endPos, eased);
       orbit.target.lerpVectors(startTarget, endTarget, eased);
@@ -635,6 +668,10 @@ function SupportModeCameraRestoreController({
       } else {
         animatingRef.current = false;
         rafRef.current = null;
+        if (savedDampingRef.current !== null && typeof orbit.enableDamping === 'boolean') {
+          orbit.enableDamping = savedDampingRef.current;
+          savedDampingRef.current = null;
+        }
         activeRunIdRef.current = null;
         restoredSupportRunIdRef.current = restoreSupportRunId;
       }
@@ -652,8 +689,13 @@ function SupportModeCameraRestoreController({
   React.useEffect(() => {
     return () => {
       cancelAnimation();
+      const orbit = controls as unknown as { enableDamping?: boolean };
+      if (savedDampingRef.current !== null && orbit && typeof orbit.enableDamping === 'boolean') {
+        orbit.enableDamping = savedDampingRef.current;
+        savedDampingRef.current = null;
+      }
     };
-  }, [cancelAnimation]);
+  }, [cancelAnimation, controls]);
 
   return null;
 }
@@ -2463,6 +2505,13 @@ export function SceneCanvas({
     const camera = cameraRef.current;
     if (!controls || !camera) return;
 
+    if (cameraFeelPreset === 'raw') {
+      controls.rotateSpeed = 1.0;
+      controls.panSpeed = 1.0;
+      controls.zoomSpeed = 1.0;
+      return;
+    }
+
     const distanceToTarget = camera.position.distanceTo(controls.target);
     const sceneScale = Math.max(
       activeBuildVolumeSettings.widthMm,
@@ -2485,6 +2534,19 @@ export function SceneCanvas({
       zoomMax: number;
       responseLerp: number;
     }> = {
+      raw: {
+        accelerationExponent: 0,
+        rotateBase: 1.0,
+        panBase: 1.0,
+        zoomBase: 1.0,
+        rotateMin: 1.0,
+        rotateMax: 1.0,
+        panMin: 1.0,
+        panMax: 1.0,
+        zoomMin: 1.0,
+        zoomMax: 1.0,
+        responseLerp: 1.0,
+      },
       precise: {
         accelerationExponent: 0.5,
         rotateBase: 0.72,
@@ -3678,11 +3740,11 @@ export function SceneCanvas({
         <OrbitControls
           ref={orbitControlsRef as React.RefObject<any>}
           makeDefault
-          enableDamping
-          dampingFactor={cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
-          rotateSpeed={cameraFeelPreset === 'precise' ? 0.72 : cameraFeelPreset === 'fast' ? 1.03 : 0.85}
-          panSpeed={cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.2 : 1.0}
-          zoomSpeed={cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.15 : 0.95}
+          enableDamping={cameraFeelPreset !== 'raw'}
+          dampingFactor={cameraFeelPreset === 'raw' ? 0 : cameraFeelPreset === 'precise' ? 0.15 : cameraFeelPreset === 'fast' ? 0.085 : 0.12}
+          rotateSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.72 : cameraFeelPreset === 'fast' ? 1.03 : 0.85}
+          panSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.2 : 1.0}
+          zoomSpeed={cameraFeelPreset === 'raw' ? 1.0 : cameraFeelPreset === 'precise' ? 0.82 : cameraFeelPreset === 'fast' ? 1.15 : 0.95}
           screenSpacePanning
           zoomToCursor
           enablePan
