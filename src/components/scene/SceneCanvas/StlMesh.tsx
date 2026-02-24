@@ -65,13 +65,14 @@ export function StlMesh({
   outOfBoundsStripeColor,
   suppressModelInteraction,
   externalHoveredModelId,
+  deferExternalTransformUpdates,
 }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
   clipUpper?: number | null;
   meshColor?: string;
   /** Ref to the group (for gizmo positioning) */
-  meshRef?: React.Ref<THREE.Mesh | null>;
+  meshRef?: React.Ref<THREE.Group | null>;
   /** Ref to the actual mesh (for outline effect) */
   actualMeshRef?: React.Ref<THREE.Mesh | null>;
   materialRoughness?: number;
@@ -116,6 +117,8 @@ export function StlMesh({
   outOfBoundsStripeColor?: string;
   suppressModelInteraction?: boolean;
   externalHoveredModelId?: string | null;
+  /** While true, do not overwrite group transform from props (used during active gizmo drag). */
+  deferExternalTransformUpdates?: boolean;
 }) {
   // Access GPU picking state to detect gizmo hover
   // Note: This works because StlMesh is rendered inside PickingProvider
@@ -184,6 +187,11 @@ export function StlMesh({
 
   // Internal ref for the mesh element to control raycasting
   const internalMeshRef = React.useRef<THREE.Mesh>(null);
+  const groupRef = React.useRef<THREE.Group | null>(null);
+
+  const defaultPosition = React.useMemo(() => new THREE.Vector3(0, 0, 0), []);
+  const defaultQuaternion = React.useMemo(() => new THREE.Quaternion(), []);
+  const defaultScale = React.useMemo(() => new THREE.Vector3(1, 1, 1), []);
 
   // Toggle raycasting based on camera movement to optimize performance
   const previousDisableState = React.useRef<boolean | undefined>(undefined);
@@ -205,6 +213,16 @@ export function StlMesh({
       }
     }
   }, [disableRaycast]);
+
+  React.useLayoutEffect(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    if (deferExternalTransformUpdates) return;
+
+    group.position.copy(transform?.position ?? defaultPosition);
+    group.quaternion.copy(transform ? quaternionFromGlobalEuler(transform.rotation) : defaultQuaternion);
+    group.scale.copy(transform?.scale ?? defaultScale);
+  }, [defaultPosition, defaultQuaternion, defaultScale, deferExternalTransformUpdates, transform]);
 
   const schedulePointerHover = React.useCallback((next: boolean) => {
     setIsPointerHovered((prev) => (prev === next ? prev : next));
@@ -356,10 +374,11 @@ export function StlMesh({
 
   return (
     <group
-      ref={meshRef}
-      position={transform?.position || new THREE.Vector3(0, 0, 0)}
-      quaternion={transform ? quaternionFromGlobalEuler(transform.rotation) : new THREE.Quaternion()}
-      scale={transform?.scale || new THREE.Vector3(1, 1, 1)}
+      ref={(node) => {
+        groupRef.current = node;
+        if (typeof meshRef === 'function') meshRef(node);
+        else if (meshRef) (meshRef as React.MutableRefObject<THREE.Group | null>).current = node;
+      }}
     >
       <mesh
         ref={(node) => {

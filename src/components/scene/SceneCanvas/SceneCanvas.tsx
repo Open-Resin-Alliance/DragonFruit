@@ -953,7 +953,7 @@ export function SceneCanvas({
 
   const colorActiveModelId = React.useMemo(() => committedActiveModelId, [committedActiveModelId]);
 
-  const meshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
+  const meshRefs = React.useRef<Record<string, THREE.Group | null>>({});
   const actualMeshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
 
   const prevBranchHoverDotVisibleRef = React.useRef<boolean | null>(null);
@@ -2201,7 +2201,7 @@ export function SceneCanvas({
   const handleMarqueePointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (mode !== 'prepare' && mode !== 'support') return;
     if (e.button !== 0) return;
-    if (mode === 'support' && !e.shiftKey) return;
+    if (!e.shiftKey) return;
     if (isGizmoDragging || isPostGizmoInteractionGuardActive) return;
     if (hoveredModelId || supportStateForBounds.hoveredCategory !== 'none') return;
 
@@ -2845,6 +2845,17 @@ export function SceneCanvas({
     };
   }, []);
 
+  const captureActiveGroupTransform = React.useCallback(() => {
+    const group = activeGroupRef.current;
+    if (!group) return null;
+
+    return {
+      position: group.position.clone(),
+      rotation: new THREE.Euler().setFromQuaternion(group.quaternion, 'ZYX'),
+      scale: group.scale.clone(),
+    };
+  }, [activeGroupRef]);
+
   return (
     <div
       style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -2930,7 +2941,7 @@ export function SceneCanvas({
                       clipLower={clipLower}
                       clipUpper={clipUpper}
                       meshColor={model.color || meshColor} // Use model color
-                      meshRef={(el: THREE.Mesh | null) => {
+                      meshRef={(el: THREE.Group | null) => {
                         meshRefs.current[model.id] = el;
                       }}
                       actualMeshRef={(el: THREE.Mesh | null) => {
@@ -2975,7 +2986,13 @@ export function SceneCanvas({
                       outOfBoundsMax={shaderOutOfBoundsBounds?.max ?? null}
                       outOfBoundsStripeColor={outOfBoundsStripeColor}
                       suppressModelInteraction={suppressModelInteraction}
-                        externalHoveredModelId={hoveredModelId}
+                      externalHoveredModelId={hoveredModelId}
+                      deferExternalTransformUpdates={
+                        isActive
+                        && mode === 'prepare'
+                        && transformMode === 'transform'
+                        && (isGizmoDragging || isPostGizmoInteractionGuardActive)
+                      }
                     />
 
                     {/* Cross-section cap (fill) at the cut plane - Render per model */}
@@ -3197,7 +3214,7 @@ export function SceneCanvas({
               {/* Gizmo attached to active model */}
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && (
                 <UnifiedGizmo
-                  meshRef={activeGroupRef as React.RefObject<THREE.Mesh>}
+                  meshRef={activeGroupRef as React.RefObject<THREE.Group | THREE.Mesh | null>}
                   position={[
                     activeModelTransform?.position.x ?? 0,
                     activeModelTransform?.position.y ?? 0,
@@ -3212,6 +3229,10 @@ export function SceneCanvas({
                   onMove={(delta) => {
                     if (activeGroupRef.current) {
                       activeGroupRef.current.position.add(delta);
+                      const live = captureActiveGroupTransform();
+                      if (live && onTransformChange) {
+                        onTransformChange(live.position, live.rotation, live.scale);
+                      }
                     }
                   }}
                   onMoveStart={() => {
@@ -3231,12 +3252,9 @@ export function SceneCanvas({
                   }}
                   onMoveEnd={() => {
                     markGizmoDragEnded();
-                    if (activeGroupRef.current && onTransformChange) {
-                      onTransformChange(
-                        activeGroupRef.current.position.clone(),
-                        activeGroupRef.current.rotation.clone(),
-                        activeGroupRef.current.scale.clone(),
-                      );
+                    const live = captureActiveGroupTransform();
+                    if (live && onTransformChange) {
+                      onTransformChange(live.position, live.rotation, live.scale);
 
                       const startSnapshot = gizmoTransformStartSnapshotRef.current;
                       if (startSnapshot && startSnapshot.modelId === activeModelId) {
@@ -3249,9 +3267,9 @@ export function SceneCanvas({
                             scale: startSnapshot.before.scale.clone(),
                           },
                           after: {
-                            position: activeGroupRef.current.position.clone(),
-                            rotation: activeGroupRef.current.rotation.clone(),
-                            scale: activeGroupRef.current.scale.clone(),
+                            position: live.position.clone(),
+                            rotation: live.rotation.clone(),
+                            scale: live.scale.clone(),
                           },
                         });
                       }
@@ -3283,12 +3301,9 @@ export function SceneCanvas({
                   }}
                   onRotateEnd={() => {
                     markGizmoDragEnded();
-                    if (activeGroupRef.current && onTransformChange) {
-                      onTransformChange(
-                        activeGroupRef.current.position.clone(),
-                        activeGroupRef.current.rotation.clone(),
-                        activeGroupRef.current.scale.clone(),
-                      );
+                    const live = captureActiveGroupTransform();
+                    if (live && onTransformChange) {
+                      onTransformChange(live.position, live.rotation, live.scale);
 
                       const startSnapshot = gizmoTransformStartSnapshotRef.current;
                       if (startSnapshot && startSnapshot.modelId === activeModelId) {
@@ -3301,9 +3316,9 @@ export function SceneCanvas({
                             scale: startSnapshot.before.scale.clone(),
                           },
                           after: {
-                            position: activeGroupRef.current.position.clone(),
-                            rotation: activeGroupRef.current.rotation.clone(),
-                            scale: activeGroupRef.current.scale.clone(),
+                            position: live.position.clone(),
+                            rotation: live.rotation.clone(),
+                            scale: live.scale.clone(),
                           },
                         });
                       }
@@ -3339,16 +3354,17 @@ export function SceneCanvas({
                         if (axis === 'y') activeGroupRef.current.scale.y *= factor;
                         if (axis === 'z') activeGroupRef.current.scale.z *= factor;
                       }
+                      const live = captureActiveGroupTransform();
+                      if (live && onTransformChange) {
+                        onTransformChange(live.position, live.rotation, live.scale);
+                      }
                     }
                   }}
                   onScaleEnd={() => {
                     markGizmoDragEnded();
-                    if (activeGroupRef.current && onTransformChange) {
-                      onTransformChange(
-                        activeGroupRef.current.position.clone(),
-                        activeGroupRef.current.rotation.clone(),
-                        activeGroupRef.current.scale.clone(),
-                      );
+                    const live = captureActiveGroupTransform();
+                    if (live && onTransformChange) {
+                      onTransformChange(live.position, live.rotation, live.scale);
 
                       const startSnapshot = gizmoTransformStartSnapshotRef.current;
                       if (startSnapshot && startSnapshot.modelId === activeModelId) {
@@ -3361,9 +3377,9 @@ export function SceneCanvas({
                             scale: startSnapshot.before.scale.clone(),
                           },
                           after: {
-                            position: activeGroupRef.current.position.clone(),
-                            rotation: activeGroupRef.current.rotation.clone(),
-                            scale: activeGroupRef.current.scale.clone(),
+                            position: live.position.clone(),
+                            rotation: live.rotation.clone(),
+                            scale: live.scale.clone(),
                           },
                         });
                       }
