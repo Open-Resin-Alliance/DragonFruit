@@ -63,6 +63,8 @@ const BATCHED_SHAFT_LOW_RADIAL_SEGMENTS = 6;
 const BATCHED_SHAFT_HIGH_INSTANCE_THRESHOLD = 1200;
 const BATCHED_JOINT_WIDTH_SEGMENTS = 12;
 const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
+const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
+const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -78,9 +80,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const { altActive: braceAltActive } = useBracePlacementState();
 
     const selectedSupportIdSet = useMemo(() => new Set(selectedSupportIds), [selectedSupportIds]);
+    const selectedId = state.selectedId;
+    const selectedCategory = state.selectedCategory;
     const hasSupportMultiSelection = selectedSupportIds.length > 0;
-    const dimNonSelected = state.selectedId !== null || hasSupportMultiSelection;
-    const hideUnselectedKnots = state.selectedId !== null || hasSupportMultiSelection;
+    const useMultiSelectionDetail = hasSupportMultiSelection && selectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
+    const dimNonSelected = selectedId !== null || useMultiSelectionDetail;
+    const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
 
     const isInteractable = mode === 'support' && !navigationLodActive;
     const hidePlateContactPrimitivesEffective = hidePlateContactPrimitives;
@@ -229,14 +234,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
     }, [activeModelId, effectiveHoverModelId]);
 
+    const resolveSceneSupportColor = React.useCallback((modelId: string | undefined, supportId: string) => {
+        if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {
+            return BULK_MULTI_SELECTED_COLOR;
+        }
+
+        return dimNonSelected ? '#666666' : resolveBaseColor(modelId);
+    }, [hasSupportMultiSelection, useMultiSelectionDetail, selectedSupportIdSet, dimNonSelected, resolveBaseColor]);
+
     const selectedTrunkIds = useMemo(() => {
         const selected = new Set<string>();
-        const selectedId = state.selectedId;
         const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
+        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+
+        if (hasSingleSelection && selectedCategory === 'trunk') {
+            selected.add(selectedId);
+            return selected;
+        }
 
         for (const trunk of Object.values(state.trunks)) {
-            const isTrunkSelected = selectedSupportIdSet.has(trunk.id) || selectedId === trunk.id;
+            const isTrunkSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(trunk.id)) || selectedId === trunk.id;
             const isChildSelected = hasSingleSelection
                 ? trunk.segments.some((segment) =>
                     segment.id === selectedId
@@ -248,16 +265,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return selected;
-    }, [state.trunks, state.selectedId, selectedSupportIdSet]);
+    }, [state.trunks, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
     const selectedBranchIds = useMemo(() => {
         const selected = new Set<string>();
-        const selectedId = state.selectedId;
         const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
+        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+
+        if (hasSingleSelection && selectedCategory === 'branch') {
+            selected.add(selectedId);
+            return selected;
+        }
 
         for (const branch of Object.values(state.branches)) {
-            const isBranchSelected = selectedSupportIdSet.has(branch.id) || selectedId === branch.id;
+            const isBranchSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(branch.id)) || selectedId === branch.id;
             const isKnotSelected = hasSingleSelection ? branch.parentKnotId === selectedId : false;
             const isChildSelected = hasSingleSelection
                 ? branch.segments.some((segment) =>
@@ -270,32 +291,40 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return selected;
-    }, [state.branches, state.selectedId, selectedSupportIdSet]);
+    }, [state.branches, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
     const selectedBraceIds = useMemo(() => {
         const selected = new Set<string>();
-        const selectedId = state.selectedId;
         const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
+        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+
+        if (hasSingleSelection && state.braces[selectedId]) {
+            selected.add(selectedId);
+            return selected;
+        }
 
         for (const brace of Object.values(state.braces)) {
-            const isBraceSelected = selectedSupportIdSet.has(brace.id) || selectedId === brace.id;
+            const isBraceSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(brace.id)) || selectedId === brace.id;
             const isSegmentSelected = hasSingleSelection ? selectedId === `braceSegment:${brace.id}` : false;
             const isEndpointSelected = hasSingleSelection ? selectedId === brace.startKnotId || selectedId === brace.endKnotId : false;
             if (isBraceSelected || isSegmentSelected || isEndpointSelected) selected.add(brace.id);
         }
 
         return selected;
-    }, [state.braces, state.selectedId, selectedSupportIdSet]);
+    }, [state.braces, selectedId, selectedSupportIdSet, useMultiSelectionDetail]);
 
     const selectedTwigIds = useMemo(() => {
         const selected = new Set<string>();
-        const selectedId = state.selectedId;
         const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
+        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+
+        if (hasSingleSelection && selectedCategory === 'twig') {
+            selected.add(selectedId);
+            return selected;
+        }
 
         for (const twig of Object.values(state.twigs)) {
-            const isTwigSelected = selectedSupportIdSet.has(twig.id) || selectedId === twig.id;
+            const isTwigSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(twig.id)) || selectedId === twig.id;
             const isChildSelected = hasSingleSelection
                 ? twig.segments.some((segment) =>
                     segment.id === selectedId
@@ -307,16 +336,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return selected;
-    }, [state.twigs, state.selectedId, selectedSupportIdSet]);
+    }, [state.twigs, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
     const selectedStickIds = useMemo(() => {
         const selected = new Set<string>();
-        const selectedId = state.selectedId;
         const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
+        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+
+        if (hasSingleSelection && selectedCategory === 'stick') {
+            selected.add(selectedId);
+            return selected;
+        }
 
         for (const stick of Object.values(state.sticks)) {
-            const isStickSelected = selectedSupportIdSet.has(stick.id) || selectedId === stick.id;
+            const isStickSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(stick.id)) || selectedId === stick.id;
             const isChildSelected = hasSingleSelection
                 ? stick.segments.some((segment) =>
                     segment.id === selectedId
@@ -328,16 +361,20 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return selected;
-    }, [state.sticks, state.selectedId, selectedSupportIdSet]);
+    }, [state.sticks, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
     const selectedSupportBraceIds = useMemo(() => {
         const selected = new Set<string>();
-        const selectedId = state.selectedId;
         const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
+        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+
+        if (hasSingleSelection && supportBraceState.supportBraces[selectedId]) {
+            selected.add(selectedId);
+            return selected;
+        }
 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            const isSupportBraceSelected = selectedSupportIdSet.has(supportBrace.id) || selectedId === supportBrace.id;
+            const isSupportBraceSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(supportBrace.id)) || selectedId === supportBrace.id;
             const isHostKnotSelected = hasSingleSelection ? selectedId === supportBrace.hostKnotId : false;
             const isChildSelected = hasSingleSelection
                 ? supportBrace.segments.some((segment) =>
@@ -350,22 +387,26 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return selected;
-    }, [supportBraceState.supportBraces, state.selectedId, selectedSupportIdSet]);
+    }, [supportBraceState.supportBraces, selectedId, selectedSupportIdSet, useMultiSelectionDetail]);
 
     const selectedLeafIds = useMemo(() => {
         const selected = new Set<string>();
-        const selectedId = state.selectedId;
         const hasSingleSelection = !!selectedId;
-        if (!hasSingleSelection && selectedSupportIdSet.size === 0) return selected;
+        if (!hasSingleSelection && !useMultiSelectionDetail) return selected;
+
+        if (hasSingleSelection && selectedCategory === 'leaf') {
+            selected.add(selectedId);
+            return selected;
+        }
 
         for (const leaf of Object.values(state.leaves)) {
-            const isLeafSelected = selectedSupportIdSet.has(leaf.id) || selectedId === leaf.id;
+            const isLeafSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(leaf.id)) || selectedId === leaf.id;
             const isKnotSelected = hasSingleSelection ? leaf.parentKnotId === selectedId : false;
             if (isLeafSelected || isKnotSelected) selected.add(leaf.id);
         }
 
         return selected;
-    }, [state.leaves, state.selectedId, selectedSupportIdSet]);
+    }, [state.leaves, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
     const trunkShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1029,7 +1070,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const jointSet = trunkJointsBySupport.get(trunk.id);
             if (!jointSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(trunk.modelId);
+            const color = resolveSceneSupportColor(trunk.modelId, trunk.id);
             pushJoints(color, jointSet.joints);
         }
 
@@ -1039,7 +1080,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const jointSet = branchJointsBySupport.get(branch.id);
             if (!jointSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(branch.modelId);
+            const color = resolveSceneSupportColor(branch.modelId, branch.id);
             pushJoints(color, jointSet.joints);
         }
 
@@ -1049,7 +1090,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const jointSet = twigJointsBySupport.get(twig.id);
             if (!jointSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(twig.modelId);
+            const color = resolveSceneSupportColor(twig.modelId, twig.id);
             pushJoints(color, jointSet.joints);
         }
 
@@ -1059,7 +1100,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const jointSet = stickJointsBySupport.get(stick.id);
             if (!jointSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(stick.modelId);
+            const color = resolveSceneSupportColor(stick.modelId, stick.id);
             pushJoints(color, jointSet.joints);
         }
 
@@ -1069,7 +1110,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const jointSet = supportBraceJointsBySupport.get(supportBrace.id);
             if (!jointSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(supportBrace.modelId);
+            const color = resolveSceneSupportColor(supportBrace.modelId, supportBrace.id);
             pushJoints(color, jointSet.joints);
         }
 
@@ -1094,6 +1135,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         supportBraceJointsBySupport,
         dimNonSelected,
         resolveBaseColor,
+        resolveSceneSupportColor,
     ]);
 
     const sceneBatchedTwigShaftGroups = useMemo(() => {
@@ -1105,14 +1147,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedTwigIds.has(twig.id)) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const color = resolveSceneSupportColor(shaftSet.modelId, twig.id);
             const shaftsForColor = grouped.get(color) ?? [];
             shaftsForColor.push(...shaftSet.shafts);
             if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.twigs, dimNonSelected, resolveBaseColor, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId]);
+    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1123,14 +1165,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedStickIds.has(stick.id)) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const color = resolveSceneSupportColor(shaftSet.modelId, stick.id);
             const shaftsForColor = grouped.get(color) ?? [];
             shaftsForColor.push(...shaftSet.shafts);
             if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.sticks, dimNonSelected, resolveBaseColor, stickShaftsBySupport, selectedStickIds, restrictToActiveModel, activeModelId]);
+    }, [state.sticks, stickShaftsBySupport, selectedStickIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
 
     const sceneBatchedSupportBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1141,14 +1183,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedSupportBraceIds.has(supportBrace.id)) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const color = resolveSceneSupportColor(shaftSet.modelId, supportBrace.id);
             const shaftsForColor = grouped.get(color) ?? [];
             shaftsForColor.push(...shaftSet.shafts);
             if (shaftsForColor.length > 0) grouped.set(color, shaftsForColor);
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [supportBraceState.supportBraces, dimNonSelected, resolveBaseColor, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId]);
+    }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1160,7 +1202,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedBraceIds.has(brace.id)) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const color = resolveSceneSupportColor(shaftSet.modelId, brace.id);
 
             const shaftsForColor = grouped.get(color);
             if (shaftsForColor) {
@@ -1171,7 +1213,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.braces, dimNonSelected, resolveBaseColor, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId]);
+    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1183,7 +1225,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedTrunkIds.has(trunk.id)) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const color = resolveSceneSupportColor(shaftSet.modelId, trunk.id);
             const shaftsForColor = grouped.get(color) ?? [];
             shaftsForColor.push(...shaftSet.shafts);
 
@@ -1191,7 +1233,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.trunks, dimNonSelected, resolveBaseColor, trunkShaftsBySupport, selectedTrunkIds, restrictToActiveModel, activeModelId]);
+    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
 
     const sceneBatchedBranchShaftGroups = useMemo(() => {
         const grouped = new Map<string, InstancedShaft[]>();
@@ -1203,7 +1245,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedBranchIds.has(branch.id)) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(shaftSet.modelId);
+            const color = resolveSceneSupportColor(shaftSet.modelId, branch.id);
             const shaftsForColor = grouped.get(color) ?? [];
             shaftsForColor.push(...shaftSet.shafts);
 
@@ -1213,7 +1255,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.entries()).map(([color, shafts]) => ({ color, shafts }));
-    }, [state.branches, dimNonSelected, resolveBaseColor, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId]);
+    }, [state.branches, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
@@ -1235,7 +1277,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
             const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(trunk.modelId);
+            const color = resolveSceneSupportColor(trunk.modelId, trunk.id);
             const rootsForColor = grouped.get(color) ?? [];
             rootsForColor.push({
                 id: root.id,
@@ -1266,6 +1308,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         state.roots,
         dimNonSelected,
         resolveBaseColor,
+        resolveSceneSupportColor,
         selectedTrunkIds,
         restrictToActiveModel,
         activeModelId,
@@ -1285,7 +1328,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const coneSet = contactConesBySupport.get(trunk.id);
             if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            const color = resolveSceneSupportColor(coneSet.modelId, trunk.id);
             coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
@@ -1294,7 +1337,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const coneSet = contactConesBySupport.get(branch.id);
             if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            const color = resolveSceneSupportColor(coneSet.modelId, branch.id);
             coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
@@ -1303,7 +1346,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const coneSet = contactConesBySupport.get(stick.id);
             if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            const color = resolveSceneSupportColor(coneSet.modelId, stick.id);
             coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
@@ -1312,7 +1355,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const coneSet = contactConesBySupport.get(leaf.id);
             if (!coneSet) continue;
 
-            const color = dimNonSelected ? '#666666' : resolveBaseColor(coneSet.modelId);
+            const color = resolveSceneSupportColor(coneSet.modelId, leaf.id);
             coneSet.cones.forEach((cone) => pushCone(color, cone));
         }
 
@@ -1329,6 +1372,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         selectedLeafIds,
         dimNonSelected,
         resolveBaseColor,
+        resolveSceneSupportColor,
     ]);
 
     const sceneBatchedShaftInstanceCount = useMemo(() => {
@@ -1682,13 +1726,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const root = state.roots[trunk.rootId];
                 if (!root) return null;
 
-                const isTrunkSelected = selectedSupportIdSet.has(trunk.id) || state.selectedId === trunk.id;
-                const isChildSelected = trunk.segments.some(s =>
-                    (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
-                    (s.bottomJoint?.id && s.bottomJoint.id === state.selectedId) ||
-                    s.id === state.selectedId
-                );
-                const effectiveSelected = isTrunkSelected || isChildSelected;
+                const effectiveSelected = selectedTrunkIds.has(trunk.id);
                 const isTrunkHovered = (state.hoveredCategory === 'support' && state.hoveredId === trunk.id)
                     || sceneHoveredSupportId === trunk.id
                     || marqueeHoveredSupportId === trunk.id;
@@ -1702,7 +1740,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         trunk={trunk}
                         root={root}
                         isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? state.selectedId : null}
+                        selectedId={effectiveSelected ? selectedId : null}
                         dimNonSelected={dimNonSelected}
                         isHovered={isTrunkHovered}
                         baseColor={resolveBaseColor(trunk.modelId)}
@@ -1736,14 +1774,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const knot = state.knots[branch.parentKnotId];
                 if (!knot) return null;
 
-                const isBranchSelected = selectedSupportIdSet.has(branch.id) || state.selectedId === branch.id;
-                const isKnotSelected = knot.id === state.selectedId;
-                const isChildSelected = branch.segments.some(s =>
-                    (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
-                    (s.bottomJoint?.id && s.bottomJoint.id === state.selectedId) ||
-                    s.id === state.selectedId
-                );
-                const effectiveSelected = isBranchSelected || isKnotSelected || isChildSelected;
+                const effectiveSelected = selectedBranchIds.has(branch.id);
                 const isBranchHovered = (state.hoveredCategory === 'support' && state.hoveredId === branch.id)
                     || sceneHoveredSupportId === branch.id
                     || marqueeHoveredSupportId === branch.id;
@@ -1758,7 +1789,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         branch={branch}
                         parentKnot={knot}
                         isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? state.selectedId : null}
+                        selectedId={effectiveSelected ? selectedId : null}
                         dimNonSelected={dimNonSelected}
                         isHovered={isBranchHovered}
                         baseColor={resolveBaseColor(branch.modelId)}
@@ -1779,9 +1810,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const knot = state.knots[leaf.parentKnotId];
                 if (!knot) return null;
 
-                const isLeafSelected = selectedSupportIdSet.has(leaf.id) || state.selectedId === leaf.id;
-                const isKnotSelected = knot.id === state.selectedId;
-                const effectiveSelected = isLeafSelected || isKnotSelected;
+                const effectiveSelected = selectedLeafIds.has(leaf.id);
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
                 return (
@@ -1805,13 +1834,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Twigs */}
             {Object.values(state.twigs).map(twig => {
                 if (restrictToActiveModel && twig.modelId !== activeModelId) return null;
-                const isTwigSelected = selectedSupportIdSet.has(twig.id) || state.selectedId === twig.id;
-                const isChildSelected = twig.segments.some(s =>
-                    (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
-                    (s.bottomJoint?.id && s.bottomJoint.id === state.selectedId) ||
-                    s.id === state.selectedId
-                );
-                const effectiveSelected = isTwigSelected || isChildSelected;
+                const effectiveSelected = selectedTwigIds.has(twig.id);
                 const isTwigHovered = (state.hoveredCategory === 'support' && state.hoveredId === twig.id)
                     || sceneHoveredSupportId === twig.id
                     || marqueeHoveredSupportId === twig.id;
@@ -1823,7 +1846,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         key={twig.id}
                         twig={twig}
                         isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? state.selectedId : null}
+                        selectedId={effectiveSelected ? selectedId : null}
                         dimNonSelected={dimNonSelected}
                         isHovered={isTwigHovered}
                         baseColor={resolveBaseColor(twig.modelId)}
@@ -1851,13 +1874,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Sticks */}
             {Object.values(state.sticks).map(stick => {
                 if (restrictToActiveModel && stick.modelId !== activeModelId) return null;
-                const isStickSelected = selectedSupportIdSet.has(stick.id) || state.selectedId === stick.id;
-                const isChildSelected = stick.segments.some(s =>
-                    (s.topJoint?.id && s.topJoint.id === state.selectedId) ||
-                    (s.bottomJoint?.id && s.bottomJoint.id === state.selectedId) ||
-                    s.id === state.selectedId
-                );
-                const effectiveSelected = isStickSelected || isChildSelected;
+                const effectiveSelected = selectedStickIds.has(stick.id);
                 const isStickHovered = (state.hoveredCategory === 'support' && state.hoveredId === stick.id)
                     || sceneHoveredSupportId === stick.id
                     || marqueeHoveredSupportId === stick.id;
@@ -1869,7 +1886,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         key={stick.id}
                         stick={stick}
                         isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? state.selectedId : null}
+                        selectedId={effectiveSelected ? selectedId : null}
                         dimNonSelected={dimNonSelected}
                         isHovered={isStickHovered}
                         baseColor={resolveBaseColor(stick.modelId)}
@@ -1914,10 +1931,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const endKnot = state.knots[brace.endKnotId];
                 if (!startKnot || !endKnot) return null;
 
-                const isBraceSelected = selectedSupportIdSet.has(brace.id) || state.selectedId === brace.id;
-                const isSegmentSelected = state.selectedId === `braceSegment:${brace.id}`;
-                const isEndpointSelected = state.selectedId === startKnot.id || state.selectedId === endKnot.id;
-                const effectiveSelected = isBraceSelected || isSegmentSelected || isEndpointSelected;
+                const effectiveSelected = selectedBraceIds.has(brace.id);
                 const isBraceHovered = (state.hoveredCategory === 'support' && state.hoveredId === brace.id)
                     || sceneHoveredSupportId === brace.id
                     || marqueeHoveredSupportId === brace.id;
@@ -1953,15 +1967,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
                 if (!root || !hostKnot) return null;
 
-                const isSupportBraceSelected = selectedSupportIdSet.has(supportBrace.id) || state.selectedId === supportBrace.id;
-                const isHostKnotSelected = state.selectedId === hostKnot.id;
-                const isChildSelected = supportBrace.segments.some(
-                    (segment) =>
-                        segment.id === state.selectedId
-                        || segment.bottomJoint?.id === state.selectedId
-                        || segment.topJoint?.id === state.selectedId,
-                );
-                const effectiveSelected = isSupportBraceSelected || isHostKnotSelected || isChildSelected;
+                const effectiveSelected = selectedSupportBraceIds.has(supportBrace.id);
                 const isSupportBraceHovered = (state.hoveredCategory === 'support' && state.hoveredId === supportBrace.id)
                     || sceneHoveredSupportId === supportBrace.id
                     || marqueeHoveredSupportId === supportBrace.id;
@@ -1976,7 +1982,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         root={root}
                         hostKnot={hostKnot}
                         isSelected={effectiveSelected}
-                        selectedId={effectiveSelected ? state.selectedId : null}
+                        selectedId={effectiveSelected ? selectedId : null}
                         dimNonSelected={dimNonSelected}
                         isHovered={isSupportBraceHovered}
                         baseColor={resolveBaseColor(supportBrace.modelId)}
