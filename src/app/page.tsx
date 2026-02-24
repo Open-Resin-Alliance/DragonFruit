@@ -88,6 +88,11 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
+import {
+  getSupportBraceSnapshot,
+  subscribeToSupportBraceStore,
+} from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -95,9 +100,48 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
 
+function installReactDevtoolsSemverGuard() {
+  if (process.env.NODE_ENV !== 'development') return;
+  if (typeof window === 'undefined') return;
+
+  const hook = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!hook || hook.__dragonfruitSemverGuardInstalled) return;
+  if (typeof hook.inject !== 'function') return;
+
+  const originalInject = hook.inject;
+
+  const withSafeSemver = (renderer: any) => {
+    if (!renderer || typeof renderer !== 'object') return renderer;
+
+    const patched = { ...renderer };
+    if (typeof patched.version !== 'string' || patched.version.trim() === '') {
+      patched.version = '0.0.0';
+    }
+    if (typeof patched.reconcilerVersion !== 'string' || patched.reconcilerVersion.trim() === '') {
+      patched.reconcilerVersion = '0.0.0';
+    }
+    return patched;
+  };
+
+  hook.inject = function injectWithSemverGuard(renderer: any) {
+    try {
+      return originalInject.call(this, renderer);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.toLowerCase().includes('not valid semver')) {
+        return originalInject.call(this, withSafeSemver(renderer));
+      }
+      throw error;
+    }
+  };
+
+  hook.__dragonfruitSemverGuardInstalled = true;
+}
+
 // Initialize BVH acceleration globally
 if (typeof window !== 'undefined') {
   initializeBVH();
+  installReactDevtoolsSemverGuard();
   console.log('[App] BVH acceleration initialized');
 }
 
@@ -117,6 +161,31 @@ export default function Home() {
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
+  const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
+  const pendingSupportSyncReleasePerfRef = React.useRef<number | null>(null);
+  const supportSyncFallbackTimeoutRef = React.useRef<number | null>(null);
+  const lastSupportStoreUpdatePerfRef = React.useRef<number>(0);
+  const lastSupportBraceStoreUpdatePerfRef = React.useRef<number>(0);
+  const transformDebugTimelineRef = React.useRef<{
+    lastOperation: 'move' | 'rotate' | 'scale' | null;
+    dragReleasedAt: { perfMs: number; epochMs: number } | null;
+    liveCalculatedAt: { perfMs: number; epochMs: number } | null;
+    storeUpdateStartedAt: { perfMs: number; epochMs: number } | null;
+    storeUpdatedAt: { perfMs: number; epochMs: number } | null;
+    supportStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
+    supportBraceStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
+    activeModelStoreObservedAt: { perfMs: number; epochMs: number } | null;
+  }>({
+    lastOperation: null,
+    dragReleasedAt: null,
+    liveCalculatedAt: null,
+    storeUpdateStartedAt: null,
+    storeUpdatedAt: null,
+    supportStoreUpdatedAt: null,
+    supportBraceStoreUpdatedAt: null,
+    activeModelStoreObservedAt: null,
+  });
+  const activeModelStoreTransformKeyRef = React.useRef<string | null>(null);
 
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
@@ -147,6 +216,8 @@ export default function Home() {
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
+  const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
+  const [transformDebugTick, setTransformDebugTick] = React.useState(0);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -278,6 +349,202 @@ export default function Home() {
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
+  const supportStateSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
+  const supportBraceStateSnapshot = React.useSyncExternalStore(subscribeToSupportBraceStore, getSupportBraceSnapshot, getSupportBraceSnapshot);
+
+  React.useEffect(() => {
+    transformDebugTimelineRef.current.supportStoreUpdatedAt = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+    lastSupportStoreUpdatePerfRef.current = transformDebugTimelineRef.current.supportStoreUpdatedAt.perfMs;
+  }, [supportStateSnapshot]);
+
+  React.useEffect(() => {
+    transformDebugTimelineRef.current.supportBraceStoreUpdatedAt = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+    lastSupportBraceStoreUpdatePerfRef.current = transformDebugTimelineRef.current.supportBraceStoreUpdatedAt.perfMs;
+  }, [supportBraceStateSnapshot]);
+
+  React.useEffect(() => {
+    if (!holdSupportDragDeltaUntilSupportSync) return;
+
+    const releasedAt = pendingSupportSyncReleasePerfRef.current;
+    if (releasedAt == null) return;
+
+    const synced =
+      lastSupportStoreUpdatePerfRef.current > releasedAt
+      || lastSupportBraceStoreUpdatePerfRef.current > releasedAt;
+
+    if (!synced) return;
+
+    setHoldSupportDragDeltaUntilSupportSync(false);
+    pendingSupportSyncReleasePerfRef.current = null;
+    if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
+      window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+      supportSyncFallbackTimeoutRef.current = null;
+    }
+  }, [holdSupportDragDeltaUntilSupportSync, supportBraceStateSnapshot, supportStateSnapshot]);
+
+  React.useEffect(() => {
+    const activeModel = scene.models.find((m) => m.id === scene.activeModelId);
+    if (!activeModel) {
+      activeModelStoreTransformKeyRef.current = null;
+      return;
+    }
+
+    const t = activeModel.transform;
+    const key = [
+      activeModel.id,
+      t.position.x.toFixed(6),
+      t.position.y.toFixed(6),
+      t.position.z.toFixed(6),
+      t.rotation.x.toFixed(6),
+      t.rotation.y.toFixed(6),
+      t.rotation.z.toFixed(6),
+      t.scale.x.toFixed(6),
+      t.scale.y.toFixed(6),
+      t.scale.z.toFixed(6),
+    ].join('|');
+
+    if (activeModelStoreTransformKeyRef.current === key) return;
+    activeModelStoreTransformKeyRef.current = key;
+    transformDebugTimelineRef.current.activeModelStoreObservedAt = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+  }, [scene.activeModelId, scene.models]);
+
+  React.useEffect(() => {
+    if (!isTransformDebugOverlayOpen) return;
+
+    let rafId: number | null = null;
+    const tick = () => {
+      setTransformDebugTick((prev) => prev + 1);
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [isTransformDebugOverlayOpen]);
+
+  const activeSupportEntityCounts = React.useMemo(() => {
+    const modelId = scene.activeModelId;
+    if (!modelId) {
+      return {
+        trunks: 0,
+        branches: 0,
+        leaves: 0,
+        twigs: 0,
+        sticks: 0,
+        braces: 0,
+        roots: 0,
+        knots: 0,
+        supportBraces: 0,
+      };
+    }
+
+    const trunks = Object.values(supportStateSnapshot.trunks).filter((item) => item.modelId === modelId).length;
+    const branches = Object.values(supportStateSnapshot.branches).filter((item) => item.modelId === modelId).length;
+    const leaves = Object.values(supportStateSnapshot.leaves).filter((item) => item.modelId === modelId).length;
+    const twigs = Object.values(supportStateSnapshot.twigs).filter((item) => item.modelId === modelId).length;
+    const sticks = Object.values(supportStateSnapshot.sticks).filter((item) => item.modelId === modelId).length;
+    const braces = Object.values(supportStateSnapshot.braces).filter((item) => item.modelId === modelId).length;
+    const roots = Object.values(supportStateSnapshot.roots).filter((item) => item.modelId === modelId).length;
+    const knots = Object.values(supportStateSnapshot.knots).filter((item) => {
+      const parent = item.parentShaftId;
+      const trunk = supportStateSnapshot.trunks[parent];
+      if (trunk) return trunk.modelId === modelId;
+      const branch = supportStateSnapshot.branches[parent];
+      if (branch) return branch.modelId === modelId;
+      const twig = supportStateSnapshot.twigs[parent];
+      if (twig) return twig.modelId === modelId;
+      const stick = supportStateSnapshot.sticks[parent];
+      if (stick) return stick.modelId === modelId;
+      if (parent.startsWith('braceSegment:')) {
+        const braceId = parent.slice('braceSegment:'.length);
+        return supportStateSnapshot.braces[braceId]?.modelId === modelId;
+      }
+      return false;
+    }).length;
+    const supportBraces = Object.values(supportBraceStateSnapshot.supportBraces).filter((item) => item.modelId === modelId).length;
+
+    return { trunks, branches, leaves, twigs, sticks, braces, roots, knots, supportBraces };
+  }, [scene.activeModelId, supportBraceStateSnapshot.supportBraces, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs]);
+
+  const transformDebugStats = React.useMemo(() => {
+    const activeModel = scene.models.find((m) => m.id === scene.activeModelId) ?? null;
+    const storeTransform = activeModel?.transform ?? null;
+    const liveTransform = transformMgr.transform;
+
+    const posDelta = storeTransform
+      ? liveTransform.position.distanceTo(storeTransform.position)
+      : 0;
+    const rotDelta = storeTransform
+      ? Math.max(
+        Math.abs(liveTransform.rotation.x - storeTransform.rotation.x),
+        Math.abs(liveTransform.rotation.y - storeTransform.rotation.y),
+        Math.abs(liveTransform.rotation.z - storeTransform.rotation.z),
+      )
+      : 0;
+    const scaleDelta = storeTransform
+      ? liveTransform.scale.distanceTo(storeTransform.scale)
+      : 0;
+
+    const dragGroup = supportDragGroupRef.current;
+    let dragGroupPos: THREE.Vector3 | null = null;
+    let dragGroupScale: THREE.Vector3 | null = null;
+    if (dragGroup) {
+      const pos = new THREE.Vector3();
+      const quat = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
+      dragGroup.matrix.decompose(pos, quat, scale);
+      dragGroupPos = pos;
+      dragGroupScale = scale;
+    }
+
+    const timeline = transformDebugTimelineRef.current;
+
+    return {
+      activeModel,
+      storeTransform,
+      liveTransform,
+      posDelta,
+      rotDelta,
+      scaleDelta,
+      dragGroupAutoUpdate: dragGroup?.matrixAutoUpdate ?? null,
+      dragGroupPos,
+      dragGroupScale,
+      timeline: {
+        lastOperation: timeline.lastOperation,
+        dragReleasedAt: timeline.dragReleasedAt,
+        liveCalculatedAt: timeline.liveCalculatedAt,
+        storeUpdateStartedAt: timeline.storeUpdateStartedAt,
+        storeUpdatedAt: timeline.storeUpdatedAt,
+        supportStoreUpdatedAt: timeline.supportStoreUpdatedAt,
+        supportBraceStoreUpdatedAt: timeline.supportBraceStoreUpdatedAt,
+        activeModelStoreObservedAt: timeline.activeModelStoreObservedAt,
+        nowPerfMs: performance.now(),
+      },
+      supportCounts: {
+        trunks: Object.keys(supportStateSnapshot.trunks).length,
+        branches: Object.keys(supportStateSnapshot.branches).length,
+        leaves: Object.keys(supportStateSnapshot.leaves).length,
+        twigs: Object.keys(supportStateSnapshot.twigs).length,
+        sticks: Object.keys(supportStateSnapshot.sticks).length,
+        braces: Object.keys(supportStateSnapshot.braces).length,
+        roots: Object.keys(supportStateSnapshot.roots).length,
+        knots: Object.keys(supportStateSnapshot.knots).length,
+        supportBraces: Object.keys(supportBraceStateSnapshot.supportBraces).length,
+      },
+    };
+  }, [scene.activeModelId, scene.models, supportBraceStateSnapshot.supportBraces, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
 
   React.useEffect(() => {
     if (arrangePrecisionMode !== 'high_precision') return;
@@ -738,13 +1005,58 @@ export default function Home() {
       setIsHistoryDebugOpen((prev) => !prev);
     };
 
+    const handleTransformDebugOverlayHotkey = (event: KeyboardEvent) => {
+      const isCtrlShiftX = event.ctrlKey
+        && event.shiftKey
+        && (event.code === 'KeyX' || event.key.toLowerCase() === 'x');
+      if (!isCtrlShiftX) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setIsTransformDebugOverlayOpen((prev) => !prev);
+    };
+
     window.addEventListener('keydown', handleDiagnosticsHotkey, true);
     window.addEventListener('keydown', handleHistoryDebugHotkey, true);
+    window.addEventListener('keydown', handleTransformDebugOverlayHotkey, true);
     return () => {
       window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
       window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
+      window.removeEventListener('keydown', handleTransformDebugOverlayHotkey, true);
     };
   }, []);
+
+  const formatDebugVec3 = React.useCallback((v: THREE.Vector3 | null | undefined) => {
+    if (!v) return 'n/a';
+    const f = (n: number) => (Number.isFinite(n) ? n.toFixed(3) : 'NaN');
+    return `${f(v.x)}, ${f(v.y)}, ${f(v.z)}`;
+  }, []);
+
+  const formatDebugNumber = React.useCallback((value: number, digits = 4) => {
+    if (!Number.isFinite(value)) return 'NaN';
+    return value.toFixed(digits);
+  }, []);
+
+  const formatDebugTime = React.useCallback((stamp: { perfMs: number; epochMs: number } | null, nowPerfMs: number) => {
+    if (!stamp) return 'n/a';
+    const d = new Date(stamp.epochMs);
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    const ss = d.getSeconds().toString().padStart(2, '0');
+    const mmm = d.getMilliseconds().toString().padStart(3, '0');
+    const wall = `${hh}:${mm}:${ss}.${mmm}`;
+    const ageMs = Math.max(0, Math.round(nowPerfMs - stamp.perfMs));
+    return `${wall} (${ageMs} ms ago)`;
+  }, []);
+
+  const formatDebugLatencyMs = React.useCallback(
+    (start: { perfMs: number; epochMs: number } | null, end: { perfMs: number; epochMs: number } | null) => {
+      if (!start || !end) return 'n/a';
+      const deltaMs = Math.max(0, Math.round(end.perfMs - start.perfMs));
+      return `${deltaMs} ms`;
+    },
+    [],
+  );
 
   React.useEffect(() => {
     if (!editorContextMenuPos) return;
@@ -2123,7 +2435,35 @@ export default function Home() {
     }
   };
 
-  const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
+  const handleTransformEnd = (
+    operation: 'move' | 'rotate' | 'scale',
+    finalTransform?: ModelTransform,
+  ) => {
+    const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
+    const releasePerf = performance.now();
+    pendingSupportSyncReleasePerfRef.current = releasePerf;
+    setHoldSupportDragDeltaUntilSupportSync(true);
+    if (typeof window !== 'undefined') {
+      if (supportSyncFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+      }
+      // Fallback release guard: avoid indefinite hold when no support updates occur.
+      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
+        setHoldSupportDragDeltaUntilSupportSync(false);
+        pendingSupportSyncReleasePerfRef.current = null;
+        supportSyncFallbackTimeoutRef.current = null;
+      }, 120);
+    }
+
+    transformDebugTimelineRef.current.lastOperation = operation;
+    transformDebugTimelineRef.current.dragReleasedAt = {
+      perfMs: releasePerf,
+      epochMs: Date.now(),
+    };
+    if (finalTransform) {
+      transformDebugTimelineRef.current.liveCalculatedAt = stampNow();
+    }
+
     // Flush the final model transform into the store synchronously so
     // transformSupportsForModel() recalculates all support positions before
     // we reset the visual drag-group matrix. This eliminates the 1-frame
@@ -2132,15 +2472,31 @@ export default function Home() {
       const pending = transformMgr.pendingTransformRef.current;
       const pendingHistory = pendingTransformHistoryRef.current;
       const current = (
-        pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+        finalTransform && isFiniteTransform(finalTransform)
       )
         ? {
-            position: pending.pos.clone(),
-            rotation: pending.rot.clone(),
-            scale: pending.scl.clone(),
+            position: finalTransform.position.clone(),
+            rotation: finalTransform.rotation.clone(),
+            scale: finalTransform.scale.clone(),
           }
-        : transformMgr.transform;
+        : (
+          pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+        )
+          ? {
+              position: pending.pos.clone(),
+              rotation: pending.rot.clone(),
+              scale: pending.scl.clone(),
+            }
+          : transformMgr.transform;
       if (isFiniteTransform(current)) {
+        if (!finalTransform) {
+          transformDebugTimelineRef.current.liveCalculatedAt = stampNow();
+        }
+
+        // Keep drag delta active through store commit so live preview remains
+        // visually stable; SceneCanvas reconciliation clears the matrix only
+        // after committed/live transforms are actually aligned.
+
         const explicitBeforeTransform = (
           pendingHistory && pendingHistory.modelId === scene.activeModelId
         )
@@ -2151,39 +2507,21 @@ export default function Home() {
             }
           : undefined;
 
+        transformDebugTimelineRef.current.storeUpdateStartedAt = stampNow();
         scene.updateModelTransform(scene.activeModelId, {
           position: current.position.clone(),
           rotation: current.rotation.clone(),
           scale: current.scale.clone(),
         }, explicitBeforeTransform);
+        transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
         // Prevent the persistence effect from applying the same delta a second time
         transformEndFlushedRef.current = true;
       }
     }
 
-    // Reset temporary drag matrix on the next frame so support store updates
-    // are visible first, avoiding a release-frame pop.
-    if (typeof window !== 'undefined') {
-      if (supportDragResetRafRef.current !== null) {
-        window.cancelAnimationFrame(supportDragResetRafRef.current);
-        supportDragResetRafRef.current = null;
-      }
-      if (supportDragResetSecondRafRef.current !== null) {
-        window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
-        supportDragResetSecondRafRef.current = null;
-      }
-      supportDragResetRafRef.current = window.requestAnimationFrame(() => {
-        supportDragResetSecondRafRef.current = window.requestAnimationFrame(() => {
-          const dragGroup = supportDragGroupRef.current;
-          if (dragGroup) {
-            dragGroup.matrix.identity();
-            dragGroup.matrixAutoUpdate = true;
-          }
-          supportDragResetSecondRafRef.current = null;
-        });
-        supportDragResetRafRef.current = null;
-      });
-    }
+    // Do not eagerly reset support drag-group matrix here.
+    // SceneCanvas reconciles dragGroup matrix from committed-vs-live transforms
+    // and only returns to identity/auto-update once both are actually in sync.
 
     const targetModelId = scene.activeModelId;
     const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
@@ -2300,6 +2638,10 @@ export default function Home() {
       if (typeof window !== 'undefined' && supportDragResetSecondRafRef.current !== null) {
         window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
         supportDragResetSecondRafRef.current = null;
+      }
+      if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+        supportSyncFallbackTimeoutRef.current = null;
       }
     };
   }, []);
@@ -3192,6 +3534,101 @@ export default function Home() {
             crossSectionMode={slicing.crossSectionMode}
           />
         )}
+
+        {isTransformDebugOverlayOpen && (
+          <div
+            key="transform-debug-overlay"
+            className="rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              color: 'var(--text-strong)',
+              background: 'color-mix(in srgb, var(--surface-0), black 14%)',
+              fontSize: '10px',
+            }}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
+                Transform Debug Overlay
+              </div>
+              <button
+                type="button"
+                className="rounded border px-2 py-0.5 text-[10px]"
+                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                onClick={() => setIsTransformDebugOverlayOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
+              <div style={{ color: 'var(--text-muted)' }}>Transform mode</div><div>{transformMgr.transformMode}</div>
+              <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
+              <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
+              <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
+              <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
+            </div>
+
+            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Transform Delta (live vs store)
+              </div>
+              <div>Δpos: {formatDebugNumber(transformDebugStats.posDelta)} mm</div>
+              <div>Δrot max: {formatDebugNumber(transformDebugStats.rotDelta)} rad</div>
+              <div>Δscale: {formatDebugNumber(transformDebugStats.scaleDelta)}</div>
+            </div>
+
+            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Active Model Transform
+              </div>
+              <div>Store pos: {formatDebugVec3(transformDebugStats.storeTransform?.position)}</div>
+              <div>Live pos: {formatDebugVec3(transformDebugStats.liveTransform.position)}</div>
+              <div>Drag Δ pos: {formatDebugVec3(transformDebugStats.dragGroupPos)}</div>
+              <div>Drag Δ scale: {formatDebugVec3(transformDebugStats.dragGroupScale)}</div>
+            </div>
+
+            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Support Counts (all / active model)
+              </div>
+              <div>Trunks: {transformDebugStats.supportCounts.trunks} / {activeSupportEntityCounts.trunks}</div>
+              <div>Branches: {transformDebugStats.supportCounts.branches} / {activeSupportEntityCounts.branches}</div>
+              <div>Leaves: {transformDebugStats.supportCounts.leaves} / {activeSupportEntityCounts.leaves}</div>
+              <div>Twigs: {transformDebugStats.supportCounts.twigs} / {activeSupportEntityCounts.twigs}</div>
+              <div>Sticks: {transformDebugStats.supportCounts.sticks} / {activeSupportEntityCounts.sticks}</div>
+              <div>Braces: {transformDebugStats.supportCounts.braces} / {activeSupportEntityCounts.braces}</div>
+              <div>Roots: {transformDebugStats.supportCounts.roots} / {activeSupportEntityCounts.roots}</div>
+              <div>Knots: {transformDebugStats.supportCounts.knots} / {activeSupportEntityCounts.knots}</div>
+              <div>SupportBraces: {transformDebugStats.supportCounts.supportBraces} / {activeSupportEntityCounts.supportBraces}</div>
+            </div>
+
+            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Transform Timeline
+              </div>
+              <div>Last op: {transformDebugStats.timeline.lastOperation ?? 'n/a'}</div>
+              <div>Drag released: {formatDebugTime(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              <div>Live calculated: {formatDebugTime(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              <div>Store update start: {formatDebugTime(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              <div>Store updated: {formatDebugTime(transformDebugStats.timeline.storeUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              <div>Support store updated: {formatDebugTime(transformDebugStats.timeline.supportStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              <div>SupportBrace store updated: {formatDebugTime(transformDebugStats.timeline.supportBraceStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              <div>Active model store observed: {formatDebugTime(transformDebugStats.timeline.activeModelStoreObservedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              <div>Release → Live: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.liveCalculatedAt)}</div>
+              <div>Live → Store start: {formatDebugLatencyMs(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.storeUpdateStartedAt)}</div>
+              <div>Store start → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
+              <div>Release → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
+              <div>Release → Support store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportStoreUpdatedAt)}</div>
+              <div>Release → SupportBrace store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportBraceStoreUpdatedAt)}</div>
+              <div>Release → Active model observed: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.activeModelStoreObservedAt)}</div>
+            </div>
+
+            <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              Toggle: Ctrl+Shift+X
+            </div>
+          </div>
+        )}
       </FloatingPanelStack>
 
       <div className="absolute inset-0 top-14 z-0">
@@ -3313,6 +3750,7 @@ export default function Home() {
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
+            holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
             ghostData={ghostData}
             duplicatePreviewModel={
               isDuplicating
@@ -3390,7 +3828,6 @@ export default function Home() {
               </div>
             </div>
           )}
-
 
         </div>
       </div>

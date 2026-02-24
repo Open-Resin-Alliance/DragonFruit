@@ -80,10 +80,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
 
-    const selectedSupportIdSet = useMemo(() => new Set(selectedSupportIds), [selectedSupportIds]);
-    const selectedId = state.selectedId;
-    const selectedCategory = state.selectedCategory;
-    const hasSupportMultiSelection = selectedSupportIds.length > 0;
+    const selectionEnabled = mode === 'support';
+    const effectiveSelectedSupportIds = selectionEnabled ? selectedSupportIds : [];
+    const selectedSupportIdSet = useMemo(() => new Set(effectiveSelectedSupportIds), [effectiveSelectedSupportIds]);
+    const selectedId = selectionEnabled ? state.selectedId : null;
+    const selectedCategory = selectionEnabled ? state.selectedCategory : null;
+    const hasSupportMultiSelection = effectiveSelectedSupportIds.length > 0;
     const useMultiSelectionDetail = hasSupportMultiSelection && selectedId !== null && selectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
