@@ -764,6 +764,7 @@ export function SceneCanvas({
   blockSupportPlacement,
   supportsRef,
   supportDragGroupRef,
+  holdSupportDragDelta,
   ghostData,
   duplicatePreviewModel,
   duplicatePreviewTransforms,
@@ -835,7 +836,7 @@ export function SceneCanvas({
     after: ModelTransform;
   }) => void;
   onTransformChangeEnd?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
-  onTransformEnd?: (operation: 'move' | 'rotate' | 'scale') => void;
+  onTransformEnd?: (operation: 'move' | 'rotate' | 'scale', finalTransform?: ModelTransform) => void;
   crossSectionMode?: 'smooth' | 'rasterized';
   pxMm?: number;
   showIslandIdLabels?: boolean;
@@ -855,6 +856,7 @@ export function SceneCanvas({
   blockSupportPlacement?: boolean;
   supportsRef?: React.RefObject<THREE.Group | null>;
   supportDragGroupRef?: React.RefObject<THREE.Group | null>;
+  holdSupportDragDelta?: boolean;
   ghostData?: any;
   duplicatePreviewModel?: LoadedModel | null;
   duplicatePreviewTransforms?: Array<{
@@ -1084,13 +1086,17 @@ export function SceneCanvas({
 
     if (isGizmoDragging) return;
 
+    // Parent orchestrator (page.tsx) owns reset timing when transform-end
+    // callback is provided, so we avoid an early duplicate reset here.
+    if (onTransformEnd) return;
+
     // Defensive reset path for any missed/late gizmo end callback ordering.
     scheduleSupportDragGroupReset();
 
     return () => {
       cancelPendingSupportDragResets();
     };
-  }, [cancelPendingSupportDragResets, isGizmoDragging, scheduleSupportDragGroupReset]);
+  }, [cancelPendingSupportDragResets, isGizmoDragging, onTransformEnd, scheduleSupportDragGroupReset]);
 
   const startOutOfBoundsRotateGrace = React.useCallback(() => {
     setOutOfBoundsRotateGraceActive(true);
@@ -1752,6 +1758,74 @@ export function SceneCanvas({
     dragGroup.matrix.multiplyMatrices(cur, inv);
     dragGroup.matrixAutoUpdate = false;
   }, [activeGroupRef, activeModelId, mode, supportDragGroupRef]);
+
+  const composeModelTransformMatrix = React.useCallback((t: ModelTransform) => {
+    return new THREE.Matrix4().compose(
+      t.position,
+      quaternionFromGlobalEuler(t.rotation),
+      t.scale,
+    );
+  }, []);
+
+  const matricesApproximatelyEqual = React.useCallback((a: THREE.Matrix4, b: THREE.Matrix4, epsilon = 1e-6) => {
+    const ae = a.elements;
+    const be = b.elements;
+    for (let i = 0; i < 16; i += 1) {
+      if (Math.abs(ae[i] - be[i]) > epsilon) return false;
+    }
+    return true;
+  }, []);
+
+  React.useEffect(() => {
+    // During active gizmo drags, `applySupportGroupDelta` owns this matrix.
+    if (isGizmoDragging) return;
+
+    const dragGroup = supportDragGroupRef?.current;
+    if (!dragGroup) return;
+
+    if (mode !== 'prepare' || !activeModelId || !transform) {
+      if (!dragGroup.matrixAutoUpdate) {
+        dragGroup.matrix.identity();
+        dragGroup.matrixAutoUpdate = true;
+      }
+      return;
+    }
+
+    const committedModel = models.find((model) => model.id === activeModelId);
+    if (!committedModel) return;
+
+    const committedMatrix = composeModelTransformMatrix(committedModel.transform);
+    const liveMatrix = composeModelTransformMatrix(transform);
+
+    if (matricesApproximatelyEqual(committedMatrix, liveMatrix)) {
+      if (holdSupportDragDelta) {
+        // Keep the temporary drag delta active until support-store sync is
+        // observed by the parent orchestrator.
+        dragGroup.matrixAutoUpdate = false;
+        return;
+      }
+
+      if (!dragGroup.matrixAutoUpdate) {
+        dragGroup.matrix.identity();
+        dragGroup.matrixAutoUpdate = true;
+      }
+      return;
+    }
+
+    const delta = new THREE.Matrix4().multiplyMatrices(liveMatrix, committedMatrix.clone().invert());
+    dragGroup.matrix.copy(delta);
+    dragGroup.matrixAutoUpdate = false;
+  }, [
+    activeModelId,
+    composeModelTransformMatrix,
+    isGizmoDragging,
+    matricesApproximatelyEqual,
+    mode,
+    models,
+    supportDragGroupRef,
+    holdSupportDragDelta,
+    transform,
+  ]);
 
   const selectedModelIdSet = React.useMemo(() => {
     return new Set(selectedModelIds ?? []);
@@ -3498,8 +3572,10 @@ export function SceneCanvas({
                       }
                     }
                     gizmoTransformStartSnapshotRef.current = null;
-                    onTransformEnd?.('move');
-                    scheduleSupportDragGroupReset();
+                    onTransformEnd?.('move', live ?? undefined);
+                    if (!onTransformEnd) {
+                      scheduleSupportDragGroupReset();
+                    }
                   }}
                   onRotate={(axis, angle) => {
                     if (activeGroupRef.current) {
@@ -3555,8 +3631,10 @@ export function SceneCanvas({
                       }
                     }
                     gizmoTransformStartSnapshotRef.current = null;
-                    onTransformEnd?.('rotate');
-                    scheduleSupportDragGroupReset();
+                    onTransformEnd?.('rotate', live ?? undefined);
+                    if (!onTransformEnd) {
+                      scheduleSupportDragGroupReset();
+                    }
                   }}
                   onScaleStart={() => {
                     stopActiveModelDropAnimation();
@@ -3620,8 +3698,10 @@ export function SceneCanvas({
                       }
                     }
                     gizmoTransformStartSnapshotRef.current = null;
-                    onTransformEnd?.('scale');
-                    scheduleSupportDragGroupReset();
+                    onTransformEnd?.('scale', live ?? undefined);
+                    if (!onTransformEnd) {
+                      scheduleSupportDragGroupReset();
+                    }
                   }}
                 />
               )}
