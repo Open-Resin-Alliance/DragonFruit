@@ -3,6 +3,7 @@ import { setSelectedId } from '../state';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
+let shiftModifierActive = false;
 let pendingHoverModelId: string | null = null;
 let lastDispatchedHoverModelId: string | null = null;
 let pendingHoverDispatchRaf: number | null = null;
@@ -28,6 +29,18 @@ function initializeHoverGuards() {
         orbitInteractionActive = false;
     };
 
+    const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Shift') shiftModifierActive = true;
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+        if (event.key === 'Shift') shiftModifierActive = false;
+    };
+
+    const clearModifiers = () => {
+        shiftModifierActive = false;
+    };
+
     window.addEventListener('picking-orbit-start', markOrbitActive);
     window.addEventListener('picking-orbit-change', markOrbitActive);
     window.addEventListener('picking-orbit-end', markOrbitInactive);
@@ -35,8 +48,21 @@ function initializeHoverGuards() {
     window.addEventListener('pointercancel', markOrbitInactiveFromPointer, true);
     window.addEventListener('mouseup', markOrbitInactiveFromPointer, true);
     window.addEventListener('contextmenu', markOrbitInactiveFromPointer, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
     window.addEventListener('blur', markOrbitInactiveFromPointer);
+    window.addEventListener('blur', clearModifiers);
     document.addEventListener('visibilitychange', markOrbitInactiveFromPointer);
+    document.addEventListener('visibilitychange', clearModifiers);
+}
+
+function isShiftActiveFromEvent(e: any) {
+    return !!(
+        e?.shiftKey
+        || e?.nativeEvent?.shiftKey
+        || e?.sourceEvent?.shiftKey
+        || shiftModifierActive
+    );
 }
 
 export function emitSupportModelPointerHover(modelId: string | null) {
@@ -75,7 +101,7 @@ export function handleSupportClick(e: any, id: string, isInteractable: boolean) 
         return;
     }
 
-    const shiftDown = !!(e?.nativeEvent?.shiftKey ?? e?.shiftKey);
+    const shiftDown = isShiftActiveFromEvent(e);
     
     e.stopPropagation(); // Stop R3F propagation
     

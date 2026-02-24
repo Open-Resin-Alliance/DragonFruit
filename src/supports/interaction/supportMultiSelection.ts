@@ -62,7 +62,20 @@ function ensureSyncedWithPrimarySelection() {
         lastPrimarySelectedId = selectedId;
         lastPrimarySelectedCategory = selectedCategory;
 
-        if (!selectedId || !isSupportCategory(selectedCategory)) {
+        if (!selectedId) {
+            if (selectedSupportIds.size > 1) {
+                return;
+            }
+
+            if (selectedSupportIds.size > 0) {
+                selectedSupportIds.clear();
+                selectedSupportIdsSnapshot = EMPTY_SELECTION;
+                notify();
+            }
+            return;
+        }
+
+        if (!isSupportCategory(selectedCategory)) {
             if (selectedSupportIds.size > 0) {
                 selectedSupportIds.clear();
                 selectedSupportIdsSnapshot = EMPTY_SELECTION;

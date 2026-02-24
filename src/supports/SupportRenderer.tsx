@@ -83,8 +83,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const selectedId = state.selectedId;
     const selectedCategory = state.selectedCategory;
     const hasSupportMultiSelection = selectedSupportIds.length > 0;
-    const useMultiSelectionDetail = hasSupportMultiSelection && selectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
-    const dimNonSelected = selectedId !== null || useMultiSelectionDetail;
+    const useMultiSelectionDetail = hasSupportMultiSelection && selectedId !== null && selectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
+    const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
 
     const isInteractable = mode === 'support' && !navigationLodActive;

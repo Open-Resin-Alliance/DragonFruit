@@ -36,9 +36,17 @@ export function selectSupportWithToggle(id: string) {
 
     toggleSelectedSupportId(id);
 
+    const updated = getSelectedSupportIds();
+
     if (isAlreadySelected) {
-        const remaining = getSelectedSupportIds();
-        setSelectedId(remaining.length > 0 ? remaining[remaining.length - 1] : null);
+        setSelectedId(updated.length > 0 ? updated[updated.length - 1] : null);
+        return;
+    }
+
+    // Once a second support is added, transition out of single-support edit mode
+    // into bulk multi-select mode (same UX intent as Ctrl+A behavior).
+    if (updated.length > 1) {
+        setSelectedId(null);
         return;
     }
 
