@@ -49,6 +49,7 @@ interface SupportRendererProps {
     modelDropOffsetsById?: Record<string, number>;
     modelFilterId?: string | null;
     excludeModelId?: string | null;
+    excludeModelIds?: string[];
     passive?: boolean;
     disableSelectionAndHover?: boolean;
     ghostOpacity?: number;
@@ -76,7 +77,7 @@ const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0 }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0 }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedSupportIds = useSyncExternalStore(
         subscribeSupportMultiSelection,
@@ -114,6 +115,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const ghostOpacityClamped = Math.max(0.05, Math.min(1, ghostOpacity));
     const ghostTransparent = ghostOpacityClamped < 0.999;
     const selectedModelIdSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+    const excludedModelIdSet = useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
     const hidePlateContactPrimitivesEffective = hidePlateContactPrimitives;
     const restrictToActiveModel = mode === 'support' && !!activeModelId;
     const suppressHover = supportSelectionAndHoverSuppressed || isJointCreationActive || !isInteractable || braceAltActive;
@@ -213,12 +215,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const isModelVisible = React.useCallback((modelId?: string, supportId?: string) => {
         const resolvedModelId = resolveSupportModelId(modelId, supportId);
 
-        if ((restrictToActiveModel || modelFilterId || excludeModelId) && !resolvedModelId) return false;
+        if ((restrictToActiveModel || modelFilterId || excludeModelId || excludedModelIdSet.size > 0) && !resolvedModelId) return false;
         if (restrictToActiveModel && resolvedModelId !== activeModelId) return false;
         if (modelFilterId && resolvedModelId !== modelFilterId) return false;
         if (excludeModelId && resolvedModelId === excludeModelId) return false;
+        if (resolvedModelId && excludedModelIdSet.has(resolvedModelId)) return false;
         return true;
-    }, [resolveSupportModelId, restrictToActiveModel, activeModelId, modelFilterId, excludeModelId]);
+    }, [resolveSupportModelId, restrictToActiveModel, activeModelId, modelFilterId, excludeModelId, excludedModelIdSet]);
 
     useEffect(() => {
         if (!interactionHooksEnabled) return;

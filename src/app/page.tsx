@@ -2803,6 +2803,7 @@ export default function Home() {
   const handleTransformEnd = (
     operation: 'move' | 'rotate' | 'scale',
     finalTransform?: ModelTransform,
+    options?: { skipStoreCommit?: boolean },
   ) => {
     const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
     const releasePerf = performance.now();
@@ -2827,6 +2828,15 @@ export default function Home() {
     };
     if (finalTransform) {
       transformDebugTimelineRef.current.liveCalculatedAt = stampNow();
+    }
+
+    if (options?.skipStoreCommit) {
+      transformMgr.setIsTransforming(false);
+      transformMgr.pendingTransformRef.current = null;
+      pendingTransformHistoryRef.current = null;
+      pendingRotateGizmoCommitRef.current = null;
+      transformHistoryCommitRequestedRef.current = false;
+      return;
     }
 
     // Flush the final model transform into the store synchronously so
@@ -2961,6 +2971,45 @@ export default function Home() {
 
     skipNextTransformEndCommitRef.current = true;
   }, [scene]);
+
+  const handleGizmoTransformGroupCommit = React.useCallback((payload: {
+    operation: 'move' | 'rotate' | 'scale';
+    entries: Array<{
+      modelId: string;
+      before: ModelTransform;
+      after: ModelTransform;
+    }>;
+  }) => {
+    if (payload.entries.length === 0) return;
+
+    const hasMeaningfulChange = (before: ModelTransform, after: ModelTransform) => {
+      const EPSILON = 1e-6;
+      return (
+        before.position.distanceToSquared(after.position) > EPSILON
+        || before.scale.distanceToSquared(after.scale) > EPSILON
+        || Math.abs(before.rotation.x - after.rotation.x) > EPSILON
+        || Math.abs(before.rotation.y - after.rotation.y) > EPSILON
+        || Math.abs(before.rotation.z - after.rotation.z) > EPSILON
+      );
+    };
+
+    const updates = payload.entries
+      .filter((entry) => isFiniteTransform(entry.after) && hasMeaningfulChange(entry.before, entry.after))
+      .map((entry) => ({
+        id: entry.modelId,
+        transform: {
+          position: entry.after.position.clone(),
+          rotation: entry.after.rotation.clone(),
+          scale: entry.after.scale.clone(),
+        },
+      }));
+
+    if (updates.length === 0) return;
+
+    scene.updateModelTransforms(updates);
+    setSupportRenderRefreshNonce((value) => value + 1);
+    skipNextTransformEndCommitRef.current = false;
+  }, [isFiniteTransform, scene]);
 
   const handleTransformStart = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
@@ -4147,6 +4196,7 @@ export default function Home() {
             transform={transformMgr.transform}
             onTransformStart={handleTransformStart}
             onGizmoTransformCommit={handleGizmoTransformCommit}
+            onGizmoTransformGroupCommit={handleGizmoTransformGroupCommit}
             onTransformChange={handleTransformChange}
             onTransformEnd={handleTransformEnd}
             mode={scene.mode}

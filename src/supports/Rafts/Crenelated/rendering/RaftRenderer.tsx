@@ -27,6 +27,7 @@ interface RaftRendererProps {
   hoverModelId?: string | null;
   modelFilterId?: string | null;
   excludeModelId?: string | null;
+  excludeModelIds?: string[];
   navigationLodActive?: boolean;
   onModelPointerSelect?: (modelId: string, e: any) => void;
 }
@@ -41,6 +42,7 @@ export default function RaftRenderer({
   hoverModelId = null,
   modelFilterId = null,
   excludeModelId = null,
+  excludeModelIds = [],
   navigationLodActive = false,
   onModelPointerSelect,
 }: RaftRendererProps) {
@@ -63,6 +65,7 @@ export default function RaftRenderer({
 
   const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
   const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
   const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const raftTransparent = raftOpacity < 0.999;
@@ -73,6 +76,7 @@ export default function RaftRenderer({
     const rootsByModel = new Map<string, typeof supportState.roots[string][]>();
     for (const root of Object.values(supportState.roots)) {
       if (excludeModelId && root.modelId === excludeModelId) continue;
+      if (root.modelId && excludedModelIdSet.has(root.modelId)) continue;
       if (modelFilterId && root.modelId !== modelFilterId) continue;
       const key = root.modelId || 'unknown';
       if (!rootsByModel.has(key)) rootsByModel.set(key, []);
@@ -137,7 +141,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder]);
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
