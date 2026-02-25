@@ -1269,11 +1269,45 @@ export default function Home() {
     transformHistoryCommitRequestedRef.current = false;
   }, [scene.activeModelId]);
 
+  const lastHandledTransformChangeRef = useRef<{
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  } | null>(null);
+
+  useEffect(() => {
+    lastHandledTransformChangeRef.current = null;
+  }, [scene.activeModelId]);
+
   // Wrap transform change to update local state
-  const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
-    transformMgr.setIsTransforming(true);
+  const handleTransformChange = React.useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
+    const prev = lastHandledTransformChangeRef.current;
+    const EPSILON = 1e-6;
+
+    if (prev) {
+      const posUnchanged = prev.position.distanceToSquared(pos) <= EPSILON;
+      const rotUnchanged =
+        Math.abs(prev.rotation.x - rot.x) <= EPSILON &&
+        Math.abs(prev.rotation.y - rot.y) <= EPSILON &&
+        Math.abs(prev.rotation.z - rot.z) <= EPSILON;
+      const scaleUnchanged = prev.scale.distanceToSquared(scl) <= EPSILON;
+
+      if (posUnchanged && rotUnchanged && scaleUnchanged) {
+        return;
+      }
+    }
+
+    lastHandledTransformChangeRef.current = {
+      position: pos.clone(),
+      rotation: rot.clone(),
+      scale: scl.clone(),
+    };
+
+    if (!transformMgr.isTransforming) {
+      transformMgr.setIsTransforming(true);
+    }
     transformMgr.onTransformChange(pos, rot, scl);
-  };
+  }, [transformMgr]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
   const sceneZRange = React.useMemo(() => ({

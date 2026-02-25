@@ -154,9 +154,6 @@ function transformSegment(segment: Segment, matrix: THREE.Matrix4, normalMatrix:
 export function transformSupportBracesForModel(
     modelId: string,
     deltaMatrix: THREE.Matrix4,
-    affectedRootIds?: Set<string>,
-    affectedKnotIds?: Set<string>,
-    affectedSegmentIds?: Set<string>,
 ) {
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
@@ -166,11 +163,7 @@ export function transformSupportBracesForModel(
     let nextKnots = state.knots;
 
     for (const supportBrace of Object.values(state.supportBraces)) {
-        const hostKnot = state.knots[supportBrace.hostKnotId];
-        const isConnectedToMovedGraph = (affectedRootIds?.has(supportBrace.rootId) ?? false)
-            || (affectedKnotIds?.has(supportBrace.hostKnotId) ?? false)
-            || (!!hostKnot && (affectedSegmentIds?.has(hostKnot.parentShaftId) ?? false));
-        if (supportBrace.modelId !== modelId && !isConnectedToMovedGraph) continue;
+        if (supportBrace.modelId !== modelId) continue;
 
         if (!changed) {
             nextSupportBraces = { ...state.supportBraces };
@@ -178,6 +171,8 @@ export function transformSupportBracesForModel(
             nextKnots = { ...state.knots };
             changed = true;
         }
+
+        const hostKnot = state.knots[supportBrace.hostKnotId];
 
         const transformedSupportBrace = {
             ...supportBrace,
