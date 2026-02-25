@@ -997,6 +997,8 @@ export function SceneCanvas({
   const [hoveredMeshModelId, setHoveredMeshModelId] = React.useState<string | null>(null);
   const [hoveredRaftModelId, setHoveredRaftModelId] = React.useState<string | null>(null);
   const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
+  const pendingRaftHoverClearFrameRef = React.useRef<number | null>(null);
+  const pendingSupportHoverClearFrameRef = React.useRef<number | null>(null);
   const hoveredSupportModelIdFromStore = React.useMemo(() => {
     const category = supportStateForBounds.hoveredCategory;
     if (category !== 'support' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
@@ -1021,18 +1023,56 @@ export function SceneCanvas({
       const customEvent = event as CustomEvent<{ modelId?: string | null; category?: string | null }>;
       const category = customEvent.detail?.category;
       if (category === 'raft') {
-        setHoveredRaftModelId(customEvent.detail?.modelId ?? null);
+        const modelId = customEvent.detail?.modelId ?? null;
+        if (modelId) {
+          if (pendingRaftHoverClearFrameRef.current !== null) {
+            window.cancelAnimationFrame(pendingRaftHoverClearFrameRef.current);
+            pendingRaftHoverClearFrameRef.current = null;
+          }
+          setHoveredRaftModelId((prev) => (prev === modelId ? prev : modelId));
+        } else {
+          if (pendingRaftHoverClearFrameRef.current !== null) {
+            window.cancelAnimationFrame(pendingRaftHoverClearFrameRef.current);
+          }
+          pendingRaftHoverClearFrameRef.current = window.requestAnimationFrame(() => {
+            pendingRaftHoverClearFrameRef.current = null;
+            setHoveredRaftModelId((prev) => (prev === null ? prev : null));
+          });
+        }
         return;
       }
 
       if (category === 'support') {
-        setHoveredSupportPointerModelId(customEvent.detail?.modelId ?? null);
+        const modelId = customEvent.detail?.modelId ?? null;
+        if (modelId) {
+          if (pendingSupportHoverClearFrameRef.current !== null) {
+            window.cancelAnimationFrame(pendingSupportHoverClearFrameRef.current);
+            pendingSupportHoverClearFrameRef.current = null;
+          }
+          setHoveredSupportPointerModelId((prev) => (prev === modelId ? prev : modelId));
+        } else {
+          if (pendingSupportHoverClearFrameRef.current !== null) {
+            window.cancelAnimationFrame(pendingSupportHoverClearFrameRef.current);
+          }
+          pendingSupportHoverClearFrameRef.current = window.requestAnimationFrame(() => {
+            pendingSupportHoverClearFrameRef.current = null;
+            setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
+          });
+        }
       }
     };
 
     window.addEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
 
     return () => {
+      if (pendingRaftHoverClearFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingRaftHoverClearFrameRef.current);
+        pendingRaftHoverClearFrameRef.current = null;
+      }
+      if (pendingSupportHoverClearFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingSupportHoverClearFrameRef.current);
+        pendingSupportHoverClearFrameRef.current = null;
+      }
       window.removeEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
     };
   }, []);

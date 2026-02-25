@@ -36,9 +36,9 @@ import {
 } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE } from '@/supports/history/actionTypes';
+import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_SUPPORT_BRACE } from '@/supports/history/actionTypes';
 import { clearSelection, getMultiSelectedSupportIds, selectAllSupports } from '@/supports/interaction/SupportSelection';
-import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getSupportBraceSnapshot, removeSupportBrace } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
@@ -82,6 +82,66 @@ function collectAllSupportIds() {
     ...Object.keys(snapshot.braces),
     ...Object.keys(supportBraceSnapshot.supportBraces),
   ];
+}
+
+function resolveSupportOwnerFromSegmentId(segmentId: string): { category: 'trunk' | 'branch' | 'twig' | 'stick' | 'brace'; id: string } | null {
+  if (!segmentId) return null;
+
+  const snapshot = getSnapshot();
+  const supportBraceSnapshot = getSupportBraceSnapshot();
+
+  if (segmentId.startsWith('braceSegment:')) {
+    const braceId = segmentId.slice('braceSegment:'.length);
+    if (snapshot.braces[braceId]) return { category: 'brace', id: braceId };
+  }
+
+  for (const trunk of Object.values(snapshot.trunks)) {
+    if (trunk.segments.some((segment) => segment.id === segmentId)) {
+      return { category: 'trunk', id: trunk.id };
+    }
+  }
+
+  for (const branch of Object.values(snapshot.branches)) {
+    if (branch.segments.some((segment) => segment.id === segmentId)) {
+      return { category: 'branch', id: branch.id };
+    }
+  }
+
+  for (const twig of Object.values(snapshot.twigs)) {
+    if (twig.segments.some((segment) => segment.id === segmentId)) {
+      return { category: 'twig', id: twig.id };
+    }
+  }
+
+  for (const stick of Object.values(snapshot.sticks)) {
+    if (stick.segments.some((segment) => segment.id === segmentId)) {
+      return { category: 'stick', id: stick.id };
+    }
+  }
+
+  for (const supportBrace of Object.values(supportBraceSnapshot.supportBraces)) {
+    if (supportBrace.segments.some((segment) => segment.id === segmentId)) {
+      return { category: 'brace', id: supportBrace.id };
+    }
+  }
+
+  return null;
+}
+
+function resolveSupportOwnerFromJointId(jointId: string): { category: 'brace'; id: string } | null {
+  if (!jointId) return null;
+
+  const supportBraceSnapshot = getSupportBraceSnapshot();
+  for (const supportBrace of Object.values(supportBraceSnapshot.supportBraces)) {
+    const ownsJoint = supportBrace.segments.some((segment) =>
+      segment.bottomJoint?.id === jointId || segment.topJoint?.id === jointId,
+    );
+    if (ownsJoint) {
+      return { category: 'brace', id: supportBrace.id };
+    }
+  }
+
+  return null;
 }
 
 export function useSupportInteractionManager({ mode }: SupportInteractionOptions) {
@@ -212,7 +272,11 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     const deleteSelectionByCategoryAndId = (category: string, id: string, recordHistory = true): boolean => {
       if (category === 'joint') {
         const result = removeJointById(id);
-        if (!result) return false;
+        if (!result) {
+          const supportBraceOwner = resolveSupportOwnerFromJointId(id);
+          if (!supportBraceOwner) return false;
+          return deleteSelectionByCategoryAndId(supportBraceOwner.category, supportBraceOwner.id, recordHistory);
+        }
         if (result.kind === 'trunk') {
           if (recordHistory) {
             pushHistory({
@@ -231,6 +295,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           setSelectedId(result.branchId);
         }
         return true;
+      }
+
+      if (category === 'segment') {
+        const owner = resolveSupportOwnerFromSegmentId(id);
+        if (!owner) return false;
+        return deleteSelectionByCategoryAndId(owner.category, owner.id, recordHistory);
       }
 
       if (category === 'trunk') {
@@ -341,6 +411,21 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           return true;
         }
 
+        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
+        const supportBrace = supportBraces.find((sb) => sb.hostKnotId === id);
+        if (supportBrace) {
+          const supportBraceSnapshots = removeSupportBrace(supportBrace.id);
+          if (!supportBraceSnapshots) return false;
+          if (recordHistory) {
+            pushHistory({
+              type: SUPPORT_REMOVE_SUPPORT_BRACE,
+              payload: { build: supportBraceSnapshots },
+            });
+          }
+          setSelectedId(null);
+          return true;
+        }
+
         return false;
       }
 
@@ -413,6 +498,18 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       }
 
       if (category === 'brace') {
+        const supportBraceSnapshots = removeSupportBrace(id);
+        if (supportBraceSnapshots) {
+          if (recordHistory) {
+            pushHistory({
+              type: SUPPORT_REMOVE_SUPPORT_BRACE,
+              payload: { build: supportBraceSnapshots },
+            });
+          }
+          setSelectedId(null);
+          return true;
+        }
+
         const snapshots = removeBrace(id);
         if (!snapshots) return false;
         if (recordHistory) {
@@ -432,8 +529,93 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return e.key === 'Alt' || e.key === 'AltGraph' || e.code === 'AltLeft' || e.code === 'AltRight';
     };
 
+    const canDeleteSelection = () => {
+      const multiSelectedIds = getMultiSelectedSupportIds();
+      if (multiSelectedIds.length > 0) return true;
+
+      const category = getSelectedCategory();
+      const id = getSelectedId();
+      if (!id || !category) return false;
+      if (category === 'joint' || category === 'trunk' || category === 'leaf' || category === 'branch' || category === 'twig' || category === 'stick' || category === 'brace') return true;
+
+      if (category === 'knot') {
+        const leaves = getLeaves();
+        if (leaves.some(l => l.parentKnotId === id)) return true;
+
+        const branches = getBranches();
+        if (branches.some(b => b.parentKnotId === id)) return true;
+
+        const braces = getBraces();
+        if (braces.some(br => br.startKnotId === id || br.endKnotId === id)) return true;
+
+        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
+        if (supportBraces.some((sb) => sb.hostKnotId === id)) return true;
+
+        return false;
+      }
+
+      if (category === 'segment') {
+        return resolveSupportOwnerFromSegmentId(id) !== null;
+      }
+
+      return false;
+    };
+
+    const performDeleteSelection = () => {
+      const multiSelectedIds = Array.from(new Set(getMultiSelectedSupportIds()));
+      if (multiSelectedIds.length > 0) {
+        const beforeSupportSnapshot = structuredClone(getSnapshot());
+        const beforeSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
+        let anyDeleted = false;
+        for (const supportId of multiSelectedIds) {
+          const category = resolveSupportCategoryFromSnapshot(supportId);
+          if (!category) continue;
+          const deleted = deleteSelectionByCategoryAndId(category, supportId, false);
+          if (deleted) anyDeleted = true;
+        }
+
+        if (anyDeleted) {
+          const afterSupportSnapshot = structuredClone(getSnapshot());
+          const afterSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
+
+          pushHistory({
+            type: SUPPORT_AUTO_BRACE_REPLACE,
+            description: `Delete ${multiSelectedIds.length} supports`,
+            payload: {
+              before: beforeSupportSnapshot,
+              after: afterSupportSnapshot,
+              supportBraceBefore: beforeSupportBraceSnapshot,
+              supportBraceAfter: afterSupportBraceSnapshot,
+            },
+          });
+        }
+
+        clearSelection();
+        setHoveredId(null);
+        setHoveredCategory('none');
+        if (anyDeleted) return;
+      }
+
+      const category = getSelectedCategory();
+      const id = getSelectedId();
+      if (!id || !category) return;
+
+      deleteSelectionByCategoryAndId(category, id);
+
+      setHoveredId(null);
+      setHoveredCategory('none');
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
+
+      if (!e.metaKey && !e.ctrlKey && (e.key === 'Delete' || e.key === 'Backspace')) {
+        if (!canDeleteSelection()) return;
+        e.preventDefault();
+        e.stopPropagation();
+        performDeleteSelection();
+        return;
+      }
 
       if (e.key === 'Escape') {
         if (getSelectedId() || getMultiSelectedSupportIds().length > 0) {
@@ -474,76 +656,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     document.addEventListener('keyup', onKeyUp, true);
 
     const unregister = registerDeleteHandler(
-      () => {
-        if (mode !== 'support') return false;
-
-        const multiSelectedIds = getMultiSelectedSupportIds();
-        if (multiSelectedIds.length > 0) return true;
-
-        const category = getSelectedCategory();
-        const id = getSelectedId();
-        if (!id || !category) return false;
-        if (category === 'joint' || category === 'trunk' || category === 'leaf' || category === 'branch' || category === 'twig' || category === 'stick' || category === 'brace') return true;
-
-        if (category === 'knot') {
-          const leaves = getLeaves();
-          if (leaves.some(l => l.parentKnotId === id)) return true;
-
-          const branches = getBranches();
-          if (branches.some(b => b.parentKnotId === id)) return true;
-
-          const braces = getBraces();
-          if (braces.some(br => br.startKnotId === id || br.endKnotId === id)) return true;
-
-          return false;
-        }
-
-        return false;
-      },
-      () => {
-        const multiSelectedIds = Array.from(new Set(getMultiSelectedSupportIds()));
-        if (multiSelectedIds.length > 0) {
-          const beforeSupportSnapshot = structuredClone(getSnapshot());
-          const beforeSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
-          let anyDeleted = false;
-          for (const supportId of multiSelectedIds) {
-            const category = resolveSupportCategoryFromSnapshot(supportId);
-            if (!category) continue;
-            const deleted = deleteSelectionByCategoryAndId(category, supportId, false);
-            if (deleted) anyDeleted = true;
-          }
-
-          if (anyDeleted) {
-            const afterSupportSnapshot = structuredClone(getSnapshot());
-            const afterSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
-
-            pushHistory({
-              type: SUPPORT_AUTO_BRACE_REPLACE,
-              description: `Delete ${multiSelectedIds.length} supports`,
-              payload: {
-                before: beforeSupportSnapshot,
-                after: afterSupportSnapshot,
-                supportBraceBefore: beforeSupportBraceSnapshot,
-                supportBraceAfter: afterSupportBraceSnapshot,
-              },
-            });
-          }
-
-          clearSelection();
-          setHoveredId(null);
-          setHoveredCategory('none');
-          if (anyDeleted) return;
-        }
-
-        const category = getSelectedCategory();
-        const id = getSelectedId();
-        if (!id || !category) return;
-
-        deleteSelectionByCategoryAndId(category, id);
-
-        setHoveredId(null);
-        setHoveredCategory('none');
-      },
+      () => mode === 'support' && canDeleteSelection(),
+      performDeleteSelection,
       100,
     );
 
