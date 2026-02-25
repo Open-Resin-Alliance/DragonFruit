@@ -1851,6 +1851,7 @@ export default function Home() {
     }
 
     scene.updateModelTransforms(sanitizedUpdates);
+    setSupportRenderRefreshNonce((prev) => prev + 1);
 
     if (!scene.activeModelId || displayActiveModelId !== scene.activeModelId) {
       return;
