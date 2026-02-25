@@ -2042,6 +2042,31 @@ export function SceneCanvas({
   }, [composeModelTransformMatrix, gizmoGroupStartSnapshot, multiGizmoPreviewTransformsById, multiGizmoSupportPreviewIds]);
 
   const multiGizmoSupportPreviewGroupRefs = React.useRef<Record<string, THREE.Group | null>>({});
+  const multiGizmoAnchorRef = React.useRef<THREE.Group | null>(null);
+
+  const computeCenterFromTransforms = React.useCallback((byModelId: Record<string, ModelTransform>) => {
+    const ids = selectedTransformableModelIds;
+    if (ids.length === 0) return null;
+
+    const sum = new THREE.Vector3();
+    let count = 0;
+    for (const modelId of ids) {
+      const t = byModelId[modelId];
+      if (!t) continue;
+      sum.add(t.position);
+      count += 1;
+    }
+    if (count === 0) return null;
+    return sum.multiplyScalar(1 / count);
+  }, [selectedTransformableModelIds]);
+
+  const setMultiGizmoAnchorPosition = React.useCallback((position: THREE.Vector3 | null) => {
+    const anchor = multiGizmoAnchorRef.current;
+    if (!anchor || !position) return;
+    anchor.position.copy(position);
+    anchor.updateMatrix();
+    anchor.updateMatrixWorld(true);
+  }, []);
 
   const applyImmediateMultiPreview = React.useCallback((
     snapshot: {
@@ -2423,6 +2448,12 @@ export function SceneCanvas({
     liveActiveTransformForMultiPreview,
     transform,
   ]);
+
+  React.useEffect(() => {
+    if (!isMultiGizmoSelection) return;
+    if (!multiGizmoCenter) return;
+    setMultiGizmoAnchorPosition(multiGizmoCenter);
+  }, [isMultiGizmoSelection, multiGizmoCenter, setMultiGizmoAnchorPosition]);
 
   const satDebugTargets = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showSliceSatBoundingMesh) return [] as Array<{
@@ -4134,11 +4165,20 @@ export function SceneCanvas({
                   ))
                 : null}
 
+              {isMultiGizmoSelection && (
+                <group
+                  ref={multiGizmoAnchorRef}
+                  position={multiGizmoCenter ?? new THREE.Vector3(0, 0, 0)}
+                  visible={false}
+                  raycast={() => null}
+                />
+              )}
+
               {/* Gizmo attached to active model */}
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && (
                 <UnifiedGizmo
-                  meshRef={activeGroupRef as React.RefObject<THREE.Group | THREE.Mesh | null>}
-                  followMeshRef={!isMultiGizmoSelection}
+                  meshRef={(isMultiGizmoSelection ? multiGizmoAnchorRef : activeGroupRef) as React.RefObject<THREE.Group | THREE.Mesh | null>}
+                  followMeshRef
                   position={[
                     (isMultiGizmoSelection ? (multiGizmoCenter?.x ?? activeModelTransform?.position.x) : activeModelTransform?.position.x) ?? 0,
                     (isMultiGizmoSelection ? (multiGizmoCenter?.y ?? activeModelTransform?.position.y) : activeModelTransform?.position.y) ?? 0,
@@ -4163,6 +4203,7 @@ export function SceneCanvas({
                             scale: live.scale.clone(),
                           });
                           applyImmediateMultiPreview(gizmoGroupStartSnapshot, immediatePreviewByModelId);
+                          setMultiGizmoAnchorPosition(computeCenterFromTransforms(immediatePreviewByModelId));
                         }
 
                         queueLiveDragTransform({
@@ -4260,6 +4301,7 @@ export function SceneCanvas({
                           scale: live.scale.clone(),
                         });
                         applyImmediateMultiPreview(gizmoGroupStartSnapshot, finalByModelId);
+                        setMultiGizmoAnchorPosition(computeCenterFromTransforms(finalByModelId));
                         const entries = Object.entries(gizmoGroupStartSnapshot.beforeByModelId).map(([modelId, before]) => {
                           const after = modelId === activeModelId
                             ? {
@@ -4480,6 +4522,7 @@ export function SceneCanvas({
                             scale: live.scale.clone(),
                           });
                           applyImmediateMultiPreview(gizmoGroupStartSnapshot, immediatePreviewByModelId);
+                          setMultiGizmoAnchorPosition(computeCenterFromTransforms(immediatePreviewByModelId));
                         }
 
                         queueLiveDragTransform({
@@ -4527,6 +4570,7 @@ export function SceneCanvas({
                           scale: live.scale.clone(),
                         });
                         applyImmediateMultiPreview(gizmoGroupStartSnapshot, finalByModelId);
+                        setMultiGizmoAnchorPosition(computeCenterFromTransforms(finalByModelId));
                         const entries = Object.entries(gizmoGroupStartSnapshot.beforeByModelId).map(([modelId, before]) => {
                           const after = modelId === activeModelId
                             ? {
