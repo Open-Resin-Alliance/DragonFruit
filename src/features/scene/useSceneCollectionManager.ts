@@ -136,8 +136,10 @@ function captureSceneSnapshot(
     selectedModelIds: [...selectedModelIds],
     ...(includeSupportState
       ? {
-          supportState: clonePlainObject(getSnapshot()),
-          supportBraceState: clonePlainObject(getSupportBraceSnapshot()),
+          // Store immutable store snapshots by reference for speed.
+          // They are deep-cloned on restore in applySceneSnapshot.
+          supportState: getSnapshot(),
+          supportBraceState: getSupportBraceSnapshot(),
         }
       : {}),
   };
@@ -443,7 +445,7 @@ type DebugPrimitiveType =
 
 type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
 
-import { deleteSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { deleteSupportsForModel, getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import {
   captureModelSupportsToClipboard,
   pasteModelSupportsFromClipboard,
@@ -505,6 +507,8 @@ export function useSceneCollectionManager() {
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredAccelerationProcessingRef = useRef(false);
   const deferredAccelerationPausedRef = useRef(false);
+  const deferredDisposalQueueRef = useRef<THREE.BufferGeometry[]>([]);
+  const deferredDisposalProcessingRef = useRef(false);
   const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
@@ -940,6 +944,56 @@ export function useSceneCollectionManager() {
       processDeferredAccelerationQueue();
     }
   }, [processDeferredAccelerationQueue]);
+
+  const processDeferredDisposalQueue = useCallback(() => {
+    if (deferredDisposalProcessingRef.current) return;
+    if (deferredDisposalQueueRef.current.length === 0) return;
+
+    deferredDisposalProcessingRef.current = true;
+
+    const scheduleNext = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(cb, { timeout: 120 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+
+    const step = () => {
+      const geometry = deferredDisposalQueueRef.current.shift();
+      if (!geometry) {
+        deferredDisposalProcessingRef.current = false;
+        return;
+      }
+
+      try {
+        disposeGeometryBVH(geometry);
+      } catch {
+        // ignore disposal failures
+      }
+      try {
+        geometry.dispose();
+      } catch {
+        // ignore disposal failures
+      }
+
+      if (deferredDisposalQueueRef.current.length === 0) {
+        deferredDisposalProcessingRef.current = false;
+        return;
+      }
+
+      scheduleNext(step);
+    };
+
+    scheduleNext(step);
+  }, []);
+
+  const deferDisposeGeometries = useCallback((geometries: THREE.BufferGeometry[]) => {
+    if (geometries.length === 0) return;
+
+    deferredDisposalQueueRef.current.push(...geometries);
+    processDeferredDisposalQueue();
+  }, [processDeferredDisposalQueue]);
 
   const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
     if (files.length === 0) return;
@@ -1389,22 +1443,82 @@ export function useSceneCollectionManager() {
     });
   }, [models]);
 
-  const deleteModels = useCallback((idsInput: string[]) => {
+  const deleteModels = useCallback(async (idsInput: string[]) => {
     const ids = new Set(idsInput);
     if (ids.size === 0) return;
 
-    const existing = models.filter((m) => ids.has(m.id));
+    const existing = modelsRef.current.filter((m) => ids.has(m.id));
     if (existing.length === 0) return;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
+    const supportStateBeforeDelete = getSnapshot();
+    const supportBraceSnapshotBefore = getSupportBraceSnapshot();
+
+    const supportBraceCountByModel = new Map<string, number>();
+    for (const supportBrace of Object.values(supportBraceSnapshotBefore.supportBraces)) {
+      const current = supportBraceCountByModel.get(supportBrace.modelId) ?? 0;
+      supportBraceCountByModel.set(supportBrace.modelId, current + 1);
+    }
+
+    const supportsByModel = new Map<string, ReturnType<typeof getSupportsForModel>>();
+    const supportPrimitiveCountByModel = new Map<string, number>();
+
+    for (const model of existing) {
+      const supportIds = getSupportsForModel(supportStateBeforeDelete, model.id);
+      supportsByModel.set(model.id, supportIds);
+
+      const supportBraceCount = supportBraceCountByModel.get(model.id) ?? 0;
+      const supportPrimitiveCount = supportIds.roots.length
+        + supportIds.trunks.length
+        + supportIds.branches.length
+        + supportIds.braces.length
+        + supportIds.leaves.length
+        + supportIds.twigs.length
+        + supportIds.sticks.length
+        + supportBraceCount;
+
+      supportPrimitiveCountByModel.set(model.id, supportPrimitiveCount);
+    }
+
+    const shouldShowDeleteOverlayImmediately = existing.some((model) => {
+      const supportPrimitiveCount = supportPrimitiveCountByModel.get(model.id) ?? 0;
+      return supportPrimitiveCount > 100 || model.polygonCount > 600000;
+    });
+
+    await waitForUiYield();
+
+    const modelHasSupports = (modelId: string) => {
+      const supportIds = supportsByModel.get(modelId) ?? getSupportsForModel(getSnapshot(), modelId);
+      if (!supportsByModel.has(modelId)) {
+        supportsByModel.set(modelId, supportIds);
+      }
+
+      const hasMainSupports = supportIds.roots.length > 0
+        || supportIds.trunks.length > 0
+        || supportIds.branches.length > 0
+        || supportIds.braces.length > 0
+        || supportIds.leaves.length > 0
+        || supportIds.twigs.length > 0
+        || supportIds.sticks.length > 0;
+
+      if (hasMainSupports) return true;
+
+      return (supportBraceCountByModel.get(modelId) ?? 0) > 0;
+    };
+
+    const includeSupportHistory = existing.some((model) => modelHasSupports(model.id));
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: includeSupportHistory });
 
     existing.forEach((model) => {
       tryRevokeObjectUrl(model.fileUrl);
     });
 
-    const nextModels = models.filter((m) => !ids.has(m.id));
-    const nextActiveModelId = activeModelId && ids.has(activeModelId) ? null : activeModelId;
-    const nextSelectedModelIds = selectedModelIds.filter((sid) => !ids.has(sid));
+    const nextModels = currentModels.filter((m) => !ids.has(m.id));
+    const nextActiveModelId = currentActiveModelId && ids.has(currentActiveModelId) ? null : currentActiveModelId;
+    const nextSelectedModelIds = currentSelectedModelIds.filter((sid) => !ids.has(sid));
 
     setModels(nextModels);
     setActiveModelId(nextActiveModelId);
@@ -1413,21 +1527,42 @@ export function useSceneCollectionManager() {
     // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
     const supportState = getSnapshot();
     let totalRemovedSupports = 0;
-    ids.forEach((id) => {
-      totalRemovedSupports += deleteSupportsForModel(supportState, id);
-    });
+    if (includeSupportHistory) {
+      ids.forEach((id) => {
+        totalRemovedSupports += deleteSupportsForModel(supportState, id);
+      });
 
-    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: true });
+      // Defensive pass: guarantee no orphaned supports survive model deletion.
+      for (const modelId of ids) {
+        const remaining = getSupportsForModel(getSnapshot(), modelId);
+        const hasRemainingMainSupports = remaining.roots.length > 0
+          || remaining.trunks.length > 0
+          || remaining.branches.length > 0
+          || remaining.braces.length > 0
+          || remaining.leaves.length > 0
+          || remaining.twigs.length > 0
+          || remaining.sticks.length > 0;
+
+        const hasRemainingSupportBraces = Object.values(getSupportBraceSnapshot().supportBraces)
+          .some((supportBrace) => supportBrace.modelId === modelId);
+
+        if (hasRemainingMainSupports || hasRemainingSupportBraces) {
+          totalRemovedSupports += deleteSupportsForModel(getSnapshot(), modelId);
+        }
+      }
+    }
+
+    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: includeSupportHistory });
     const deletedLabel = existing.length === 1
       ? `Delete Model ${existing[0].name}`
       : `Delete ${existing.length} Models`;
     pushSceneSnapshotHistory(before, after, deletedLabel);
 
     console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
-  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds, tryRevokeObjectUrl]);
+  }, [pushSceneSnapshotHistory, tryRevokeObjectUrl, waitForUiYield]);
 
   const deleteModel = useCallback((id: string) => {
-    deleteModels([id]);
+    void deleteModels([id]);
   }, [deleteModels]);
 
   const copyModel = useCallback((id: string) => {
@@ -2274,22 +2409,15 @@ export function useSceneCollectionManager() {
       }
     }
 
+    const removed: THREE.BufferGeometry[] = [];
     for (const geometry of previous) {
       if (next.has(geometry)) continue;
-      try {
-        disposeGeometryBVH(geometry);
-      } catch {
-        // ignore disposal failures
-      }
-      try {
-        geometry.dispose();
-      } catch {
-        // ignore disposal failures
-      }
+      removed.push(geometry);
     }
+    deferDisposeGeometries(removed);
 
     trackedGeometriesRef.current = next;
-  }, [modelClipboard, models]);
+  }, [deferDisposeGeometries, modelClipboard, models]);
 
   // Sync model geometries into the auto-brace mesh store so clearance checks can access them.
   useEffect(() => {

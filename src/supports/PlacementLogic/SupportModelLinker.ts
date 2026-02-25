@@ -1,6 +1,6 @@
 import type { SupportState } from '../types';
-import { removeBranch, removeBrace, removeLeaf, removeStick, removeTrunk, removeTwig } from '../state';
-import { getSupportBraceSnapshot, removeSupportBrace } from '../SupportTypes/SupportBrace/supportBraceStore';
+import { setSnapshot } from '../state';
+import { getSupportBraceSnapshot, setSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
 
 /**
  * SupportModelLinker
@@ -100,52 +100,129 @@ export function getSupportsForModel(state: SupportState, modelId: string): Model
  */
 export function deleteSupportsForModel(state: SupportState, modelId: string): number {
     const ids = getSupportsForModel(state, modelId);
-    let removedCount = 0;
 
-    // Remove Trunks
-    // removeTrunk() handles the root cleanup internally if the trunk owns it.
-    // It also handles notification.
-    ids.trunks.forEach(trunkId => {
-        const result = removeTrunk(trunkId);
-        if (result) removedCount++;
-    });
-
-    // Remove any branches that were not already removed by trunk/branch cascades.
-    ids.branches.forEach((branchId) => {
-        const result = removeBranch(branchId);
-        if (result) removedCount++;
-    });
-
-    // Remove any braces that remain after branch/trunk cascades.
-    ids.braces.forEach((braceId) => {
-        const result = removeBrace(braceId);
-        if (result) removedCount++;
-    });
-
-    // Remove remaining leaf-only entities.
-    ids.leaves.forEach((leafId) => {
-        const result = removeLeaf(leafId);
-        if (result) removedCount++;
-    });
-
-    // Remove mesh-to-mesh supports owned by the model.
-    ids.twigs.forEach((twigId) => {
-        const result = removeTwig(twigId);
-        if (result) removedCount++;
-    });
-
-    ids.sticks.forEach((stickId) => {
-        const result = removeStick(stickId);
-        if (result) removedCount++;
-    });
-
-    // Remove any support braces owned by this model that remain in the local support-brace store.
     const supportBraceSnapshot = getSupportBraceSnapshot();
-    for (const supportBrace of Object.values(supportBraceSnapshot.supportBraces)) {
-        if (supportBrace.modelId !== modelId) continue;
-        const removed = removeSupportBrace(supportBrace.id);
-        if (removed) removedCount++;
+    const supportBraceIdsToRemove = Object.values(supportBraceSnapshot.supportBraces)
+        .filter((supportBrace) => supportBrace.modelId === modelId)
+        .map((supportBrace) => supportBrace.id);
+
+    const hasMainSupportEntities = ids.roots.length > 0
+        || ids.trunks.length > 0
+        || ids.branches.length > 0
+        || ids.braces.length > 0
+        || ids.leaves.length > 0
+        || ids.twigs.length > 0
+        || ids.sticks.length > 0;
+
+    if (!hasMainSupportEntities && supportBraceIdsToRemove.length === 0) {
+        return 0;
     }
+
+    const rootsToRemove = new Set(ids.roots);
+    const trunksToRemove = new Set(ids.trunks);
+    const branchesToRemove = new Set(ids.branches);
+    const bracesToRemove = new Set(ids.braces);
+    const leavesToRemove = new Set(ids.leaves);
+    const twigsToRemove = new Set(ids.twigs);
+    const sticksToRemove = new Set(ids.sticks);
+
+    const segmentsToRemove = new Set<string>();
+    for (const trunkId of trunksToRemove) {
+        const trunk = state.trunks[trunkId];
+        if (!trunk) continue;
+        for (const segment of trunk.segments) segmentsToRemove.add(segment.id);
+    }
+    for (const branchId of branchesToRemove) {
+        const branch = state.branches[branchId];
+        if (!branch) continue;
+        for (const segment of branch.segments) segmentsToRemove.add(segment.id);
+    }
+    for (const twigId of twigsToRemove) {
+        const twig = state.twigs[twigId];
+        if (!twig) continue;
+        for (const segment of twig.segments) segmentsToRemove.add(segment.id);
+    }
+    for (const stickId of sticksToRemove) {
+        const stick = state.sticks[stickId];
+        if (!stick) continue;
+        for (const segment of stick.segments) segmentsToRemove.add(segment.id);
+    }
+    for (const braceId of bracesToRemove) {
+        const brace = state.braces[braceId];
+        if (!brace) continue;
+        segmentsToRemove.add(`braceSegment:${brace.id}`);
+    }
+
+    const knotsToRemove = new Set<string>();
+    for (const [knotId, knot] of Object.entries(state.knots)) {
+        const parentShaftId = knot.parentShaftId;
+        const removeByShaft = segmentsToRemove.has(parentShaftId);
+        const removeByLeafCone = parentShaftId.startsWith('leafCone:')
+            && leavesToRemove.has(parentShaftId.slice('leafCone:'.length));
+        const removeByBraceSegment = parentShaftId.startsWith('braceSegment:')
+            && bracesToRemove.has(parentShaftId.slice('braceSegment:'.length));
+        if (removeByShaft || removeByLeafCone || removeByBraceSegment) {
+            knotsToRemove.add(knotId);
+        }
+    }
+
+    const filterRecord = <T>(record: Record<string, T>, shouldRemove: (id: string) => boolean): Record<string, T> => {
+        const next: Record<string, T> = {};
+        for (const [id, value] of Object.entries(record)) {
+            if (shouldRemove(id)) continue;
+            next[id] = value;
+        }
+        return next;
+    };
+
+    const nextState: SupportState = {
+        ...state,
+        roots: filterRecord(state.roots, (id) => rootsToRemove.has(id)),
+        trunks: filterRecord(state.trunks, (id) => trunksToRemove.has(id)),
+        branches: filterRecord(state.branches, (id) => branchesToRemove.has(id)),
+        leaves: filterRecord(state.leaves, (id) => leavesToRemove.has(id)),
+        twigs: filterRecord(state.twigs, (id) => twigsToRemove.has(id)),
+        sticks: filterRecord(state.sticks, (id) => sticksToRemove.has(id)),
+        braces: filterRecord(state.braces, (id) => bracesToRemove.has(id)),
+        knots: filterRecord(state.knots, (id) => knotsToRemove.has(id)),
+        selectedId: null,
+        selectedCategory: null,
+        hoveredId: null,
+    };
+
+    setSnapshot(nextState);
+
+    if (supportBraceIdsToRemove.length > 0) {
+        const supportBraceIdsSet = new Set(supportBraceIdsToRemove);
+        const supportBraceRootIdsToRemove = new Set<string>();
+        const supportBraceKnotIdsToRemove = new Set<string>();
+
+        for (const supportBraceId of supportBraceIdsToRemove) {
+            const supportBrace = supportBraceSnapshot.supportBraces[supportBraceId];
+            if (!supportBrace) continue;
+            supportBraceRootIdsToRemove.add(supportBrace.rootId);
+            supportBraceKnotIdsToRemove.add(supportBrace.hostKnotId);
+        }
+
+        setSupportBraceSnapshot({
+            supportBraces: filterRecord(supportBraceSnapshot.supportBraces, (id) => supportBraceIdsSet.has(id)),
+            roots: filterRecord(supportBraceSnapshot.roots, (id) => supportBraceRootIdsToRemove.has(id)),
+            knots: filterRecord(supportBraceSnapshot.knots, (id) => supportBraceKnotIdsToRemove.has(id)),
+            selectedId: null,
+        });
+    }
+
+    let removedCount = ids.trunks.length
+        + ids.branches.length
+        + ids.braces.length
+        + ids.leaves.length
+        + ids.twigs.length
+        + ids.sticks.length;
+
+    removedCount += supportBraceIdsToRemove.length;
+
+    // Keep count semantics close to historical behavior, where root removals were
+    // typically cascaded from shaft removals (not counted as explicit removals).
 
     return removedCount;
 }
