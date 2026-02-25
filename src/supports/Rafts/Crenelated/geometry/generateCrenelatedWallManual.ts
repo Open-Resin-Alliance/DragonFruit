@@ -1,6 +1,98 @@
 import * as THREE from 'three';
 import { FootprintProfile, RaftSettings } from '../RaftTypes';
 import { insetConvexPolygon } from './insetConvexPolygon';
+import { generatePerimeterWall } from './generatePerimeterWall';
+
+const LOOP_EPS = 1e-4;
+
+function signedArea(poly: THREE.Vector2[]): number {
+  let area = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const j = (i + 1) % poly.length;
+    area += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
+  }
+  return area * 0.5;
+}
+
+function cross(o: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2): number {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+function onSegment(a: THREE.Vector2, b: THREE.Vector2, p: THREE.Vector2): boolean {
+  return p.x >= Math.min(a.x, b.x) - LOOP_EPS
+    && p.x <= Math.max(a.x, b.x) + LOOP_EPS
+    && p.y >= Math.min(a.y, b.y) - LOOP_EPS
+    && p.y <= Math.max(a.y, b.y) + LOOP_EPS;
+}
+
+function segmentsIntersect(a1: THREE.Vector2, a2: THREE.Vector2, b1: THREE.Vector2, b2: THREE.Vector2): boolean {
+  const o1 = cross(a1, a2, b1);
+  const o2 = cross(a1, a2, b2);
+  const o3 = cross(b1, b2, a1);
+  const o4 = cross(b1, b2, a2);
+
+  if ((o1 > 0 && o2 < 0 || o1 < 0 && o2 > 0) && (o3 > 0 && o4 < 0 || o3 < 0 && o4 > 0)) {
+    return true;
+  }
+
+  if (Math.abs(o1) <= LOOP_EPS && onSegment(a1, a2, b1)) return true;
+  if (Math.abs(o2) <= LOOP_EPS && onSegment(a1, a2, b2)) return true;
+  if (Math.abs(o3) <= LOOP_EPS && onSegment(b1, b2, a1)) return true;
+  if (Math.abs(o4) <= LOOP_EPS && onSegment(b1, b2, a2)) return true;
+
+  return false;
+}
+
+function isSimpleLoop(poly: THREE.Vector2[]): boolean {
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const a1 = poly[i];
+    const a2 = poly[(i + 1) % n];
+    for (let j = i + 1; j < n; j++) {
+      if (j === i) continue;
+      if ((j + 1) % n === i) continue;
+      if (j === (i + 1) % n) continue;
+
+      const b1 = poly[j];
+      const b2 = poly[(j + 1) % n];
+      if (segmentsIntersect(a1, a2, b1, b2)) return false;
+    }
+  }
+  return true;
+}
+
+function sanitizeLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
+  if (!loop || loop.length < 3) return [];
+
+  const deduped: THREE.Vector2[] = [];
+  for (const p of loop) {
+    const prev = deduped[deduped.length - 1];
+    if (!prev || prev.distanceToSquared(p) > LOOP_EPS * LOOP_EPS) {
+      deduped.push(p.clone());
+    }
+  }
+
+  if (deduped.length >= 2 && deduped[0].distanceToSquared(deduped[deduped.length - 1]) <= LOOP_EPS * LOOP_EPS) {
+    deduped.pop();
+  }
+
+  if (deduped.length < 3) return [];
+
+  const compacted: THREE.Vector2[] = [];
+  for (let i = 0; i < deduped.length; i++) {
+    const prev = deduped[(i - 1 + deduped.length) % deduped.length];
+    const cur = deduped[i];
+    const next = deduped[(i + 1) % deduped.length];
+    if (Math.abs(cross(prev, cur, next)) <= LOOP_EPS) continue;
+    compacted.push(cur.clone());
+  }
+
+  if (compacted.length < 3) return [];
+  if (!isSimpleLoop(compacted)) return [];
+  if (Math.abs(signedArea(compacted)) <= LOOP_EPS) return [];
+
+  return compacted;
+}
 
 /**
  * Generate a crenelated wall by manually building geometry with rectangular gaps.
@@ -25,14 +117,33 @@ export function generateCrenelatedWallManual(
   // If nearly 90 degrees, offset is 0
   const topInset = Math.abs(angleRad - Math.PI / 2) < 0.001 ? 0 : wallHeight / Math.tan(angleRad);
 
-  const outer = topProfile;
-  const inner = insetConvexPolygon(outer, wallThickness);
+  const outer = sanitizeLoop(topProfile);
+  if (outer.length < 3) {
+    return new THREE.Mesh(new THREE.BufferGeometry());
+  }
+
+  const inner = sanitizeLoop(insetConvexPolygon(outer, wallThickness));
+  if (inner.length < 3) {
+    return generatePerimeterWall(outer, {
+      wallThickness,
+      wallHeight,
+      thickness: settings.thickness,
+    });
+  }
 
   // Inset the top loops to create the slope
   // If topInset is 0, topOuter === outer (vertical wall)
   // We use -topInset to OUTSET (expand) the top, creating an outward flare
-  const topOuter = topInset > 0.001 ? insetConvexPolygon(outer, -topInset) : outer;
-  const topInner = topInset > 0.001 ? insetConvexPolygon(inner, -topInset) : inner;
+  const topOuter = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(outer, -topInset) : outer);
+  const topInner = sanitizeLoop(topInset > 0.001 ? insetConvexPolygon(inner, -topInset) : inner);
+
+  if (topOuter.length !== outer.length || topInner.length !== inner.length || topOuter.length < 3 || topInner.length < 3) {
+    return generatePerimeterWall(outer, {
+      wallThickness,
+      wallHeight,
+      thickness: settings.thickness,
+    });
+  }
 
   const n = outer.length;
   const zBase = settings.thickness;
@@ -44,6 +155,10 @@ export function generateCrenelatedWallManual(
     const next = (i + 1) % n;
     const dir = new THREE.Vector2().subVectors(outer[next], outer[i]);
     const len = dir.length();
+    if (!Number.isFinite(len) || len <= LOOP_EPS) {
+      edges.push({ dir: new THREE.Vector2(1, 0), len: 0, isStraight: false });
+      continue;
+    }
     dir.normalize();
 
     // Check if this edge is part of a straight run
@@ -108,8 +223,8 @@ export function generateCrenelatedWallManual(
       addQuad(o0, i0, i1, o1, false);
     } else {
       // Straight edge: place 3 gaps
+      if (edge.len <= LOOP_EPS) continue;
       const tangent = edge.dir;
-      const normal = new THREE.Vector2(-tangent.y, tangent.x); // Inward normal
 
       const gapCount = 1;
       const margin = 1.0;
@@ -221,6 +336,15 @@ export function generateCrenelatedWallManual(
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+
+  const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!posAttr || posAttr.count === 0) {
+    return generatePerimeterWall(outer, {
+      wallThickness,
+      wallHeight,
+      thickness: settings.thickness,
+    });
+  }
 
   return new THREE.Mesh(geometry);
 }

@@ -343,6 +343,7 @@ export default function LineRaftRenderer({
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
         wallMesh.userData.modelId = modelId;
+        wallMesh.userData.isWall = true;
       }
     }
 
@@ -421,7 +422,8 @@ export default function LineRaftRenderer({
 
       const modelId = (mesh.userData?.modelId as string | undefined) ?? null;
       const tintStrength = resolveTintStrength(modelId);
-      const isWall = !!mesh.geometry && ((mesh.geometry as THREE.BufferGeometry).boundingBox?.max?.z ?? 0) > (raft.lineHeightMm + 0.001);
+      const isWall = mesh.userData?.isWall === true
+        || (!!mesh.geometry && ((mesh.geometry as THREE.BufferGeometry).boundingBox?.max?.z ?? 0) > (raft.lineHeightMm + 0.001));
       const tintHex = isWall ? '#22c55e' : '#f97316';
       const nextColor = blendColor('#a3a3a3', tintHex, tintStrength);
       if (!material.color.equals(nextColor)) {
