@@ -1385,6 +1385,16 @@ export function SceneCanvas({
     return '#a3a3a3';
   }, [hoveredModelId, visualActiveModelId]);
 
+  const supportCreationModeActive = Boolean(
+    isBranchPlacementActive
+    || isLeafPlacementActive
+    || isBracePlacementActive
+    || isSupportBracePlacementActive,
+  );
+
+  const raftColorized = mode === 'support' || !!visualActiveModelId || !!hoveredModelId;
+  const raftHoverized = mode === 'support' || (!visualActiveModelId && !!hoveredModelId);
+
   const modelBoundingBoxDebugData = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showModelBoundingBoxes) return [] as Array<{
       id: string;
@@ -3212,16 +3222,16 @@ export function SceneCanvas({
                           {!hideRaftPrimitives && (
                             <>
                               <RaftRenderer
-                                colorized={!!visualActiveModelId || !!hoveredModelId}
-                                hoverized={!visualActiveModelId && !!hoveredModelId}
+                                colorized={raftColorized}
+                                hoverized={raftHoverized}
                                 activeModelId={visualActiveModelId ?? null}
                                 hoverModelId={hoveredModelId}
                                 modelFilterId={model.id}
                                 navigationLodActive={navigationLodActive}
                               />
                               <LineRaftRenderer
-                                colorized={!!visualActiveModelId || !!hoveredModelId}
-                                hoverized={!visualActiveModelId && !!hoveredModelId}
+                                colorized={raftColorized}
+                                hoverized={raftHoverized}
                                 activeModelId={visualActiveModelId ?? null}
                                 hoverModelId={hoveredModelId}
                                 modelFilterId={model.id}
@@ -3243,6 +3253,7 @@ export function SceneCanvas({
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
                             modelFilterId={model.id}
+                            disableSelectionAndHover={supportCreationModeActive}
                             passive
                           />
                         </group>
@@ -3430,16 +3441,16 @@ export function SceneCanvas({
               {!useActiveModelAttachedSupportProxy && !hideRaftPrimitives && (
                 <>
                   <RaftRenderer
-                    colorized={!!visualActiveModelId || !!hoveredModelId}
-                    hoverized={!visualActiveModelId && !!hoveredModelId}
+                    colorized={raftColorized}
+                    hoverized={raftHoverized}
                     activeModelId={visualActiveModelId ?? null}
                     hoverModelId={hoveredModelId}
                     navigationLodActive={navigationLodActive}
                     onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   />
                   <LineRaftRenderer
-                    colorized={!!visualActiveModelId || !!hoveredModelId}
-                    hoverized={!visualActiveModelId && !!hoveredModelId}
+                    colorized={raftColorized}
+                    hoverized={raftHoverized}
                     activeModelId={visualActiveModelId ?? null}
                     hoverModelId={hoveredModelId}
                     navigationLodActive={navigationLodActive}
@@ -3464,6 +3475,7 @@ export function SceneCanvas({
                   activeModelId={visualActiveModelId ?? null}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
+                  disableSelectionAndHover={supportCreationModeActive}
                 />
               )}
               </group>{/* end supportDragGroupRef */}
@@ -3496,16 +3508,16 @@ export function SceneCanvas({
                   {!hideRaftPrimitives && (
                     <>
                       <RaftRenderer
-                        colorized={!!visualActiveModelId || !!hoveredModelId}
-                        hoverized={!visualActiveModelId && !!hoveredModelId}
+                        colorized={raftColorized}
+                        hoverized={raftHoverized}
                         activeModelId={visualActiveModelId ?? null}
                         hoverModelId={hoveredModelId}
                         excludeModelId={activeModelId}
                         navigationLodActive
                       />
                       <LineRaftRenderer
-                        colorized={!!visualActiveModelId || !!hoveredModelId}
-                        hoverized={!visualActiveModelId && !!hoveredModelId}
+                        colorized={raftColorized}
+                        hoverized={raftHoverized}
                         activeModelId={visualActiveModelId ?? null}
                         hoverModelId={hoveredModelId}
                         excludeModelId={activeModelId}
@@ -3528,6 +3540,7 @@ export function SceneCanvas({
                     hoverModelId={hoveredModelId}
                     modelDropOffsetsById={entryDropOffsets}
                     excludeModelId={activeModelId}
+                    disableSelectionAndHover={supportCreationModeActive}
                     passive
                   />
                 </>
