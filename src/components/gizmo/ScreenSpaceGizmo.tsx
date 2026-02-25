@@ -41,11 +41,28 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   scaleFactor?: number;
   followMeshRef?: boolean;
 }) {
+  const SWITCH_DAMP_LAMBDA = 44;
+  const SWITCH_SNAP_EPSILON = 0.02;
+  const AXIS_SUPPRESS_MS = 64;
+
   const { camera } = useThree();
   const scaleFactor = props.scaleFactor ?? 0.04;
   const followMeshRef = props.followMeshRef ?? true;
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
   const scratchPointRef = React.useRef(new THREE.Vector3());
+  const targetObject = followMeshRef ? props.meshRef?.current : null;
+  const [suppressAxisAnimations, setSuppressAxisAnimations] = React.useState(false);
+  const switchAnimationTimeoutRef = React.useRef<number | null>(null);
+  const prevTargetObjectRef = React.useRef<THREE.Group | THREE.Mesh | null>(targetObject ?? null);
+  const isDraggingRef = React.useRef(false);
+
+  const transitionRef = React.useRef<{
+    active: boolean;
+    target: [number, number, number];
+  }>({
+    active: false,
+    target: [0, 0, 0],
+  });
 
   const resolveCurrentPosition = React.useCallback((): [number, number, number] => {
     const meshPos = followMeshRef ? props.meshRef?.current?.position : null;
@@ -63,47 +80,151 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   const lastPositionRef = React.useRef<[number, number, number]>(initialPosition);
   const lastScaleRef = React.useRef<number>(initialScale);
 
+  const stopTransition = React.useCallback((snapTo?: [number, number, number]) => {
+    transitionRef.current.active = false;
+    if (!snapTo) return;
+
+    lastPositionRef.current = snapTo;
+
+    const root = gizmoRootRef.current;
+    if (root) {
+      root.position.set(snapTo[0], snapTo[1], snapTo[2]);
+    }
+  }, []);
+
+  React.useLayoutEffect(() => {
+    const targetChanged = prevTargetObjectRef.current !== targetObject;
+    prevTargetObjectRef.current = targetObject ?? null;
+
+    if (!targetChanged) return;
+
+    setSuppressAxisAnimations(true);
+    if (switchAnimationTimeoutRef.current !== null) {
+      window.clearTimeout(switchAnimationTimeoutRef.current);
+      switchAnimationTimeoutRef.current = null;
+    }
+
+    switchAnimationTimeoutRef.current = window.setTimeout(() => {
+      setSuppressAxisAnimations(false);
+      switchAnimationTimeoutRef.current = null;
+    }, AXIS_SUPPRESS_MS);
+
+    const nextTarget = resolveCurrentPosition();
+    const current = lastPositionRef.current;
+    const dx = nextTarget[0] - current[0];
+    const dy = nextTarget[1] - current[1];
+    const dz = nextTarget[2] - current[2];
+    const distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
+
+    if (!isDraggingRef.current && distanceSq > 1e-6) {
+      transitionRef.current = {
+        active: true,
+        target: nextTarget,
+      };
+    } else {
+      stopTransition(nextTarget);
+    }
+
+    return () => {
+      if (switchAnimationTimeoutRef.current !== null) {
+        window.clearTimeout(switchAnimationTimeoutRef.current);
+        switchAnimationTimeoutRef.current = null;
+      }
+    };
+  }, [AXIS_SUPPRESS_MS, resolveCurrentPosition, stopTransition, targetObject]);
+
   React.useLayoutEffect(() => {
     const root = gizmoRootRef.current;
     if (!root) return;
 
     const nextPosition = resolveCurrentPosition();
-    const prev = lastPositionRef.current;
-    if (prev[0] !== nextPosition[0] || prev[1] !== nextPosition[1] || prev[2] !== nextPosition[2]) {
-      lastPositionRef.current = nextPosition;
-      root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
+    if (!transitionRef.current.active) {
+      const prev = lastPositionRef.current;
+      if (prev[0] !== nextPosition[0] || prev[1] !== nextPosition[1] || prev[2] !== nextPosition[2]) {
+        lastPositionRef.current = nextPosition;
+        root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
+      }
     }
 
-    const nextScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor, scratchPointRef.current);
+    const effectiveScalePosition = transitionRef.current.active ? lastPositionRef.current : nextPosition;
+    const nextScale = computeScreenSpaceScale(camera, effectiveScalePosition, scaleFactor, scratchPointRef.current);
     if (Math.abs(nextScale - lastScaleRef.current) > 1e-4) {
       lastScaleRef.current = nextScale;
       root.scale.setScalar(nextScale);
     }
-  }, [camera, resolveCurrentPosition, scaleFactor]);
+  }, [camera, resolveCurrentPosition, scaleFactor, targetObject]);
   
   // Imperative per-frame sync keeps gizmo visually glued to the target
   // without React state scheduling overhead.
-  useFrame(() => {
+  useFrame((_, delta) => {
     const root = gizmoRootRef.current;
     if (!root) return;
 
-    const nextPosition = resolveCurrentPosition();
-    const prevPosition = lastPositionRef.current;
-    if (
-      prevPosition[0] !== nextPosition[0]
-      || prevPosition[1] !== nextPosition[1]
-      || prevPosition[2] !== nextPosition[2]
-    ) {
-      lastPositionRef.current = nextPosition;
-      root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
+    let effectivePosition: [number, number, number];
+
+    if (transitionRef.current.active && !isDraggingRef.current) {
+      const { target } = transitionRef.current;
+      const current = lastPositionRef.current;
+
+      const damped: [number, number, number] = [
+        THREE.MathUtils.damp(current[0], target[0], SWITCH_DAMP_LAMBDA, delta),
+        THREE.MathUtils.damp(current[1], target[1], SWITCH_DAMP_LAMBDA, delta),
+        THREE.MathUtils.damp(current[2], target[2], SWITCH_DAMP_LAMBDA, delta),
+      ];
+
+      lastPositionRef.current = damped;
+      root.position.set(damped[0], damped[1], damped[2]);
+      effectivePosition = damped;
+
+      const rx = target[0] - damped[0];
+      const ry = target[1] - damped[1];
+      const rz = target[2] - damped[2];
+      const remainingSq = (rx * rx) + (ry * ry) + (rz * rz);
+
+      if (remainingSq <= (SWITCH_SNAP_EPSILON * SWITCH_SNAP_EPSILON)) {
+        stopTransition(target);
+        effectivePosition = target;
+      }
+    } else {
+      const nextPosition = resolveCurrentPosition();
+      const prevPosition = lastPositionRef.current;
+      if (
+        prevPosition[0] !== nextPosition[0]
+        || prevPosition[1] !== nextPosition[1]
+        || prevPosition[2] !== nextPosition[2]
+      ) {
+        lastPositionRef.current = nextPosition;
+        root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
+      }
+      effectivePosition = lastPositionRef.current;
     }
 
-    const newScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor, scratchPointRef.current);
+    const newScale = computeScreenSpaceScale(camera, effectivePosition, scaleFactor, scratchPointRef.current);
     if (Math.abs(newScale - lastScaleRef.current) > 1e-4) {
       lastScaleRef.current = newScale;
       root.scale.setScalar(newScale);
     }
   });
 
-  return <TransformGizmo {...props} position={initialPosition} size={initialScale} rootRef={gizmoRootRef} />;
+  const handleDragStateChange = React.useCallback((isDragging: boolean) => {
+    isDraggingRef.current = isDragging;
+    if (isDragging) {
+      const snap = resolveCurrentPosition();
+      stopTransition(snap);
+    }
+    props.onDragStateChange?.(isDragging);
+  }, [props, resolveCurrentPosition, stopTransition]);
+
+  const renderPosition = lastPositionRef.current;
+
+  return (
+    <TransformGizmo
+      {...props}
+      position={renderPosition}
+      size={initialScale}
+      suppressAxisAnimations={suppressAxisAnimations}
+      onDragStateChange={handleDragStateChange}
+      rootRef={gizmoRootRef}
+    />
+  );
 }

@@ -51,6 +51,7 @@ export function TransformGizmo({
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
   handleScale = 1.0, // New prop
+  suppressAxisAnimations = false,
   onMoveStart,
   onMove,
   onMoveEnd,
@@ -281,6 +282,7 @@ export function TransformGizmo({
             isActive={activePart === 'ring-x'}
             isDimmed={isDimmed('ring-x')}
             isHidden={isHidden('ring-x')}
+            suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-x')}
             onDrag={(angle: number) => handleRotate('x', angle)}
@@ -294,6 +296,7 @@ export function TransformGizmo({
             isActive={activePart === 'ring-y'}
             isDimmed={isDimmed('ring-y')}
             isHidden={isHidden('ring-y')}
+            suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-y')}
             onDrag={(angle: number) => handleRotate('y', angle)}
@@ -307,6 +310,7 @@ export function TransformGizmo({
             isActive={activePart === 'ring-z'}
             isDimmed={isDimmed('ring-z')}
             isHidden={isHidden('ring-z')}
+            suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-z')}
             onDrag={(angle: number) => handleRotate('z', angle)}

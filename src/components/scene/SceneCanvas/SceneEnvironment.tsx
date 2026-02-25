@@ -151,8 +151,8 @@ export function Helpers({
   const divisions = Math.max(8, Math.round(baseDivisions / 3));
   const scaleX = width / baseSize;
   const scaleZ = depth / baseSize;
-  const buildPlateOversizeEachSideMm = 4;
-  const buildPlateThicknessMm = 4;
+  const buildPlateOversizeEachSideMm = 3;
+  const buildPlateThicknessMm = 3;
   const buildPlateCornerRadiusMm = 3;
   const clampedBuildPlateOpacity = THREE.MathUtils.clamp(buildPlateOpacity ?? 1, 0, 1);
   const gridMajorColor = '#4f5560';
@@ -166,18 +166,18 @@ export function Helpers({
   const frontTabDepth = buildPlateOversizeEachSideMm + 0.2;
   const frontTabBackWidth = Math.min(buildPlateWidth - 12, 24);
   const frontTabFrontWidth = Math.min(frontTabBackWidth - 3, 16);
-  const frontMarkerInsetMm = 0.5;
+  const frontMarkerInsetMm = 0.2;
   const frontMarkerAspect = 256 / 72;
   const markerAvailableDepth = Math.max(2.8, frontTabDepth - frontMarkerInsetMm * 2);
   const markerAvailableWidth = Math.max(12, frontTabBackWidth - frontMarkerInsetMm * 2);
   const frontMarkerDepth = Math.min(markerAvailableDepth, markerAvailableWidth / frontMarkerAspect);
   const frontMarkerWidth = frontMarkerDepth * frontMarkerAspect;
-  const axisBaseZ = 0.16;
-  const axisLength = 44;
+  const axisBaseZ = 0.5;
+  const axisLength = 22;
   const axisShaftRadius = 0.42;
   const axisHeadRadius = 1.3;
-  const axisHeadLength = 3.8;
-  const axisLabelLift = 0.9;
+  const axisHeadLength = 1.9;
+  const axisLabelLift = 1.0;
   // Seat marker over the front tab so it reads as part of the build plate geometry.
   const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.1;
 

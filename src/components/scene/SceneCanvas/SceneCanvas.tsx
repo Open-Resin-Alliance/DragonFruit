@@ -1520,6 +1520,10 @@ export function SceneCanvas({
   }, [activeBuildVolumeSettings]);
 
   const cachedModelWorldBoundsRef = React.useRef<Map<string, THREE.Box3>>(new Map());
+  const activeTransformOverrideModelId = React.useMemo(
+    () => (transform ? activeModelId : null),
+    [activeModelId, transform],
+  );
 
   const modelWorldBounds = React.useMemo(() => {
     if (isGizmoDragging) {
@@ -1530,14 +1534,14 @@ export function SceneCanvas({
     for (const model of models) {
       if (!model.visible) continue;
       const effectiveTransform =
-        (model.id === activeModelId && transform)
+        (model.id === activeTransformOverrideModelId && transform)
           ? transform
           : model.transform;
       map.set(model.id, computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds));
     }
     cachedModelWorldBoundsRef.current = map;
     return map;
-  }, [activeModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, models, transform]);
+  }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, models, transform]);
 
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
@@ -1629,7 +1633,7 @@ export function SceneCanvas({
       .filter((model) => model.visible)
       .map((model) => {
         const effectiveTransform =
-          (model.id === activeModelId && transform)
+          (model.id === activeTransformOverrideModelId && transform)
             ? transform
             : model.transform;
         const bounds = modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
@@ -1639,7 +1643,7 @@ export function SceneCanvas({
           color: outOfBoundsModelIds.has(model.id) ? '#ff5b6f' : '#5aaeff',
         };
       });
-  }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeModelId, computeModelWorldBounds, modelWorldBounds, models, outOfBoundsModelIds, transform]);
+  }, [activeBuildVolumeSettings.showModelBoundingBoxes, activeTransformOverrideModelId, computeModelWorldBounds, modelWorldBounds, models, outOfBoundsModelIds, transform]);
 
   const buildVolumeBoxGeometry = React.useMemo(() => {
     if (!activeBuildVolumeSettings?.enabled) return null;
