@@ -26,6 +26,14 @@ function isOrbitLikeControls(value: unknown): value is OrbitLikeControls {
   return !!maybe.target && typeof maybe.update === 'function';
 }
 
+function easeInOutQuint(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t < 0.5
+    ? 16 * t * t * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 5) / 2;
+}
+
 export function CameraIntroController({
   bounds,
   runId,
@@ -138,7 +146,8 @@ export function CameraIntroController({
 
       const elapsed = now - startTime;
       const t = Math.min(elapsed / duration, 1);
-      const eased = THREE.MathUtils.smootherstep(t, 0, 1);
+      const smoothStep = THREE.MathUtils.smootherstep(t, 0, 1);
+      const eased = THREE.MathUtils.lerp(smoothStep, easeInOutQuint(t), 0.72);
 
       camera.position.lerpVectors(startPos, endPos, eased);
 
