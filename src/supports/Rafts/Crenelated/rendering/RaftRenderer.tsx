@@ -245,7 +245,7 @@ export default function RaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder, selectedModelIdSet]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet]);
 
   if (raft.bottomMode === 'off') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;

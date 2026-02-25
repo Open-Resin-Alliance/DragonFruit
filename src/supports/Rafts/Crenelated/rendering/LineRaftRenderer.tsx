@@ -467,7 +467,7 @@ export default function LineRaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, selectedModelIdSet]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet]);
 
   if (raft.bottomMode !== 'line') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
