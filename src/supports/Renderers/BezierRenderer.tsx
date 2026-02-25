@@ -193,6 +193,18 @@ export function BezierRenderer({
         // Ctrl is reserved for Support Brace placement and should not re-select segments.
         if (ctrlDown) return;
 
+        // UX: for curved segments, a direct click should select the segment immediately
+        // (so bezier handles appear on first click) instead of requiring a support-first click.
+        if (!isParentSelected && !altDown && onClick) {
+            e.stopPropagation();
+            if (e.nativeEvent) {
+                e.nativeEvent.stopPropagation();
+                e.nativeEvent.stopImmediatePropagation();
+            }
+            onClick(e);
+            return;
+        }
+
         // When not in an editable context, let parent support handlers own the click.
         if (!isParentSelected && !altDown) return;
 
