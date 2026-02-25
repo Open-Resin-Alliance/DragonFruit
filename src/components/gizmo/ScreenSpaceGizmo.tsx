@@ -38,18 +38,20 @@ function computeScreenSpaceScale(
 export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & { 
   meshRef?: React.RefObject<THREE.Group | THREE.Mesh | null>;
   scaleFactor?: number;
+  followMeshRef?: boolean;
 }) {
   const { camera } = useThree();
   const scaleFactor = props.scaleFactor ?? 0.04;
+  const followMeshRef = props.followMeshRef ?? true;
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
 
   const resolveCurrentPosition = React.useCallback((): [number, number, number] => {
-    const meshPos = props.meshRef?.current?.position;
+    const meshPos = followMeshRef ? props.meshRef?.current?.position : null;
     if (meshPos) {
       return [meshPos.x, meshPos.y, meshPos.z];
     }
     return toPositionArray(props.position);
-  }, [props.meshRef, props.position]);
+  }, [followMeshRef, props.meshRef, props.position]);
 
   const initialPosition = React.useMemo(() => resolveCurrentPosition(), [resolveCurrentPosition]);
   const initialScale = React.useMemo(
