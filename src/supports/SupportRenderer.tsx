@@ -92,6 +92,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const useMultiSelectionDetail = hasSupportMultiSelection && selectedId !== null && selectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
+    const enableTwigSceneBatching = false;
 
     const interactionHooksEnabled = !passive;
     const isInteractable = interactionHooksEnabled && mode === 'support' && !navigationLodActive;
@@ -590,6 +591,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [state.braces, state.knots, restrictToActiveModel, activeModelId]);
 
     const twigShaftsBySupport = useMemo(() => {
+        if (!enableTwigSceneBatching) {
+            return new Map<string, SupportShaftSet>();
+        }
+
         const result = new Map<string, SupportShaftSet>();
 
         const getDiskTipCenter = (disk: ContactDisk) => {
@@ -656,7 +661,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.twigs, restrictToActiveModel, activeModelId]);
+    }, [state.twigs, restrictToActiveModel, activeModelId, enableTwigSceneBatching]);
 
     const stickShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1087,6 +1092,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [supportBraceState.supportBraces, restrictToActiveModel, activeModelId]);
 
     const sceneBatchedJointGroups = useMemo(() => {
+        if (selectionEnabled) {
+            // In support-edit mode, joint/knot handles should appear only for the
+            // actively selected support via detailed renderers.
+            return [] as Array<{ color: string; joints: InstancedJoint[] }>;
+        }
+
         const grouped = new Map<string, InstancedJoint[]>();
 
         const pushJoints = (color: string, joints: InstancedJoint[]) => {
@@ -1154,6 +1165,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return Array.from(grouped.entries()).map(([color, joints]) => ({ color, joints }));
     }, [
+        selectionEnabled,
         state.trunks,
         state.branches,
         state.twigs,
@@ -1178,6 +1190,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     ]);
 
     const sceneBatchedTwigShaftGroups = useMemo(() => {
+        if (!enableTwigSceneBatching) {
+            return [] as Array<{ modelId?: string; color: string; shafts: InstancedShaft[] }>;
+        }
+
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const twig of Object.values(state.twigs)) {
@@ -1199,7 +1215,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
+    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like, enableTwigSceneBatching]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
