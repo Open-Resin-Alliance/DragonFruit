@@ -48,6 +48,13 @@ export function ShaftRenderer({
 }: ShaftRendererProps) {
     const radiusStart = (diameterStart ?? diameter) / 2;
     const radiusEnd = (diameterEnd ?? diameter) / 2;
+    const PICK_RADIUS_MULTIPLIER = 1.9;
+    const MIN_PICK_RADIUS_MM = 0.45;
+    const selectedVisualScale = isSelected ? 1.03 : 1;
+    const visualRadiusStart = radiusStart * selectedVisualScale;
+    const visualRadiusEnd = radiusEnd * selectedVisualScale;
+    const pickRadiusStart = Math.max(visualRadiusStart * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
+    const pickRadiusEnd = Math.max(visualRadiusEnd * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const groupRef = useRef<THREE.Group>(null);
 
     const { altActive: braceAltActive } = useBracePlacementState();
@@ -187,8 +194,14 @@ export function ShaftRenderer({
             onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
             onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
         >
+            {enableSegmentInteraction && (
+                <mesh raycast={raycast}>
+                    <cylinderGeometry args={[pickRadiusEnd, pickRadiusStart, 1, Math.max(8, radialSegments)]} />
+                    <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+                </mesh>
+            )}
             <mesh raycast={raycast}>
-                <cylinderGeometry args={[radiusEnd, radiusStart, 1, radialSegments]} />
+                <cylinderGeometry args={[visualRadiusEnd, visualRadiusStart, 1, radialSegments]} />
                 <meshStandardMaterial 
                     color={finalColor} 
                     emissive={finalEmissive} 
@@ -196,6 +209,9 @@ export function ShaftRenderer({
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
+                    polygonOffset={!!isSelected}
+                    polygonOffsetFactor={isSelected ? -2 : 0}
+                    polygonOffsetUnits={isSelected ? -2 : 0}
                 />
             </mesh>
         </group>

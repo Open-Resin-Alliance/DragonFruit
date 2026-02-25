@@ -63,6 +63,12 @@ export function BezierRenderer({
 
     const startRadius = (diameterStart ?? diameter) / 2;
     const endRadius = (diameterEnd ?? diameter) / 2;
+    const PICK_RADIUS_MULTIPLIER = 1.9;
+    const MIN_PICK_RADIUS_MM = 0.45;
+    const selectedVisualScale = isSelected ? 1.03 : 1;
+    const visualStartRadius = startRadius * selectedVisualScale;
+    const visualEndRadius = endRadius * selectedVisualScale;
+    const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
 
     const geometry = useMemo(() => {
         const tubularSegments = Math.max(2, resolution);
@@ -76,7 +82,7 @@ export function BezierRenderer({
         for (let i = 0; i < ringCount; i++) {
             const u = i / tubularSegments;
             const center = curve.getPointAt(u);
-            const r = THREE.MathUtils.lerp(startRadius, endRadius, u);
+            const r = THREE.MathUtils.lerp(visualStartRadius, visualEndRadius, u);
 
             for (let j = 0; j < ringSize; j++) {
                 const idx = i * ringSize + j;
@@ -100,13 +106,29 @@ export function BezierRenderer({
         g.computeBoundingBox();
         g.computeBoundingSphere();
         return g;
-    }, [curve, resolution, startRadius, endRadius]);
+    }, [curve, resolution, visualStartRadius, visualEndRadius]);
+
+    const pickGeometry = useMemo(() => {
+        if (!enableSegmentInteraction) return null;
+        const tubularSegments = Math.max(2, resolution);
+        const radialSegments = 8;
+        const g = new THREE.TubeGeometry(curve, tubularSegments, pickRadius, radialSegments, false);
+        g.computeBoundingBox();
+        g.computeBoundingSphere();
+        return g;
+    }, [curve, enableSegmentInteraction, pickRadius, resolution]);
 
     useEffect(() => {
         return () => {
             geometry.dispose();
         };
     }, [geometry]);
+
+    useEffect(() => {
+        return () => {
+            pickGeometry?.dispose();
+        };
+    }, [pickGeometry]);
     const groupRef = useRef<THREE.Group>(null);
 
     // GPU Picking Setup
@@ -214,6 +236,17 @@ export function BezierRenderer({
 
     return (
         <group ref={groupRef}>
+            {pickGeometry && (
+                <mesh
+                    raycast={raycast}
+                    onClick={handleClick}
+                    onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
+                    onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
+                >
+                    <primitive object={pickGeometry} attach="geometry" />
+                    <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+                </mesh>
+            )}
             <mesh
                 raycast={raycast}
                 onClick={handleClick}
@@ -228,6 +261,9 @@ export function BezierRenderer({
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
+                    polygonOffset={!!isSelected}
+                    polygonOffsetFactor={isSelected ? -2 : 0}
+                    polygonOffsetUnits={isSelected ? -2 : 0}
                 />
             </mesh>
         </group>
