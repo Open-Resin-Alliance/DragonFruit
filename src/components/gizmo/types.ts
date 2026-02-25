@@ -105,6 +105,7 @@ export interface TransformGizmoProps extends GizmoConfig {
   position: [number, number, number] | THREE.Vector3;
   rotation?: [number, number, number] | THREE.Euler;
   visible?: boolean;
+  suppressAxisAnimations?: boolean;
   rootRef?: React.RefObject<THREE.Group | null>;
 }
 
