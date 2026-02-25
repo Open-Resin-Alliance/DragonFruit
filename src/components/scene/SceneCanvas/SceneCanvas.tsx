@@ -3650,9 +3650,10 @@ export function SceneCanvas({
                   && model.id === duplicatePreviewModel.id,
                 );
                 // Use props.transform if active (for smooth drag), else model.transform
-                const activeTransformForRender = isMultiGizmoSelection
-                  ? (liveActiveTransformForMultiPreview ?? model.transform)
-                  : (transform ?? model.transform);
+                const activeTransformForRender = liveDragTransformRef.current
+                  ?? (isMultiGizmoSelection
+                    ? (liveActiveTransformForMultiPreview ?? model.transform)
+                    : (transform ?? model.transform));
                 const transformToUse = isActive
                   ? (duplicateActivePreviewTransform ?? activeTransformForRender)
                   : (multiGizmoPreviewTransformsById[model.id] ?? model.transform);
@@ -4211,9 +4212,6 @@ export function SceneCanvas({
                           rotation: live.rotation.clone(),
                           scale: live.scale.clone(),
                         });
-                        if (!isMultiGizmoSelection) {
-                          scheduleTransformChange(live);
-                        }
                       }
                     }
                   }}
@@ -4365,7 +4363,6 @@ export function SceneCanvas({
                           rotation: live.rotation.clone(),
                           scale: live.scale.clone(),
                         });
-                        scheduleTransformChange(live);
                       }
                     }
                   }}
@@ -4530,9 +4527,6 @@ export function SceneCanvas({
                           rotation: live.rotation.clone(),
                           scale: live.scale.clone(),
                         });
-                        if (!isMultiGizmoSelection) {
-                          scheduleTransformChange(live);
-                        }
                       }
                     }
                   }}
