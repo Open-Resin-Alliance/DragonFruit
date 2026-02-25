@@ -1556,6 +1556,27 @@ export function SceneCanvas({
     return models.find((m) => m.id === activeModelId) ?? null;
   }, [models, activeModelId]);
 
+  const useActiveModelAttachedSupportProxy = mode === 'prepare'
+    && transformMode === 'transform'
+    && isGizmoDragging
+    && !!activeModelId;
+
+  const activeModelAttachedSupportLocalMatrix = React.useMemo(() => {
+    if (!useActiveModelAttachedSupportProxy || !activeModelId) return null;
+
+    const committedModel = models.find((model) => model.id === activeModelId);
+    if (!committedModel) return null;
+
+    const committedTransform = committedModel.transform;
+    return new THREE.Matrix4()
+      .compose(
+        committedTransform.position,
+        quaternionFromGlobalEuler(committedTransform.rotation),
+        committedTransform.scale,
+      )
+      .invert();
+  }, [activeModelId, models, useActiveModelAttachedSupportProxy]);
+
   // --- Support drag group helpers (must be after activeModel/activeGroupRef) ---
   const captureGizmoDragBeforeMatrix = React.useCallback(() => {
     const source = transform ?? activeModel?.transform;
@@ -3117,7 +3138,31 @@ export function SceneCanvas({
                         && transformMode === 'transform'
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
-                    />
+                    >
+                      {useActiveModelAttachedSupportProxy && isActive && (
+                        <group
+                          matrix={activeModelAttachedSupportLocalMatrix ?? undefined}
+                          matrixAutoUpdate={false}
+                        >
+                          <SupportRenderer
+                            mode={mode}
+                            navigationLodActive={navigationLodActive}
+                            hidePlateContactPrimitives={hidePlateContactPrimitives}
+                            clipLower={clipLower}
+                            clipUpper={clipUpper}
+                            supportColorsByModelId={supportColorsByModelId}
+                            hoverTintColor={hoverTintColor}
+                            hoverTintStrength={hoverTintStrength}
+                            selectedTintStrength={selectedTintStrength}
+                            activeModelId={visualActiveModelId ?? null}
+                            hoverModelId={hoveredModelId}
+                            modelDropOffsetsById={entryDropOffsets}
+                            modelFilterId={model.id}
+                            passive
+                          />
+                        </group>
+                      )}
+                    </StlMesh>
 
                     {/* Cross-section cap (fill) at the cut plane - Render per model */}
                     {clipUpper != null && !hideCrossSectionCap && (
@@ -3297,7 +3342,7 @@ export function SceneCanvas({
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {/* Wrap all support/raft geometry in a drag group so they move as one during gizmo drags */}
               <group ref={supportDragGroupRef ?? undefined}>
-              {!hideRaftPrimitives && (
+              {!useActiveModelAttachedSupportProxy && !hideRaftPrimitives && (
                 <>
                   <RaftRenderer
                     colorized={!!visualActiveModelId || !!hoveredModelId}
@@ -3319,21 +3364,23 @@ export function SceneCanvas({
               )}
 
               {/* Render supports */}
-              <SupportRenderer
-                ref={supportsRef as React.RefObject<THREE.Group>}
-                mode={mode}
-                navigationLodActive={navigationLodActive}
-                hidePlateContactPrimitives={hidePlateContactPrimitives}
-                clipLower={clipLower}
-                clipUpper={clipUpper}
-                supportColorsByModelId={supportColorsByModelId}
-                hoverTintColor={hoverTintColor}
-                hoverTintStrength={hoverTintStrength}
-                selectedTintStrength={selectedTintStrength}
-                activeModelId={visualActiveModelId ?? null}
-                hoverModelId={hoveredModelId}
-                modelDropOffsetsById={entryDropOffsets}
-              />
+              {!useActiveModelAttachedSupportProxy && (
+                <SupportRenderer
+                  ref={supportsRef as React.RefObject<THREE.Group>}
+                  mode={mode}
+                  navigationLodActive={navigationLodActive}
+                  hidePlateContactPrimitives={hidePlateContactPrimitives}
+                  clipLower={clipLower}
+                  clipUpper={clipUpper}
+                  supportColorsByModelId={supportColorsByModelId}
+                  hoverTintColor={hoverTintColor}
+                  hoverTintStrength={hoverTintStrength}
+                  selectedTintStrength={selectedTintStrength}
+                  activeModelId={visualActiveModelId ?? null}
+                  hoverModelId={hoveredModelId}
+                  modelDropOffsetsById={entryDropOffsets}
+                />
+              )}
               </group>{/* end supportDragGroupRef */}
 
               {!hideRaftPrimitives && !isGizmoDragging && (

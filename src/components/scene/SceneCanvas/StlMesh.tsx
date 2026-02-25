@@ -66,6 +66,7 @@ export function StlMesh({
   suppressModelInteraction,
   externalHoveredModelId,
   deferExternalTransformUpdates,
+  children,
 }: {
   geometry: THREE.BufferGeometry;
   clipLower?: number | null;
@@ -119,6 +120,7 @@ export function StlMesh({
   externalHoveredModelId?: string | null;
   /** While true, do not overwrite group transform from props (used during active gizmo drag). */
   deferExternalTransformUpdates?: boolean;
+  children?: React.ReactNode;
 }) {
   // Access GPU picking state to detect gizmo hover
   // Note: This works because StlMesh is rendered inside PickingProvider
@@ -633,6 +635,8 @@ export function StlMesh({
           <primitive object={outOfBoundsMaterial} attach="material" />
         </mesh>
       )}
+
+      {children}
     </group>
   );
 }

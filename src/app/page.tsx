@@ -422,17 +422,12 @@ export default function Home() {
   React.useEffect(() => {
     if (!isTransformDebugOverlayOpen) return;
 
-    let rafId: number | null = null;
-    const tick = () => {
+    const intervalId = window.setInterval(() => {
       setTransformDebugTick((prev) => prev + 1);
-      rafId = window.requestAnimationFrame(tick);
-    };
+    }, 120);
 
-    rafId = window.requestAnimationFrame(tick);
     return () => {
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-      }
+      window.clearInterval(intervalId);
     };
   }, [isTransformDebugOverlayOpen]);
 

@@ -35,8 +35,10 @@ import {
 import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKnotById, removeRootById, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
 import { addSupportBrace, removeSupportBrace, setSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
 
-export function useSupportHistoryHandlers() {
+export function useSupportHistoryHandlers(enabled = true) {
   useEffect(() => {
+    if (!enabled) return;
+
     const unregisters = [
       registerHistoryHandler(SUPPORT_ADD_TRUNK, (action, direction) => {
         const payload = action.payload as SupportTrunkPayload | undefined;
@@ -288,5 +290,5 @@ export function useSupportHistoryHandlers() {
     return () => {
       unregisters.forEach((fn) => fn());
     };
-  }, []);
+  }, [enabled]);
 }

@@ -419,6 +419,11 @@ type DebugPrimitiveType =
 type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
 
 import { deleteSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import {
+  captureModelSupportsToClipboard,
+  pasteModelSupportsFromClipboard,
+  type SupportClipboardPayload,
+} from '@/supports/PlacementLogic/supportClipboard';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
 
 type ImportProgressState = {
@@ -437,6 +442,7 @@ type ModelClipboardEntry = {
   transform: ModelTransform;
   color: string;
   polygonCount: number;
+  supportClipboard: SupportClipboardPayload | null;
 };
 
 export function useSceneCollectionManager() {
@@ -1393,6 +1399,8 @@ export function useSceneCollectionManager() {
     const source = models.find((m) => m.id === id);
     if (!source) return false;
 
+    const supportClipboard = captureModelSupportsToClipboard(source.id);
+
     setModelClipboard([
       {
         sourceId: source.id,
@@ -1406,6 +1414,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
+        supportClipboard,
       },
     ]);
 
@@ -1419,19 +1428,23 @@ export function useSceneCollectionManager() {
     const selected = models.filter((m) => idSet.has(m.id));
     if (selected.length === 0) return false;
 
-    setModelClipboard(selected.map((source) => ({
-      sourceId: source.id,
-      name: source.name,
-      fileSizeBytes: source.fileSizeBytes,
-      geometry: source.geometry,
-      transform: {
-        position: source.transform.position.clone(),
-        rotation: source.transform.rotation.clone(),
-        scale: source.transform.scale.clone(),
-      },
-      color: source.color,
-      polygonCount: source.polygonCount,
-    })));
+    setModelClipboard(selected.map((source) => {
+      const supportClipboard = captureModelSupportsToClipboard(source.id);
+      return {
+        sourceId: source.id,
+        name: source.name,
+        fileSizeBytes: source.fileSizeBytes,
+        geometry: source.geometry,
+        transform: {
+          position: source.transform.position.clone(),
+          rotation: source.transform.rotation.clone(),
+          scale: source.transform.scale.clone(),
+        },
+        color: source.color,
+        polygonCount: source.polygonCount,
+        supportClipboard,
+      };
+    }));
 
     return true;
   }, [models, selectedModelIds]);
@@ -1473,6 +1486,13 @@ export function useSceneCollectionManager() {
     setModels(nextModels);
     setActiveModelId(id);
     setSelectedModelIds([id]);
+
+    pasteModelSupportsFromClipboard(
+      first.supportClipboard,
+      id,
+      first.transform,
+      pastedModel.transform,
+    );
 
     const after = captureSceneSnapshot(nextModels, id, [id]);
     pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
@@ -1665,6 +1685,18 @@ export function useSceneCollectionManager() {
 
     const nextModels = [...models, ...pastedModels];
     setModels(nextModels);
+
+    pastedModels.forEach((pastedModel, index) => {
+      const sourceEntry = entries[index];
+      if (!sourceEntry) return;
+      pasteModelSupportsFromClipboard(
+        sourceEntry.supportClipboard,
+        pastedModel.id,
+        sourceEntry.transform,
+        pastedModel.transform,
+      );
+    });
+
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds(createdIds);
@@ -1681,6 +1713,7 @@ export function useSceneCollectionManager() {
 
     const source = models.find((m) => m.id === sourceId);
     if (!source) return [] as string[];
+    const supportClipboard = captureModelSupportsToClipboard(sourceId);
 
     const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
 
@@ -1734,6 +1767,27 @@ export function useSceneCollectionManager() {
 
     const nextModels = [...withSourceGroup, ...newModels];
     setModels(nextModels);
+
+    const supportSourceTransform = sourceTransform
+      ? {
+          position: sourceTransform.position.clone(),
+          rotation: sourceTransform.rotation.clone(),
+          scale: sourceTransform.scale.clone(),
+        }
+      : {
+          position: source.transform.position.clone(),
+          rotation: source.transform.rotation.clone(),
+          scale: source.transform.scale.clone(),
+        };
+
+    newModels.forEach((model) => {
+      pasteModelSupportsFromClipboard(
+        supportClipboard,
+        model.id,
+        supportSourceTransform,
+        model.transform,
+      );
+    });
 
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
