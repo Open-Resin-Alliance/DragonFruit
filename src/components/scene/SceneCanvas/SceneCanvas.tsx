@@ -2131,6 +2131,31 @@ export function SceneCanvas({
     return duplicatePreviewModel.id;
   }, [duplicateActiveSupportPreviewDelta, duplicatePreviewModel]);
 
+  const arrangeSupportPreviewDeltas = React.useMemo(() => {
+    if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
+      return [] as Array<{ modelId: string; delta: THREE.Matrix4 }>;
+    }
+
+    return arrangeArrayPreviewItems.map((item) => {
+      const sourceMatrix = new THREE.Matrix4().compose(
+        item.model.transform.position,
+        quaternionFromGlobalEuler(item.model.transform.rotation),
+        item.model.transform.scale,
+      );
+
+      const targetMatrix = new THREE.Matrix4().compose(
+        item.transform.position,
+        quaternionFromGlobalEuler(item.transform.rotation),
+        item.transform.scale,
+      );
+
+      return {
+        modelId: item.model.id,
+        delta: targetMatrix.multiply(sourceMatrix.clone().invert()),
+      };
+    });
+  }, [arrangeArrayPreviewItems]);
+
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
     if (transform && activeModelId === activeModel.id) return transform;
@@ -3637,6 +3662,41 @@ export function SceneCanvas({
                       </group>
                     );
                   })
+                : null}
+
+              {arrangeSupportPreviewDeltas.length > 0
+                ? arrangeSupportPreviewDeltas.map(({ modelId, delta }) => (
+                    <group
+                      key={`arrange-support-preview-${modelId}`}
+                      matrix={delta}
+                      matrixAutoUpdate={false}
+                      raycast={() => null}
+                    >
+                      <ModelAttachedSupportLayer
+                        mode={mode}
+                        navigationLodActive
+                        hideRaftPrimitives={hideRaftPrimitives}
+                        hidePlateContactPrimitives={hidePlateContactPrimitives}
+                        clipLower={clipLower}
+                        clipUpper={clipUpper}
+                        supportColorsByModelId={supportColorsByModelId}
+                        hoverTintColor={hoverTintColor}
+                        hoverTintStrength={hoverTintStrength}
+                        selectedTintStrength={selectedTintStrength}
+                        activeModelId={null}
+                        hoverModelId={null}
+                        modelDropOffsetsById={{}}
+                        modelFilterId={modelId}
+                        ghostOpacity={0.3}
+                        ghostRenderOrder={2}
+                        disableSelectionAndHover
+                        raftColorized={false}
+                        raftHoverized={false}
+                        passive
+                        supportRenderRefreshNonce={supportRenderRefreshNonce}
+                      />
+                    </group>
+                  ))
                 : null}
 
               {activeBuildVolumeSettings.showModelBoundingBoxes
