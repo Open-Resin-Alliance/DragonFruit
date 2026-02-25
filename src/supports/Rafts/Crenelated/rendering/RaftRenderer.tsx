@@ -114,6 +114,7 @@ export default function RaftRenderer({
 
         if (wallMesh.geometry && (wallMesh.geometry as any).attributes?.position?.count > 0) {
           wallMesh.userData.modelId = modelId;
+          wallMesh.userData.isWall = true;
           wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
           wallMesh.castShadow = false;
           wallMesh.receiveShadow = true;
@@ -196,7 +197,13 @@ export default function RaftRenderer({
 
       const modelId = (mesh.userData?.modelId as string | undefined) ?? null;
       const tintStrength = resolveTintStrength(modelId);
-      const isWall = !!mesh.geometry && ((mesh.geometry as THREE.BufferGeometry).attributes?.position?.count ?? 0) > 0 && mesh.geometry.boundingBox?.max?.z !== undefined && ((mesh.geometry.boundingBox?.max.z ?? 0) > (raft.thickness + 0.001));
+      const isWall = mesh.userData?.isWall === true
+        || (
+          !!mesh.geometry
+          && ((mesh.geometry as THREE.BufferGeometry).attributes?.position?.count ?? 0) > 0
+          && mesh.geometry.boundingBox?.max?.z !== undefined
+          && ((mesh.geometry.boundingBox?.max.z ?? 0) > (raft.thickness + 0.001))
+        );
       const tintHex = isWall ? '#22c55e' : '#3b82f6';
       const nextColor = blendColor('#a3a3a3', tintHex, tintStrength);
       if (!material.color.equals(nextColor)) {
