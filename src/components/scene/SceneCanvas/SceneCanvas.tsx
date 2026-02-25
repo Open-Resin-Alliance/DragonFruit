@@ -532,6 +532,7 @@ type ModelAttachedSupportLayerProps = {
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   activeModelId?: string | null;
+  selectedModelIds?: string[];
   hoverModelId?: string | null;
   modelDropOffsetsById?: Record<string, number>;
   navigationLodActive?: boolean;
@@ -559,6 +560,7 @@ function ModelAttachedSupportLayer({
   hoverTintStrength,
   selectedTintStrength,
   activeModelId = null,
+  selectedModelIds = [],
   hoverModelId = null,
   modelDropOffsetsById,
   navigationLodActive = false,
@@ -582,6 +584,7 @@ function ModelAttachedSupportLayer({
             ghostOpacity={ghostOpacity}
             ghostRenderOrder={ghostRenderOrder}
             activeModelId={activeModelId}
+            selectedModelIds={selectedModelIds}
             hoverModelId={hoverModelId}
             modelFilterId={modelFilterId}
             excludeModelId={excludeModelId}
@@ -594,6 +597,7 @@ function ModelAttachedSupportLayer({
             ghostOpacity={ghostOpacity}
             ghostRenderOrder={ghostRenderOrder}
             activeModelId={activeModelId}
+            selectedModelIds={selectedModelIds}
             hoverModelId={hoverModelId}
             modelFilterId={modelFilterId}
             excludeModelId={excludeModelId}
@@ -616,6 +620,7 @@ function ModelAttachedSupportLayer({
         hoverTintStrength={hoverTintStrength}
         selectedTintStrength={selectedTintStrength}
         activeModelId={activeModelId}
+        selectedModelIds={selectedModelIds}
         hoverModelId={hoverModelId}
         modelDropOffsetsById={modelDropOffsetsById}
         modelFilterId={modelFilterId}
@@ -3453,6 +3458,7 @@ export function SceneCanvas({
                             hoverTintStrength={hoverTintStrength}
                             selectedTintStrength={selectedTintStrength}
                             activeModelId={visualActiveModelId ?? null}
+                            selectedModelIds={selectedModelIds}
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
                             navigationLodActive={navigationLodActive}
@@ -3546,6 +3552,7 @@ export function SceneCanvas({
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
+                        selectedModelIds={[]}
                         hoverModelId={null}
                         modelDropOffsetsById={{}}
                         modelFilterId={duplicatePreviewModel.id}
@@ -3613,6 +3620,7 @@ export function SceneCanvas({
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
+                        selectedModelIds={[]}
                         hoverModelId={null}
                         modelDropOffsetsById={{}}
                         modelFilterId={duplicatePreviewModel.id}
@@ -3684,6 +3692,7 @@ export function SceneCanvas({
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
                         activeModelId={null}
+                        selectedModelIds={[]}
                         hoverModelId={null}
                         modelDropOffsetsById={{}}
                         modelFilterId={modelId}
@@ -3764,6 +3773,7 @@ export function SceneCanvas({
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={visualActiveModelId ?? null}
+                  selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive={navigationLodActive}
@@ -3813,6 +3823,7 @@ export function SceneCanvas({
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
                   activeModelId={visualActiveModelId ?? null}
+                  selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive

@@ -44,6 +44,7 @@ interface SupportRendererProps {
     hoverTintStrength?: number;
     selectedTintStrength?: number;
     activeModelId?: string | null;
+    selectedModelIds?: string[];
     hoverModelId?: string | null;
     modelDropOffsetsById?: Record<string, number>;
     modelFilterId?: string | null;
@@ -75,7 +76,7 @@ const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0 }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0 }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedSupportIds = useSyncExternalStore(
         subscribeSupportMultiSelection,
@@ -112,6 +113,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const isPointerInteractable = supportPointerInteractable || isPreparePointerInteractable;
     const ghostOpacityClamped = Math.max(0.05, Math.min(1, ghostOpacity));
     const ghostTransparent = ghostOpacityClamped < 0.999;
+    const selectedModelIdSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
     const hidePlateContactPrimitivesEffective = hidePlateContactPrimitives;
     const restrictToActiveModel = mode === 'support' && !!activeModelId;
     const suppressHover = supportSelectionAndHoverSuppressed || isJointCreationActive || !isInteractable || braceAltActive;
@@ -533,17 +535,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const baseHex = '#a3a3a3';
         const hoverTintHex = '#ff8800';
         const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.5).getStyle();
+        const hasModelSelection = !!activeModelId || selectedModelIdSet.size > 0;
 
         return (modelId?: string) => {
-            const isSelectedModelSupport = !!activeModelId && !!modelId && modelId === activeModelId;
+            const isSelectedModelSupport = !!modelId && (modelId === activeModelId || selectedModelIdSet.has(modelId));
             if (isSelectedModelSupport) return '#ff8800';
 
-            const isHoveredModelSupport = !activeModelId && !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
+            const isHoveredModelSupport = !hasModelSelection && !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
             if (isHoveredModelSupport) return hoveredColor;
 
             return baseHex;
         };
-    }, [activeModelId, effectiveHoverModelId]);
+    }, [activeModelId, effectiveHoverModelId, selectedModelIdSet]);
 
     const resolveSceneSupportColor = React.useCallback((modelId: string | undefined, supportId: string) => {
         if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {

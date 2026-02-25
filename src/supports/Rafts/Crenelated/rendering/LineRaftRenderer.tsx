@@ -115,6 +115,7 @@ interface LineRaftRendererProps {
   ghostOpacity?: number;
   ghostRenderOrder?: number;
   activeModelId?: string | null;
+  selectedModelIds?: string[];
   hoverModelId?: string | null;
   modelFilterId?: string | null;
   excludeModelId?: string | null;
@@ -128,6 +129,7 @@ export default function LineRaftRenderer({
   ghostOpacity = 1,
   ghostRenderOrder = 0,
   activeModelId = null,
+  selectedModelIds = [],
   hoverModelId = null,
   modelFilterId = null,
   excludeModelId = null,
@@ -152,6 +154,8 @@ export default function LineRaftRenderer({
   }, []);
 
   const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
+  const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
   const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
   const raftTransparent = raftOpacity < 0.999;
 
@@ -172,7 +176,7 @@ export default function LineRaftRenderer({
 
     const resolveTintStrength = (modelId: string) => {
       if (!colorized) return 0;
-      if (activeModelId) return modelId === activeModelId ? 1 : 0;
+      if (hasSelectedModels) return (modelId === activeModelId || selectedModelIdSet.has(modelId)) ? 1 : 0;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       return hoverized ? 0.5 : 1;
     };
@@ -420,7 +424,7 @@ export default function LineRaftRenderer({
     const resolveTintStrength = (modelId: string | null) => {
       if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
       if (!colorized) return 0;
-      if (activeModelId) return modelId === activeModelId ? 1 : 0;
+      if (hasSelectedModels) return (modelId === activeModelId || selectedModelIdSet.has(modelId)) ? 1 : 0;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       return hoverized ? 0.5 : 1;
     };
@@ -457,7 +461,7 @@ export default function LineRaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, selectedModelIdSet]);
 
   if (raft.bottomMode !== 'line') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
