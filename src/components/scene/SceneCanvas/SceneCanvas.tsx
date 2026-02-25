@@ -2041,6 +2041,41 @@ export function SceneCanvas({
     return deltas;
   }, [composeModelTransformMatrix, gizmoGroupStartSnapshot, multiGizmoPreviewTransformsById, multiGizmoSupportPreviewIds]);
 
+  const multiGizmoSupportPreviewGroupRefs = React.useRef<Record<string, THREE.Group | null>>({});
+
+  const applyImmediateMultiPreview = React.useCallback((
+    snapshot: {
+      operation: 'move' | 'scale';
+      activeModelId: string;
+      pivot: THREE.Vector3;
+      beforeByModelId: Record<string, ModelTransform>;
+    },
+    previewByModelId: Record<string, ModelTransform>,
+  ) => {
+    for (const [modelId, preview] of Object.entries(previewByModelId)) {
+      if (modelId === snapshot.activeModelId) continue;
+
+      const meshGroup = meshRefs.current[modelId];
+      if (meshGroup) {
+        meshGroup.position.copy(preview.position);
+        meshGroup.quaternion.copy(quaternionFromGlobalEuler(preview.rotation));
+        meshGroup.scale.copy(preview.scale);
+        meshGroup.updateMatrix();
+        meshGroup.updateMatrixWorld(true);
+      }
+
+      const supportGroup = multiGizmoSupportPreviewGroupRefs.current[modelId];
+      const before = snapshot.beforeByModelId[modelId];
+      if (supportGroup && before) {
+        const beforeMatrix = composeModelTransformMatrix(before);
+        const afterMatrix = composeModelTransformMatrix(preview);
+        supportGroup.matrix.multiplyMatrices(afterMatrix, beforeMatrix.clone().invert());
+        supportGroup.matrixAutoUpdate = false;
+        supportGroup.matrixWorldNeedsUpdate = true;
+      }
+    }
+  }, [composeModelTransformMatrix]);
+
   const supportProxyExcludeModelIds = React.useMemo(() => {
     const ids = [...multiGizmoSupportPreviewIds];
     if (activeModelId) ids.push(activeModelId);
@@ -4066,6 +4101,9 @@ export function SceneCanvas({
                 ? multiGizmoSupportPreviewDeltas.map(({ modelId, delta }) => (
                     <group
                       key={`multi-gizmo-support-preview-${modelId}`}
+                      ref={(node) => {
+                        multiGizmoSupportPreviewGroupRefs.current[modelId] = node;
+                      }}
                       matrix={delta}
                       matrixAutoUpdate={false}
                       raycast={() => null}
@@ -4118,6 +4156,15 @@ export function SceneCanvas({
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live) {
+                        if (isMultiGizmoSelection && gizmoGroupStartSnapshot?.operation === 'move') {
+                          const immediatePreviewByModelId = buildMultiSelectionTransformsFromActive(gizmoGroupStartSnapshot, {
+                            position: live.position.clone(),
+                            rotation: live.rotation.clone(),
+                            scale: live.scale.clone(),
+                          });
+                          applyImmediateMultiPreview(gizmoGroupStartSnapshot, immediatePreviewByModelId);
+                        }
+
                         queueLiveDragTransform({
                           position: live.position.clone(),
                           rotation: live.rotation.clone(),
@@ -4212,6 +4259,7 @@ export function SceneCanvas({
                           rotation: live.rotation.clone(),
                           scale: live.scale.clone(),
                         });
+                        applyImmediateMultiPreview(gizmoGroupStartSnapshot, finalByModelId);
                         const entries = Object.entries(gizmoGroupStartSnapshot.beforeByModelId).map(([modelId, before]) => {
                           const after = modelId === activeModelId
                             ? {
@@ -4425,6 +4473,15 @@ export function SceneCanvas({
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live) {
+                        if (isMultiGizmoSelection && gizmoGroupStartSnapshot?.operation === 'scale') {
+                          const immediatePreviewByModelId = buildMultiSelectionTransformsFromActive(gizmoGroupStartSnapshot, {
+                            position: live.position.clone(),
+                            rotation: live.rotation.clone(),
+                            scale: live.scale.clone(),
+                          });
+                          applyImmediateMultiPreview(gizmoGroupStartSnapshot, immediatePreviewByModelId);
+                        }
+
                         queueLiveDragTransform({
                           position: live.position.clone(),
                           rotation: live.rotation.clone(),
@@ -4469,6 +4526,7 @@ export function SceneCanvas({
                           rotation: live.rotation.clone(),
                           scale: live.scale.clone(),
                         });
+                        applyImmediateMultiPreview(gizmoGroupStartSnapshot, finalByModelId);
                         const entries = Object.entries(gizmoGroupStartSnapshot.beforeByModelId).map(([modelId, before]) => {
                           const after = modelId === activeModelId
                             ? {
