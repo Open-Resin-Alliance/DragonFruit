@@ -31,6 +31,7 @@ import { getEmptySelectedSupportIdsSnapshot, getSelectedSupportIds, subscribeSup
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
+import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -70,6 +71,7 @@ const BATCHED_JOINT_WIDTH_SEGMENTS = 12;
 const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
+const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, passive = false, disableSelectionAndHover = false }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -878,17 +880,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const joints: InstancedJoint[] = [];
 
             for (const segment of trunk.segments) {
-                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
-                    seen.add(segment.bottomJoint.id);
-                    joints.push({
-                        id: segment.bottomJoint.id,
-                        pos: segment.bottomJoint.pos,
-                        diameter: segment.bottomJoint.diameter,
-                        supportId: trunk.id,
-                        modelId: trunk.modelId,
-                    });
-                }
-
                 if (segment.topJoint && !seen.has(segment.topJoint.id)) {
                     seen.add(segment.topJoint.id);
                     joints.push({
@@ -923,17 +914,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const joints: InstancedJoint[] = [];
 
             for (const segment of branch.segments) {
-                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
-                    seen.add(segment.bottomJoint.id);
-                    joints.push({
-                        id: segment.bottomJoint.id,
-                        pos: segment.bottomJoint.pos,
-                        diameter: segment.bottomJoint.diameter,
-                        supportId: branch.id,
-                        modelId: branch.modelId,
-                    });
-                }
-
                 if (segment.topJoint && !seen.has(segment.topJoint.id)) {
                     seen.add(segment.topJoint.id);
                     joints.push({
@@ -1058,17 +1038,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const joints: InstancedJoint[] = [];
 
             for (const segment of supportBrace.segments) {
-                if (segment.bottomJoint && !seen.has(segment.bottomJoint.id)) {
-                    seen.add(segment.bottomJoint.id);
-                    joints.push({
-                        id: segment.bottomJoint.id,
-                        pos: segment.bottomJoint.pos,
-                        diameter: segment.bottomJoint.diameter,
-                        supportId: supportBrace.id,
-                        modelId: supportBrace.modelId,
-                    });
-                }
-
                 if (segment.topJoint && !seen.has(segment.topJoint.id)) {
                     seen.add(segment.topJoint.id);
                     joints.push({
@@ -1094,12 +1063,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [supportBraceState.supportBraces, restrictToActiveModel, activeModelId]);
 
     const sceneBatchedJointGroups = useMemo(() => {
-        if (selectionEnabled) {
-            // In support-edit mode, joint/knot handles should appear only for the
-            // actively selected support via detailed renderers.
-            return [] as Array<{ color: string; joints: InstancedJoint[] }>;
-        }
-
         const grouped = new Map<string, InstancedJoint[]>();
 
         const pushJoints = (color: string, joints: InstancedJoint[]) => {
@@ -1107,6 +1070,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const adjusted = joints.map((joint) => ({
                 ...joint,
                 pos: applyDropToVec3Like(joint.pos, joint.modelId),
+                diameter: Math.max(0.001, joint.diameter - SCENE_JOINT_DIAMETER_BLEND_MM),
             }));
             if (existing) {
                 existing.push(...adjusted);
@@ -1167,7 +1131,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         return Array.from(grouped.entries()).map(([color, joints]) => ({ color, joints }));
     }, [
-        selectionEnabled,
+        disableSelectionAndHover,
         state.trunks,
         state.branches,
         state.twigs,
