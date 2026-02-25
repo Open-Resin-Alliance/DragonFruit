@@ -1029,7 +1029,7 @@ export function SceneCanvas({
 
   const committedActiveModelId = React.useMemo(() => {
     if (typeof visualActiveModelId === 'string') return visualActiveModelId;
-    if (visualActiveModelId === null) return null;
+    if (visualActiveModelId === null && !activeModelId) return null;
     return activeModelId;
   }, [activeModelId, visualActiveModelId]);
 
@@ -1226,9 +1226,11 @@ export function SceneCanvas({
   const buildVolumeCenterTarget = React.useMemo(() => {
     const centerX = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.widthMm * 0.5 : 0;
     const centerY = activeBuildVolumeSettings.originMode === 'front_left' ? activeBuildVolumeSettings.depthMm * 0.5 : 0;
-    return new THREE.Vector3(centerX, centerY, 10);
+    const centerZ = activeBuildVolumeSettings.maxZMm * 0.5;
+    return new THREE.Vector3(centerX, centerY, centerZ);
   }, [
     activeBuildVolumeSettings.depthMm,
+    activeBuildVolumeSettings.maxZMm,
     activeBuildVolumeSettings.originMode,
     activeBuildVolumeSettings.widthMm,
   ]);
@@ -1598,10 +1600,10 @@ export function SceneCanvas({
     const blend = (baseHex: string, tintHex: string, strength: number) =>
       new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
 
-    if (visualActiveModelId) return '#3b82f6';
+    if (committedActiveModelId) return '#3b82f6';
     if (hoveredModelId) return blend('#a3a3a3', '#3b82f6', 0.5);
     return '#a3a3a3';
-  }, [hoveredModelId, visualActiveModelId]);
+  }, [committedActiveModelId, hoveredModelId]);
 
   const supportCreationModeActive = Boolean(
     isBranchPlacementActive
@@ -1623,8 +1625,9 @@ export function SceneCanvas({
     && !!hoveredMeshModelId,
   );
 
-  const raftColorized = mode === 'support' || !!visualActiveModelId || !!hoveredModelId;
-  const raftHoverized = mode === 'support' || (!visualActiveModelId && !!hoveredModelId);
+  const hasRaftSelection = !!committedActiveModelId || !!activeModelId || (selectedModelIds?.length ?? 0) > 0;
+  const raftColorized = mode === 'support' || hasRaftSelection || !!hoveredModelId;
+  const raftHoverized = mode === 'support' || (!hasRaftSelection && !!hoveredModelId);
 
   const modelBoundingBoxDebugData = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showModelBoundingBoxes) return [] as Array<{
@@ -4009,7 +4012,7 @@ export function SceneCanvas({
                             hoverTintColor={hoverTintColor}
                             hoverTintStrength={hoverTintStrength}
                             selectedTintStrength={selectedTintStrength}
-                            activeModelId={visualActiveModelId ?? null}
+                            activeModelId={committedActiveModelId}
                             selectedModelIds={selectedModelIds}
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
@@ -4354,7 +4357,7 @@ export function SceneCanvas({
                   hoverTintColor={hoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
-                  activeModelId={visualActiveModelId ?? null}
+                  activeModelId={committedActiveModelId}
                   selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
@@ -4373,7 +4376,7 @@ export function SceneCanvas({
                 <FootprintBorderRenderer
                   modelGeometry={activeModel ? activeModel.geometry : null}
                   modelTransform={activeModelTransform}
-                  modelId={visualActiveModelId ?? hoveredModelId ?? null}
+                  modelId={committedActiveModelId ?? hoveredModelId ?? null}
                   color={supportHoverTintColor}
                 />
               )}
@@ -4405,7 +4408,7 @@ export function SceneCanvas({
                   hoverTintColor={hoverTintColor}
                   hoverTintStrength={hoverTintStrength}
                   selectedTintStrength={selectedTintStrength}
-                  activeModelId={visualActiveModelId ?? null}
+                  activeModelId={committedActiveModelId}
                   selectedModelIds={selectedModelIds}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
@@ -4440,7 +4443,7 @@ export function SceneCanvas({
                         hoverTintColor={hoverTintColor}
                         hoverTintStrength={hoverTintStrength}
                         selectedTintStrength={selectedTintStrength}
-                        activeModelId={visualActiveModelId ?? null}
+                        activeModelId={committedActiveModelId}
                         selectedModelIds={selectedModelIds}
                         hoverModelId={hoveredModelId}
                         modelDropOffsetsById={entryDropOffsets}
