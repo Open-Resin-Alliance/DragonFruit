@@ -69,6 +69,8 @@ export function BezierRenderer({
     const visualStartRadius = startRadius * selectedVisualScale;
     const visualEndRadius = endRadius * selectedVisualScale;
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
+    const { altActive: braceAltActive } = useBracePlacementState();
+    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
 
     const geometry = useMemo(() => {
         const tubularSegments = Math.max(2, resolution);
@@ -134,9 +136,6 @@ export function BezierRenderer({
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
     const { register, unregister, hit } = usePicking();
-
-    const { altActive: braceAltActive } = useBracePlacementState();
-    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
 
     // Register with picking system
     useEffect(() => {
