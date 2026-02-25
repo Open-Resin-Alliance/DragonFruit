@@ -22,6 +22,8 @@ interface RaftRendererProps {
   hoverized?: boolean;
   activeModelId?: string | null;
   hoverModelId?: string | null;
+  modelFilterId?: string | null;
+  excludeModelId?: string | null;
   navigationLodActive?: boolean;
   onModelPointerSelect?: (modelId: string, e: any) => void;
 }
@@ -31,6 +33,8 @@ export default function RaftRenderer({
   hoverized = false,
   activeModelId = null,
   hoverModelId = null,
+  modelFilterId = null,
+  excludeModelId = null,
   navigationLodActive = false,
   onModelPointerSelect,
 }: RaftRendererProps) {
@@ -58,6 +62,8 @@ export default function RaftRenderer({
 
     const rootsByModel = new Map<string, typeof supportState.roots[string][]>();
     for (const root of Object.values(supportState.roots)) {
+      if (excludeModelId && root.modelId === excludeModelId) continue;
+      if (modelFilterId && root.modelId !== modelFilterId) continue;
       const key = root.modelId || 'unknown';
       if (!rootsByModel.has(key)) rootsByModel.set(key, []);
       rootsByModel.get(key)!.push(root);
@@ -118,7 +124,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
+  }, [excludeModelId, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;

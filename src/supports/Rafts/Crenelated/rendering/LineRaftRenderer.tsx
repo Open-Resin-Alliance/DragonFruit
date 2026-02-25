@@ -114,6 +114,8 @@ interface LineRaftRendererProps {
   hoverized?: boolean;
   activeModelId?: string | null;
   hoverModelId?: string | null;
+  modelFilterId?: string | null;
+  excludeModelId?: string | null;
   navigationLodActive?: boolean;
   onModelPointerSelect?: (modelId: string, e: any) => void;
 }
@@ -123,6 +125,8 @@ export default function LineRaftRenderer({
   hoverized = false,
   activeModelId = null,
   hoverModelId = null,
+  modelFilterId = null,
+  excludeModelId = null,
   navigationLodActive = false,
   onModelPointerSelect,
 }: LineRaftRendererProps) {
@@ -150,6 +154,8 @@ export default function LineRaftRenderer({
 
     const rootsByModel = new Map<string, typeof supportState.roots[string][]>();
     for (const root of Object.values(supportState.roots)) {
+      if (excludeModelId && root.modelId === excludeModelId) continue;
+      if (modelFilterId && root.modelId !== modelFilterId) continue;
       const key = root.modelId || 'unknown';
       if (!rootsByModel.has(key)) rootsByModel.set(key, []);
       rootsByModel.get(key)!.push(root);
@@ -344,7 +350,7 @@ export default function LineRaftRenderer({
     }
 
     return meshes;
-  }, [raft, supportState]);
+  }, [excludeModelId, modelFilterId, raft, supportState]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;

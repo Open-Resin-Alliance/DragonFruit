@@ -950,6 +950,8 @@ export function SceneCanvas({
     enabled?: boolean;
   } | null>(null);
   const suppressNextCanvasClickRef = React.useRef(false);
+  const orbitChangeRafRef = React.useRef<number | null>(null);
+  const orbitChangeQueuedRef = React.useRef(false);
   const marqueePointerIdRef = React.useRef<number | null>(null);
   const marqueePointerStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const orbitInteractionActiveRef = React.useRef(false);
@@ -2851,19 +2853,42 @@ export function SceneCanvas({
   ]);
 
   const handleOrbitChange = React.useCallback(() => {
-    const orbitActive = orbitInteractionActiveRef.current;
-    if (orbitActive) {
+    if (orbitInteractionActiveRef.current) {
       orbitInteractionMovedRef.current = true;
-      const rotating = isOrbitInRotateState();
-      setIsOrbitRotating((prev) => (prev === rotating ? prev : rotating));
     }
-    updateOrbitControlSpeeds();
-    updateCameraBelowBuildPlate();
-    onCameraChange?.();
-    if (orbitActive) {
-      window.dispatchEvent(new Event('picking-orbit-change'));
-    }
+
+    if (orbitChangeQueuedRef.current) return;
+    orbitChangeQueuedRef.current = true;
+
+    orbitChangeRafRef.current = requestAnimationFrame(() => {
+      orbitChangeRafRef.current = null;
+      orbitChangeQueuedRef.current = false;
+
+      const orbitActive = orbitInteractionActiveRef.current;
+      if (orbitActive) {
+        const rotating = isOrbitInRotateState();
+        setIsOrbitRotating((prev) => (prev === rotating ? prev : rotating));
+      }
+
+      updateOrbitControlSpeeds();
+      updateCameraBelowBuildPlate();
+      onCameraChange?.();
+
+      if (orbitActive) {
+        window.dispatchEvent(new Event('picking-orbit-change'));
+      }
+    });
   }, [isOrbitInRotateState, onCameraChange, updateCameraBelowBuildPlate, updateOrbitControlSpeeds]);
+
+  React.useEffect(() => {
+    return () => {
+      if (orbitChangeRafRef.current !== null) {
+        cancelAnimationFrame(orbitChangeRafRef.current);
+        orbitChangeRafRef.current = null;
+      }
+      orbitChangeQueuedRef.current = false;
+    };
+  }, []);
 
   const handleOrbitStart = React.useCallback(() => {
     orbitInteractionActiveRef.current = true;
@@ -3144,6 +3169,26 @@ export function SceneCanvas({
                           matrix={activeModelAttachedSupportLocalMatrix ?? undefined}
                           matrixAutoUpdate={false}
                         >
+                          {!hideRaftPrimitives && (
+                            <>
+                              <RaftRenderer
+                                colorized={!!visualActiveModelId || !!hoveredModelId}
+                                hoverized={!visualActiveModelId && !!hoveredModelId}
+                                activeModelId={visualActiveModelId ?? null}
+                                hoverModelId={hoveredModelId}
+                                modelFilterId={model.id}
+                                navigationLodActive={navigationLodActive}
+                              />
+                              <LineRaftRenderer
+                                colorized={!!visualActiveModelId || !!hoveredModelId}
+                                hoverized={!visualActiveModelId && !!hoveredModelId}
+                                activeModelId={visualActiveModelId ?? null}
+                                hoverModelId={hoveredModelId}
+                                modelFilterId={model.id}
+                                navigationLodActive={navigationLodActive}
+                              />
+                            </>
+                          )}
                           <SupportRenderer
                             mode={mode}
                             navigationLodActive={navigationLodActive}
@@ -3404,6 +3449,49 @@ export function SceneCanvas({
                   interactionActive={isGizmoDragging}
                 />
               ))}
+
+              {/* During active-model proxy drag, keep other models' supports/rafts visible in world space. */}
+              {useActiveModelAttachedSupportProxy && activeModelId && (
+                <>
+                  {!hideRaftPrimitives && (
+                    <>
+                      <RaftRenderer
+                        colorized={!!visualActiveModelId || !!hoveredModelId}
+                        hoverized={!visualActiveModelId && !!hoveredModelId}
+                        activeModelId={visualActiveModelId ?? null}
+                        hoverModelId={hoveredModelId}
+                        excludeModelId={activeModelId}
+                        navigationLodActive
+                      />
+                      <LineRaftRenderer
+                        colorized={!!visualActiveModelId || !!hoveredModelId}
+                        hoverized={!visualActiveModelId && !!hoveredModelId}
+                        activeModelId={visualActiveModelId ?? null}
+                        hoverModelId={hoveredModelId}
+                        excludeModelId={activeModelId}
+                        navigationLodActive
+                      />
+                    </>
+                  )}
+
+                  <SupportRenderer
+                    mode={mode}
+                    navigationLodActive
+                    hidePlateContactPrimitives={hidePlateContactPrimitives}
+                    clipLower={clipLower}
+                    clipUpper={clipUpper}
+                    supportColorsByModelId={supportColorsByModelId}
+                    hoverTintColor={hoverTintColor}
+                    hoverTintStrength={hoverTintStrength}
+                    selectedTintStrength={selectedTintStrength}
+                    activeModelId={visualActiveModelId ?? null}
+                    hoverModelId={hoveredModelId}
+                    modelDropOffsetsById={entryDropOffsets}
+                    excludeModelId={activeModelId}
+                    passive
+                  />
+                </>
+              )}
 
               {/* Gizmo attached to active model */}
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && (

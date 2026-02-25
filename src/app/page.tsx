@@ -1270,11 +1270,13 @@ export default function Home() {
     transformHistoryCommitRequestedRef.current = false;
   }, [scene.activeModelId]);
 
-  // Wrap transform change to update local state
-  const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
+  // Wrap transform change to update local state.
+  // Keep this callback stable during active drags to avoid callback-identity
+  // churn feeding back into gizmo drag listeners/effects.
+  const handleTransformChange = React.useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
     transformMgr.setIsTransforming(true);
     transformMgr.onTransformChange(pos, rot, scl);
-  };
+  }, [transformMgr.onTransformChange, transformMgr.setIsTransforming]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
   const sceneZRange = React.useMemo(() => ({
