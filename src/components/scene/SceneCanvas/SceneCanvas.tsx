@@ -519,6 +519,113 @@ function CameraModeEntryFramingController({
   return null;
 }
 
+type ModelAttachedSupportLayerProps = {
+  mode?: SupportMode;
+  modelFilterId?: string | null;
+  excludeModelId?: string | null;
+  hideRaftPrimitives?: boolean;
+  hidePlateContactPrimitives?: boolean;
+  clipLower?: number | null;
+  clipUpper?: number | null;
+  supportColorsByModelId?: Record<string, string>;
+  hoverTintColor?: string;
+  hoverTintStrength?: number;
+  selectedTintStrength?: number;
+  activeModelId?: string | null;
+  hoverModelId?: string | null;
+  modelDropOffsetsById?: Record<string, number>;
+  navigationLodActive?: boolean;
+  disableSelectionAndHover?: boolean;
+  passive?: boolean;
+  raftColorized?: boolean;
+  raftHoverized?: boolean;
+  onModelPointerSelect?: (modelId: string) => void;
+  ghostOpacity?: number;
+  ghostRenderOrder?: number;
+  supportRendererRef?: React.Ref<THREE.Group>;
+};
+
+function ModelAttachedSupportLayer({
+  mode,
+  modelFilterId = null,
+  excludeModelId = null,
+  hideRaftPrimitives = false,
+  hidePlateContactPrimitives = false,
+  clipLower,
+  clipUpper,
+  supportColorsByModelId,
+  hoverTintColor,
+  hoverTintStrength,
+  selectedTintStrength,
+  activeModelId = null,
+  hoverModelId = null,
+  modelDropOffsetsById,
+  navigationLodActive = false,
+  disableSelectionAndHover = false,
+  passive = false,
+  raftColorized = true,
+  raftHoverized = false,
+  onModelPointerSelect,
+  ghostOpacity,
+  ghostRenderOrder,
+  supportRendererRef,
+}: ModelAttachedSupportLayerProps) {
+  return (
+    <>
+      {!hideRaftPrimitives && (
+        <>
+          <RaftRenderer
+            colorized={raftColorized}
+            hoverized={raftHoverized}
+            ghostOpacity={ghostOpacity}
+            ghostRenderOrder={ghostRenderOrder}
+            activeModelId={activeModelId}
+            hoverModelId={hoverModelId}
+            modelFilterId={modelFilterId}
+            excludeModelId={excludeModelId}
+            navigationLodActive={navigationLodActive}
+            onModelPointerSelect={onModelPointerSelect}
+          />
+          <LineRaftRenderer
+            colorized={raftColorized}
+            hoverized={raftHoverized}
+            ghostOpacity={ghostOpacity}
+            ghostRenderOrder={ghostRenderOrder}
+            activeModelId={activeModelId}
+            hoverModelId={hoverModelId}
+            modelFilterId={modelFilterId}
+            excludeModelId={excludeModelId}
+            navigationLodActive={navigationLodActive}
+            onModelPointerSelect={onModelPointerSelect}
+          />
+        </>
+      )}
+
+      <SupportRenderer
+        ref={supportRendererRef}
+        mode={mode}
+        navigationLodActive={navigationLodActive}
+        hidePlateContactPrimitives={hidePlateContactPrimitives}
+        clipLower={clipLower}
+        clipUpper={clipUpper}
+        supportColorsByModelId={supportColorsByModelId}
+        hoverTintColor={hoverTintColor}
+        hoverTintStrength={hoverTintStrength}
+        selectedTintStrength={selectedTintStrength}
+        activeModelId={activeModelId}
+        hoverModelId={hoverModelId}
+        modelDropOffsetsById={modelDropOffsetsById}
+        modelFilterId={modelFilterId}
+        excludeModelId={excludeModelId}
+        disableSelectionAndHover={disableSelectionAndHover}
+        ghostOpacity={ghostOpacity}
+        ghostRenderOrder={ghostRenderOrder}
+        passive={passive}
+      />
+    </>
+  );
+}
+
 export function SceneCanvas({
   models: modelsProp = [],
   activeModelId: activeModelIdProp,
@@ -1947,6 +2054,45 @@ export function SceneCanvas({
     );
   }, [duplicatePreviewModel]);
 
+  const duplicateSupportPreviewDeltas = React.useMemo(() => {
+    if (!duplicatePreviewModel || !duplicatePreviewTransforms || duplicatePreviewTransforms.length === 0) {
+      return [] as THREE.Matrix4[];
+    }
+
+    const sourceMatrix = new THREE.Matrix4().compose(
+      duplicatePreviewModel.transform.position,
+      quaternionFromGlobalEuler(duplicatePreviewModel.transform.rotation),
+      duplicatePreviewModel.transform.scale,
+    );
+    const invSource = sourceMatrix.clone().invert();
+
+    return duplicatePreviewTransforms.map((previewTransform) => {
+      const targetMatrix = new THREE.Matrix4().compose(
+        previewTransform.position,
+        quaternionFromGlobalEuler(previewTransform.rotation),
+        previewTransform.scale,
+      );
+      return targetMatrix.multiply(invSource.clone());
+    });
+  }, [duplicatePreviewModel, duplicatePreviewTransforms]);
+
+  const duplicateActiveSupportPreviewDelta = React.useMemo(() => {
+    if (!duplicatePreviewModel || !duplicateActivePreviewTransform) return null;
+
+    const sourceMatrix = new THREE.Matrix4().compose(
+      duplicatePreviewModel.transform.position,
+      quaternionFromGlobalEuler(duplicatePreviewModel.transform.rotation),
+      duplicatePreviewModel.transform.scale,
+    );
+    const targetMatrix = new THREE.Matrix4().compose(
+      duplicateActivePreviewTransform.position,
+      quaternionFromGlobalEuler(duplicateActivePreviewTransform.rotation),
+      duplicateActivePreviewTransform.scale,
+    );
+
+    return targetMatrix.multiply(sourceMatrix.clone().invert());
+  }, [duplicateActivePreviewTransform, duplicatePreviewModel]);
+
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
     if (transform && activeModelId === activeModel.id) return transform;
@@ -3232,29 +3378,10 @@ export function SceneCanvas({
                           matrix={activeModelAttachedSupportLocalMatrix ?? undefined}
                           matrixAutoUpdate={false}
                         >
-                          {!hideRaftPrimitives && (
-                            <>
-                              <RaftRenderer
-                                colorized={raftColorized}
-                                hoverized={raftHoverized}
-                                activeModelId={visualActiveModelId ?? null}
-                                hoverModelId={hoveredModelId}
-                                modelFilterId={model.id}
-                                navigationLodActive={navigationLodActive}
-                              />
-                              <LineRaftRenderer
-                                colorized={raftColorized}
-                                hoverized={raftHoverized}
-                                activeModelId={visualActiveModelId ?? null}
-                                hoverModelId={hoveredModelId}
-                                modelFilterId={model.id}
-                                navigationLodActive={navigationLodActive}
-                              />
-                            </>
-                          )}
-                          <SupportRenderer
+                          <ModelAttachedSupportLayer
                             mode={mode}
-                            navigationLodActive={navigationLodActive}
+                            modelFilterId={model.id}
+                            hideRaftPrimitives={hideRaftPrimitives}
                             hidePlateContactPrimitives={hidePlateContactPrimitives}
                             clipLower={clipLower}
                             clipUpper={clipUpper}
@@ -3265,8 +3392,10 @@ export function SceneCanvas({
                             activeModelId={visualActiveModelId ?? null}
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
-                            modelFilterId={model.id}
+                            navigationLodActive={navigationLodActive}
                             disableSelectionAndHover={supportCreationModeActive}
+                            raftColorized={raftColorized}
+                            raftHoverized={raftHoverized}
                             passive
                           />
                         </group>
@@ -3332,6 +3461,41 @@ export function SceneCanvas({
                   ))
                 : null}
 
+              {duplicatePreviewModel
+                && duplicateSupportPreviewDeltas.length > 0
+                ? duplicateSupportPreviewDeltas.map((deltaMatrix, index) => (
+                    <group
+                      key={`duplicate-support-preview-${index}`}
+                      matrix={deltaMatrix}
+                      matrixAutoUpdate={false}
+                      raycast={() => null}
+                    >
+                      <ModelAttachedSupportLayer
+                        mode={mode}
+                        navigationLodActive
+                        hideRaftPrimitives={hideRaftPrimitives}
+                        hidePlateContactPrimitives={hidePlateContactPrimitives}
+                        clipLower={clipLower}
+                        clipUpper={clipUpper}
+                        supportColorsByModelId={supportColorsByModelId}
+                        hoverTintColor={hoverTintColor}
+                        hoverTintStrength={hoverTintStrength}
+                        selectedTintStrength={selectedTintStrength}
+                        activeModelId={null}
+                        hoverModelId={null}
+                        modelDropOffsetsById={{}}
+                        modelFilterId={duplicatePreviewModel.id}
+                        ghostOpacity={0.3}
+                        ghostRenderOrder={2}
+                        disableSelectionAndHover
+                        raftColorized={false}
+                        raftHoverized={false}
+                        passive
+                      />
+                    </group>
+                  ))
+                : null}
+
               {hideDuplicateSourceDuringApply
                 && duplicatePreviewModel
                 && duplicatePreviewMeshOffset
@@ -3359,6 +3523,42 @@ export function SceneCanvas({
                           depthWrite={false}
                         />
                       </mesh>
+                    </group>
+                  )
+                : null}
+
+              {hideDuplicateSourceDuringApply
+                && duplicatePreviewModel
+                && duplicateActiveSupportPreviewDelta
+                ? (
+                    <group
+                      key="duplicate-source-support-preview"
+                      matrix={duplicateActiveSupportPreviewDelta}
+                      matrixAutoUpdate={false}
+                      raycast={() => null}
+                    >
+                      <ModelAttachedSupportLayer
+                        mode={mode}
+                        navigationLodActive
+                        hideRaftPrimitives={hideRaftPrimitives}
+                        hidePlateContactPrimitives={hidePlateContactPrimitives}
+                        clipLower={clipLower}
+                        clipUpper={clipUpper}
+                        supportColorsByModelId={supportColorsByModelId}
+                        hoverTintColor={hoverTintColor}
+                        hoverTintStrength={hoverTintStrength}
+                        selectedTintStrength={selectedTintStrength}
+                        activeModelId={null}
+                        hoverModelId={null}
+                        modelDropOffsetsById={{}}
+                        modelFilterId={duplicatePreviewModel.id}
+                        ghostOpacity={0.3}
+                        ghostRenderOrder={2}
+                        disableSelectionAndHover
+                        raftColorized={false}
+                        raftHoverized={false}
+                        passive
+                      />
                     </group>
                   )
                 : null}
@@ -3451,33 +3651,10 @@ export function SceneCanvas({
               {/* Raft system (Crenelated) - uses supports roots + active model footprint */}
               {/* Wrap all support/raft geometry in a drag group so they move as one during gizmo drags */}
               <group ref={supportDragGroupRef ?? undefined}>
-              {!useActiveModelAttachedSupportProxy && !hideRaftPrimitives && (
-                <>
-                  <RaftRenderer
-                    colorized={raftColorized}
-                    hoverized={raftHoverized}
-                    activeModelId={visualActiveModelId ?? null}
-                    hoverModelId={hoveredModelId}
-                    navigationLodActive={navigationLodActive}
-                    onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
-                  />
-                  <LineRaftRenderer
-                    colorized={raftColorized}
-                    hoverized={raftHoverized}
-                    activeModelId={visualActiveModelId ?? null}
-                    hoverModelId={hoveredModelId}
-                    navigationLodActive={navigationLodActive}
-                    onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
-                  />
-                </>
-              )}
-
-              {/* Render supports */}
               {!useActiveModelAttachedSupportProxy && (
-                <SupportRenderer
-                  ref={supportsRef as React.RefObject<THREE.Group>}
+                <ModelAttachedSupportLayer
                   mode={mode}
-                  navigationLodActive={navigationLodActive}
+                  hideRaftPrimitives={hideRaftPrimitives}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   clipLower={clipLower}
                   clipUpper={clipUpper}
@@ -3488,7 +3665,12 @@ export function SceneCanvas({
                   activeModelId={visualActiveModelId ?? null}
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
+                  navigationLodActive={navigationLodActive}
                   disableSelectionAndHover={supportCreationModeActive}
+                  raftColorized={raftColorized}
+                  raftHoverized={raftHoverized}
+                  onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
+                  supportRendererRef={supportsRef as React.Ref<THREE.Group>}
                 />
               )}
               </group>{/* end supportDragGroupRef */}
@@ -3517,46 +3699,26 @@ export function SceneCanvas({
 
               {/* During active-model proxy drag, keep other models' supports/rafts visible in world space. */}
               {useActiveModelAttachedSupportProxy && activeModelId && (
-                <>
-                  {!hideRaftPrimitives && (
-                    <>
-                      <RaftRenderer
-                        colorized={raftColorized}
-                        hoverized={raftHoverized}
-                        activeModelId={visualActiveModelId ?? null}
-                        hoverModelId={hoveredModelId}
-                        excludeModelId={activeModelId}
-                        navigationLodActive
-                      />
-                      <LineRaftRenderer
-                        colorized={raftColorized}
-                        hoverized={raftHoverized}
-                        activeModelId={visualActiveModelId ?? null}
-                        hoverModelId={hoveredModelId}
-                        excludeModelId={activeModelId}
-                        navigationLodActive
-                      />
-                    </>
-                  )}
-
-                  <SupportRenderer
-                    mode={mode}
-                    navigationLodActive
-                    hidePlateContactPrimitives={hidePlateContactPrimitives}
-                    clipLower={clipLower}
-                    clipUpper={clipUpper}
-                    supportColorsByModelId={supportColorsByModelId}
-                    hoverTintColor={hoverTintColor}
-                    hoverTintStrength={hoverTintStrength}
-                    selectedTintStrength={selectedTintStrength}
-                    activeModelId={visualActiveModelId ?? null}
-                    hoverModelId={hoveredModelId}
-                    modelDropOffsetsById={entryDropOffsets}
-                    excludeModelId={activeModelId}
-                    disableSelectionAndHover={supportCreationModeActive}
-                    passive
-                  />
-                </>
+                <ModelAttachedSupportLayer
+                  mode={mode}
+                  excludeModelId={activeModelId}
+                  hideRaftPrimitives={hideRaftPrimitives}
+                  hidePlateContactPrimitives={hidePlateContactPrimitives}
+                  clipLower={clipLower}
+                  clipUpper={clipUpper}
+                  supportColorsByModelId={supportColorsByModelId}
+                  hoverTintColor={hoverTintColor}
+                  hoverTintStrength={hoverTintStrength}
+                  selectedTintStrength={selectedTintStrength}
+                  activeModelId={visualActiveModelId ?? null}
+                  hoverModelId={hoveredModelId}
+                  modelDropOffsetsById={entryDropOffsets}
+                  navigationLodActive
+                  disableSelectionAndHover={supportCreationModeActive}
+                  raftColorized={raftColorized}
+                  raftHoverized={raftHoverized}
+                  passive
+                />
               )}
 
               {/* Gizmo attached to active model */}

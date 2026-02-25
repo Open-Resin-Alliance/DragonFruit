@@ -20,6 +20,8 @@ import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWall
 interface RaftRendererProps {
   colorized?: boolean;
   hoverized?: boolean;
+  ghostOpacity?: number;
+  ghostRenderOrder?: number;
   activeModelId?: string | null;
   hoverModelId?: string | null;
   modelFilterId?: string | null;
@@ -31,6 +33,8 @@ interface RaftRendererProps {
 export default function RaftRenderer({
   colorized = true,
   hoverized = false,
+  ghostOpacity = 1,
+  ghostRenderOrder = 0,
   activeModelId = null,
   hoverModelId = null,
   modelFilterId = null,
@@ -56,6 +60,8 @@ export default function RaftRenderer({
   }, []);
 
   const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
+  const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
+  const raftTransparent = raftOpacity < 0.999;
 
   const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'solid') return null;
@@ -94,7 +100,8 @@ export default function RaftRenderer({
 
       const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
       baseMesh.userData.modelId = modelId;
-      baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
+      baseMesh.renderOrder = ghostRenderOrder;
+      baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
       baseMesh.castShadow = false;
       baseMesh.receiveShadow = true;
 
@@ -115,7 +122,8 @@ export default function RaftRenderer({
         if (wallMesh.geometry && (wallMesh.geometry as any).attributes?.position?.count > 0) {
           wallMesh.userData.modelId = modelId;
           wallMesh.userData.isWall = true;
-          wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: 1.0, transparent: false });
+          wallMesh.renderOrder = ghostRenderOrder;
+          wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
           wallMesh.castShadow = false;
           wallMesh.receiveShadow = true;
         }
@@ -125,7 +133,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing]);
+  }, [excludeModelId, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
@@ -209,8 +217,25 @@ export default function RaftRenderer({
       if (!material.color.equals(nextColor)) {
         material.color.copy(nextColor);
       }
+
+      if (material.transparent !== raftTransparent) {
+        material.transparent = raftTransparent;
+      }
+
+      if (Math.abs(material.opacity - raftOpacity) > 1e-4) {
+        material.opacity = raftOpacity;
+      }
+
+      const nextDepthWrite = !raftTransparent;
+      if (material.depthWrite !== nextDepthWrite) {
+        material.depthWrite = nextDepthWrite;
+      }
+
+      if (mesh.renderOrder !== ghostRenderOrder) {
+        mesh.renderOrder = ghostRenderOrder;
+      }
     }
-  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, raft.thickness]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder]);
 
   if (raft.bottomMode === 'off') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;

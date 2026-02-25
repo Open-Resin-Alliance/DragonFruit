@@ -95,6 +95,10 @@ import {
   subscribeToSupportBraceStore,
 } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
+import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
+import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
+import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -363,6 +367,7 @@ export default function Home() {
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
   const supportStateSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
   const supportBraceStateSnapshot = React.useSyncExternalStore(subscribeToSupportBraceStore, getSupportBraceSnapshot, getSupportBraceSnapshot);
+  const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const bracePlacementSnapshot = React.useSyncExternalStore(
     bracePlacementStore.subscribe,
     bracePlacementStore.getSnapshot,
@@ -1542,33 +1547,241 @@ export default function Home() {
     return model.transform;
   }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
 
-  const getModelBoundingFootprintMm = React.useCallback((
+  const supportBoundsByModelId = React.useMemo(() => {
+    const boundsByModelId = new Map<string, THREE.Box3>();
+
+    const ensureBounds = (modelId: string) => {
+      let bounds = boundsByModelId.get(modelId);
+      if (!bounds) {
+        bounds = new THREE.Box3();
+        boundsByModelId.set(modelId, bounds);
+      }
+      return bounds;
+    };
+
+    const expand = (modelId: string | null | undefined, pos: { x: number; y: number; z: number } | null | undefined, radiusMm = 0) => {
+      if (!modelId || !pos) return;
+      const bounds = ensureBounds(modelId);
+      const radius = Math.max(0, radiusMm);
+      bounds.expandByPoint(new THREE.Vector3(pos.x - radius, pos.y - radius, pos.z - radius));
+      bounds.expandByPoint(new THREE.Vector3(pos.x + radius, pos.y + radius, pos.z + radius));
+    };
+
+    const knotModelById = new Map<string, string>();
+
+    for (const branch of Object.values(supportStateSnapshot.branches)) {
+      if (branch.modelId) knotModelById.set(branch.parentKnotId, branch.modelId);
+    }
+    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
+      if (leaf.modelId) knotModelById.set(leaf.parentKnotId, leaf.modelId);
+    }
+    for (const brace of Object.values(supportStateSnapshot.braces)) {
+      if (!brace.modelId) continue;
+      knotModelById.set(brace.startKnotId, brace.modelId);
+      knotModelById.set(brace.endKnotId, brace.modelId);
+    }
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      if (supportBrace.modelId) knotModelById.set(supportBrace.hostKnotId, supportBrace.modelId);
+    }
+
+    for (const root of Object.values(supportStateSnapshot.roots)) {
+      expand(root.modelId, root.transform?.pos, Math.max(0.001, root.diameter / 2));
+      expand(root.modelId, {
+        x: root.transform.pos.x,
+        y: root.transform.pos.y,
+        z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+      }, Math.max(0.001, root.diameter / 2));
+    }
+
+    if (raftSettingsSnapshot.bottomMode !== 'off') {
+      const rootsByModel = new Map<string, SupportBaseCircle[]>();
+
+      for (const root of Object.values(supportStateSnapshot.roots)) {
+        if (!root.modelId) continue;
+        if (!rootsByModel.has(root.modelId)) rootsByModel.set(root.modelId, []);
+        rootsByModel.get(root.modelId)!.push({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          r: root.diameter / 2,
+        });
+      }
+
+      for (const [modelId, circles] of rootsByModel) {
+        if (circles.length === 0) continue;
+
+        const chamferInset = raftSettingsSnapshot.bottomMode === 'line'
+          ? Math.max(0, raftSettingsSnapshot.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsSnapshot.chamferAngle))))
+          : 0;
+
+        const baseProfile = computeFootprint(circles, {
+          marginMm: 0.2 + chamferInset,
+          samplesPerCircle: 24,
+        });
+
+        if (!baseProfile || baseProfile.length < 3) continue;
+
+        const outerProfile = raftSettingsSnapshot.wallEnabled
+          ? computeRaftOuterBoundary(baseProfile, raftSettingsSnapshot)
+          : baseProfile;
+
+        const raftTopZ = raftSettingsSnapshot.bottomMode === 'line'
+          ? raftSettingsSnapshot.lineHeightMm
+          : raftSettingsSnapshot.thickness;
+        const raftMaxZ = raftTopZ + (raftSettingsSnapshot.wallEnabled ? raftSettingsSnapshot.wallHeight : 0);
+
+        for (const p of outerProfile) {
+          expand(modelId, { x: p.x, y: p.y, z: 0 }, 0);
+          expand(modelId, { x: p.x, y: p.y, z: raftMaxZ }, 0);
+        }
+      }
+    }
+
+    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
+      const modelId = trunk.modelId;
+      if (!modelId) continue;
+      for (const seg of trunk.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      if (trunk.contactCone) {
+        expand(modelId, trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+      }
+    }
+
+    for (const branch of Object.values(supportStateSnapshot.branches)) {
+      const modelId = branch.modelId;
+      if (!modelId) continue;
+      for (const seg of branch.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      if (branch.contactCone) {
+        expand(modelId, branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
+      }
+    }
+
+    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
+      if (!leaf.modelId || !leaf.contactCone) continue;
+      expand(leaf.modelId, leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
+    }
+
+    for (const twig of Object.values(supportStateSnapshot.twigs)) {
+      const modelId = twig.modelId;
+      if (!modelId) continue;
+      for (const seg of twig.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      expand(modelId, twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
+      expand(modelId, twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
+    }
+
+    for (const stick of Object.values(supportStateSnapshot.sticks)) {
+      const modelId = stick.modelId;
+      if (!modelId) continue;
+      for (const seg of stick.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      expand(modelId, stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
+      expand(modelId, stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
+    }
+
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      const modelId = supportBrace.modelId;
+      if (!modelId) continue;
+      for (const seg of supportBrace.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+    }
+
+    for (const knot of Object.values(supportStateSnapshot.knots)) {
+      const parent = knot.parentShaftId;
+      let modelId = knotModelById.get(knot.id) ?? null;
+      if (!modelId) {
+        const trunk = supportStateSnapshot.trunks[parent];
+        const branch = supportStateSnapshot.branches[parent];
+        const twig = supportStateSnapshot.twigs[parent];
+        const stick = supportStateSnapshot.sticks[parent];
+        if (trunk?.modelId) modelId = trunk.modelId;
+        else if (branch?.modelId) modelId = branch.modelId;
+        else if (twig?.modelId) modelId = twig.modelId;
+        else if (stick?.modelId) modelId = stick.modelId;
+        else if (parent.startsWith('braceSegment:')) {
+          const braceId = parent.slice('braceSegment:'.length);
+          modelId = supportStateSnapshot.braces[braceId]?.modelId ?? null;
+        }
+      }
+      expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
+    }
+
+    for (const knot of Object.values(supportBraceStateSnapshot.knots)) {
+      const modelId = knotModelById.get(knot.id) ?? null;
+      expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
+    }
+
+    return boundsByModelId;
+  }, [
+    supportStateSnapshot.braces,
+    supportStateSnapshot.branches,
+    supportStateSnapshot.knots,
+    supportStateSnapshot.leaves,
+    supportStateSnapshot.roots,
+    supportStateSnapshot.sticks,
+    supportStateSnapshot.trunks,
+    supportStateSnapshot.twigs,
+    supportBraceStateSnapshot.knots,
+    supportBraceStateSnapshot.supportBraces,
+    raftSettingsSnapshot,
+  ]);
+
+  const getModelSupportAwareDimensionsMm = React.useCallback((
     model: (typeof scene.models)[number],
     rotationZOverride?: number,
     transformOverride?: (typeof scene.models)[number]['transform'],
   ) => {
     const t = transformOverride ?? getArrangeTransform(model);
-    const rotation = new THREE.Euler(
-      t.rotation.x,
-      t.rotation.y,
-      rotationZOverride ?? t.rotation.z,
-      t.rotation.order,
+    const effectiveTransform = {
+      position: t.position.clone(),
+      rotation: new THREE.Euler(
+        t.rotation.x,
+        t.rotation.y,
+        rotationZOverride ?? t.rotation.z,
+        t.rotation.order,
+      ),
+      scale: t.scale.clone(),
+    };
+
+    const meshBounds = computeApproxModelWorldBounds(
+      model.geometry,
+      effectiveTransform,
     );
 
-    const bounds = computeApproxModelWorldBounds(
-      model.geometry,
-      {
-        position: new THREE.Vector3(0, 0, 0),
-        rotation,
-        scale: t.scale,
-      },
-    );
+    const supportBoundsBase = supportBoundsByModelId.get(model.id);
+    const combinedBounds = meshBounds.clone();
+    if (supportBoundsBase && !supportBoundsBase.isEmpty()) {
+      const sourceMatrix = new THREE.Matrix4().compose(
+        model.transform.position,
+        new THREE.Quaternion().setFromEuler(model.transform.rotation),
+        model.transform.scale,
+      );
+      const targetMatrix = new THREE.Matrix4().compose(
+        effectiveTransform.position,
+        new THREE.Quaternion().setFromEuler(effectiveTransform.rotation),
+        effectiveTransform.scale,
+      );
+      const delta = new THREE.Matrix4().multiplyMatrices(targetMatrix, sourceMatrix.clone().invert());
+      const transformedSupportBounds = supportBoundsBase.clone().applyMatrix4(delta);
+      combinedBounds.union(transformedSupportBounds);
+    }
 
     return {
-      width: Math.max(2, bounds.max.x - bounds.min.x),
-      depth: Math.max(2, bounds.max.y - bounds.min.y),
+      width: Math.max(2, combinedBounds.max.x - combinedBounds.min.x),
+      depth: Math.max(2, combinedBounds.max.y - combinedBounds.min.y),
+      height: Math.max(2, combinedBounds.max.z - combinedBounds.min.z),
     };
-  }, [computeApproxModelWorldBounds, getArrangeTransform]);
+  }, [computeApproxModelWorldBounds, getArrangeTransform, supportBoundsByModelId]);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1663,7 +1876,7 @@ export default function Home() {
 
       const modelsWithFootprints = visibleModels.map((model) => {
         const t = modelTransformById.get(model.id) ?? model.transform;
-        const baseFootprint = getModelBoundingFootprintMm(model, undefined, t);
+        const baseFootprint = getModelSupportAwareDimensionsMm(model, undefined, t);
         return {
           model,
           baseWidth: baseFootprint.width,
@@ -1732,7 +1945,7 @@ export default function Home() {
           const cached = placementSizeCache.get(key);
           if (cached) return cached;
 
-          const dims = getModelBoundingFootprintMm(model, angleZ, t);
+          const dims = getModelSupportAwareDimensionsMm(model, angleZ, t);
 
           placementSizeCache.set(key, dims);
           return dims;
@@ -2052,7 +2265,7 @@ export default function Home() {
       setActiveArrangeOperation(null);
       setArrangeOverlayModelCount(null);
     }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelBoundingFootprintMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
 
   const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
@@ -2126,9 +2339,8 @@ export default function Home() {
 
     const baseDims = visibleModels.map((model) => {
       const t = modelTransformById.get(model.id) ?? model.transform;
-      const projected = getModelBoundingFootprintMm(model, undefined, t);
-      const size = model.geometry.size;
-      const scaledHeight = Math.max(2, Math.abs(size.z * t.scale.z));
+      const projected = getModelSupportAwareDimensionsMm(model, undefined, t);
+      const scaledHeight = projected.height;
 
       return {
         width: projected.width,
@@ -2211,7 +2423,7 @@ export default function Home() {
     scene.view3dSettings.originMode,
     scene.view3dSettings.widthMm,
     getArrangeTransform,
-    getModelBoundingFootprintMm,
+    getModelSupportAwareDimensionsMm,
     resolveArrangeVisibleModels,
   ]);
 
@@ -2954,14 +3166,10 @@ export default function Home() {
     }
 
     const model = scene.activeModel;
-    const baseWidth = Math.max(2, Math.abs(model.geometry.size.x * model.transform.scale.x));
-    const baseDepth = Math.max(2, Math.abs(model.geometry.size.y * model.transform.scale.y));
-    const z = model.transform.rotation.z;
-    const c = Math.abs(Math.cos(z));
-    const s = Math.abs(Math.sin(z));
-    const width = (baseWidth * c) + (baseDepth * s);
-    const depth = (baseWidth * s) + (baseDepth * c);
-    const height = Math.max(2, Math.abs(model.geometry.size.z * model.transform.scale.z));
+    const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
+    const width = sourceDims.width;
+    const depth = sourceDims.depth;
+    const height = sourceDims.height;
 
     const slots: THREE.Vector3[] = [];
 
@@ -3014,17 +3222,13 @@ export default function Home() {
       type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
       const intersectsRect = (a: Rect2D, b: Rect2D) => {
-        return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+        return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
       };
 
       const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-        const mBaseW = Math.max(2, Math.abs(m.geometry.size.x * m.transform.scale.x));
-        const mBaseD = Math.max(2, Math.abs(m.geometry.size.y * m.transform.scale.y));
-        const rz = m.transform.rotation.z;
-        const rc = Math.abs(Math.cos(rz));
-        const rs = Math.abs(Math.sin(rz));
-        const mW = (mBaseW * rc) + (mBaseD * rs);
-        const mD = (mBaseW * rs) + (mBaseD * rc);
+        const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
+        const mW = dims.width;
+        const mD = dims.depth;
         return {
           minX: m.transform.position.x - (mW * 0.5),
           maxX: m.transform.position.x + (mW * 0.5),
@@ -3147,6 +3351,7 @@ export default function Home() {
     resolveArrangeVisibleModels,
     duplicateSpacingMm,
     duplicateTotalCopies,
+    getModelSupportAwareDimensionsMm,
     scene.activeModel,
     scene.models,
     scene.mode,
@@ -3209,13 +3414,9 @@ export default function Home() {
     const model = scene.activeModel;
     if (!model) return;
 
-    const baseWidth = Math.max(2, Math.abs(model.geometry.size.x * model.transform.scale.x));
-    const baseDepth = Math.max(2, Math.abs(model.geometry.size.y * model.transform.scale.y));
-    const rz = model.transform.rotation.z;
-    const rc = Math.abs(Math.cos(rz));
-    const rs = Math.abs(Math.sin(rz));
-    const width = (baseWidth * rc) + (baseDepth * rs);
-    const depth = (baseWidth * rs) + (baseDepth * rc);
+    const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
+    const width = sourceDims.width;
+    const depth = sourceDims.depth;
     const spacing = Math.max(0, duplicateSpacingMm);
 
     const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
@@ -3236,17 +3437,13 @@ export default function Home() {
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
-      return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+      return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
     };
 
     const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-      const mBaseW = Math.max(2, Math.abs(m.geometry.size.x * m.transform.scale.x));
-      const mBaseD = Math.max(2, Math.abs(m.geometry.size.y * m.transform.scale.y));
-      const z = m.transform.rotation.z;
-      const c = Math.abs(Math.cos(z));
-      const s = Math.abs(Math.sin(z));
-      const mW = (mBaseW * c) + (mBaseD * s);
-      const mD = (mBaseW * s) + (mBaseD * c);
+      const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
+      const mW = dims.width;
+      const mD = dims.depth;
       return {
         minX: m.transform.position.x - (mW * 0.5),
         maxX: m.transform.position.x + (mW * 0.5),
@@ -3290,7 +3487,7 @@ export default function Home() {
 
     const targetCopies = Math.min(128, Math.max(1, capacity));
     setDuplicateTotalCopies(targetCopies);
-  }, [duplicateLayoutMode, duplicateSpacingMm, isDuplicating, scene]);
+  }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
 
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden">

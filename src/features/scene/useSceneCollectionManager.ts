@@ -425,6 +425,10 @@ import {
   type SupportClipboardPayload,
 } from '@/supports/PlacementLogic/supportClipboard';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
+import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
+import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 
 type ImportProgressState = {
   active: boolean;
@@ -1517,7 +1521,7 @@ export function useSceneCollectionManager() {
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
-      return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+      return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
     };
 
     const isRectInsidePlate = (rect: Rect2D) => (
@@ -1539,20 +1543,180 @@ export function useSceneCollectionManager() {
       };
     };
 
-    const maxWidth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).width));
-    const maxDepth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).depth));
+    const supportRectForPayload = (payload: SupportClipboardPayload | null | undefined): Rect2D | null => {
+      if (!payload) return null;
+
+      const raftSettings = getRaftSettings();
+
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      let hasAny = false;
+
+      const expand = (pos?: { x: number; y: number; z: number } | null, radius = 0) => {
+        if (!pos) return;
+        const r = Math.max(0, radius);
+        minX = Math.min(minX, pos.x - r);
+        maxX = Math.max(maxX, pos.x + r);
+        minY = Math.min(minY, pos.y - r);
+        maxY = Math.max(maxY, pos.y + r);
+        hasAny = true;
+      };
+
+      payload.roots.forEach((root) => {
+        const rr = Math.max(0.001, root.diameter / 2);
+        expand(root.transform.pos, rr);
+        expand({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+        }, rr);
+      });
+
+      if (raftSettings.bottomMode !== 'off' && payload.roots.length > 0) {
+        const circles: SupportBaseCircle[] = payload.roots.map((root) => ({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          r: root.diameter / 2,
+        }));
+
+        const chamferInset = raftSettings.bottomMode === 'line'
+          ? Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))))
+          : 0;
+
+        const baseProfile = computeFootprint(circles, {
+          marginMm: 0.2 + chamferInset,
+          samplesPerCircle: 24,
+        });
+
+        if (baseProfile && baseProfile.length >= 3) {
+          const outerProfile = raftSettings.wallEnabled
+            ? computeRaftOuterBoundary(baseProfile, raftSettings)
+            : baseProfile;
+
+          outerProfile.forEach((point) => expand({ x: point.x, y: point.y, z: 0 }, 0));
+        }
+      }
+
+      payload.knots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
+      payload.supportBraceKnots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
+
+      const expandSegments = (segments: Array<any>) => {
+        segments.forEach((segment) => {
+          expand(segment.topJoint?.pos, Math.max(0.001, (segment.topJoint?.diameter ?? segment.diameter) / 2));
+          expand(segment.bottomJoint?.pos, Math.max(0.001, (segment.bottomJoint?.diameter ?? segment.diameter) / 2));
+        });
+      };
+
+      payload.trunks.forEach((trunk) => {
+        expandSegments(trunk.segments as any[]);
+        if (trunk.contactCone) {
+          expand(trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+        }
+      });
+
+      payload.branches.forEach((branch) => {
+        expandSegments(branch.segments as any[]);
+        if (branch.contactCone) {
+          expand(branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
+        }
+      });
+
+      payload.leaves.forEach((leaf) => {
+        if (!leaf.contactCone) return;
+        expand(leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
+      });
+
+      payload.twigs.forEach((twig) => {
+        expandSegments(twig.segments as any[]);
+        expand(twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
+        expand(twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
+      });
+
+      payload.sticks.forEach((stick) => {
+        expandSegments(stick.segments as any[]);
+        expand(stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
+        expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
+      });
+
+      payload.supportBraces.forEach((supportBrace) => {
+        expandSegments(supportBrace.segments as any[]);
+      });
+
+      return hasAny ? { minX, maxX, minY, maxY } : null;
+    };
+
+    type PlacementOffsets = {
+      minXOffset: number;
+      maxXOffset: number;
+      minYOffset: number;
+      maxYOffset: number;
+      width: number;
+      depth: number;
+    };
+
+    const buildPlacementOffsets = (
+      center: { x: number; y: number },
+      meshSize: THREE.Vector3,
+      transform: ModelTransform,
+      supportPayload: SupportClipboardPayload | null | undefined,
+    ): PlacementOffsets => {
+      const meshFootprint = footprintFor(meshSize, transform);
+      const meshRect: Rect2D = {
+        minX: center.x - (meshFootprint.width * 0.5),
+        maxX: center.x + (meshFootprint.width * 0.5),
+        minY: center.y - (meshFootprint.depth * 0.5),
+        maxY: center.y + (meshFootprint.depth * 0.5),
+      };
+
+      const supportRect = supportRectForPayload(supportPayload);
+      const combinedRect = supportRect
+        ? {
+            minX: Math.min(meshRect.minX, supportRect.minX),
+            maxX: Math.max(meshRect.maxX, supportRect.maxX),
+            minY: Math.min(meshRect.minY, supportRect.minY),
+            maxY: Math.max(meshRect.maxY, supportRect.maxY),
+          }
+        : meshRect;
+
+      return {
+        minXOffset: combinedRect.minX - center.x,
+        maxXOffset: combinedRect.maxX - center.x,
+        minYOffset: combinedRect.minY - center.y,
+        maxYOffset: combinedRect.maxY - center.y,
+        width: Math.max(2, combinedRect.maxX - combinedRect.minX),
+        depth: Math.max(2, combinedRect.maxY - combinedRect.minY),
+      };
+    };
+
+    const entryPlacementOffsets = entries.map((entry) => buildPlacementOffsets(
+      { x: entry.transform.position.x, y: entry.transform.position.y },
+      entry.geometry.size,
+      entry.transform,
+      entry.supportClipboard,
+    ));
+
+    const maxWidth = Math.max(...entryPlacementOffsets.map((entry) => entry.width));
+    const maxDepth = Math.max(...entryPlacementOffsets.map((entry) => entry.depth));
     const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
     const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
 
     const blockedRects: Rect2D[] = models
       .filter((model) => model.visible)
       .map((model) => {
-        const { width, depth } = footprintFor(model.geometry.size, model.transform);
+        const supportPayload = captureModelSupportsToClipboard(model.id);
+        const placement = buildPlacementOffsets(
+          { x: model.transform.position.x, y: model.transform.position.y },
+          model.geometry.size,
+          model.transform,
+          supportPayload,
+        );
         return {
-          minX: model.transform.position.x - (width * 0.5),
-          maxX: model.transform.position.x + (width * 0.5),
-          minY: model.transform.position.y - (depth * 0.5),
-          maxY: model.transform.position.y + (depth * 0.5),
+          minX: model.transform.position.x + placement.minXOffset,
+          maxX: model.transform.position.x + placement.maxXOffset,
+          minY: model.transform.position.y + placement.minYOffset,
+          maxY: model.transform.position.y + placement.maxYOffset,
         };
       });
 
@@ -1610,14 +1774,14 @@ export function useSceneCollectionManager() {
 
     candidateCenters.sort((a, b) => a.distSq - b.distSq);
 
-    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry) => {
-      const { width, depth } = footprintFor(entry.geometry.size, entry.transform);
+    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry, entryIndex) => {
+      const placement = entryPlacementOffsets[entryIndex];
 
       const makeRectAt = (x: number, y: number): Rect2D => ({
-        minX: x - (width * 0.5),
-        maxX: x + (width * 0.5),
-        minY: y - (depth * 0.5),
-        maxY: y + (depth * 0.5),
+        minX: x + placement.minXOffset,
+        maxX: x + placement.maxXOffset,
+        minY: y + placement.minYOffset,
+        maxY: y + placement.maxYOffset,
       });
 
       // Pass 1: exhaust all valid in-plate positions first.
@@ -1649,10 +1813,10 @@ export function useSceneCollectionManager() {
       const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
       const fallbackY = centerY;
       blockedRects.push({
-        minX: fallbackX - (width * 0.5),
-        maxX: fallbackX + (width * 0.5),
-        minY: fallbackY - (depth * 0.5),
-        maxY: fallbackY + (depth * 0.5),
+        minX: fallbackX + placement.minXOffset,
+        maxX: fallbackX + placement.maxXOffset,
+        minY: fallbackY + placement.minYOffset,
+        maxY: fallbackY + placement.maxYOffset,
       });
       return { x: fallbackX, y: fallbackY };
     });
