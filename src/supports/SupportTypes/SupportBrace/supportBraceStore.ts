@@ -122,6 +122,14 @@ function transformVec3(value: Vec3, matrix: THREE.Matrix4): Vec3 {
     return { x: v.x, y: v.y, z: v.z };
 }
 
+function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
+    const transformed = transformVec3(value, matrix);
+    return {
+        ...transformed,
+        z: value.z,
+    };
+}
+
 function transformDirection(value: Vec3, normalMatrix: THREE.Matrix3): Vec3 {
     const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix3(normalMatrix);
     if (v.lengthSq() <= 1e-12) return value;
@@ -157,6 +165,7 @@ export function transformSupportBracesForModel(
     touchedRootIds?: Set<string>,
     touchedKnotIds?: Set<string>,
     touchedSegmentIds?: Set<string>,
+    preserveRootZ = false,
 ) {
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
@@ -196,7 +205,9 @@ export function transformSupportBracesForModel(
                 ...root,
                 transform: {
                     ...root.transform,
-                    pos: transformVec3(root.transform.pos, deltaMatrix),
+                    pos: preserveRootZ
+                        ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
+                        : transformVec3(root.transform.pos, deltaMatrix),
                 },
             };
         }
@@ -220,7 +231,7 @@ export function transformSupportBracesForModel(
     notify();
 }
 
-export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4): boolean {
+export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4, preserveRootZ = false): boolean {
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
     const supportBraceEntries = Object.values(state.supportBraces);
@@ -242,7 +253,9 @@ export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4): boolean {
                 ...root,
                 transform: {
                     ...root.transform,
-                    pos: transformVec3(root.transform.pos, deltaMatrix),
+                    pos: preserveRootZ
+                        ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
+                        : transformVec3(root.transform.pos, deltaMatrix),
                 },
             };
         }
