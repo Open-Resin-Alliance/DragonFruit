@@ -1392,6 +1392,19 @@ export function SceneCanvas({
     || isSupportBracePlacementActive,
   );
 
+  const supportHoverTargetActive = supportStateForBounds.hoveredCategory === 'support'
+    || supportStateForBounds.hoveredCategory === 'segment'
+    || supportStateForBounds.hoveredCategory === 'joint'
+    || supportStateForBounds.hoveredCategory === 'knot';
+
+  const branchHoverDotVisible = Boolean(
+    branchHoverPosition
+    && !branchTipPosition
+    && !branchPlacementPreview
+    && !supportHoverTargetActive
+    && !!hoveredMeshModelId,
+  );
+
   const raftColorized = mode === 'support' || !!visualActiveModelId || !!hoveredModelId;
   const raftHoverized = mode === 'support' || (!visualActiveModelId && !!hoveredModelId);
 
@@ -3809,7 +3822,7 @@ export function SceneCanvas({
 
               {/* Render Branch Hover Preview Dot - shows when Alt is held before first click */}
               {/* Uses tip contact diameter to match actual tip size */}
-              {branchHoverPosition && !branchTipPosition && !branchPlacementPreview && (
+              {branchHoverDotVisible && branchHoverPosition && (
                 <mesh position={[branchHoverPosition.x, branchHoverPosition.y, branchHoverPosition.z]} raycast={() => null}>
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
                   <meshStandardMaterial
