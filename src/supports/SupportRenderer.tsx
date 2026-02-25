@@ -937,20 +937,97 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return result;
     }, [supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, restrictToActiveModel, activeModelId]);
 
+    const segmentModelIdById = useMemo(() => {
+        const map = new Map<string, string | undefined>();
+
+        for (const trunk of Object.values(state.trunks)) {
+            for (const segment of trunk.segments) {
+                map.set(segment.id, trunk.modelId);
+            }
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            for (const segment of branch.segments) {
+                map.set(segment.id, branch.modelId);
+            }
+        }
+
+        for (const twig of Object.values(state.twigs)) {
+            for (const segment of twig.segments) {
+                map.set(segment.id, twig.modelId);
+            }
+        }
+
+        for (const stick of Object.values(state.sticks)) {
+            for (const segment of stick.segments) {
+                map.set(segment.id, stick.modelId);
+            }
+        }
+
+        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+            for (const segment of supportBrace.segments) {
+                map.set(segment.id, supportBrace.modelId);
+            }
+        }
+
+        return map;
+    }, [state.trunks, state.branches, state.twigs, state.sticks, supportBraceState.supportBraces]);
+
+    const modelIdByKnotId = useMemo(() => {
+        const map = new Map<string, string | undefined>();
+
+        for (const knot of Object.values(state.knots)) {
+            const parentShaftId = knot.parentShaftId;
+            let modelId: string | undefined;
+
+            if (parentShaftId.startsWith('braceSegment:')) {
+                const braceId = parentShaftId.slice('braceSegment:'.length);
+                modelId = state.braces[braceId]?.modelId;
+            } else if (parentShaftId.startsWith('leafCone:')) {
+                const leafId = parentShaftId.slice('leafCone:'.length);
+                modelId = state.leaves[leafId]?.modelId;
+            } else {
+                modelId = segmentModelIdById.get(parentShaftId);
+            }
+
+            map.set(knot.id, modelId);
+        }
+
+        for (const knot of Object.values(supportBraceState.knots)) {
+            const parentShaftId = knot.parentShaftId;
+            let modelId: string | undefined;
+
+            if (parentShaftId.startsWith('braceSegment:')) {
+                const braceId = parentShaftId.slice('braceSegment:'.length);
+                modelId = state.braces[braceId]?.modelId;
+            } else if (parentShaftId.startsWith('leafCone:')) {
+                const leafId = parentShaftId.slice('leafCone:'.length);
+                modelId = state.leaves[leafId]?.modelId;
+            } else {
+                modelId = segmentModelIdById.get(parentShaftId);
+            }
+
+            map.set(knot.id, modelId);
+        }
+
+        return map;
+    }, [state.knots, state.braces, state.leaves, supportBraceState.knots, segmentModelIdById]);
+
     const contactConesBySupport = useMemo(() => {
         const result = new Map<string, { supportId: string; modelId?: string; cones: InstancedContactCone[] }>();
 
         for (const trunk of Object.values(state.trunks)) {
-            if (!isModelVisible(trunk.modelId)) continue;
+            const modelId = trunk.modelId;
+            if (!isModelVisible(modelId)) continue;
             if (!trunk.contactCone) continue;
 
             result.set(trunk.id, {
                 supportId: trunk.id,
-                modelId: trunk.modelId,
+                modelId,
                 cones: [{
                     id: trunk.contactCone.id,
                     supportId: trunk.id,
-                    modelId: trunk.modelId,
+                    modelId,
                     pos: trunk.contactCone.pos,
                     normal: trunk.contactCone.normal,
                     surfaceNormal: trunk.contactCone.surfaceNormal,
@@ -961,16 +1038,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const branch of Object.values(state.branches)) {
-            if (!isModelVisible(branch.modelId)) continue;
+            const modelId = branch.modelId ?? modelIdByKnotId.get(branch.parentKnotId);
+            if (!isModelVisible(modelId)) continue;
             if (!branch.contactCone) continue;
 
             result.set(branch.id, {
                 supportId: branch.id,
-                modelId: branch.modelId,
+                modelId,
                 cones: [{
                     id: branch.contactCone.id,
                     supportId: branch.id,
-                    modelId: branch.modelId,
+                    modelId,
                     pos: branch.contactCone.pos,
                     normal: branch.contactCone.normal,
                     surfaceNormal: branch.contactCone.surfaceNormal,
@@ -981,16 +1059,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const stick of Object.values(state.sticks)) {
-            if (!isModelVisible(stick.modelId)) continue;
+            const modelId = stick.modelId;
+            if (!isModelVisible(modelId)) continue;
 
             result.set(stick.id, {
                 supportId: stick.id,
-                modelId: stick.modelId,
+                modelId,
                 cones: [
                     {
                         id: stick.contactConeA.id,
                         supportId: stick.id,
-                        modelId: stick.modelId,
+                        modelId,
                         pos: stick.contactConeA.pos,
                         normal: stick.contactConeA.normal,
                         surfaceNormal: stick.contactConeA.surfaceNormal,
@@ -1000,7 +1079,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     {
                         id: stick.contactConeB.id,
                         supportId: stick.id,
-                        modelId: stick.modelId,
+                        modelId,
                         pos: stick.contactConeB.pos,
                         normal: stick.contactConeB.normal,
                         surfaceNormal: stick.contactConeB.surfaceNormal,
@@ -1012,15 +1091,16 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const leaf of Object.values(state.leaves)) {
-            if (!isModelVisible(leaf.modelId)) continue;
+            const modelId = leaf.modelId ?? modelIdByKnotId.get(leaf.parentKnotId);
+            if (!isModelVisible(modelId)) continue;
 
             result.set(leaf.id, {
                 supportId: leaf.id,
-                modelId: leaf.modelId,
+                modelId,
                 cones: [{
                     id: leaf.contactCone.id,
                     supportId: leaf.id,
-                    modelId: leaf.modelId,
+                    modelId,
                     pos: leaf.contactCone.pos,
                     normal: leaf.contactCone.normal,
                     surfaceNormal: leaf.contactCone.surfaceNormal,
@@ -1031,7 +1111,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.trunks, state.branches, state.sticks, state.leaves, restrictToActiveModel, activeModelId]);
+    }, [state.trunks, state.branches, state.sticks, state.leaves, modelIdByKnotId, restrictToActiveModel, activeModelId, modelFilterId, excludeModelId]);
 
     const trunkJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();

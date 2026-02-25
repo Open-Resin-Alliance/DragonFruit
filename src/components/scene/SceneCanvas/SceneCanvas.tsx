@@ -2054,8 +2054,31 @@ export function SceneCanvas({
     );
   }, [duplicatePreviewModel]);
 
+  const effectiveDuplicatePreviewTransforms = React.useMemo(() => {
+    if (!duplicatePreviewTransforms || duplicatePreviewTransforms.length === 0) {
+      return [] as Array<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>;
+    }
+
+    if (!duplicateActivePreviewTransform) {
+      return duplicatePreviewTransforms;
+    }
+
+    const EPSILON = 1e-5;
+    const source = duplicateActivePreviewTransform;
+
+    return duplicatePreviewTransforms.filter((candidate) => {
+      const posMatch = candidate.position.distanceToSquared(source.position) <= EPSILON;
+      const rotMatch =
+        Math.abs(candidate.rotation.x - source.rotation.x) <= EPSILON
+        && Math.abs(candidate.rotation.y - source.rotation.y) <= EPSILON
+        && Math.abs(candidate.rotation.z - source.rotation.z) <= EPSILON;
+      const scaleMatch = candidate.scale.distanceToSquared(source.scale) <= EPSILON;
+      return !(posMatch && rotMatch && scaleMatch);
+    });
+  }, [duplicateActivePreviewTransform, duplicatePreviewTransforms]);
+
   const duplicateSupportPreviewDeltas = React.useMemo(() => {
-    if (!duplicatePreviewModel || !duplicatePreviewTransforms || duplicatePreviewTransforms.length === 0) {
+    if (!duplicatePreviewModel || effectiveDuplicatePreviewTransforms.length === 0) {
       return [] as THREE.Matrix4[];
     }
 
@@ -2066,7 +2089,7 @@ export function SceneCanvas({
     );
     const invSource = sourceMatrix.clone().invert();
 
-    return duplicatePreviewTransforms.map((previewTransform) => {
+    return effectiveDuplicatePreviewTransforms.map((previewTransform) => {
       const targetMatrix = new THREE.Matrix4().compose(
         previewTransform.position,
         quaternionFromGlobalEuler(previewTransform.rotation),
@@ -2074,7 +2097,7 @@ export function SceneCanvas({
       );
       return targetMatrix.multiply(invSource.clone());
     });
-  }, [duplicatePreviewModel, duplicatePreviewTransforms]);
+  }, [duplicatePreviewModel, effectiveDuplicatePreviewTransforms]);
 
   const duplicateActiveSupportPreviewDelta = React.useMemo(() => {
     if (!duplicatePreviewModel || !duplicateActivePreviewTransform) return null;
@@ -2092,6 +2115,11 @@ export function SceneCanvas({
 
     return targetMatrix.multiply(sourceMatrix.clone().invert());
   }, [duplicateActivePreviewTransform, duplicatePreviewModel]);
+
+  const duplicateSourceSupportPreviewModelId = React.useMemo(() => {
+    if (!duplicatePreviewModel || !duplicateActiveSupportPreviewDelta) return null;
+    return duplicatePreviewModel.id;
+  }, [duplicateActiveSupportPreviewDelta, duplicatePreviewModel]);
 
   const activeModelTransform = React.useMemo(() => {
     if (!activeModel) return null;
@@ -3433,8 +3461,8 @@ export function SceneCanvas({
 
               {duplicatePreviewModel
                 && duplicatePreviewMeshOffset
-                && (duplicatePreviewTransforms?.length ?? 0) > 0
-                ? duplicatePreviewTransforms!.map((previewTransform, index) => (
+                && effectiveDuplicatePreviewTransforms.length > 0
+                ? effectiveDuplicatePreviewTransforms.map((previewTransform, index) => (
                     <group
                       key={`duplicate-preview-${index}`}
                       position={previewTransform.position}
@@ -3527,8 +3555,7 @@ export function SceneCanvas({
                   )
                 : null}
 
-              {hideDuplicateSourceDuringApply
-                && duplicatePreviewModel
+              {duplicatePreviewModel
                 && duplicateActiveSupportPreviewDelta
                 ? (
                     <group
@@ -3654,6 +3681,7 @@ export function SceneCanvas({
               {!useActiveModelAttachedSupportProxy && (
                 <ModelAttachedSupportLayer
                   mode={mode}
+                  excludeModelId={duplicateSourceSupportPreviewModelId}
                   hideRaftPrimitives={hideRaftPrimitives}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   clipLower={clipLower}
