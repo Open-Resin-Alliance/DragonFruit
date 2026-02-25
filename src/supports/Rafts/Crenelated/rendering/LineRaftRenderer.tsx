@@ -180,8 +180,9 @@ export default function LineRaftRenderer({
 
     const resolveTintStrength = (modelId: string) => {
       if (!colorized) return 0;
-      if (hasSelectedModels) return (modelId === activeModelId || selectedModelIdSet.has(modelId)) ? 1 : 0;
+      if (modelId === activeModelId || selectedModelIdSet.has(modelId)) return 1;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
+      if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
     };
 
@@ -428,8 +429,9 @@ export default function LineRaftRenderer({
     const resolveTintStrength = (modelId: string | null) => {
       if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
       if (!colorized) return 0;
-      if (hasSelectedModels) return (modelId === activeModelId || selectedModelIdSet.has(modelId)) ? 1 : 0;
+      if (modelId === activeModelId || selectedModelIdSet.has(modelId)) return 1;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
+      if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
     };
 

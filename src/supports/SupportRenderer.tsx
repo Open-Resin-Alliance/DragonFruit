@@ -538,13 +538,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const baseHex = '#a3a3a3';
         const hoverTintHex = '#ff8800';
         const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.5).getStyle();
-        const hasModelSelection = !!activeModelId || selectedModelIdSet.size > 0;
 
         return (modelId?: string) => {
             const isSelectedModelSupport = !!modelId && (modelId === activeModelId || selectedModelIdSet.has(modelId));
             if (isSelectedModelSupport) return '#ff8800';
 
-            const isHoveredModelSupport = !hasModelSelection && !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
+            const isHoveredModelSupport = !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
             if (isHoveredModelSupport) return hoveredColor;
 
             return baseHex;
@@ -1530,10 +1529,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const sceneBatchedTwigShaftGroups = useMemo(() => {
         if (!enableTwigSceneBatching) {
-            return [] as Array<{ modelId?: string; color: string; shafts: InstancedShaft[] }>;
+            return [] as Array<{ modelId?: string; shafts: InstancedShaft[] }>;
         }
 
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
 
         for (const twig of Object.values(state.twigs)) {
             if (!isModelVisible(twig.modelId, twig.id)) continue;
@@ -1541,23 +1540,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedTwigIds.has(twig.id)) continue;
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, twig.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const bucketKey = `${modelKey}::${color}`;
-            const existing = grouped.get(bucketKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
+            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
-            if (existing.shafts.length > 0) grouped.set(bucketKey, existing);
+            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like, enableTwigSceneBatching]);
+    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, applyDropToVec3Like, enableTwigSceneBatching]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
 
         for (const stick of Object.values(state.sticks)) {
             if (!isModelVisible(stick.modelId, stick.id)) continue;
@@ -1565,23 +1562,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedStickIds.has(stick.id)) continue;
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, stick.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const bucketKey = `${modelKey}::${color}`;
-            const existing = grouped.get(bucketKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
+            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
-            if (existing.shafts.length > 0) grouped.set(bucketKey, existing);
+            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [state.sticks, stickShaftsBySupport, selectedStickIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
+    }, [state.sticks, stickShaftsBySupport, selectedStickIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
 
     const sceneBatchedSupportBraceShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
             if (!isModelVisible(supportBrace.modelId, supportBrace.id)) continue;
@@ -1589,23 +1584,21 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedSupportBraceIds.has(supportBrace.id)) continue;
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, supportBrace.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const bucketKey = `${modelKey}::${color}`;
-            const existing = grouped.get(bucketKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
+            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
-            if (existing.shafts.length > 0) grouped.set(bucketKey, existing);
+            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
+    }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
 
         for (const brace of Object.values(state.braces)) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
@@ -1614,11 +1607,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedBraceIds.has(brace.id)) continue;
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, brace.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const bucketKey = `${modelKey}::${color}`;
 
-            const existing = grouped.get(bucketKey);
+            const existing = grouped.get(modelKey);
             if (existing) {
                 existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                     ...shaft,
@@ -1626,9 +1617,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     end: applyDropToVec3Like(shaft.end, shaft.modelId),
                 })));
             } else {
-                grouped.set(bucketKey, {
+                grouped.set(modelKey, {
                     modelId: shaftSet.modelId,
-                    color,
                     shafts: shaftSet.shafts.map((shaft) => ({
                         ...shaft,
                         start: applyDropToVec3Like(shaft.start, shaft.modelId),
@@ -1639,10 +1629,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
+    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
 
         for (const trunk of Object.values(state.trunks)) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
@@ -1651,24 +1641,22 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedTrunkIds.has(trunk.id)) continue;
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, trunk.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const bucketKey = `${modelKey}::${color}`;
-            const existing = grouped.get(bucketKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
+            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
 
-            if (existing.shafts.length > 0) grouped.set(bucketKey, existing);
+            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
+    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
 
     const sceneBatchedBranchShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
 
         for (const branch of Object.values(state.branches)) {
             if (!isModelVisible(branch.modelId)) continue;
@@ -1677,10 +1665,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedBranchIds.has(branch.id)) continue;
 
-            const color = resolveSceneSupportColor(shaftSet.modelId, branch.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const bucketKey = `${modelKey}::${color}`;
-            const existing = grouped.get(bucketKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
+            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
@@ -1688,12 +1674,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })));
 
             if (existing.shafts.length > 0) {
-                grouped.set(bucketKey, existing);
+                grouped.set(modelKey, existing);
             }
         }
 
         return Array.from(grouped.values());
-    }, [state.branches, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId, resolveSceneSupportColor, applyDropToVec3Like]);
+    }, [state.branches, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
@@ -2223,10 +2209,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Trunks */}
             {sceneBatchedTrunkShaftGroups.map((group) => (
-                <group key={`scene-trunk-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-trunk-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={group.color}
+                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2366,10 +2352,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Branches */}
             {sceneBatchedBranchShaftGroups.map((group) => (
-                <group key={`scene-branch-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-branch-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={group.color}
+                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2479,10 +2465,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {sceneBatchedTwigShaftGroups.map((group) => (
-                <group key={`scene-twig-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-twig-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={group.color}
+                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2527,10 +2513,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {sceneBatchedStickShaftGroups.map((group) => (
-                <group key={`scene-stick-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-stick-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={group.color}
+                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2543,10 +2529,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Braces */}
             {sceneBatchedBraceShaftGroups.map((group) => (
-                <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={group.color}
+                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2638,10 +2624,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {sceneBatchedSupportBraceShaftGroups.map((group) => (
-                <group key={`scene-support-brace-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-support-brace-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={group.color}
+                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
