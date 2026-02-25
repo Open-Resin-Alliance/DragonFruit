@@ -41,9 +41,9 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   scaleFactor?: number;
   followMeshRef?: boolean;
 }) {
-  const SWITCH_DAMP_LAMBDA = 44;
-  const SWITCH_SNAP_EPSILON = 0.02;
-  const AXIS_SUPPRESS_MS = 64;
+  const SWITCH_DAMP_LAMBDA = 30;
+  const SWITCH_SNAP_EPSILON = 0.003;
+  const AXIS_SUPPRESS_MS = 72;
 
   const { camera } = useThree();
   const scaleFactor = props.scaleFactor ?? 0.04;
