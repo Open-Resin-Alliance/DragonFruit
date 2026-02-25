@@ -16,8 +16,9 @@ function computeScreenSpaceScale(
   camera: THREE.Camera,
   position: [number, number, number],
   scaleFactor: number,
+  scratchPoint: THREE.Vector3,
 ): number {
-  const point = new THREE.Vector3(position[0], position[1], position[2]);
+  const point = scratchPoint.set(position[0], position[1], position[2]);
   if ((camera as any).isOrthographicCamera) {
     const ortho = camera as THREE.OrthographicCamera;
     const worldHeight = (ortho.top - ortho.bottom) / Math.max(1e-6, ortho.zoom);
@@ -44,6 +45,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   const scaleFactor = props.scaleFactor ?? 0.04;
   const followMeshRef = props.followMeshRef ?? true;
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
+  const scratchPointRef = React.useRef(new THREE.Vector3());
 
   const resolveCurrentPosition = React.useCallback((): [number, number, number] => {
     const meshPos = followMeshRef ? props.meshRef?.current?.position : null;
@@ -55,7 +57,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
 
   const initialPosition = React.useMemo(() => resolveCurrentPosition(), [resolveCurrentPosition]);
   const initialScale = React.useMemo(
-    () => computeScreenSpaceScale(camera, initialPosition, scaleFactor),
+    () => computeScreenSpaceScale(camera, initialPosition, scaleFactor, scratchPointRef.current),
     [camera, initialPosition, scaleFactor],
   );
   const lastPositionRef = React.useRef<[number, number, number]>(initialPosition);
@@ -72,7 +74,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
       root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
     }
 
-    const nextScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor);
+    const nextScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor, scratchPointRef.current);
     if (Math.abs(nextScale - lastScaleRef.current) > 1e-4) {
       lastScaleRef.current = nextScale;
       root.scale.setScalar(nextScale);
@@ -96,7 +98,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
       root.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
     }
 
-    const newScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor);
+    const newScale = computeScreenSpaceScale(camera, nextPosition, scaleFactor, scratchPointRef.current);
     if (Math.abs(newScale - lastScaleRef.current) > 1e-4) {
       lastScaleRef.current = newScale;
       root.scale.setScalar(newScale);

@@ -127,6 +127,46 @@ function buildBoxWireframePositions(bounds: THREE.Box3): Float32Array {
   ]);
 }
 
+function writeCornerOnlyWireframePositions(target: Float32Array, bounds: THREE.Box3, cornerLengthMm = 5): void {
+  const min = bounds.min;
+  const max = bounds.max;
+
+  const xLen = Math.min(Math.max(0, cornerLengthMm), Math.max(0, max.x - min.x));
+  const yLen = Math.min(Math.max(0, cornerLengthMm), Math.max(0, max.y - min.y));
+  const zLen = Math.min(Math.max(0, cornerLengthMm), Math.max(0, max.z - min.z));
+
+  const corners: Array<{ x: number; y: number; z: number; sx: number; sy: number; sz: number }> = [
+    { x: min.x, y: min.y, z: min.z, sx: 1, sy: 1, sz: 1 },
+    { x: max.x, y: min.y, z: min.z, sx: -1, sy: 1, sz: 1 },
+    { x: max.x, y: max.y, z: min.z, sx: -1, sy: -1, sz: 1 },
+    { x: min.x, y: max.y, z: min.z, sx: 1, sy: -1, sz: 1 },
+    { x: min.x, y: min.y, z: max.z, sx: 1, sy: 1, sz: -1 },
+    { x: max.x, y: min.y, z: max.z, sx: -1, sy: 1, sz: -1 },
+    { x: max.x, y: max.y, z: max.z, sx: -1, sy: -1, sz: -1 },
+    { x: min.x, y: max.y, z: max.z, sx: 1, sy: -1, sz: -1 },
+  ];
+
+  let index = 0;
+  for (const corner of corners) {
+    const { x, y, z, sx, sy, sz } = corner;
+
+    // X tick
+    target[index++] = x; target[index++] = y; target[index++] = z;
+    target[index++] = x + (sx * xLen); target[index++] = y; target[index++] = z;
+    // Y tick
+    target[index++] = x; target[index++] = y; target[index++] = z;
+    target[index++] = x; target[index++] = y + (sy * yLen); target[index++] = z;
+    // Z tick
+    target[index++] = x; target[index++] = y; target[index++] = z;
+    target[index++] = x; target[index++] = y; target[index++] = z + (sz * zLen);
+  }
+}
+
+function buildEmptyCornerOnlyWireframePositions(): Float32Array {
+  // 8 corners * 3 ticks * 2 vertices * 3 components
+  return new Float32Array(8 * 3 * 2 * 3);
+}
+
 function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
   const { camera, controls, set, size } = useThree();
   const ORTHO_NEAR = -20000;
@@ -2455,6 +2495,206 @@ export function SceneCanvas({
     setMultiGizmoAnchorPosition(multiGizmoCenter);
   }, [isMultiGizmoSelection, multiGizmoCenter, setMultiGizmoAnchorPosition]);
 
+  const dragCornerCageRefs = React.useRef<Record<string, THREE.LineSegments | null>>({});
+  const dragCornerCageBaseBoundsRef = React.useRef<Record<string, THREE.Box3>>({});
+  const dragCornerCageBaseTransformsRef = React.useRef<Record<string, ModelTransform>>({});
+  const dragCornerCageCurrentMatrixRef = React.useRef(new THREE.Matrix4());
+  const dragCornerCageBaseMatrixRef = React.useRef(new THREE.Matrix4());
+  const dragCornerCageDeltaMatrixRef = React.useRef(new THREE.Matrix4());
+  const dragCornerCageBoundsScratchRef = React.useRef(new THREE.Box3());
+  const dragCornerCageCornerScratchRef = React.useRef([
+    new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(),
+    new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(),
+  ]);
+
+  const clearDragCornerCageBaseData = React.useCallback(() => {
+    dragCornerCageBaseBoundsRef.current = {};
+    dragCornerCageBaseTransformsRef.current = {};
+  }, []);
+
+  const captureDragCornerCageBaseData = React.useCallback((ids: string[], activeBefore: ModelTransform | null) => {
+    const baseBounds: Record<string, THREE.Box3> = {};
+    const baseTransforms: Record<string, ModelTransform> = {};
+
+    for (const modelId of ids) {
+      const model = models.find((entry) => entry.id === modelId);
+      if (!model || !model.visible) continue;
+
+      const beforeTransform = (modelId === activeModelId && activeBefore)
+        ? activeBefore
+        : model.transform;
+
+      const bounds = computeModelWorldBounds(model, beforeTransform, buildVolumeBounds);
+      if (!bounds || bounds.isEmpty()) continue;
+
+      baseBounds[modelId] = bounds.clone();
+      baseTransforms[modelId] = {
+        position: beforeTransform.position.clone(),
+        rotation: beforeTransform.rotation.clone(),
+        scale: beforeTransform.scale.clone(),
+      };
+    }
+
+    dragCornerCageBaseBoundsRef.current = baseBounds;
+    dragCornerCageBaseTransformsRef.current = baseTransforms;
+  }, [activeModelId, buildVolumeBounds, computeModelWorldBounds, models]);
+
+  const transformBoundsByDelta = React.useCallback((baseBounds: THREE.Box3, delta: THREE.Matrix4): THREE.Box3 => {
+    const min = baseBounds.min;
+    const max = baseBounds.max;
+    const corners = dragCornerCageCornerScratchRef.current;
+
+    corners[0].set(min.x, min.y, min.z);
+    corners[1].set(max.x, min.y, min.z);
+    corners[2].set(max.x, max.y, min.z);
+    corners[3].set(min.x, max.y, min.z);
+    corners[4].set(min.x, min.y, max.z);
+    corners[5].set(max.x, min.y, max.z);
+    corners[6].set(max.x, max.y, max.z);
+    corners[7].set(min.x, max.y, max.z);
+
+    const out = dragCornerCageBoundsScratchRef.current;
+    out.makeEmpty();
+    for (const corner of corners) {
+      corner.applyMatrix4(delta);
+      out.expandByPoint(corner);
+    }
+    return out;
+  }, []);
+
+  const resolveLiveTransformForCage = React.useCallback((modelId: string, model: LoadedModel): ModelTransform => {
+    const liveGroup = meshRefs.current[modelId];
+    if (!liveGroup) {
+      if (modelId === activeModelId) {
+        return liveDragTransformRef.current ?? transform ?? model.transform;
+      }
+      return multiGizmoPreviewTransformsById[modelId] ?? model.transform;
+    }
+
+    return {
+      position: liveGroup.position.clone(),
+      rotation: new THREE.Euler().setFromQuaternion(liveGroup.quaternion, 'ZYX'),
+      scale: liveGroup.scale.clone(),
+    };
+  }, [activeModelId, multiGizmoPreviewTransformsById, transform]);
+
+  const dragCornerCageModelIds = React.useMemo(() => {
+    if (mode !== 'prepare') return [] as string[];
+    if (transformMode !== 'transform') return [] as string[];
+    if (!isGizmoDragging || !activeModelId) return [] as string[];
+
+    const ids = isMultiGizmoSelection
+      ? selectedTransformableModelIds
+      : [activeModelId];
+
+    return ids.filter((modelId) => {
+      const model = models.find((entry) => entry.id === modelId);
+      return !!model?.visible;
+    });
+  }, [activeModelId, isGizmoDragging, isMultiGizmoSelection, mode, models, selectedTransformableModelIds, transformMode]);
+
+  const updateDragCornerCagesNow = React.useCallback(() => {
+    if (dragCornerCageModelIds.length === 0) {
+      Object.values(dragCornerCageRefs.current).forEach((line) => {
+        if (line) line.visible = false;
+      });
+      return;
+    }
+
+    const now = performance.now();
+    for (let i = 0; i < dragCornerCageModelIds.length; i += 1) {
+      const modelId = dragCornerCageModelIds[i];
+      const line = dragCornerCageRefs.current[modelId];
+      if (!line) continue;
+
+      const model = models.find((entry) => entry.id === modelId);
+      if (!model || !model.visible) {
+        line.visible = false;
+        continue;
+      }
+
+      const effectiveTransform = resolveLiveTransformForCage(modelId, model);
+
+      const baseBounds = dragCornerCageBaseBoundsRef.current[modelId];
+      const baseTransform = dragCornerCageBaseTransformsRef.current[modelId];
+
+      let bounds: THREE.Box3;
+      if (baseBounds && baseTransform) {
+        const currentMatrix = dragCornerCageCurrentMatrixRef.current.copy(composeModelTransformMatrix(effectiveTransform));
+        const baseMatrix = dragCornerCageBaseMatrixRef.current.copy(composeModelTransformMatrix(baseTransform));
+        const delta = dragCornerCageDeltaMatrixRef.current.multiplyMatrices(currentMatrix, baseMatrix.invert());
+        bounds = transformBoundsByDelta(baseBounds, delta);
+      } else {
+        bounds = computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
+      }
+
+      if (!bounds || bounds.isEmpty()) {
+        line.visible = false;
+        continue;
+      }
+
+      const positionAttribute = line.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!positionAttribute) continue;
+
+      const targetArray = positionAttribute.array as Float32Array;
+      if (targetArray.length !== (8 * 3 * 2 * 3)) continue;
+
+      writeCornerOnlyWireframePositions(targetArray, bounds, 2.5);
+      positionAttribute.needsUpdate = true;
+
+      const pulse = 0.78 + (0.22 * (0.5 + (0.5 * Math.sin((now * 0.008) + (i * 0.65)))));
+      const material = line.material;
+      if (Array.isArray(material)) {
+        material.forEach((m) => {
+          const lineMaterial = m as THREE.LineBasicMaterial;
+          lineMaterial.opacity = pulse;
+        });
+      } else if (material) {
+        (material as THREE.LineBasicMaterial).opacity = pulse;
+      }
+
+      line.visible = true;
+    }
+  }, [
+    buildVolumeBounds,
+    composeModelTransformMatrix,
+    computeModelWorldBounds,
+    dragCornerCageModelIds,
+    models,
+    resolveLiveTransformForCage,
+    transformBoundsByDelta,
+  ]);
+
+  React.useEffect(() => {
+    if (dragCornerCageModelIds.length === 0) {
+      updateDragCornerCagesNow();
+      return;
+    }
+
+    let rafId: number | null = null;
+    const tick = () => {
+      updateDragCornerCagesNow();
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    tick();
+
+    return () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [
+    activeModelId,
+    buildVolumeBounds,
+    composeModelTransformMatrix,
+    computeModelWorldBounds,
+    dragCornerCageModelIds,
+    transformBoundsByDelta,
+    models,
+    updateDragCornerCagesNow,
+  ]);
+
   const satDebugTargets = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showSliceSatBoundingMesh) return [] as Array<{
       id: string;
@@ -4020,6 +4260,35 @@ export function SceneCanvas({
                   ))
                 : null}
 
+              {dragCornerCageModelIds.length > 0
+                ? dragCornerCageModelIds.map((modelId) => (
+                    <lineSegments
+                      key={`drag-corner-cage-${modelId}`}
+                      ref={(node) => {
+                        dragCornerCageRefs.current[modelId] = node;
+                      }}
+                      renderOrder={11}
+                      raycast={() => null}
+                    >
+                      <bufferGeometry>
+                        <bufferAttribute
+                          attach="attributes-position"
+                          args={[buildEmptyCornerOnlyWireframePositions(), 3]}
+                        />
+                      </bufferGeometry>
+                      <lineBasicMaterial
+                        color={modelId === activeModelId ? '#baf72e' : '#8be63d'}
+                        transparent
+                        opacity={0.86}
+                        blending={THREE.AdditiveBlending}
+                        toneMapped={false}
+                        depthWrite={false}
+                        depthTest={false}
+                      />
+                    </lineSegments>
+                  ))
+                : null}
+
               {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
                 <group
                   position={[
@@ -4212,6 +4481,7 @@ export function SceneCanvas({
                           rotation: live.rotation.clone(),
                           scale: live.scale.clone(),
                         });
+                        updateDragCornerCagesNow();
                       }
                     }
                   }}
@@ -4221,6 +4491,11 @@ export function SceneCanvas({
                     onTransformStart?.('move');
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
+                      const idsForCage = isMultiGizmoSelection
+                        ? selectedTransformableModelIds
+                        : [activeModelId];
+                      captureDragCornerCageBaseData(idsForCage, sourceTransform);
+                      updateDragCornerCagesNow();
                       queueLiveDragTransform({
                         position: sourceTransform.position.clone(),
                         rotation: sourceTransform.rotation.clone(),
@@ -4346,6 +4621,7 @@ export function SceneCanvas({
                     onTransformEnd?.('move', live ?? undefined, { skipStoreCommit: isMultiGizmoSelection });
                     queueLiveDragTransform(null);
                     setGizmoGroupStartSnapshot(null);
+                    clearDragCornerCageBaseData();
                     if (!onTransformEnd) {
                       scheduleSupportDragGroupReset();
                     }
@@ -4370,6 +4646,7 @@ export function SceneCanvas({
                     stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
                     onTransformStart?.('rotate');
+                    clearDragCornerCageBaseData();
                     setGizmoGroupStartSnapshot(null);
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
@@ -4417,6 +4694,7 @@ export function SceneCanvas({
                     gizmoTransformStartSnapshotRef.current = null;
                     onTransformEnd?.('rotate', live ?? undefined);
                     queueLiveDragTransform(null);
+                    clearDragCornerCageBaseData();
                     if (!onTransformEnd) {
                       scheduleSupportDragGroupReset();
                     }
@@ -4430,6 +4708,11 @@ export function SceneCanvas({
                     }
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
+                      const idsForCage = isMultiGizmoSelection
+                        ? selectedTransformableModelIds
+                        : [activeModelId];
+                      captureDragCornerCageBaseData(idsForCage, sourceTransform);
+                      updateDragCornerCagesNow();
                       queueLiveDragTransform({
                         position: sourceTransform.position.clone(),
                         rotation: sourceTransform.rotation.clone(),
@@ -4527,6 +4810,7 @@ export function SceneCanvas({
                           rotation: live.rotation.clone(),
                           scale: live.scale.clone(),
                         });
+                        updateDragCornerCagesNow();
                       }
                     }
                   }}
@@ -4611,6 +4895,7 @@ export function SceneCanvas({
                     onTransformEnd?.('scale', live ?? undefined, { skipStoreCommit: isMultiGizmoSelection });
                     queueLiveDragTransform(null);
                     setGizmoGroupStartSnapshot(null);
+                    clearDragCornerCageBaseData();
                     if (!onTransformEnd) {
                       scheduleSupportDragGroupReset();
                     }
