@@ -38,6 +38,19 @@ export function KnotGizmo() {
     const [hoveredArrow, setHoveredArrow] = React.useState<'up' | 'down' | null>(null);
     const [scale, setScale] = React.useState(1);
 
+    const setKnotGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
+        const w = window as any;
+        w.__knotGizmoDragging = isDragging;
+        w.__knotGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
+
+        window.dispatchEvent(new CustomEvent('knot-gizmo-interaction-lock', {
+            detail: {
+                active: isDragging,
+                guardUntil: w.__knotGizmoGuardUntil,
+            },
+        }));
+    }, []);
+
     // Picking registration for gizmo handles
     const upArrowRef = useRef<THREE.Group>(null);
     const downArrowRef = useRef<THREE.Group>(null);
@@ -344,6 +357,7 @@ export function KnotGizmo() {
         const handleGlobalMouseUp = () => {
             if (isDraggingRef.current) {
                 isDraggingRef.current = false;
+                setKnotGizmoInteractionFlags(false);
                 // Set flag to prevent canvas click from deselecting
                 (window as any).__gizmoDragEndedThisFrame = true;
                 // Clear flag after a short delay
@@ -355,8 +369,11 @@ export function KnotGizmo() {
             }
         };
         window.addEventListener('mouseup', handleGlobalMouseUp);
-        return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-    }, []);
+        return () => {
+            window.removeEventListener('mouseup', handleGlobalMouseUp);
+            setKnotGizmoInteractionFlags(false, 0);
+        };
+    }, [setKnotGizmoInteractionFlags]);
 
     // Only show gizmo when a knot is selected
     if (selectedCategory !== 'knot' || !result) return null;
@@ -383,6 +400,7 @@ export function KnotGizmo() {
             e.nativeEvent.stopImmediatePropagation();
         }
         isDraggingRef.current = true;
+        setKnotGizmoInteractionFlags(true);
         (window as any).__gizmoDragEndedThisFrame = false;
         document.body.style.cursor = 'grabbing';
 
@@ -432,6 +450,7 @@ export function KnotGizmo() {
         }
         if (isDraggingRef.current) {
             isDraggingRef.current = false;
+            setKnotGizmoInteractionFlags(false);
             // Set flag to prevent canvas click from deselecting
             (window as any).__gizmoDragEndedThisFrame = true;
             // Also set a short timeout to ensure the flag persists

@@ -94,12 +94,18 @@ import {
   getSupportBraceSnapshot,
   subscribeToSupportBraceStore,
 } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
+
+interface ShaftHoverDebugDetail {
+  segmentId: string | null;
+  point: { x: number; y: number; z: number } | null;
+}
 
 function installReactDevtoolsSemverGuard() {
   if (process.env.NODE_ENV !== 'development') return;
@@ -220,6 +226,10 @@ export default function Home() {
   const [supportsInfoModelId, setSupportsInfoModelId] = React.useState<string | null>(null);
   const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
   const [transformDebugTick, setTransformDebugTick] = React.useState(0);
+  const [supportShaftHoverDebug, setSupportShaftHoverDebug] = React.useState<ShaftHoverDebugDetail>({
+    segmentId: null,
+    point: null,
+  });
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -353,6 +363,11 @@ export default function Home() {
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
   const supportStateSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
   const supportBraceStateSnapshot = React.useSyncExternalStore(subscribeToSupportBraceStore, getSupportBraceSnapshot, getSupportBraceSnapshot);
+  const bracePlacementSnapshot = React.useSyncExternalStore(
+    bracePlacementStore.subscribe,
+    bracePlacementStore.getSnapshot,
+    bracePlacementStore.getSnapshot,
+  );
 
   React.useEffect(() => {
     transformDebugTimelineRef.current.supportStoreUpdatedAt = {
@@ -430,6 +445,33 @@ export default function Home() {
       window.clearInterval(intervalId);
     };
   }, [isTransformDebugOverlayOpen]);
+
+  React.useEffect(() => {
+    const handleShaftHover = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ segmentId?: string | null; point?: { x: number; y: number; z: number } | null }>).detail;
+      setSupportShaftHoverDebug({
+        segmentId: detail?.segmentId ?? null,
+        point: detail?.point ?? null,
+      });
+    };
+
+    const handleShaftLeave = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ segmentId?: string | null }>).detail;
+      setSupportShaftHoverDebug((prev) => {
+        if (!detail?.segmentId || prev.segmentId === detail.segmentId) {
+          return { segmentId: null, point: null };
+        }
+        return prev;
+      });
+    };
+
+    window.addEventListener('shaft-hover', handleShaftHover as EventListener);
+    window.addEventListener('shaft-leave', handleShaftLeave as EventListener);
+    return () => {
+      window.removeEventListener('shaft-hover', handleShaftHover as EventListener);
+      window.removeEventListener('shaft-leave', handleShaftLeave as EventListener);
+    };
+  }, []);
 
   const activeSupportEntityCounts = React.useMemo(() => {
     const modelId = scene.activeModelId;
@@ -542,6 +584,83 @@ export default function Home() {
       },
     };
   }, [scene.activeModelId, scene.models, supportBraceStateSnapshot.supportBraces, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
+
+  const supportDebugStats = React.useMemo(() => {
+    const snapTarget = bracePlacementSnapshot.snapTarget;
+    const preview = bracePlacementSnapshot.preview;
+    const hoveredSegmentId = supportShaftHoverDebug.segmentId;
+    const snappedSegmentId = snapTarget?.kind === 'shaft' ? (snapTarget.segmentId ?? null) : null;
+    const hoveredVsSnapMismatch = Boolean(
+      hoveredSegmentId
+      && snappedSegmentId
+      && hoveredSegmentId !== snappedSegmentId,
+    );
+
+    const supportRendererDebug = (typeof window !== 'undefined')
+      ? ((window as any).__supportRendererDebug as {
+        supportInteractionSuppressed?: boolean;
+        disableSelectionAndHover?: boolean;
+        gizmoInteractionLockActive?: boolean;
+        knotGizmoDragging?: boolean;
+        jointGizmoDragging?: boolean;
+        knotGizmoGuardUntil?: number;
+        knotOnlyGuardUntil?: number;
+        jointOnlyGuardUntil?: number;
+        immediateModelHoverId?: string | null;
+        externalHoverModelId?: string | null;
+        effectiveHoverModelId?: string | null;
+        sceneHoveredSupportId?: string | null;
+        marqueeHoveredSupportId?: string | null;
+        rawHoveredCategory?: string | null;
+        rawHoveredId?: string | null;
+        hoveredCategoryForVisual?: string | null;
+        hoveredIdForVisual?: string | null;
+      } | undefined)
+      : undefined;
+
+    const nowEpoch = Date.now();
+    const knotGuardUntil = supportRendererDebug?.knotGizmoGuardUntil ?? 0;
+    const knotGuardRemainingMs = Math.max(0, knotGuardUntil - nowEpoch);
+    const knotOnlyGuardRemainingMs = Math.max(0, (supportRendererDebug?.knotOnlyGuardUntil ?? 0) - nowEpoch);
+    const jointOnlyGuardRemainingMs = Math.max(0, (supportRendererDebug?.jointOnlyGuardUntil ?? 0) - nowEpoch);
+
+    return {
+      hoveredCategory: supportStateSnapshot.hoveredCategory,
+      hoveredId: supportStateSnapshot.hoveredId,
+      shaftHoveredSegmentId: hoveredSegmentId,
+      shaftHoverPoint: supportShaftHoverDebug.point,
+      braceAltActive: bracePlacementSnapshot.altActive,
+      braceStage: bracePlacementSnapshot.stage,
+      braceStartKind: bracePlacementSnapshot.start?.kind ?? null,
+      braceStartSegmentId: bracePlacementSnapshot.start?.kind === 'shaft'
+        ? (bracePlacementSnapshot.start.segmentId ?? null)
+        : null,
+      braceSnapKind: snapTarget?.kind ?? null,
+      braceSnapSegmentId: snappedSegmentId,
+      braceSnapLeafId: snapTarget?.kind === 'leaf' ? (snapTarget.leafId ?? null) : null,
+      previewStart: preview?.start ?? null,
+      previewEnd: preview?.end ?? null,
+      hoveredVsSnapMismatch,
+
+      supportInteractionSuppressed: !!supportRendererDebug?.supportInteractionSuppressed,
+      disableSelectionAndHover: !!supportRendererDebug?.disableSelectionAndHover,
+      gizmoInteractionLockActive: !!supportRendererDebug?.gizmoInteractionLockActive,
+      knotGizmoDragging: !!supportRendererDebug?.knotGizmoDragging,
+      jointGizmoDragging: !!supportRendererDebug?.jointGizmoDragging,
+      knotGuardRemainingMs,
+      knotOnlyGuardRemainingMs,
+      jointOnlyGuardRemainingMs,
+      immediateModelHoverId: supportRendererDebug?.immediateModelHoverId ?? null,
+      externalHoverModelId: supportRendererDebug?.externalHoverModelId ?? null,
+      effectiveHoverModelId: supportRendererDebug?.effectiveHoverModelId ?? null,
+      sceneHoveredSupportId: supportRendererDebug?.sceneHoveredSupportId ?? null,
+      marqueeHoveredSupportId: supportRendererDebug?.marqueeHoveredSupportId ?? null,
+      rawHoveredCategory: supportRendererDebug?.rawHoveredCategory ?? null,
+      rawHoveredId: supportRendererDebug?.rawHoveredId ?? null,
+      hoveredCategoryForVisual: supportRendererDebug?.hoveredCategoryForVisual ?? null,
+      hoveredIdForVisual: supportRendererDebug?.hoveredIdForVisual ?? null,
+    };
+  }, [bracePlacementSnapshot, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, supportStateSnapshot.hoveredCategory, supportStateSnapshot.hoveredId, transformDebugTick]);
 
   React.useEffect(() => {
     if (arrangePrecisionMode !== 'high_precision') return;
@@ -1028,6 +1147,12 @@ export default function Home() {
   }, []);
 
   const formatDebugVec3 = React.useCallback((v: THREE.Vector3 | null | undefined) => {
+    if (!v) return 'n/a';
+    const f = (n: number) => (Number.isFinite(n) ? n.toFixed(3) : 'NaN');
+    return `${f(v.x)}, ${f(v.y)}, ${f(v.z)}`;
+  }, []);
+
+  const formatDebugVec3Like = React.useCallback((v: { x: number; y: number; z: number } | null | undefined) => {
     if (!v) return 'n/a';
     const f = (n: number) => (Number.isFinite(n) ? n.toFixed(3) : 'NaN');
     return `${f(v.x)}, ${f(v.y)}, ${f(v.z)}`;
@@ -3552,7 +3677,7 @@ export default function Home() {
           >
             <div className="mb-2 flex items-center justify-between">
               <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-                Transform Debug Overlay
+                {scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
               </div>
               <button
                 type="button"
@@ -3564,33 +3689,84 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-              <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
-              <div style={{ color: 'var(--text-muted)' }}>Transform mode</div><div>{transformMgr.transformMode}</div>
-              <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
-              <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
-              <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
-              <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
-            </div>
-
-            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Transform Delta (live vs store)
+            {scene.mode === 'support' ? (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Hovered category</div><div>{supportDebugStats.hoveredCategory}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Hovered id</div><div>{supportDebugStats.hoveredId ?? 'none'}</div>
               </div>
-              <div>Δpos: {formatDebugNumber(transformDebugStats.posDelta)} mm</div>
-              <div>Δrot max: {formatDebugNumber(transformDebugStats.rotDelta)} rad</div>
-              <div>Δscale: {formatDebugNumber(transformDebugStats.scaleDelta)}</div>
-            </div>
-
-            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Active Model Transform
+            ) : (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Transform mode</div><div>{transformMgr.transformMode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
               </div>
-              <div>Store pos: {formatDebugVec3(transformDebugStats.storeTransform?.position)}</div>
-              <div>Live pos: {formatDebugVec3(transformDebugStats.liveTransform.position)}</div>
-              <div>Drag Δ pos: {formatDebugVec3(transformDebugStats.dragGroupPos)}</div>
-              <div>Drag Δ scale: {formatDebugVec3(transformDebugStats.dragGroupScale)}</div>
-            </div>
+            )}
+
+            {scene.mode === 'support' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Placement Lock Debug
+                </div>
+                <div>Hovered category/id: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
+                <div>Shaft hovered segment: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
+                <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
+                <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
+                <div>Brace stage: {supportDebugStats.braceStage}</div>
+                <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
+                <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapLeafId ?? 'n/a'}</div>
+                <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
+                <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
+                <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
+                <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
+                <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
+                <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
+                <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
+                <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
+                <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
+                <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
+                <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
+                <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
+                <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
+                <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
+                <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
+                <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
+                <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
+                <div>
+                  Hover vs snap segment mismatch:{' '}
+                  <span style={{ color: supportDebugStats.hoveredVsSnapMismatch ? '#ff8a8a' : 'var(--text-strong)' }}>
+                    {supportDebugStats.hoveredVsSnapMismatch ? 'YES' : 'no'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {scene.mode !== 'support' && (
+              <>
+                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Transform Delta (live vs store)
+                  </div>
+                  <div>Δpos: {formatDebugNumber(transformDebugStats.posDelta)} mm</div>
+                  <div>Δrot max: {formatDebugNumber(transformDebugStats.rotDelta)} rad</div>
+                  <div>Δscale: {formatDebugNumber(transformDebugStats.scaleDelta)}</div>
+                </div>
+
+                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Active Model Transform
+                  </div>
+                  <div>Store pos: {formatDebugVec3(transformDebugStats.storeTransform?.position)}</div>
+                  <div>Live pos: {formatDebugVec3(transformDebugStats.liveTransform.position)}</div>
+                  <div>Drag Δ pos: {formatDebugVec3(transformDebugStats.dragGroupPos)}</div>
+                  <div>Drag Δ scale: {formatDebugVec3(transformDebugStats.dragGroupScale)}</div>
+                </div>
+              </>
+            )}
 
             <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
               <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -3607,26 +3783,28 @@ export default function Home() {
               <div>SupportBraces: {transformDebugStats.supportCounts.supportBraces} / {activeSupportEntityCounts.supportBraces}</div>
             </div>
 
-            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                Transform Timeline
+            {scene.mode !== 'support' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Transform Timeline
+                </div>
+                <div>Last op: {transformDebugStats.timeline.lastOperation ?? 'n/a'}</div>
+                <div>Drag released: {formatDebugTime(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Live calculated: {formatDebugTime(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Store update start: {formatDebugTime(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Store updated: {formatDebugTime(transformDebugStats.timeline.storeUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Support store updated: {formatDebugTime(transformDebugStats.timeline.supportStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>SupportBrace store updated: {formatDebugTime(transformDebugStats.timeline.supportBraceStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Active model store observed: {formatDebugTime(transformDebugStats.timeline.activeModelStoreObservedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Release → Live: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.liveCalculatedAt)}</div>
+                <div>Live → Store start: {formatDebugLatencyMs(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.storeUpdateStartedAt)}</div>
+                <div>Store start → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
+                <div>Release → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
+                <div>Release → Support store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportStoreUpdatedAt)}</div>
+                <div>Release → SupportBrace store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportBraceStoreUpdatedAt)}</div>
+                <div>Release → Active model observed: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.activeModelStoreObservedAt)}</div>
               </div>
-              <div>Last op: {transformDebugStats.timeline.lastOperation ?? 'n/a'}</div>
-              <div>Drag released: {formatDebugTime(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              <div>Live calculated: {formatDebugTime(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              <div>Store update start: {formatDebugTime(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              <div>Store updated: {formatDebugTime(transformDebugStats.timeline.storeUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              <div>Support store updated: {formatDebugTime(transformDebugStats.timeline.supportStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              <div>SupportBrace store updated: {formatDebugTime(transformDebugStats.timeline.supportBraceStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              <div>Active model store observed: {formatDebugTime(transformDebugStats.timeline.activeModelStoreObservedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-              <div>Release → Live: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.liveCalculatedAt)}</div>
-              <div>Live → Store start: {formatDebugLatencyMs(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.storeUpdateStartedAt)}</div>
-              <div>Store start → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
-              <div>Release → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
-              <div>Release → Support store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportStoreUpdatedAt)}</div>
-              <div>Release → SupportBrace store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportBraceStoreUpdatedAt)}</div>
-              <div>Release → Active model observed: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.activeModelStoreObservedAt)}</div>
-            </div>
+            )}
 
             <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
               Toggle: Ctrl+Shift+X

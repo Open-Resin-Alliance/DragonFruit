@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore, useCallback, useRef } from 'react';
+import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, getTwigById, getStickById } from '../../state';
 import { moveJoint } from './jointUtils';
@@ -22,6 +22,26 @@ export function JointGizmo() {
     const { isActive: isCurveMode } = useCurveInteractionState();
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
+
+    const setJointGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
+        const w = window as any;
+        w.__jointGizmoDragging = isDragging;
+        w.__jointGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
+
+        window.dispatchEvent(new CustomEvent('joint-gizmo-interaction-lock', {
+            detail: {
+                active: isDragging,
+                guardUntil: w.__jointGizmoGuardUntil,
+            },
+        }));
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (typeof window === 'undefined') return;
+            setJointGizmoInteractionFlags(false, 0);
+        };
+    }, [setJointGizmoInteractionFlags]);
 
      const updateSegmentsJointPos = useCallback((segments: any[], jointId: string, pos: { x: number; y: number; z: number }) => {
          return segments.map(seg => {
@@ -221,6 +241,7 @@ export function JointGizmo() {
     const { joint, trunk, branch, twig, stick, supportBrace } = result;
 
     const handleMoveStart = () => {
+        setJointGizmoInteractionFlags(true);
         if (joint) {
             dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
         }
@@ -300,6 +321,7 @@ export function JointGizmo() {
     };
 
     const handleMoveEnd = () => {
+        setJointGizmoInteractionFlags(false);
         // Prevent the canvas click handler from deselecting the joint
         window.__gizmoDragEndedThisFrame = true;
         dragPosRef.current = null;
