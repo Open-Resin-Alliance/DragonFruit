@@ -48,6 +48,7 @@ interface SupportRendererProps {
     modelFilterId?: string | null;
     excludeModelId?: string | null;
     passive?: boolean;
+    disableSelectionAndHover?: boolean;
 }
 
 interface SupportShaftSet {
@@ -70,7 +71,7 @@ const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, passive = false }, ref) => {
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, passive = false, disableSelectionAndHover = false }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const selectedSupportIds = useSyncExternalStore(
         subscribeSupportMultiSelection,
@@ -95,12 +96,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const enableTwigSceneBatching = false;
 
     const interactionHooksEnabled = !passive;
-    const isInteractable = interactionHooksEnabled && mode === 'support' && !navigationLodActive;
+    const supportPointerInteractable = interactionHooksEnabled && mode === 'support' && !navigationLodActive;
+    const isInteractable = supportPointerInteractable && !disableSelectionAndHover;
     const isPreparePointerInteractable = interactionHooksEnabled && mode === 'prepare' && !navigationLodActive;
-    const isPointerInteractable = isInteractable || isPreparePointerInteractable;
+    const isPointerInteractable = supportPointerInteractable || isPreparePointerInteractable;
     const hidePlateContactPrimitivesEffective = hidePlateContactPrimitives;
     const restrictToActiveModel = mode === 'support' && !!activeModelId;
-    const suppressHover = isJointCreationActive || !isInteractable || braceAltActive;
+    const suppressHover = disableSelectionAndHover || isJointCreationActive || !isInteractable || braceAltActive;
     const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
     const [sceneHoveredSupportId, setSceneHoveredSupportId] = React.useState<string | null>(null);
     const [marqueeHoveredSupportId, setMarqueeHoveredSupportId] = React.useState<string | null>(null);
@@ -1625,13 +1627,41 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             emitSupportModelPointerSelect(shaft.modelId ?? null);
             return;
         }
+
+        if (mode === 'support' && disableSelectionAndHover) {
+            const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
+            const point = e.point
+                ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
+                : null;
+
+            window.dispatchEvent(new CustomEvent('shaft-click', {
+                detail: {
+                    segmentId: shaft.id,
+                    point,
+                    intersection: event,
+                },
+            }));
+            return;
+        }
+
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, mode, disableSelectionAndHover, isInteractable]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+
+        if (mode === 'support' && disableSelectionAndHover) {
+            window.dispatchEvent(new CustomEvent('shaft-hover', {
+                detail: {
+                    segmentId: shaft.id,
+                    point: null,
+                    intersection: null,
+                },
+            }));
+            return;
+        }
 
         if (pendingSceneHoverClearFrameRef.current != null) {
             cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
@@ -1641,11 +1671,18 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = shaft.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(shaft.modelId ?? null);
-    }, [isPointerInteractable]);
+    }, [isPointerInteractable, mode, disableSelectionAndHover]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback(() => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+
+        if (mode === 'support' && disableSelectionAndHover) {
+            window.dispatchEvent(new CustomEvent('shaft-leave', {
+                detail: { segmentId: null },
+            }));
+            return;
+        }
 
         if (pendingSceneHoverClearFrameRef.current != null) {
             cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
@@ -1656,7 +1693,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
             emitSupportModelPointerHover(null);
         });
-    }, [isPointerInteractable]);
+    }, [isPointerInteractable, mode, disableSelectionAndHover]);
 
     const handleSceneBatchedRootClick = React.useCallback((root: InstancedRoot, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -1664,13 +1701,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             emitSupportModelPointerSelect(root.modelId ?? null);
             return;
         }
+        if (mode === 'support' && disableSelectionAndHover) return;
         if (!root.supportId) return;
         handleSupportClick(event, root.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, mode, disableSelectionAndHover, isInteractable]);
 
     const handleSceneBatchedRootPointerMove = React.useCallback((root: InstancedRoot) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+        if (mode === 'support' && disableSelectionAndHover) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
             cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
@@ -1680,7 +1719,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = root.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(root.modelId ?? null);
-    }, [isPointerInteractable]);
+    }, [isPointerInteractable, mode, disableSelectionAndHover]);
 
     const handleSceneBatchedConeClick = React.useCallback((cone: InstancedContactCone, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -1688,13 +1727,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             emitSupportModelPointerSelect(cone.modelId ?? null);
             return;
         }
+        if (mode === 'support' && disableSelectionAndHover) return;
         if (!cone.supportId) return;
         handleSupportClick(event, cone.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, mode, disableSelectionAndHover, isInteractable]);
 
     const handleSceneBatchedConePointerMove = React.useCallback((cone: InstancedContactCone) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+        if (mode === 'support' && disableSelectionAndHover) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
             cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
@@ -1704,7 +1745,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = cone.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(cone.modelId ?? null);
-    }, [isPointerInteractable]);
+    }, [isPointerInteractable, mode, disableSelectionAndHover]);
 
     const handleSceneBatchedJointClick = React.useCallback((joint: InstancedJoint, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
@@ -1712,13 +1753,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             emitSupportModelPointerSelect(joint.modelId ?? null);
             return;
         }
+        if (mode === 'support' && disableSelectionAndHover) return;
         if (!joint.supportId) return;
         handleSupportClick(event, joint.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable]);
+    }, [isPointerInteractable, isPreparePointerInteractable, mode, disableSelectionAndHover, isInteractable]);
 
     const handleSceneBatchedJointPointerMove = React.useCallback((joint: InstancedJoint) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
+        if (mode === 'support' && disableSelectionAndHover) return;
 
         if (pendingSceneHoverClearFrameRef.current != null) {
             cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
@@ -1728,7 +1771,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const nextSupportId = joint.supportId ?? null;
         setSceneHoveredSupportId((prev) => (prev === nextSupportId ? prev : nextSupportId));
         emitSupportModelPointerHover(joint.modelId ?? null);
-    }, [isPointerInteractable]);
+    }, [isPointerInteractable, mode, disableSelectionAndHover]);
 
     useEffect(() => {
         const root = groupRef.current;
