@@ -108,6 +108,7 @@ export default function FootprintBorderRenderer({
   color = '#3b82f6',
 }: FootprintBorderRendererProps) {
   const FOOTPRINT_BORDER_Z = 0.001;
+  const FOOTPRINT_BORDER_MARGIN_MAX_MM = 0.05;
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
 
@@ -233,7 +234,7 @@ export default function FootprintBorderRenderer({
     if (!combinedHull || combinedHull.length < 3) return null;
 
     // 4. Add margin
-    const margin = raft.footprintBorderMargin || 2.0;
+    const margin = Math.min(FOOTPRINT_BORDER_MARGIN_MAX_MM, Math.max(0, raft.footprintBorderMargin || 0));
     const borderProfile = offsetPolygonOutward(combinedHull, margin);
     if (!borderProfile || borderProfile.length < 3) return null;
 
@@ -245,7 +246,7 @@ export default function FootprintBorderRenderer({
     points.push(new THREE.Vector3(borderProfile[0].x, borderProfile[0].y, FOOTPRINT_BORDER_Z));
 
     return new THREE.BufferGeometry().setFromPoints(points);
-  }, [FOOTPRINT_BORDER_Z, modelGeometry, modelId, modelTransform, supportState, raft]);
+  }, [FOOTPRINT_BORDER_MARGIN_MAX_MM, FOOTPRINT_BORDER_Z, modelGeometry, modelId, modelTransform, supportState, raft]);
 
   if (raft.bottomMode === 'off' || !raft.showFootprintBorder || !borderLine) {
     return null;
