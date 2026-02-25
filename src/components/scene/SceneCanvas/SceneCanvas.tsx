@@ -131,6 +131,8 @@ function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
   const { camera, controls, set, size } = useThree();
   const ORTHO_NEAR = -20000;
   const ORTHO_FAR = 20000;
+  const PERSPECTIVE_NEAR = 0.005;
+  const PERSPECTIVE_FAR = 50000;
 
   React.useEffect(() => {
     const aspect = size.width / Math.max(1, size.height);
@@ -147,6 +149,8 @@ function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
 
     if (mode === 'perspective' && camera instanceof THREE.PerspectiveCamera) {
       camera.aspect = aspect;
+      camera.near = PERSPECTIVE_NEAR;
+      camera.far = PERSPECTIVE_FAR;
       camera.updateProjectionMatrix();
       return;
     }
@@ -178,7 +182,7 @@ function CameraProjectionController({ mode }: { mode: CameraProjectionMode }) {
       return;
     }
 
-    const next = new THREE.PerspectiveCamera(50, aspect, camera.near ?? 0.02, camera.far ?? 5000);
+    const next = new THREE.PerspectiveCamera(50, aspect, PERSPECTIVE_NEAR, PERSPECTIVE_FAR);
     next.up.copy(camera.up);
 
     if (camera instanceof THREE.OrthographicCamera) {
