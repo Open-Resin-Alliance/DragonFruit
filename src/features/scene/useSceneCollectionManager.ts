@@ -3,20 +3,22 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
 import type { HistoryAction, HistoryDirection } from '@/history/types';
 import type { ModelTransform } from '@/hooks/useModelTransform';
-import type { SupportMode } from '@/supports/types';
+import type { SupportMode, SupportState } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
+import { getSupportBraceSnapshot, setSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import type { SupportBraceState } from '@/supports/SupportTypes/SupportBrace/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   DEFAULT_VIEW3D_SETTINGS,
@@ -76,6 +78,12 @@ type SceneSnapshot = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  supportState?: SupportState;
+  supportBraceState?: SupportBraceState;
+};
+
+type SceneSnapshotCaptureOptions = {
+  includeSupportState?: boolean;
 };
 
 type SceneSnapshotPair = {
@@ -110,11 +118,28 @@ function cloneLoadedModel(model: LoadedModel): LoadedModel {
   };
 }
 
-function captureSceneSnapshot(models: LoadedModel[], activeModelId: string | null, selectedModelIds: string[]): SceneSnapshot {
+function clonePlainObject<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function captureSceneSnapshot(
+  models: LoadedModel[],
+  activeModelId: string | null,
+  selectedModelIds: string[],
+  options?: SceneSnapshotCaptureOptions,
+): SceneSnapshot {
+  const includeSupportState = options?.includeSupportState ?? false;
+
   return {
     models: models.map(cloneLoadedModel),
     activeModelId,
     selectedModelIds: [...selectedModelIds],
+    ...(includeSupportState
+      ? {
+          supportState: clonePlainObject(getSnapshot()),
+          supportBraceState: clonePlainObject(getSupportBraceSnapshot()),
+        }
+      : {}),
   };
 }
 
@@ -769,15 +794,20 @@ export function useSceneCollectionManager() {
   const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
-    const currentModels = modelsRef.current;
-    const nextById = new Map(snapshot.models.map((model) => [model.id, model] as const));
+    if (snapshot.supportState && snapshot.supportBraceState) {
+      setSupportSnapshot(clonePlainObject(snapshot.supportState));
+      setSupportBraceSnapshot(clonePlainObject(snapshot.supportBraceState));
+    } else {
+      const currentModels = modelsRef.current;
+      const nextById = new Map(snapshot.models.map((model) => [model.id, model] as const));
 
-    for (const currentModel of currentModels) {
-      const nextModel = nextById.get(currentModel.id);
-      if (!nextModel) continue;
-      if (transformsEqual(currentModel.transform, nextModel.transform)) continue;
+      for (const currentModel of currentModels) {
+        const nextModel = nextById.get(currentModel.id);
+        if (!nextModel) continue;
+        if (transformsEqual(currentModel.transform, nextModel.transform)) continue;
 
-      transformSupportsForModel(currentModel.id, currentModel.transform, nextModel.transform);
+        transformSupportsForModel(currentModel.id, currentModel.transform, nextModel.transform);
+      }
     }
 
     setModels(snapshot.models.map(cloneLoadedModel));
@@ -1366,7 +1396,7 @@ export function useSceneCollectionManager() {
     const existing = models.filter((m) => ids.has(m.id));
     if (existing.length === 0) return;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
     existing.forEach((model) => {
       tryRevokeObjectUrl(model.fileUrl);
@@ -1380,18 +1410,19 @@ export function useSceneCollectionManager() {
     setActiveModelId(nextActiveModelId);
     setSelectedModelIds(nextSelectedModelIds);
 
-    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds);
-    const deletedLabel = existing.length === 1
-      ? `Delete Model ${existing[0].name}`
-      : `Delete ${existing.length} Models`;
-    pushSceneSnapshotHistory(before, after, deletedLabel);
-
-    // Clean up associated supports.
+    // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
     const supportState = getSnapshot();
     let totalRemovedSupports = 0;
     ids.forEach((id) => {
       totalRemovedSupports += deleteSupportsForModel(supportState, id);
     });
+
+    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: true });
+    const deletedLabel = existing.length === 1
+      ? `Delete Model ${existing[0].name}`
+      : `Delete ${existing.length} Models`;
+    pushSceneSnapshotHistory(before, after, deletedLabel);
+
     console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
   }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds, tryRevokeObjectUrl]);
 
@@ -1463,7 +1494,7 @@ export function useSceneCollectionManager() {
   const pasteModel = useCallback(() => {
     if (modelClipboard.length === 0) return null;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
     const first = modelClipboard[0];
 
@@ -1498,7 +1529,7 @@ export function useSceneCollectionManager() {
       pastedModel.transform,
     );
 
-    const after = captureSceneSnapshot(nextModels, id, [id]);
+    const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
     pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
 
     return id;
@@ -1507,7 +1538,7 @@ export function useSceneCollectionManager() {
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
     const entries = modelClipboard;
 
@@ -1865,7 +1896,7 @@ export function useSceneCollectionManager() {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds(createdIds);
 
-      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds);
+      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
       pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
     }
 
@@ -1879,7 +1910,7 @@ export function useSceneCollectionManager() {
     if (!source) return [] as string[];
     const supportClipboard = captureModelSupportsToClipboard(sourceId);
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
     const resolvedGroupId = source.groupId ?? `group-${generateId()}`;
     const resolvedGroupName = source.groupName ?? source.name;
@@ -1958,7 +1989,7 @@ export function useSceneCollectionManager() {
       setSelectedModelIds([sourceId, ...createdIds]);
 
       const nextSelected = [sourceId, ...createdIds];
-      const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected);
+      const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected, { includeSupportState: true });
       pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? `Duplicate Model ${source.name}` : `Duplicate ${createdIds.length} Models`);
     }
 
