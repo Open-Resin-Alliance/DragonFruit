@@ -1963,23 +1963,21 @@ export function useSceneCollectionManager() {
     const nextModels = [...withSourceGroup, ...newModels];
     setModels(nextModels);
 
-    const supportSourceTransform = sourceTransform
-      ? {
-          position: sourceTransform.position.clone(),
-          rotation: sourceTransform.rotation.clone(),
-          scale: sourceTransform.scale.clone(),
-        }
-      : {
-          position: source.transform.position.clone(),
-          rotation: source.transform.rotation.clone(),
-          scale: source.transform.scale.clone(),
-        };
+    const originalSourceTransform = {
+      position: source.transform.position.clone(),
+      rotation: source.transform.rotation.clone(),
+      scale: source.transform.scale.clone(),
+    };
+
+    if (sourceTransform && !transformsEqual(source.transform, sourceTransform)) {
+      transformSupportsForModel(sourceId, source.transform, sourceTransform);
+    }
 
     newModels.forEach((model) => {
       pasteModelSupportsFromClipboard(
         supportClipboard,
         model.id,
-        supportSourceTransform,
+        originalSourceTransform,
         model.transform,
       );
     });
