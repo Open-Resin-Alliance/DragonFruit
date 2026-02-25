@@ -361,6 +361,7 @@ export default function Home() {
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   } | null>(null);
+  const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
   const dragDepthRef = React.useRef(0);
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
@@ -1308,7 +1309,11 @@ export default function Home() {
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
   useEffect(() => {
-    if (transformMgr.isTransforming) return;
+    // Only suppress persistence while a live gizmo transform is actively driving
+    // transient values (pendingTransformRef is set from SceneCanvas drag updates).
+    // If isTransforming ever lingers true without a pending gizmo payload, we still
+    // need manual Transform panel edits to persist and reflow support geometry.
+    if (transformMgr.isTransforming && transformMgr.pendingTransformRef.current) return;
 
     // Skip if handleTransformEnd already flushed the final transform synchronously.
     // The persistence effect would otherwise re-apply the delta because React state
@@ -1362,7 +1367,12 @@ export default function Home() {
           };
         }
 
+        const isDirectTransformPath = !transformMgr.pendingTransformRef.current;
         scene.updateModelTransform(scene.activeModelId, current);
+
+        if (isDirectTransformPath) {
+          setSupportRenderRefreshNonce((prev) => prev + 1);
+        }
 
         if (transformHistoryCommitRequestedRef.current) {
           window.requestAnimationFrame(() => {
@@ -1862,6 +1872,13 @@ export default function Home() {
 
     if (visibleModels.length <= 1) return;
 
+    // Arrange and Duplicate previews should never overlap.
+    setDuplicateApplySourceModel(null);
+    setDuplicateApplySourceTransform(null);
+    setDuplicateSourcePreviewTransform(null);
+    setDuplicatePreviewTransforms([]);
+    setDuplicateTotalCopies(1);
+
     const minSpinnerMs = 220;
     const startedAt = performance.now();
     setActiveArrangeOperation('standard');
@@ -2272,6 +2289,13 @@ export default function Home() {
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
     if (visibleModels.length <= 1) return;
+
+    // Arrange and Duplicate previews should never overlap.
+    setDuplicateApplySourceModel(null);
+    setDuplicateApplySourceTransform(null);
+    setDuplicateSourcePreviewTransform(null);
+    setDuplicatePreviewTransforms([]);
+    setDuplicateTotalCopies(1);
 
     const minSpinnerMs = 220;
     const startedAt = performance.now();
@@ -3383,7 +3407,7 @@ export default function Home() {
     await sleep(0);
 
     try {
-      scene.duplicateModelWithTransforms(
+      const createdIds = scene.duplicateModelWithTransforms(
         scene.activeModelId,
         duplicatePreviewTransforms,
         duplicateSourcePreviewTransform
@@ -3394,6 +3418,28 @@ export default function Home() {
             }
           : null,
       );
+
+      const firstCreatedId = createdIds[0] ?? null;
+      const firstCreatedTransform = duplicatePreviewTransforms[0] ?? null;
+      if (firstCreatedId && firstCreatedTransform) {
+        setDisplayActiveModelId(firstCreatedId);
+        transformMgr.transformHook.setPosition(
+          firstCreatedTransform.position.x,
+          firstCreatedTransform.position.y,
+          firstCreatedTransform.position.z,
+        );
+        transformMgr.transformHook.setRotation(
+          firstCreatedTransform.rotation.x,
+          firstCreatedTransform.rotation.y,
+          firstCreatedTransform.rotation.z,
+        );
+        transformMgr.transformHook.setScale(
+          firstCreatedTransform.scale.x,
+          firstCreatedTransform.scale.y,
+          firstCreatedTransform.scale.z,
+        );
+      }
+
       setDuplicateTotalCopies(1);
       setDuplicateSourcePreviewTransform(null);
       setDuplicatePreviewTransforms([]);
@@ -3406,7 +3452,7 @@ export default function Home() {
       setDuplicateApplySourceModel(null);
       setDuplicateApplySourceTransform(null);
     }
-  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep]);
+  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr.transformHook]);
 
   const handleFillPlateDuplicate = React.useCallback(() => {
     if (isDuplicating) return;
@@ -4142,6 +4188,7 @@ export default function Home() {
                 ? duplicateApplySourceTransform
                 : duplicateSourcePreviewTransform
             }
+            supportRenderRefreshNonce={supportRenderRefreshNonce}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}

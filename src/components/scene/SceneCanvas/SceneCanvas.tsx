@@ -543,6 +543,7 @@ type ModelAttachedSupportLayerProps = {
   ghostOpacity?: number;
   ghostRenderOrder?: number;
   supportRendererRef?: React.Ref<THREE.Group>;
+  supportRenderRefreshNonce?: number;
 };
 
 function ModelAttachedSupportLayer({
@@ -569,6 +570,7 @@ function ModelAttachedSupportLayer({
   ghostOpacity,
   ghostRenderOrder,
   supportRendererRef,
+  supportRenderRefreshNonce = 0,
 }: ModelAttachedSupportLayerProps) {
   return (
     <>
@@ -602,6 +604,7 @@ function ModelAttachedSupportLayer({
       )}
 
       <SupportRenderer
+        key={`support-renderer-${supportRenderRefreshNonce}`}
         ref={supportRendererRef}
         mode={mode}
         navigationLodActive={navigationLodActive}
@@ -714,6 +717,7 @@ export function SceneCanvas({
   classificationGeometry,
   showClassification,
   view3dSettings,
+  supportRenderRefreshNonce = 0,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -826,6 +830,7 @@ export function SceneCanvas({
   classificationGeometry?: THREE.BufferGeometry;
   showClassification?: boolean;
   view3dSettings?: View3DSettings;
+  supportRenderRefreshNonce?: number;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -1803,7 +1808,18 @@ export function SceneCanvas({
     const dragGroup = supportDragGroupRef?.current;
     if (!dragGroup) return;
 
-    if (mode !== 'prepare' || !activeModelId || !transform) {
+    if (mode !== 'prepare' || transformMode !== 'transform' || !activeModelId || !transform) {
+      if (!dragGroup.matrixAutoUpdate) {
+        dragGroup.matrix.identity();
+        dragGroup.matrixAutoUpdate = true;
+      }
+      return;
+    }
+
+    // Outside the explicit post-drag hold window we should never keep a
+    // reconciliation delta alive, otherwise stale support clouds can persist
+    // while selection remains active.
+    if (!holdSupportDragDelta) {
       if (!dragGroup.matrixAutoUpdate) {
         dragGroup.matrix.identity();
         dragGroup.matrixAutoUpdate = true;
@@ -1818,13 +1834,6 @@ export function SceneCanvas({
     const liveMatrix = composeModelTransformMatrix(transform);
 
     if (matricesApproximatelyEqual(committedMatrix, liveMatrix)) {
-      if (holdSupportDragDelta) {
-        // Keep the temporary drag delta active until support-store sync is
-        // observed by the parent orchestrator.
-        dragGroup.matrixAutoUpdate = false;
-        return;
-      }
-
       if (!dragGroup.matrixAutoUpdate) {
         dragGroup.matrix.identity();
         dragGroup.matrixAutoUpdate = true;
@@ -1841,6 +1850,7 @@ export function SceneCanvas({
     isGizmoDragging,
     matricesApproximatelyEqual,
     mode,
+    transformMode,
     models,
     supportDragGroupRef,
     holdSupportDragDelta,
@@ -3425,6 +3435,7 @@ export function SceneCanvas({
                             raftColorized={raftColorized}
                             raftHoverized={raftHoverized}
                             passive
+                            supportRenderRefreshNonce={supportRenderRefreshNonce}
                           />
                         </group>
                       )}
@@ -3519,6 +3530,7 @@ export function SceneCanvas({
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>
                   ))
@@ -3585,6 +3597,7 @@ export function SceneCanvas({
                         raftColorized={false}
                         raftHoverized={false}
                         passive
+                        supportRenderRefreshNonce={supportRenderRefreshNonce}
                       />
                     </group>
                   )
@@ -3699,6 +3712,7 @@ export function SceneCanvas({
                   raftHoverized={raftHoverized}
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   supportRendererRef={supportsRef as React.Ref<THREE.Group>}
+                  supportRenderRefreshNonce={supportRenderRefreshNonce}
                 />
               )}
               </group>{/* end supportDragGroupRef */}
@@ -3746,6 +3760,7 @@ export function SceneCanvas({
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   passive
+                  supportRenderRefreshNonce={supportRenderRefreshNonce}
                 />
               )}
 

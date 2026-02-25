@@ -950,6 +950,52 @@ export function transformSupportsForModel(
     const affectedTwigIds = new Set<string>();
     const affectedStickIds = new Set<string>();
 
+    const segmentModelIdById = new Map<string, string | undefined>();
+    for (const trunk of Object.values(state.trunks)) {
+        for (const segment of trunk.segments) segmentModelIdById.set(segment.id, trunk.modelId);
+    }
+    for (const branch of Object.values(state.branches)) {
+        for (const segment of branch.segments) segmentModelIdById.set(segment.id, branch.modelId);
+    }
+    for (const twig of Object.values(state.twigs)) {
+        for (const segment of twig.segments) segmentModelIdById.set(segment.id, twig.modelId);
+    }
+    for (const stick of Object.values(state.sticks)) {
+        for (const segment of stick.segments) segmentModelIdById.set(segment.id, stick.modelId);
+    }
+
+    const resolveModelIdFromParentShaft = (parentShaftId: string, visitedBraceIds?: Set<string>): string | undefined => {
+        if (parentShaftId.startsWith('leafCone:')) {
+            const leafId = parentShaftId.slice('leafCone:'.length);
+            const leaf = state.leaves[leafId];
+            if (!leaf) return undefined;
+            return leaf.modelId ?? resolveModelIdFromKnot(leaf.parentKnotId, visitedBraceIds);
+        }
+
+        if (parentShaftId.startsWith('braceSegment:')) {
+            const braceId = parentShaftId.slice('braceSegment:'.length);
+            const brace = state.braces[braceId];
+            if (!brace) return undefined;
+
+            const nextVisited = visitedBraceIds ?? new Set<string>();
+            if (nextVisited.has(braceId)) return brace.modelId;
+            nextVisited.add(braceId);
+
+            return brace.modelId
+                ?? resolveModelIdFromKnot(brace.startKnotId, nextVisited)
+                ?? resolveModelIdFromKnot(brace.endKnotId, nextVisited);
+        }
+
+        return segmentModelIdById.get(parentShaftId);
+    };
+
+    const resolveModelIdFromKnot = (knotId: string | undefined, visitedBraceIds?: Set<string>): string | undefined => {
+        if (!knotId) return undefined;
+        const knot = state.knots[knotId];
+        if (!knot) return undefined;
+        return resolveModelIdFromParentShaft(knot.parentShaftId, visitedBraceIds);
+    };
+
     for (const root of Object.values(state.roots)) {
         if (root.modelId !== modelId) continue;
         if (!changed) {
@@ -1000,8 +1046,9 @@ export function transformSupportsForModel(
             const parentKnot = state.knots[branch.parentKnotId];
             const isConnectedToMovedGraph = touchedKnotIds.has(branch.parentKnotId)
                 || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
+            const resolvedBranchModelId = branch.modelId ?? resolveModelIdFromKnot(branch.parentKnotId);
 
-            if (branch.modelId !== modelId && !isConnectedToMovedGraph) continue;
+            if (resolvedBranchModelId !== modelId && !isConnectedToMovedGraph) continue;
 
             affectedBranchIds.add(branch.id);
             touchedKnotIds.add(branch.parentKnotId);
@@ -1022,8 +1069,9 @@ export function transformSupportsForModel(
             const parentKnot = state.knots[leaf.parentKnotId];
             const isConnectedToMovedGraph = touchedKnotIds.has(leaf.parentKnotId)
                 || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
+            const resolvedLeafModelId = leaf.modelId ?? resolveModelIdFromKnot(leaf.parentKnotId);
 
-            if (leaf.modelId !== modelId && !isConnectedToMovedGraph) continue;
+            if (resolvedLeafModelId !== modelId && !isConnectedToMovedGraph) continue;
 
             affectedLeafIds.add(leaf.id);
             touchedKnotIds.add(leaf.parentKnotId);
@@ -1046,8 +1094,11 @@ export function transformSupportsForModel(
                 || (!!endParentShaftId && (touchedSegmentIds.has(endParentShaftId)
                     || (endParentShaftId.startsWith('braceSegment:')
                         && touchedBraceIds.has(endParentShaftId.slice('braceSegment:'.length)))));
+            const resolvedBraceModelId = brace.modelId
+                ?? resolveModelIdFromKnot(brace.startKnotId)
+                ?? resolveModelIdFromKnot(brace.endKnotId);
 
-            if (brace.modelId !== modelId && !isConnectedToMovedGraph) continue;
+            if (resolvedBraceModelId !== modelId && !isConnectedToMovedGraph) continue;
 
             affectedBraceIds.add(brace.id);
             touchedKnotIds.add(brace.startKnotId);

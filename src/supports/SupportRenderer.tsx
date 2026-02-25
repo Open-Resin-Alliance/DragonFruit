@@ -2,7 +2,7 @@
 
 import React, { useSyncExternalStore, forwardRef, useImperativeHandle, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { addKnot, addRoot, removeRootById, subscribe, getSnapshot } from './state';
+import { addKnot, addRoot, removeRootById, subscribe, getSnapshot, updateKnot } from './state';
 import { TrunkRenderer } from './SupportTypes/Trunk/TrunkRenderer';
 import { BranchRenderer } from './SupportTypes/Branch/BranchRenderer';
 import { LeafRenderer } from './SupportTypes/Leaf/LeafRenderer';
@@ -120,12 +120,103 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const [marqueeHoveredSupportId, setMarqueeHoveredSupportId] = React.useState<string | null>(null);
     const pendingSceneHoverClearFrameRef = React.useRef<number | null>(null);
     const orbitInteractionActiveRef = React.useRef(false);
-    const isModelVisible = React.useCallback((modelId?: string) => {
-        if (restrictToActiveModel && modelId !== activeModelId) return false;
-        if (modelFilterId && modelId !== modelFilterId) return false;
-        if (excludeModelId && modelId === excludeModelId) return false;
+    const entitySegmentModelIdById = useMemo(() => {
+        const map = new Map<string, string | undefined>();
+
+        for (const trunk of Object.values(state.trunks)) {
+            for (const segment of trunk.segments) map.set(segment.id, trunk.modelId);
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            for (const segment of branch.segments) map.set(segment.id, branch.modelId);
+        }
+
+        for (const twig of Object.values(state.twigs)) {
+            for (const segment of twig.segments) map.set(segment.id, twig.modelId);
+        }
+
+        for (const stick of Object.values(state.sticks)) {
+            for (const segment of stick.segments) map.set(segment.id, stick.modelId);
+        }
+
+        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+            for (const segment of supportBrace.segments) map.set(segment.id, supportBrace.modelId);
+        }
+
+        return map;
+    }, [state.trunks, state.branches, state.twigs, state.sticks, supportBraceState.supportBraces]);
+
+    const entityModelIdByKnotId = useMemo(() => {
+        const map = new Map<string, string | undefined>();
+
+        const resolveByParentShaftId = (parentShaftId: string): string | undefined => {
+            if (parentShaftId.startsWith('braceSegment:')) {
+                const braceId = parentShaftId.slice('braceSegment:'.length);
+                return state.braces[braceId]?.modelId;
+            }
+            if (parentShaftId.startsWith('leafCone:')) {
+                const leafId = parentShaftId.slice('leafCone:'.length);
+                return state.leaves[leafId]?.modelId;
+            }
+            return entitySegmentModelIdById.get(parentShaftId);
+        };
+
+        for (const knot of Object.values(state.knots)) {
+            map.set(knot.id, resolveByParentShaftId(knot.parentShaftId));
+        }
+
+        for (const knot of Object.values(supportBraceState.knots)) {
+            map.set(knot.id, resolveByParentShaftId(knot.parentShaftId));
+        }
+
+        return map;
+    }, [state.knots, state.braces, state.leaves, supportBraceState.knots, entitySegmentModelIdById]);
+
+    const resolveSupportModelId = React.useCallback((modelId?: string, supportId?: string) => {
+        if (modelId) return modelId;
+        if (!supportId) return undefined;
+
+        const trunk = state.trunks[supportId];
+        if (trunk?.modelId) return trunk.modelId;
+
+        const branch = state.branches[supportId];
+        if (branch) return branch.modelId ?? entityModelIdByKnotId.get(branch.parentKnotId);
+
+        const leaf = state.leaves[supportId];
+        if (leaf) return leaf.modelId ?? entityModelIdByKnotId.get(leaf.parentKnotId);
+
+        const brace = state.braces[supportId];
+        if (brace) {
+            return brace.modelId
+                ?? entityModelIdByKnotId.get(brace.startKnotId)
+                ?? entityModelIdByKnotId.get(brace.endKnotId);
+        }
+
+        const twig = state.twigs[supportId];
+        if (twig?.modelId) return twig.modelId;
+
+        const stick = state.sticks[supportId];
+        if (stick?.modelId) return stick.modelId;
+
+        const supportBrace = supportBraceState.supportBraces[supportId];
+        if (supportBrace) {
+            return supportBrace.modelId
+                ?? supportBraceState.roots[supportBrace.rootId]?.modelId
+                ?? entityModelIdByKnotId.get(supportBrace.hostKnotId);
+        }
+
+        return undefined;
+    }, [state.trunks, state.branches, state.leaves, state.braces, state.twigs, state.sticks, supportBraceState.supportBraces, supportBraceState.roots, entityModelIdByKnotId]);
+
+    const isModelVisible = React.useCallback((modelId?: string, supportId?: string) => {
+        const resolvedModelId = resolveSupportModelId(modelId, supportId);
+
+        if ((restrictToActiveModel || modelFilterId || excludeModelId) && !resolvedModelId) return false;
+        if (restrictToActiveModel && resolvedModelId !== activeModelId) return false;
+        if (modelFilterId && resolvedModelId !== modelFilterId) return false;
+        if (excludeModelId && resolvedModelId === excludeModelId) return false;
         return true;
-    }, [restrictToActiveModel, activeModelId, modelFilterId, excludeModelId]);
+    }, [resolveSupportModelId, restrictToActiveModel, activeModelId, modelFilterId, excludeModelId]);
 
     useEffect(() => {
         if (!interactionHooksEnabled) return;
@@ -361,15 +452,48 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     useEffect(() => {
         if (!interactionHooksEnabled) return;
 
+        const rootDiffers = (
+            a: { modelId?: string; diameter: number; diskHeight: number; coneHeight: number; transform: { pos: { x: number; y: number; z: number } } },
+            b: { modelId?: string; diameter: number; diskHeight: number; coneHeight: number; transform: { pos: { x: number; y: number; z: number } } },
+        ) => {
+            return a.modelId !== b.modelId
+                || a.diameter !== b.diameter
+                || a.diskHeight !== b.diskHeight
+                || a.coneHeight !== b.coneHeight
+                || a.transform.pos.x !== b.transform.pos.x
+                || a.transform.pos.y !== b.transform.pos.y
+                || a.transform.pos.z !== b.transform.pos.z;
+        };
+
+        const knotDiffers = (
+            a: { t?: number; parentShaftId: string; diameter?: number; pos: { x: number; y: number; z: number } },
+            b: { t?: number; parentShaftId: string; diameter?: number; pos: { x: number; y: number; z: number } },
+        ) => {
+            return a.parentShaftId !== b.parentShaftId
+                || a.t !== b.t
+                || a.diameter !== b.diameter
+                || a.pos.x !== b.pos.x
+                || a.pos.y !== b.pos.y
+                || a.pos.z !== b.pos.z;
+        };
+
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
             const root = supportBraceState.roots[supportBrace.rootId];
-            if (root && !state.roots[root.id]) {
-                addRoot(root);
+            if (root) {
+                const existingRoot = state.roots[root.id] as typeof root | undefined;
+                if (!existingRoot || rootDiffers(existingRoot, root)) {
+                    addRoot(root);
+                }
             }
 
             const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
-            if (hostKnot && !state.knots[hostKnot.id]) {
-                addKnot(hostKnot);
+            if (hostKnot) {
+                const existingKnot = state.knots[hostKnot.id] as typeof hostKnot | undefined;
+                if (!existingKnot) {
+                    addKnot(hostKnot);
+                } else if (knotDiffers(existingKnot, hostKnot)) {
+                    updateKnot(hostKnot);
+                }
             }
         }
 
@@ -380,7 +504,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (supportBraceRootIds.has(rootId)) continue;
             removeRootById(rootId);
         }
-    }, [supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, state.trunks, interactionHooksEnabled]);
+    }, [supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, state.roots, state.knots, state.trunks, interactionHooksEnabled]);
 
     // Enable joint dragging
     useJointInteraction(isInteractable);
@@ -618,7 +742,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const baseFlareEnabled = baseFlare.enabled;
 
         for (const trunk of Object.values(state.trunks)) {
-            if (!isModelVisible(trunk.modelId)) continue;
+            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
             const root = state.roots[trunk.rootId];
             if (!root) continue;
 
@@ -679,7 +803,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportShaftSet>();
 
         for (const branch of Object.values(state.branches)) {
-            if (!isModelVisible(branch.modelId)) continue;
+            if (!isModelVisible(branch.modelId, branch.id)) continue;
             const parentKnot = state.knots[branch.parentKnotId];
             if (!parentKnot) continue;
 
@@ -732,7 +856,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportShaftSet>();
 
         for (const brace of Object.values(state.braces)) {
-            if (!isModelVisible(brace.modelId)) continue;
+            if (!isModelVisible(brace.modelId, brace.id)) continue;
             if (brace.curve?.type === 'bezier') continue;
 
             const startKnot = state.knots[brace.startKnotId];
@@ -774,7 +898,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
 
         for (const twig of Object.values(state.twigs)) {
-            if (!isModelVisible(twig.modelId)) continue;
+            if (!isModelVisible(twig.modelId, twig.id)) continue;
 
             const shafts: InstancedShaft[] = [];
             let fullyBatchable = true;
@@ -834,7 +958,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportShaftSet>();
 
         for (const stick of Object.values(state.sticks)) {
-            if (!isModelVisible(stick.modelId)) continue;
+            if (!isModelVisible(stick.modelId, stick.id)) continue;
 
             const shafts: InstancedShaft[] = [];
             let fullyBatchable = true;
@@ -884,7 +1008,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportShaftSet>();
 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            if (!isModelVisible(supportBrace.modelId)) continue;
+            if (!isModelVisible(supportBrace.modelId, supportBrace.id)) continue;
 
             const root = supportBraceState.roots[supportBrace.rootId];
             const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
@@ -1117,7 +1241,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportJointSet>();
 
         for (const trunk of Object.values(state.trunks)) {
-            if (!isModelVisible(trunk.modelId)) continue;
+            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
 
             const seen = new Set<string>();
             const joints: InstancedJoint[] = [];
@@ -1151,7 +1275,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportJointSet>();
 
         for (const branch of Object.values(state.branches)) {
-            if (!isModelVisible(branch.modelId)) continue;
+            if (!isModelVisible(branch.modelId, branch.id)) continue;
 
             const seen = new Set<string>();
             const joints: InstancedJoint[] = [];
@@ -1185,7 +1309,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportJointSet>();
 
         for (const twig of Object.values(state.twigs)) {
-            if (!isModelVisible(twig.modelId)) continue;
+            if (!isModelVisible(twig.modelId, twig.id)) continue;
 
             const seen = new Set<string>();
             const joints: InstancedJoint[] = [];
@@ -1230,7 +1354,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportJointSet>();
 
         for (const stick of Object.values(state.sticks)) {
-            if (!isModelVisible(stick.modelId)) continue;
+            if (!isModelVisible(stick.modelId, stick.id)) continue;
 
             const seen = new Set<string>();
             const joints: InstancedJoint[] = [];
@@ -1275,7 +1399,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const result = new Map<string, SupportJointSet>();
 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            if (!isModelVisible(supportBrace.modelId)) continue;
+            if (!isModelVisible(supportBrace.modelId, supportBrace.id)) continue;
 
             const seen = new Set<string>();
             const joints: InstancedJoint[] = [];
@@ -1323,7 +1447,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
 
         for (const trunk of Object.values(state.trunks)) {
-            if (!isModelVisible(trunk.modelId)) continue;
+            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
             if (selectedTrunkIds.has(trunk.id)) continue;
             const jointSet = trunkJointsBySupport.get(trunk.id);
             if (!jointSet) continue;
@@ -1333,7 +1457,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const branch of Object.values(state.branches)) {
-            if (!isModelVisible(branch.modelId)) continue;
+            if (!isModelVisible(branch.modelId, branch.id)) continue;
             if (selectedBranchIds.has(branch.id)) continue;
             const jointSet = branchJointsBySupport.get(branch.id);
             if (!jointSet) continue;
@@ -1343,7 +1467,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const twig of Object.values(state.twigs)) {
-            if (!isModelVisible(twig.modelId)) continue;
+            if (!isModelVisible(twig.modelId, twig.id)) continue;
             if (selectedTwigIds.has(twig.id)) continue;
             const jointSet = twigJointsBySupport.get(twig.id);
             if (!jointSet) continue;
@@ -1353,7 +1477,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const stick of Object.values(state.sticks)) {
-            if (!isModelVisible(stick.modelId)) continue;
+            if (!isModelVisible(stick.modelId, stick.id)) continue;
             if (selectedStickIds.has(stick.id)) continue;
             const jointSet = stickJointsBySupport.get(stick.id);
             if (!jointSet) continue;
@@ -1363,7 +1487,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            if (!isModelVisible(supportBrace.modelId)) continue;
+            if (!isModelVisible(supportBrace.modelId, supportBrace.id)) continue;
             if (selectedSupportBraceIds.has(supportBrace.id)) continue;
             const jointSet = supportBraceJointsBySupport.get(supportBrace.id);
             if (!jointSet) continue;
@@ -1406,7 +1530,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const twig of Object.values(state.twigs)) {
-            if (!isModelVisible(twig.modelId)) continue;
+            if (!isModelVisible(twig.modelId, twig.id)) continue;
             const shaftSet = twigShaftsBySupport.get(twig.id);
             if (!shaftSet) continue;
             if (selectedTwigIds.has(twig.id)) continue;
@@ -1430,7 +1554,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const stick of Object.values(state.sticks)) {
-            if (!isModelVisible(stick.modelId)) continue;
+            if (!isModelVisible(stick.modelId, stick.id)) continue;
             const shaftSet = stickShaftsBySupport.get(stick.id);
             if (!shaftSet) continue;
             if (selectedStickIds.has(stick.id)) continue;
@@ -1454,7 +1578,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            if (!isModelVisible(supportBrace.modelId)) continue;
+            if (!isModelVisible(supportBrace.modelId, supportBrace.id)) continue;
             const shaftSet = supportBraceShaftsBySupport.get(supportBrace.id);
             if (!shaftSet) continue;
             if (selectedSupportBraceIds.has(supportBrace.id)) continue;
@@ -1478,7 +1602,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const brace of Object.values(state.braces)) {
-            if (!isModelVisible(brace.modelId)) continue;
+            if (!isModelVisible(brace.modelId, brace.id)) continue;
             const shaftSet = braceShaftsBySupport.get(brace.id);
             if (!shaftSet) continue;
 
@@ -1515,7 +1639,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const trunk of Object.values(state.trunks)) {
-            if (!isModelVisible(trunk.modelId)) continue;
+            if (!isModelVisible(trunk.modelId, trunk.id)) continue;
             const shaftSet = trunkShaftsBySupport.get(trunk.id);
             if (!shaftSet) continue;
 
@@ -2197,7 +2321,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             )}
 
             {Object.values(state.trunks).map(trunk => {
-                if (!isModelVisible(trunk.modelId)) return null;
+                if (!isModelVisible(trunk.modelId, trunk.id)) return null;
                 const root = state.roots[trunk.rootId];
                 if (!root) return null;
 
@@ -2251,7 +2375,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             ))}
 
             {Object.values(state.branches).map(branch => {
-                if (!isModelVisible(branch.modelId)) return null;
+                if (!isModelVisible(branch.modelId, branch.id)) return null;
                 const knot = state.knots[branch.parentKnotId];
                 if (!knot) return null;
 
@@ -2290,7 +2414,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Leaves */}
             {Object.values(state.leaves).map(leaf => {
-                if (!isModelVisible(leaf.modelId)) return null;
+                if (!isModelVisible(leaf.modelId, leaf.id)) return null;
                 const knot = state.knots[leaf.parentKnotId];
                 if (!knot) return null;
 
@@ -2318,7 +2442,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Twigs */}
             {Object.values(state.twigs).map(twig => {
-                if (!isModelVisible(twig.modelId)) return null;
+                if (!isModelVisible(twig.modelId, twig.id)) return null;
                 const effectiveSelected = selectedTwigIds.has(twig.id);
                 const isTwigBatchable = twigShaftsBySupport.has(twig.id);
                 const renderDetailedTwig = effectiveSelected || !isTwigBatchable;
@@ -2365,7 +2489,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Sticks */}
             {Object.values(state.sticks).map(stick => {
-                if (!isModelVisible(stick.modelId)) return null;
+                if (!isModelVisible(stick.modelId, stick.id)) return null;
                 const effectiveSelected = selectedStickIds.has(stick.id);
                 const isStickBatchable = stickShaftsBySupport.has(stick.id);
                 const renderDetailedStick = effectiveSelected || !isStickBatchable;
@@ -2428,7 +2552,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             ))}
 
             {Object.values(state.braces).map(brace => {
-                if (!isModelVisible(brace.modelId)) return null;
+                if (!isModelVisible(brace.modelId, brace.id)) return null;
                 const startKnot = state.knots[brace.startKnotId];
                 const endKnot = state.knots[brace.endKnotId];
                 if (!startKnot || !endKnot) return null;
@@ -2468,7 +2592,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Support Braces */}
             {Object.values(supportBraceState.supportBraces).map((supportBrace) => {
-                if (!isModelVisible(supportBrace.modelId)) return null;
+                if (!isModelVisible(supportBrace.modelId, supportBrace.id)) return null;
                 const root = supportBraceState.roots[supportBrace.rootId];
                 const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
                 if (!root || !hostKnot) return null;
