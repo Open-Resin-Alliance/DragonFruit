@@ -26,13 +26,20 @@ function clonePlain<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function getOrCreateMappedId(sourceId: string, idMap: Map<string, string>): string {
+  const mapped = idMap.get(sourceId);
+  if (mapped) return mapped;
+  const created = generateUuid();
+  idMap.set(sourceId, created);
+  return created;
+}
+
 function remapSupportJoint<T extends { id: string; pos: { x: number; y: number; z: number }; diameter: number }>(
   joint: T | undefined,
   jointIdMap: Map<string, string>,
 ): T | undefined {
   if (!joint) return joint;
-  const mappedId = jointIdMap.get(joint.id) ?? generateUuid();
-  jointIdMap.set(joint.id, mappedId);
+  const mappedId = getOrCreateMappedId(joint.id, jointIdMap);
   return {
     ...joint,
     id: mappedId,
@@ -173,14 +180,14 @@ function mergeSupportClipboardPayload(
       ...clonePlain(trunk),
       id,
       modelId: targetModelId,
-      rootId: rootIdMap.get(trunk.rootId) ?? trunk.rootId,
+      rootId: getOrCreateMappedId(trunk.rootId, rootIdMap),
       segments: clonedSegments,
       contactCone: trunk.contactCone
         ? {
             ...clonePlain(trunk.contactCone),
             id: generateUuid(),
             socketJointId: trunk.contactCone.socketJointId
-              ? (jointIdMap.get(trunk.contactCone.socketJointId) ?? trunk.contactCone.socketJointId)
+              ? getOrCreateMappedId(trunk.contactCone.socketJointId, jointIdMap)
               : trunk.contactCone.socketJointId,
           }
         : trunk.contactCone,
@@ -210,14 +217,14 @@ function mergeSupportClipboardPayload(
       ...clonePlain(branch),
       id,
       modelId: targetModelId,
-      parentKnotId: knotIdMap.get(branch.parentKnotId) ?? branch.parentKnotId,
+      parentKnotId: getOrCreateMappedId(branch.parentKnotId, knotIdMap),
       segments: clonedSegments,
       contactCone: branch.contactCone
         ? {
             ...clonePlain(branch.contactCone),
             id: generateUuid(),
             socketJointId: branch.contactCone.socketJointId
-              ? (jointIdMap.get(branch.contactCone.socketJointId) ?? branch.contactCone.socketJointId)
+              ? getOrCreateMappedId(branch.contactCone.socketJointId, jointIdMap)
               : branch.contactCone.socketJointId,
           }
         : branch.contactCone,
@@ -231,10 +238,13 @@ function mergeSupportClipboardPayload(
       ...clonePlain(leaf),
       id,
       modelId: targetModelId,
-      parentKnotId: knotIdMap.get(leaf.parentKnotId) ?? leaf.parentKnotId,
+      parentKnotId: getOrCreateMappedId(leaf.parentKnotId, knotIdMap),
       contactCone: {
         ...clonePlain(leaf.contactCone),
         id: generateUuid(),
+        socketJointId: leaf.contactCone.socketJointId
+          ? getOrCreateMappedId(leaf.contactCone.socketJointId, jointIdMap)
+          : leaf.contactCone.socketJointId,
       },
     } as Leaf;
   });
@@ -293,10 +303,16 @@ function mergeSupportClipboardPayload(
       contactConeA: {
         ...clonePlain(stick.contactConeA),
         id: generateUuid(),
+        socketJointId: stick.contactConeA.socketJointId
+          ? getOrCreateMappedId(stick.contactConeA.socketJointId, jointIdMap)
+          : stick.contactConeA.socketJointId,
       },
       contactConeB: {
         ...clonePlain(stick.contactConeB),
         id: generateUuid(),
+        socketJointId: stick.contactConeB.socketJointId
+          ? getOrCreateMappedId(stick.contactConeB.socketJointId, jointIdMap)
+          : stick.contactConeB.socketJointId,
       },
     } as Stick;
   });
@@ -308,8 +324,8 @@ function mergeSupportClipboardPayload(
       ...clonePlain(brace),
       id,
       modelId: targetModelId,
-      startKnotId: knotIdMap.get(brace.startKnotId) ?? brace.startKnotId,
-      endKnotId: knotIdMap.get(brace.endKnotId) ?? brace.endKnotId,
+      startKnotId: getOrCreateMappedId(brace.startKnotId, knotIdMap),
+      endKnotId: getOrCreateMappedId(brace.endKnotId, knotIdMap),
     } as Brace;
   });
 
@@ -319,12 +335,12 @@ function mergeSupportClipboardPayload(
     let parentShaftId = knot.parentShaftId;
     if (parentShaftId.startsWith('leafCone:')) {
       const leafId = parentShaftId.slice('leafCone:'.length);
-      parentShaftId = `leafCone:${leafIdMap.get(leafId) ?? leafId}`;
+      parentShaftId = `leafCone:${getOrCreateMappedId(leafId, leafIdMap)}`;
     } else if (parentShaftId.startsWith('braceSegment:')) {
       const braceId = parentShaftId.slice('braceSegment:'.length);
-      parentShaftId = `braceSegment:${braceIdMap.get(braceId) ?? braceId}`;
+      parentShaftId = `braceSegment:${getOrCreateMappedId(braceId, braceIdMap)}`;
     } else {
-      parentShaftId = segmentIdMap.get(parentShaftId) ?? parentShaftId;
+      parentShaftId = getOrCreateMappedId(parentShaftId, segmentIdMap);
     }
 
     return {
@@ -350,7 +366,7 @@ function mergeSupportClipboardPayload(
     return {
       ...clonePlain(knot),
       id,
-      parentShaftId: segmentIdMap.get(knot.parentShaftId) ?? knot.parentShaftId,
+      parentShaftId: getOrCreateMappedId(knot.parentShaftId, segmentIdMap),
     };
   });
 
@@ -359,8 +375,7 @@ function mergeSupportClipboardPayload(
     supportBraceIdMap.set(supportBrace.id, id);
 
     const clonedSegments = supportBrace.segments.map((segment) => {
-      const segmentId = generateUuid();
-      segmentIdMap.set(segment.id, segmentId);
+      const segmentId = getOrCreateMappedId(segment.id, segmentIdMap);
       return {
         ...clonePlain(segment),
         id: segmentId,
@@ -373,9 +388,9 @@ function mergeSupportClipboardPayload(
       ...clonePlain(supportBrace),
       id,
       modelId: targetModelId,
-      rootId: supportBraceRootIdMap.get(supportBrace.rootId) ?? supportBrace.rootId,
-      hostKnotId: supportBraceKnotIdMap.get(supportBrace.hostKnotId) ?? supportBrace.hostKnotId,
-      hostSegmentId: segmentIdMap.get(supportBrace.hostSegmentId) ?? supportBrace.hostSegmentId,
+      rootId: getOrCreateMappedId(supportBrace.rootId, supportBraceRootIdMap),
+      hostKnotId: getOrCreateMappedId(supportBrace.hostKnotId, supportBraceKnotIdMap),
+      hostSegmentId: getOrCreateMappedId(supportBrace.hostSegmentId, segmentIdMap),
       segments: clonedSegments,
     } as SupportBrace;
   });
