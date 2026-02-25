@@ -835,6 +835,14 @@ function transformVec3(value: Vec3, matrix: THREE.Matrix4): Vec3 {
     return { x: v.x, y: v.y, z: v.z };
 }
 
+function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
+    const transformed = transformVec3(value, matrix);
+    return {
+        ...transformed,
+        z: value.z,
+    };
+}
+
 function transformDirection(value: Vec3, normalMatrix: THREE.Matrix3): Vec3 {
     const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix3(normalMatrix);
     if (v.lengthSq() <= 1e-12) return value;
@@ -903,6 +911,19 @@ function transformsRoughlyEqual(a: THREE.Matrix4, b: THREE.Matrix4, epsilon = 1e
     return true;
 }
 
+function vectorsRoughlyEqual(a: THREE.Vector3, b: THREE.Vector3, epsilon = 1e-8) {
+    return Math.abs(a.x - b.x) <= epsilon
+        && Math.abs(a.y - b.y) <= epsilon
+        && Math.abs(a.z - b.z) <= epsilon;
+}
+
+function eulersRoughlyEqual(a: THREE.Euler, b: THREE.Euler, epsilon = 1e-8) {
+    return Math.abs(a.x - b.x) <= epsilon
+        && Math.abs(a.y - b.y) <= epsilon
+        && Math.abs(a.z - b.z) <= epsilon
+        && a.order === b.order;
+}
+
 export function transformSupportsForModel(
     modelId: string,
     beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
@@ -924,6 +945,11 @@ export function transformSupportsForModel(
     if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
         return;
     }
+
+    const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
+        && vectorsRoughlyEqual(beforeTransform.scale, afterTransform.scale);
+    const deltaTranslation = afterTransform.position.clone().sub(beforeTransform.position);
+    const preserveRootZ = isPureTranslation && Math.abs(deltaTranslation.z) > 1e-8;
 
     const deltaMatrix = afterMatrix.clone().multiply(beforeMatrix.clone().invert());
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
@@ -1007,7 +1033,9 @@ export function transformSupportsForModel(
             ...root,
             transform: {
                 ...root.transform,
-                pos: transformVec3(root.transform.pos, deltaMatrix),
+                pos: preserveRootZ
+                    ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
+                    : transformVec3(root.transform.pos, deltaMatrix),
             },
         };
     }
@@ -1290,7 +1318,7 @@ export function transformSupportsForModel(
         notify();
     }
 
-    transformSupportBracesForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds);
+    transformSupportBracesForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds, preserveRootZ);
 }
 
 export function transformAllSupportsForSingleModel(
@@ -1312,6 +1340,11 @@ export function transformAllSupportsForSingleModel(
         return;
     }
 
+    const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
+        && vectorsRoughlyEqual(beforeTransform.scale, afterTransform.scale);
+    const deltaTranslation = afterTransform.position.clone().sub(beforeTransform.position);
+    const preserveRootZ = isPureTranslation && Math.abs(deltaTranslation.z) > 1e-8;
+
     const deltaMatrix = afterMatrix.clone().multiply(beforeMatrix.clone().invert());
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
@@ -1321,7 +1354,9 @@ export function transformAllSupportsForSingleModel(
             ...root,
             transform: {
                 ...root.transform,
-                pos: transformVec3(root.transform.pos, deltaMatrix),
+                pos: preserveRootZ
+                    ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
+                    : transformVec3(root.transform.pos, deltaMatrix),
             },
         };
     }
@@ -1409,7 +1444,7 @@ export function transformAllSupportsForSingleModel(
     };
     notify();
 
-    transformAllSupportBraces(deltaMatrix);
+    transformAllSupportBraces(deltaMatrix, preserveRootZ);
 }
 
 export function removeRootById(rootId: string): Roots | null {
