@@ -15,6 +15,7 @@ import {
   FolderPlus,
   FolderMinus,
   PanelsTopLeft,
+  Info,
 } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Card, CardHeader, IconButton } from '@/components/ui/primitives';
@@ -36,6 +37,7 @@ interface ModelManagerPanelProps {
   onUngroupGroup?: (groupId: string) => void;
   onRenameGroup?: (groupId: string, nextName: string) => void;
   onModelContextMenu?: (id: string, position: { x: number; y: number }) => void;
+  onOpenSupportsInfo?: (id: string) => void;
   onDelete: (id: string) => void;
   onVisibilityChange: (id: string, visible: boolean) => void;
   onLoadMeshChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -76,6 +78,7 @@ export function ModelManagerPanel({
   onUngroupGroup,
   onRenameGroup,
   onModelContextMenu,
+  onOpenSupportsInfo,
   onDelete,
   onVisibilityChange,
   onLoadMeshChange,
@@ -528,6 +531,18 @@ export function ModelManagerPanel({
                           </div>
 
                           <div className="flex items-center gap-1">
+                            {onOpenSupportsInfo && (
+                              <IconButton
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenSupportsInfo(model.id);
+                                }}
+                                className="!p-1.5"
+                                title="Supports for model"
+                              >
+                                <Info className="w-3.5 h-3.5" />
+                              </IconButton>
+                            )}
                             <IconButton
                               onClick={(e) => {
                                 e.stopPropagation();
