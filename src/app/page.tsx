@@ -3004,12 +3004,41 @@ export default function Home() {
         },
       }));
 
+    const formatVec3 = (v: THREE.Vector3) => `(${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`;
+    console.groupCollapsed(`[MultiGizmo][Page] ${payload.operation} commit`);
+    console.log('selected models:', payload.entries.map((entry) => entry.modelId));
+    console.log('model positions:', payload.entries.map((entry) => ({
+      modelId: entry.modelId,
+      position: formatVec3(entry.before.position),
+    })));
+    const draggedEntry = payload.entries.find((entry) => entry.modelId === scene.activeModelId) ?? payload.entries[0] ?? null;
+    console.log('model dragged to:', draggedEntry ? {
+      modelId: draggedEntry.modelId,
+      position: formatVec3(draggedEntry.after.position),
+    } : null);
+    console.log('model updated position:', updates.map((entry) => ({
+      modelId: entry.id,
+      position: formatVec3(entry.transform.position),
+    })));
+    console.groupEnd();
+
     if (updates.length === 0) return;
 
     scene.updateModelTransforms(updates);
+
+    const activeUpdate = scene.activeModelId
+      ? updates.find((entry) => entry.id === scene.activeModelId)
+      : undefined;
+    if (activeUpdate) {
+      const { position, rotation, scale } = activeUpdate.transform;
+      transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+      transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+      transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+    }
+
     setSupportRenderRefreshNonce((value) => value + 1);
     skipNextTransformEndCommitRef.current = false;
-  }, [isFiniteTransform, scene]);
+  }, [isFiniteTransform, scene, transformMgr.transformHook]);
 
   const handleTransformStart = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
