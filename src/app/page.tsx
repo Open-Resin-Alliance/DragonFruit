@@ -34,6 +34,7 @@ import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
+import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -216,6 +217,7 @@ export default function Home() {
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
+  const [supportsInfoModelId, setSupportsInfoModelId] = React.useState<string | null>(null);
   const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
   const [transformDebugTick, setTransformDebugTick] = React.useState(0);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
@@ -656,6 +658,10 @@ export default function Home() {
     }
     setEditorContextMenuPos(position);
   }, [scene]);
+
+  const handleOpenModelSupportsInfo = React.useCallback((modelId: string) => {
+    setSupportsInfoModelId(modelId);
+  }, []);
 
   const handleModelSelection = React.useCallback((modelId: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
     scene.selectModel(modelId, mode);
@@ -1269,45 +1275,11 @@ export default function Home() {
     transformHistoryCommitRequestedRef.current = false;
   }, [scene.activeModelId]);
 
-  const lastHandledTransformChangeRef = useRef<{
-    position: THREE.Vector3;
-    rotation: THREE.Euler;
-    scale: THREE.Vector3;
-  } | null>(null);
-
-  useEffect(() => {
-    lastHandledTransformChangeRef.current = null;
-  }, [scene.activeModelId]);
-
   // Wrap transform change to update local state
-  const handleTransformChange = React.useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
-    const prev = lastHandledTransformChangeRef.current;
-    const EPSILON = 1e-6;
-
-    if (prev) {
-      const posUnchanged = prev.position.distanceToSquared(pos) <= EPSILON;
-      const rotUnchanged =
-        Math.abs(prev.rotation.x - rot.x) <= EPSILON &&
-        Math.abs(prev.rotation.y - rot.y) <= EPSILON &&
-        Math.abs(prev.rotation.z - rot.z) <= EPSILON;
-      const scaleUnchanged = prev.scale.distanceToSquared(scl) <= EPSILON;
-
-      if (posUnchanged && rotUnchanged && scaleUnchanged) {
-        return;
-      }
-    }
-
-    lastHandledTransformChangeRef.current = {
-      position: pos.clone(),
-      rotation: rot.clone(),
-      scale: scl.clone(),
-    };
-
-    if (!transformMgr.isTransforming) {
-      transformMgr.setIsTransforming(true);
-    }
+  const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
+    transformMgr.setIsTransforming(true);
     transformMgr.onTransformChange(pos, rot, scl);
-  }, [transformMgr]);
+  };
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
   const sceneZRange = React.useMemo(() => ({
@@ -3253,6 +3225,7 @@ export default function Home() {
               onUngroupGroup={handleUngroupFolder}
               onRenameGroup={handleRenameFolder}
               onModelContextMenu={handleModelListContextMenu}
+              onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
               onLoadMeshChange={scene.onFileChange}
@@ -3715,7 +3688,7 @@ export default function Home() {
 
           <SceneCanvas
             models={scene.models}
-            activeModelId={scene.activeModelId}
+            activeModelId={displayActiveModelId}
             visualActiveModelId={scene.activeModelId}
             selectedModelIds={scene.selectedModelIds}
             clipLower={slicing.clipLower}
@@ -3908,6 +3881,12 @@ export default function Home() {
           clearHistory();
           clearHistoryDebugEvents();
         }}
+      />
+
+      <ModelSupportsModal
+        isOpen={supportsInfoModelId !== null}
+        onClose={() => setSupportsInfoModelId(null)}
+        model={scene.models.find((m) => m.id === supportsInfoModelId) ?? null}
       />
 
       {showArrangeBlockingOverlay && (
