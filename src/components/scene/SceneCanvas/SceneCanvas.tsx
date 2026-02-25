@@ -13,6 +13,7 @@ import { MeshClassificationRenderer } from '@/components/scene/MeshClassificatio
 import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { PickingDebugOverlay } from '@/components/picking';
+import { usePicking } from '@/components/picking';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -317,6 +318,39 @@ function OrbitPivotIndicator({
       />
     </points>
   );
+}
+
+function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
+  const { hit } = usePicking();
+  const wasEmptyRef = React.useRef<boolean>(false);
+
+  React.useEffect(() => {
+    if (!enabled) {
+      wasEmptyRef.current = false;
+      return;
+    }
+
+    const isEmpty = hit.category === 'none';
+    if (!isEmpty) {
+      wasEmptyRef.current = false;
+      return;
+    }
+
+    if (wasEmptyRef.current) return;
+    wasEmptyRef.current = true;
+
+    window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+      detail: { modelId: null },
+    }));
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+      detail: { modelId: null, category: 'support' },
+    }));
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+      detail: { modelId: null, category: 'raft' },
+    }));
+  }, [enabled, hit.category]);
+
+  return null;
 }
 
 function CameraModeEntryFramingController({
@@ -1207,8 +1241,6 @@ export function SceneCanvas({
   const [hoveredMeshModelId, setHoveredMeshModelId] = React.useState<string | null>(null);
   const [hoveredRaftModelId, setHoveredRaftModelId] = React.useState<string | null>(null);
   const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
-  const pendingRaftHoverClearFrameRef = React.useRef<number | null>(null);
-  const pendingSupportHoverClearFrameRef = React.useRef<number | null>(null);
   const hoveredSupportModelIdFromStore = React.useMemo(() => {
     const category = supportStateForBounds.hoveredCategory;
     if (category !== 'support' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
@@ -1235,19 +1267,9 @@ export function SceneCanvas({
       if (category === 'raft') {
         const modelId = customEvent.detail?.modelId ?? null;
         if (modelId) {
-          if (pendingRaftHoverClearFrameRef.current !== null) {
-            window.cancelAnimationFrame(pendingRaftHoverClearFrameRef.current);
-            pendingRaftHoverClearFrameRef.current = null;
-          }
           setHoveredRaftModelId((prev) => (prev === modelId ? prev : modelId));
         } else {
-          if (pendingRaftHoverClearFrameRef.current !== null) {
-            window.cancelAnimationFrame(pendingRaftHoverClearFrameRef.current);
-          }
-          pendingRaftHoverClearFrameRef.current = window.requestAnimationFrame(() => {
-            pendingRaftHoverClearFrameRef.current = null;
-            setHoveredRaftModelId((prev) => (prev === null ? prev : null));
-          });
+          setHoveredRaftModelId((prev) => (prev === null ? prev : null));
         }
         return;
       }
@@ -1255,19 +1277,9 @@ export function SceneCanvas({
       if (category === 'support') {
         const modelId = customEvent.detail?.modelId ?? null;
         if (modelId) {
-          if (pendingSupportHoverClearFrameRef.current !== null) {
-            window.cancelAnimationFrame(pendingSupportHoverClearFrameRef.current);
-            pendingSupportHoverClearFrameRef.current = null;
-          }
           setHoveredSupportPointerModelId((prev) => (prev === modelId ? prev : modelId));
         } else {
-          if (pendingSupportHoverClearFrameRef.current !== null) {
-            window.cancelAnimationFrame(pendingSupportHoverClearFrameRef.current);
-          }
-          pendingSupportHoverClearFrameRef.current = window.requestAnimationFrame(() => {
-            pendingSupportHoverClearFrameRef.current = null;
-            setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
-          });
+          setHoveredSupportPointerModelId((prev) => (prev === null ? prev : null));
         }
       }
     };
@@ -1275,14 +1287,6 @@ export function SceneCanvas({
     window.addEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
 
     return () => {
-      if (pendingRaftHoverClearFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingRaftHoverClearFrameRef.current);
-        pendingRaftHoverClearFrameRef.current = null;
-      }
-      if (pendingSupportHoverClearFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingSupportHoverClearFrameRef.current);
-        pendingSupportHoverClearFrameRef.current = null;
-      }
       window.removeEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
     };
   }, []);
@@ -3884,6 +3888,7 @@ export function SceneCanvas({
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
         <PickingProviderWrapper enabled={gpuPickingTest} mode={mode}>
           <PickingStateSyncer />
+          <PickingEmptySpaceHoverResetter enabled={mode === 'prepare' || mode === 'support'} />
 
           {/* Selection Provider - manages model selection state */}
           <SelectionProvider initialSelection={activeModelId || 'default-model'}>

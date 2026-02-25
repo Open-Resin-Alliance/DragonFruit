@@ -4,9 +4,7 @@ import { setSelectedId } from '../state';
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
 let shiftModifierActive = false;
-let pendingHoverModelId: string | null = null;
 let lastDispatchedHoverModelId: string | null = null;
-let pendingHoverDispatchRaf: number | null = null;
 
 function initializeHoverGuards() {
     if (hoverGuardInitialized || typeof window === 'undefined') return;
@@ -14,11 +12,6 @@ function initializeHoverGuards() {
 
     const markOrbitActive = () => {
         orbitInteractionActive = true;
-        if (pendingHoverDispatchRaf != null) {
-            cancelAnimationFrame(pendingHoverDispatchRaf);
-            pendingHoverDispatchRaf = null;
-        }
-        pendingHoverModelId = null;
     };
 
     const markOrbitInactive = () => {
@@ -72,24 +65,15 @@ export function emitSupportModelPointerHover(modelId: string | null) {
 
     if (orbitInteractionActive) return;
 
-    pendingHoverModelId = modelId;
-    if (pendingHoverDispatchRaf != null) return;
+    if (modelId === lastDispatchedHoverModelId) return;
+    lastDispatchedHoverModelId = modelId;
 
-    pendingHoverDispatchRaf = requestAnimationFrame(() => {
-        pendingHoverDispatchRaf = null;
-        const nextModelId = pendingHoverModelId;
-        pendingHoverModelId = null;
-
-        if (nextModelId === lastDispatchedHoverModelId) return;
-        lastDispatchedHoverModelId = nextModelId;
-
-        window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
-            detail: {
-                modelId: nextModelId,
-                category: 'support',
-            },
-        }));
-    });
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+        detail: {
+            modelId,
+            category: 'support',
+        },
+    }));
 }
 
 export function emitSupportModelPointerSelect(modelId: string | null) {
