@@ -1161,6 +1161,16 @@ export function SceneCanvas({
   }, [isGizmoDragging, queueLiveDragTransform]);
 
   React.useEffect(() => {
+    // Hard reset transient drag caches whenever selection target changes.
+    // This prevents stale live transforms from the previous model from being
+    // reused after delete/import/undo flows.
+    liveDragTransformRef.current = null;
+    setLiveDragTransformVersion((value) => value + 1);
+    gizmoTransformStartSnapshotRef.current = null;
+    setGizmoGroupStartSnapshot(null);
+  }, [activeModelId]);
+
+  React.useEffect(() => {
     return () => {
       liveDragTransformRef.current = null;
     };

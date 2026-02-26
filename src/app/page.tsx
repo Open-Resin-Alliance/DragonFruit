@@ -205,6 +205,7 @@ export default function Home() {
   const [displayActiveModelId, setDisplayActiveModelId] = React.useState<string | null>(null);
   const pendingTransformHistoryRef = React.useRef<{ modelId: string; before: ModelTransform; description?: string } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
+  const transformHistoryCommitNonceRef = React.useRef(0);
   const pendingHistoryTransformResyncRef = React.useRef(false);
   const suppressNextTransformPersistenceRef = React.useRef(false);
   const skipNextTransformEndCommitRef = React.useRef(false);
@@ -216,6 +217,7 @@ export default function Home() {
   } | null>(null);
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
+  const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
 
@@ -921,14 +923,26 @@ export default function Home() {
     && isFiniteNumber(t.scale.z)
   ), [isFiniteNumber]);
 
-  const commitPendingTransformHistory = React.useCallback(() => {
+  const invalidatePendingTransformHistory = React.useCallback((options?: { clearRotateCommit?: boolean }) => {
+    transformHistoryCommitNonceRef.current += 1;
+    pendingTransformHistoryRef.current = null;
+    transformHistoryCommitRequestedRef.current = false;
+    if (options?.clearRotateCommit !== false) {
+      pendingRotateGizmoCommitRef.current = null;
+    }
+  }, []);
+
+  const commitPendingTransformHistory = React.useCallback((expectedNonce?: number) => {
+    if (typeof expectedNonce === 'number' && expectedNonce !== transformHistoryCommitNonceRef.current) {
+      return false;
+    }
+
     const pending = pendingTransformHistoryRef.current;
     if (!pending) return false;
 
     const targetModel = scene.models.find((model) => model.id === pending.modelId);
     if (!targetModel) {
-      pendingTransformHistoryRef.current = null;
-      transformHistoryCommitRequestedRef.current = false;
+      invalidatePendingTransformHistory();
       return false;
     }
 
@@ -965,13 +979,15 @@ export default function Home() {
     pendingTransformHistoryRef.current = null;
     transformHistoryCommitRequestedRef.current = false;
     return true;
-  }, [isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform]);
+  }, [invalidatePendingTransformHistory, isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform]);
 
   const scheduleCommitPendingTransformHistory = React.useCallback((frameDelay = 1) => {
+    const scheduledNonce = ++transformHistoryCommitNonceRef.current;
     transformHistoryCommitRequestedRef.current = true;
     const run = (remaining: number) => {
+      if (scheduledNonce !== transformHistoryCommitNonceRef.current) return;
       if (remaining <= 0) {
-        commitPendingTransformHistory();
+        commitPendingTransformHistory(scheduledNonce);
         return;
       }
       window.requestAnimationFrame(() => run(remaining - 1));
@@ -989,9 +1005,9 @@ export default function Home() {
       const sourceDescription = action.description?.trim() || fallbackDescription(action.type);
       const description = formatHistoryLabel(sourceDescription);
 
-      if (action.type === 'scene_models_snapshot_apply') {
-        pendingHistoryTransformResyncRef.current = true;
-      }
+      pendingHistoryTransformResyncRef.current = true;
+      invalidatePendingTransformHistory();
+      setHistoryTransformResyncTick((value) => value + 1);
 
       setHistoryActionToast({ id: Date.now(), text: description, direction });
       setIsHistoryActionToastVisible(true);
@@ -1023,14 +1039,13 @@ export default function Home() {
         window.clearTimeout(historyActionToastClearTimeoutRef.current);
       }
     };
-  }, []);
+  }, [invalidatePendingTransformHistory]);
 
   React.useEffect(() => {
     if (!pendingHistoryTransformResyncRef.current) return;
 
     pendingHistoryTransformResyncRef.current = false;
-    pendingTransformHistoryRef.current = null;
-    transformHistoryCommitRequestedRef.current = false;
+    invalidatePendingTransformHistory();
 
     if (!scene.activeModelId || !scene.activeModel) {
       setDisplayActiveModelId(null);
@@ -1045,7 +1060,7 @@ export default function Home() {
     transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
     transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
     setDisplayActiveModelId(scene.activeModelId);
-  }, [isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transformHook]);
+  }, [historyTransformResyncTick, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transformHook]);
 
   const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
@@ -1298,13 +1313,6 @@ export default function Home() {
   // Sync transform manager when active model changes
   useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
-      // Only run this sync when selection changes.
-      // If we re-run on every activeModel object mutation, it can fight
-      // with local transform/autolift updates and create feedback loops.
-      if (displayActiveModelId === scene.activeModelId) {
-        return;
-      }
-
       const t = scene.activeModel.transform;
 
       if (!isFiniteTransform(t)) {
@@ -1369,15 +1377,13 @@ export default function Home() {
       setDisplayActiveModelId(scene.activeModelId);
     } else {
       setDisplayActiveModelId(null);
-      pendingTransformHistoryRef.current = null;
-      transformHistoryCommitRequestedRef.current = false;
-      pendingRotateGizmoCommitRef.current = null;
+      invalidatePendingTransformHistory();
       suppressNextTransformPersistenceRef.current = true;
       transformMgr.transformHook.setPosition(0, 0, 0);
       transformMgr.transformHook.setRotation(0, 0, 0);
       transformMgr.transformHook.setScale(1, 1, 1);
     }
-  }, [displayActiveModelId, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
+  }, [displayActiveModelId, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
@@ -1454,7 +1460,7 @@ export default function Home() {
 
         if (transformHistoryCommitRequestedRef.current) {
           window.requestAnimationFrame(() => {
-            commitPendingTransformHistory();
+            commitPendingTransformHistory(transformHistoryCommitNonceRef.current);
           });
         }
       }
@@ -1484,9 +1490,8 @@ export default function Home() {
       return;
     }
     if (scene.activeModelId === pending.modelId) return;
-    pendingTransformHistoryRef.current = null;
-    transformHistoryCommitRequestedRef.current = false;
-  }, [scene.activeModelId]);
+    invalidatePendingTransformHistory();
+  }, [invalidatePendingTransformHistory, scene.activeModelId]);
 
   // Wrap transform change to update local state.
   // Keep this callback stable during active drags to avoid callback-identity
@@ -2988,9 +2993,7 @@ export default function Home() {
     if (options?.skipStoreCommit) {
       transformMgr.setIsTransforming(false);
       transformMgr.pendingTransformRef.current = null;
-      pendingTransformHistoryRef.current = null;
-      pendingRotateGizmoCommitRef.current = null;
-      transformHistoryCommitRequestedRef.current = false;
+      invalidatePendingTransformHistory();
       return;
     }
 
@@ -3085,9 +3088,7 @@ export default function Home() {
 
     if (skipNextTransformEndCommitRef.current) {
       skipNextTransformEndCommitRef.current = false;
-      pendingTransformHistoryRef.current = null;
-      transformHistoryCommitRequestedRef.current = false;
-      pendingRotateGizmoCommitRef.current = null;
+      invalidatePendingTransformHistory();
       return;
     }
 
