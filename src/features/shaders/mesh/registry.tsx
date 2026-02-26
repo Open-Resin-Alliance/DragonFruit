@@ -7,6 +7,7 @@ import { ToonMaterial } from './toon';
 import { NormalDebugMaterial } from './normalDebug';
 import { WireframeMaterial } from './wireframe';
 import { XrayMaterial } from './xray';
+import { OverhangHeatmapMaterial } from './overhangHeatmap';
 
 export function MeshShaderMaterial({
   shaderType,
@@ -20,6 +21,9 @@ export function MeshShaderMaterial({
   materialRoughness,
   clippingPlanes,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
   matcapVariant,
   flatUseVertexColors,
   toonSteps,
@@ -35,6 +39,9 @@ export function MeshShaderMaterial({
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
   xrayOpacity?: number;
+  heatmapBlend?: number;
+  heatmapContrast?: number;
+  heatmapColors?: string[];
   matcapVariant?: MatcapVariant;
   flatUseVertexColors?: boolean;
   toonSteps?: number;
@@ -112,6 +119,24 @@ export function MeshShaderMaterial({
           materialRoughness={materialRoughness}
           clippingPlanes={clippingPlanes}
           opacity={xrayOpacity}
+        />
+      );
+
+    case 'overhang_heatmap':
+      return (
+        <OverhangHeatmapMaterial
+          isSelected={isSelected}
+          isHovered={isHovered}
+          hoverTintColor={hoverTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
+          useVertexColors={useVertexColors}
+          meshColor={meshColor}
+          materialRoughness={materialRoughness}
+          clippingPlanes={clippingPlanes}
+          heatmapBlend={heatmapBlend}
+          heatmapContrast={heatmapContrast}
+          heatmapColors={heatmapColors}
         />
       );
 
