@@ -19,9 +19,26 @@ export type SliceExportOrchestratorOptions = {
   filenameBase: string;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
+  abortSignal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
   onLayerPreview?: (layerIndex: number, totalLayers: number, pngBytes: Uint8Array) => void;
 };
+
+function createAbortError(message = 'Slicing canceled by user.'): Error {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException(message, 'AbortError');
+  }
+
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
 
 export type SliceExportArtifact = {
   blob: Blob;
@@ -100,6 +117,7 @@ function triggerByteDownload(bytes: Uint8Array, filename: string, mimeType = 'ap
  * - Route through Rust/WASM encoder selected by `format.wasmExportName`
  */
 export async function runSliceExportOrchestrator(options: SliceExportOrchestratorOptions): Promise<SliceExportResult> {
+  throwIfAborted(options.abortSignal);
   const orchestratorStartMs = performance.now();
   const format = resolveSlicingFormatDefinition({
     printerProfile: options.printerProfile,
@@ -119,10 +137,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   let wasmError: string | null = null;
 
   if (format.outputFormat === '.nanodlp') {
+    throwIfAborted(options.abortSignal);
     wasmAvailable = await isSlicerWasmAvailable();
     logDebug('WASM availability', { wasmAvailable });
     if (wasmAvailable) {
       try {
+        throwIfAborted(options.abortSignal);
         options.onProgress?.(0, 1, `Preparing solid mesh · ${format.displayName}`);
         const meshPrepStartMs = performance.now();
         const solidMesh = buildSolidSliceMeshForWasm({
@@ -168,11 +188,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         let coreSlicingMs: number;
 
         if (useWorker) {
+          throwIfAborted(options.abortSignal);
           logDebug('Using worker pool path for NanoDLP');
           options.onProgress?.(0, solidMesh.totalLayers, 'Chunked WASM worker pool active');
           const workerResult = await sliceSolidNanodlpInWorker({
             job: wasmJob,
             previewPngBytes: options.exportThumbnailPng ?? undefined,
+            abortSignal: options.abortSignal,
             onProgress: (done: number, total: number, phase: string) => {
               options.onProgress?.(Math.min(Math.max(0, done), Math.max(1, total)), Math.max(1, total), phase);
             },
@@ -182,11 +204,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
           encodedBlob = workerResult.blob;
           coreSlicingMs = workerResult.coreElapsedMs;
         } else {
+          throwIfAborted(options.abortSignal);
           logDebug('Using direct WASM path for NanoDLP');
           encodedBytes = await sliceSolidAndEncodeWithSlicerWasm(format, wasmJob);
           coreSlicingMs = performance.now() - coreStartMs;
         }
 
+        throwIfAborted(options.abortSignal);
         const outputName = `${safeFilenameBase(options.filenameBase)}.nanodlp`;
         let artifactBlob: Blob;
         if (encodedBlob) {
@@ -235,6 +259,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
           },
         };
       } catch (error) {
+        if ((error as { name?: string } | null)?.name === 'AbortError') {
+          throw error;
+        }
         console.warn('[Slicing] WASM .nanodlp encode failed; falling back to ZIP prototype.', error);
         wasmError = error instanceof Error ? error.message : String(error);
         logDebug('Falling back due to WASM error', { wasmError });
@@ -252,6 +279,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     materialProfile: options.materialProfile,
     filenameBase: options.filenameBase,
     outputMode: options.outputMode,
+    abortSignal: options.abortSignal,
     onProgress: (done, total, phase) => {
       options.onProgress?.(done, total, `${phase} · ${format.displayName}`);
     },

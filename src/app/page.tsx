@@ -311,6 +311,9 @@ export default function Home() {
   const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
+  const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
+  const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'running' | 'ready' | 'failed' | 'started'>('running');
+  const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -943,6 +946,9 @@ export default function Home() {
     setPrintingSendStageText(null);
     setPrintingReadyPlateId(null);
     setPrintingPrintNowBusy(false);
+    setPrintingUploadDialogOpen(false);
+    setPrintingUploadDialogStage('running');
+    setPrintingUploadDisplayProgress(0);
   }, []);
 
   const printingOutputSizeLabel = React.useMemo(() => {
@@ -1011,6 +1017,30 @@ export default function Home() {
     && activePrinterProfile.networkConnection?.connected === true,
   );
 
+  React.useEffect(() => {
+    if (!printingUploadDialogOpen) {
+      setPrintingUploadDisplayProgress(printingSendProgress);
+      return;
+    }
+
+    let raf = 0;
+    const animate = () => {
+      setPrintingUploadDisplayProgress((previous) => {
+        const target = Math.max(0, Math.min(1, printingSendProgress));
+        if (Math.abs(target - previous) < 0.0025) {
+          return target;
+        }
+        return previous + ((target - previous) * 0.18);
+      });
+      raf = window.requestAnimationFrame(animate);
+    };
+
+    raf = window.requestAnimationFrame(animate);
+    return () => {
+      window.cancelAnimationFrame(raf);
+    };
+  }, [printingSendProgress, printingUploadDialogOpen]);
+
   const handleDownloadPrintArtifact = React.useCallback(() => {
     if (!printingArtifact) return;
     const objectUrl = URL.createObjectURL(printingArtifact.blob);
@@ -1047,6 +1077,8 @@ export default function Home() {
     setPrintingSendProgress(0.01);
     setPrintingSendStageText('Uploading print job…');
     setPrintingSendStatusText('Uploading print job to printer…');
+    setPrintingUploadDialogStage('running');
+    setPrintingUploadDialogOpen(true);
 
     try {
       const bytes = new Uint8Array(await printingArtifact.blob.arrayBuffer());
@@ -1079,6 +1111,7 @@ export default function Home() {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         setPrintingSendStatusText(`Send failed: ${reason}`);
         setPrintingSendStageText('Upload failed');
+        setPrintingUploadDialogStage('failed');
         setPrintingSendProgress(0);
         return;
       }
@@ -1142,12 +1175,14 @@ export default function Home() {
       if (metadataReady) {
         setPrintingSendProgress(1);
         setPrintingSendStageText('Ready to print');
+        setPrintingUploadDialogStage('ready');
         setPrintingSendStatusText(
           `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
         );
       } else {
         setPrintingSendProgress(0.95);
         setPrintingSendStageText('Metadata still processing');
+        setPrintingUploadDialogStage('failed');
         setPrintingSendStatusText(
           `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Metadata is still processing on the device.`,
         );
@@ -1156,6 +1191,7 @@ export default function Home() {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setPrintingSendStatusText(`Send failed: ${message}`);
       setPrintingSendStageText('Upload failed');
+      setPrintingUploadDialogStage('failed');
       setPrintingSendProgress(0);
     } finally {
       setPrintingSendBusy(false);
@@ -1177,6 +1213,7 @@ export default function Home() {
 
     setPrintingPrintNowBusy(true);
     setPrintingSendStageText('Starting print…');
+    setPrintingUploadDialogStage('running');
 
     try {
       const response = await fetch('/api/network/plugin', {
@@ -1194,15 +1231,18 @@ export default function Home() {
       const payload = await response.json().catch(() => ({} as any));
       if (response.ok && payload?.ok) {
         setPrintingSendStageText('Print started');
+        setPrintingUploadDialogStage('started');
         setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
       } else {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         setPrintingSendStageText('Start print failed');
+        setPrintingUploadDialogStage('failed');
         setPrintingSendStatusText(`Print start failed: ${reason}`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setPrintingSendStageText('Start print failed');
+      setPrintingUploadDialogStage('failed');
       setPrintingSendStatusText(`Print start failed: ${message}`);
     } finally {
       setPrintingPrintNowBusy(false);
@@ -4923,13 +4963,8 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
-              sendProgress={printingSendProgress}
-              sendStageText={printingSendStageText}
-              canPrintNow={canPrintNow}
-              printNowBusy={printingPrintNowBusy}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
-              onPrintNow={handlePrintNow}
             />
           </>
         ) : (
@@ -5455,6 +5490,139 @@ export default function Home() {
         onCancel={handleCancelDestructiveTransform}
         onConfirm={handleConfirmDestructiveTransform}
       />
+
+      {printingUploadDialogOpen && (
+        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px] px-4">
+          <div
+            className="w-[min(560px,94vw)] rounded-xl border px-5 py-4 shadow-xl"
+            style={{
+              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+              borderColor: 'var(--border-subtle)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+            aria-label="Printer upload status"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Uploading to NanoDLP
+                </div>
+                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {printingArtifact?.outputName ?? 'Preparing artifact'}
+                </div>
+              </div>
+
+              {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
+                <button
+                  type="button"
+                  className="rounded border px-2 py-1 text-[11px] font-medium"
+                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                  onClick={() => setPrintingUploadDialogOpen(false)}
+                  disabled={printingSendBusy || printingPrintNowBusy}
+                >
+                  Close
+                </button>
+              )}
+            </div>
+
+            <div className="mt-3 flex items-center gap-2">
+              <div
+                className="rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-wide"
+                style={{
+                  borderColor: printingUploadDialogStage === 'failed'
+                    ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)'
+                    : printingUploadDialogStage === 'started'
+                      ? 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)'
+                      : printingUploadDialogStage === 'ready'
+                        ? 'color-mix(in srgb, #34d399, var(--border-subtle) 50%)'
+                        : 'color-mix(in srgb, var(--accent), var(--border-subtle) 60%)',
+                  color: printingUploadDialogStage === 'failed'
+                    ? '#fca5a5'
+                    : printingUploadDialogStage === 'started'
+                      ? '#93c5fd'
+                      : printingUploadDialogStage === 'ready'
+                        ? '#86efac'
+                        : 'var(--accent)',
+                  background: 'color-mix(in srgb, var(--surface-1), transparent 15%)',
+                }}
+              >
+                {printingSendStageText
+                  ?? (printingUploadDialogStage === 'ready'
+                    ? 'Ready to print'
+                    : printingUploadDialogStage === 'started'
+                      ? 'Print started'
+                      : printingUploadDialogStage === 'failed'
+                        ? 'Upload failed'
+                        : 'Processing')}
+              </div>
+              {printingReadyPlateId && (
+                <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+                  Plate #{printingReadyPlateId}
+                </div>
+              )}
+            </div>
+
+            <div
+              className="mt-3 h-3 w-full rounded-full border overflow-hidden"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                background: 'color-mix(in srgb, var(--surface-2), black 20%)',
+              }}
+            >
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${Math.max(0, Math.min(100, printingUploadDisplayProgress * 100)).toFixed(1)}%`,
+                  background: printingUploadDialogStage === 'failed'
+                    ? 'linear-gradient(90deg, #ef4444, #f97316)'
+                    : printingUploadDialogStage === 'started'
+                      ? 'linear-gradient(90deg, #60a5fa, #22d3ee)'
+                      : 'linear-gradient(90deg, var(--accent), #ff79c6)',
+                  transition: 'width 220ms ease',
+                }}
+              />
+            </div>
+
+            <div className="mt-2 flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <span>{printingSendStatusText ?? 'Preparing upload pipeline…'}</span>
+              <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                {(Math.max(0, Math.min(100, printingUploadDisplayProgress * 100))).toFixed(0)}%
+              </span>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
+                <button
+                  type="button"
+                  className="rounded-md border px-3 py-1.5 text-xs font-medium"
+                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                  onClick={() => setPrintingUploadDialogOpen(false)}
+                  disabled={printingSendBusy || printingPrintNowBusy}
+                >
+                  Dismiss
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1.5 text-xs font-semibold"
+                style={{
+                  borderColor: canPrintNow ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)' : 'var(--border-subtle)',
+                  color: canPrintNow ? 'var(--accent)' : 'var(--text-muted)',
+                  background: canPrintNow ? 'color-mix(in srgb, var(--accent), transparent 88%)' : 'transparent',
+                  opacity: canPrintNow ? 1 : 0.6,
+                }}
+                onClick={handlePrintNow}
+                disabled={!canPrintNow || printingPrintNowBusy || printingSendBusy || printingUploadDialogStage !== 'ready'}
+              >
+                {printingPrintNowBusy ? 'Starting print…' : 'Print Now'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showArrangeBlockingOverlay && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">

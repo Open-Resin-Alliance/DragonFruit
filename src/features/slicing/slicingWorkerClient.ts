@@ -6,6 +6,7 @@ type SliceInWorkerOptions = {
   previewPngBytes?: Uint8Array;
   onProgress?: (done: number, total: number, phase: string) => void;
   onLayerPreview?: (layerIndex: number, totalLayers: number, pngBytes: Uint8Array) => void;
+  abortSignal?: AbortSignal;
   chunkSize?: number;
   maxWorkers?: number;
 };
@@ -46,6 +47,15 @@ const DEBUG_PREFIX = '[SlicingDebug]';
 function logDebug(...args: unknown[]): void {
   if (typeof console === 'undefined' || typeof console.debug !== 'function') return;
   console.debug(DEBUG_PREFIX, ...args);
+}
+
+function createAbortError(message = 'Slicing canceled by user.'): Error {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException(message, 'AbortError');
+  }
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
 }
 
 export function supportsSlicingWorker(): boolean {
@@ -173,7 +183,7 @@ class ZipDeflateBlobBuilder {
 
   private finalPromiseReject: ((error: Error) => void) | null = null;
 
-  constructor(level: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 7) {
+  constructor(level: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = 3) {
     this.level = level;
     this.zipper = new Zip((error, data, final) => {
       if (error) {
@@ -400,11 +410,21 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     throw new Error('Web Workers are not available in this runtime.');
   }
 
+  if (options.abortSignal?.aborted) {
+    throw createAbortError();
+  }
+
   return new Promise<SliceInWorkerResult>((resolve, reject) => {
     const totalLayers = Math.max(1, options.job.totalLayers);
-    const chunkSize = Math.max(1, Math.min(totalLayers, options.chunkSize ?? 4));
     const rawConcurrency = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency ?? 2 : 2;
-    const targetWorkers = options.maxWorkers ?? Math.max(1, Math.min(4, rawConcurrency - 1));
+    const defaultWorkers = Math.max(1, Math.min(6, rawConcurrency - 1));
+    const targetWorkers = options.maxWorkers ?? defaultWorkers;
+
+    const adaptiveChunkSize = Math.max(
+      2,
+      Math.min(16, Math.ceil(totalLayers / Math.max(1, targetWorkers * 3))),
+    );
+    const chunkSize = Math.max(1, Math.min(totalLayers, options.chunkSize ?? adaptiveChunkSize));
     const workerCount = Math.max(1, Math.min(targetWorkers, Math.ceil(totalLayers / chunkSize)));
 
     const chunkQueue: ChunkTask[] = [];
@@ -428,8 +448,9 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     let rejected = false;
     let finalizing = false;
     let firstLayerHeaderReported = false;
+    let abortListenerAttached = false;
 
-    const zipBuilder = new ZipDeflateBlobBuilder(7);
+    const zipBuilder = new ZipDeflateBlobBuilder(3);
     const metadata = buildNanodlpMetadata(options.job);
     zipBuilder.addFile('meta.json', JSON.stringify(metadata.metaJson, null, 2));
     zipBuilder.addFile('slicer.json', JSON.stringify(metadata.slicerJson, null, 2));
@@ -441,6 +462,11 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     let previewLayerPng: Uint8Array | null = null;
 
     const cleanupAll = () => {
+      if (abortListenerAttached && options.abortSignal) {
+        options.abortSignal.removeEventListener('abort', abortHandler);
+        abortListenerAttached = false;
+      }
+
       for (const worker of workers) {
         worker.onmessage = null;
         worker.onerror = null;
@@ -463,6 +489,26 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
       cleanupAll();
       reject(new Error(message));
     };
+
+    const rejectAbortOnce = () => {
+      if (rejected) return;
+      rejected = true;
+      cleanupAll();
+      reject(createAbortError());
+    };
+
+    const abortHandler = () => {
+      rejectAbortOnce();
+    };
+
+    if (options.abortSignal) {
+      if (options.abortSignal.aborted) {
+        rejectAbortOnce();
+        return;
+      }
+      options.abortSignal.addEventListener('abort', abortHandler, { once: true });
+      abortListenerAttached = true;
+    }
 
     const tryFinalize = async () => {
       if (rejected) return;
@@ -532,6 +578,10 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
 
     const dispatchNext = (worker: Worker) => {
       if (rejected) return;
+      if (options.abortSignal?.aborted) {
+        rejectAbortOnce();
+        return;
+      }
 
       const next = chunkQueue.shift();
       if (!next) {

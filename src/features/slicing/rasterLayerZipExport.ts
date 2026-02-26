@@ -11,8 +11,25 @@ export type RasterLayerZipExportOptions = {
   materialProfile: MaterialProfile;
   filenameBase: string;
   outputMode?: 'download' | 'return';
+  abortSignal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
 };
+
+function createAbortError(message = 'Slicing canceled by user.'): Error {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException(message, 'AbortError');
+  }
+
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
 
 export type RasterLayerZipArtifact = {
   blob: Blob;
@@ -774,6 +791,7 @@ function resolveEffectiveSettings(options: RasterLayerZipExportOptions): Effecti
 }
 
 async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promise<RasterizationResult> {
+  throwIfAborted(options.abortSignal);
   const visibleModels = options.models.filter((model) => model.visible);
   if (visibleModels.length === 0) {
     throw new Error('No visible models available for slicing.');
@@ -818,6 +836,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
   const layerEntries: RasterizedLayerEntry[] = [];
 
   for (let layerIndex = 0; layerIndex < totalLayers; layerIndex += 1) {
+    throwIfAborted(options.abortSignal);
     const zStart = layerIndex * settings.layerHeightMm;
     const zSample = (layerIndex + 0.5) * settings.layerHeightMm;
 
@@ -909,6 +928,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
 
     if (layerIndex % 16 === 15) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      throwIfAborted(options.abortSignal);
     }
   }
 
@@ -1090,6 +1110,7 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
 }
 
 export async function exportRasterLayerZip(options: RasterLayerZipExportOptions): Promise<RasterLayerZipArtifact> {
+  throwIfAborted(options.abortSignal);
   const rasterized = await rasterizeLayerStack(options);
 
   const zip = new JSZip();
@@ -1099,6 +1120,7 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
   }
 
   for (let i = 0; i < rasterized.layerEntries.length; i += 1) {
+    throwIfAborted(options.abortSignal);
     const layer = rasterized.layerEntries[i];
     zipFolder.file(layer.name, layer.blob);
   }
@@ -1106,11 +1128,14 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
   zip.file('manifest.json', JSON.stringify(rasterized.manifest, null, 2));
 
   options.onProgress?.(rasterized.totalLayers, rasterized.totalLayers, 'Compressing ZIP');
+  throwIfAborted(options.abortSignal);
 
   const outputBlob = await zip.generateAsync({
     type: 'blob',
     compression: 'STORE',
   });
+
+  throwIfAborted(options.abortSignal);
 
   const outputName = `${safeFilenameBase(options.filenameBase)}_layers.zip`;
   if (options.outputMode !== 'return') {

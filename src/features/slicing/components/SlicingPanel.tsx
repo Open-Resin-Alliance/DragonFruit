@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Cpu, Gauge, Layers3, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
@@ -83,7 +83,7 @@ export function SlicingPanel({
   const [currentElapsedMs, setCurrentElapsedMs] = useState(0);
   const [currentRasterMs, setCurrentRasterMs] = useState(0);
   const [showSlicingModal, setShowSlicingModal] = useState(false);
-  const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed'>('running');
+  const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
   const [previewTotalLayers, setPreviewTotalLayers] = useState(0);
@@ -98,6 +98,7 @@ export function SlicingPanel({
     lastRasterMs: null,
     lastBackend: null,
   });
+  const slicingAbortControllerRef = useRef<AbortController | null>(null);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
@@ -182,6 +183,7 @@ export function SlicingPanel({
 
   useEffect(() => {
     return () => {
+      slicingAbortControllerRef.current?.abort();
       clearLayerPreviewUrls();
     };
   }, [clearLayerPreviewUrls]);
@@ -256,6 +258,8 @@ export function SlicingPanel({
     setPreviewSelectedLayer(1);
 
     const runStartMs = performance.now();
+    const abortController = new AbortController();
+    slicingAbortControllerRef.current = abortController;
     let rasterStartedMs: number | null = null;
     let rasterAccumulatedMs = 0;
     let exportThumbnailPng: Uint8Array | null = null;
@@ -279,6 +283,7 @@ export function SlicingPanel({
         filenameBase: filename || activePrinterProfile.name || 'slice_export',
         outputMode: 'return',
         exportThumbnailPng,
+        abortSignal: abortController.signal,
         onProgress: (done, total, phase) => {
           setCurrentPhase(phase);
           setSliceStatus(`${phase} ${done}/${total}`);
@@ -305,10 +310,9 @@ export function SlicingPanel({
           onLayerPreviewGenerated?.({
             layerIndex,
             totalLayers,
-            pngBytes: Uint8Array.from(pngBytes),
+            pngBytes,
           });
-          const previewBuffer = Uint8Array.from(pngBytes).buffer;
-          const blob = new Blob([previewBuffer], { type: 'image/png' });
+          const blob = new Blob([pngBytes], { type: 'image/png' });
           const nextUrl = URL.createObjectURL(blob);
           setLayerPreviewUrls((previous) => {
             const next = previous.slice();
@@ -372,19 +376,35 @@ export function SlicingPanel({
         onSliceArtifactReady?.(result.artifact);
       }
     } catch (error) {
-      console.error('Slice ZIP export failed:', error);
-      const message = error instanceof Error ? error.message : 'Unknown slicing error.';
-      setCurrentPhase('Failed');
-      setSliceStatus(`Failed: ${message}`);
-      setSlicingModalStage('failed');
-      alert(`Slice ZIP export failed: ${message}`);
+      if ((error as { name?: string } | null)?.name === 'AbortError') {
+        setCurrentPhase('Cancelled');
+        setSliceStatus('Slicing cancelled by user.');
+        setSlicingModalStage('cancelled');
+      } else {
+        console.error('Slice ZIP export failed:', error);
+        const message = error instanceof Error ? error.message : 'Unknown slicing error.';
+        setCurrentPhase('Failed');
+        setSliceStatus(`Failed: ${message}`);
+        setSlicingModalStage('failed');
+        alert(`Slice ZIP export failed: ${message}`);
+      }
     } finally {
+      if (slicingAbortControllerRef.current === abortController) {
+        slicingAbortControllerRef.current = null;
+      }
       setIsSlicingZip(false);
       if (slicingSucceeded) {
         onSlicingFinished?.({ totalLayers: Math.max(completedTotalLayers, completedTotalLayersFromResult, 1) });
       }
     }
   };
+
+  const handleCancelSlicing = useCallback(() => {
+    if (!isSlicingZip) return;
+    setCurrentPhase('Cancelling…');
+    setSliceStatus('Cancelling slicing job…');
+    slicingAbortControllerRef.current?.abort();
+  }, [isSlicingZip]);
 
   const selectedLayerPreviewUrl = useMemo(() => {
     if (previewSelectedLayer < 1) return null;
@@ -629,11 +649,15 @@ export function SlicingPanel({
                 style={{
                   borderColor: slicingModalStage === 'failed'
                     ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)'
+                    : slicingModalStage === 'cancelled'
+                      ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)'
                     : slicingModalStage === 'finished'
                       ? 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)'
                       : 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
                   color: slicingModalStage === 'failed'
                     ? '#fca5a5'
+                    : slicingModalStage === 'cancelled'
+                      ? '#fcd34d'
                     : slicingModalStage === 'finished'
                       ? '#86efac'
                       : 'var(--text-strong)',
@@ -644,6 +668,8 @@ export function SlicingPanel({
                   ? 'Running'
                   : slicingModalStage === 'finished'
                     ? 'Ready'
+                    : slicingModalStage === 'cancelled'
+                      ? 'Cancelled'
                     : 'Failed'}
               </div>
             </div>
@@ -693,14 +719,25 @@ export function SlicingPanel({
               />
             </div>
             <div className="pt-1 flex justify-end">
-              <Button
-                variant="secondary"
-                className="!h-8 text-xs"
-                disabled={slicingModalStage === 'running'}
-                onClick={handleCloseSlicingModal}
-              >
-                {slicingModalStage === 'running' ? 'Slicing…' : 'Close Plate'}
-              </Button>
+              <div className="flex items-center gap-2">
+                {slicingModalStage === 'running' && (
+                  <Button
+                    variant="secondary"
+                    className="!h-8 text-xs"
+                    onClick={handleCancelSlicing}
+                  >
+                    Cancel Slicing
+                  </Button>
+                )}
+                <Button
+                  variant="secondary"
+                  className="!h-8 text-xs"
+                  disabled={slicingModalStage === 'running'}
+                  onClick={handleCloseSlicingModal}
+                >
+                  {slicingModalStage === 'running' ? 'Slicing…' : 'Close Plate'}
+                </Button>
+              </div>
             </div>
           </div>
         </div>
