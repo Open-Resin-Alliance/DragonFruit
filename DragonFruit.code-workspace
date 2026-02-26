@@ -5,6 +5,9 @@
 		}
 	],
 	"settings": {
-		"discord.enabled": false
+		"discord.enabled": false,
+		"chat.tools.terminal.autoApprove": {
+			"cargo check": true
+		}
 	}
 }
