@@ -804,6 +804,7 @@ export function SceneCanvas({
   view3dSettings,
   supportRenderRefreshNonce = 0,
   gizmoResetNonce = 0,
+  historyTransformResyncToken = 0,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -933,6 +934,7 @@ export function SceneCanvas({
   view3dSettings?: View3DSettings;
   supportRenderRefreshNonce?: number;
   gizmoResetNonce?: number;
+  historyTransformResyncToken?: number;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -1169,6 +1171,24 @@ export function SceneCanvas({
     gizmoTransformStartSnapshotRef.current = null;
     setGizmoGroupStartSnapshot(null);
   }, [activeModelId]);
+
+  React.useEffect(() => {
+    if (historyTransformResyncToken <= 0) return;
+
+    // History apply (undo/redo) must always win over any stale live drag refs.
+    // Clear all transient gizmo/live state so rendering falls back to store data.
+    cancelPendingSupportDragResets();
+    liveDragTransformRef.current = null;
+    setLiveDragTransformVersion((value) => value + 1);
+    gizmoTransformStartSnapshotRef.current = null;
+    setGizmoGroupStartSnapshot(null);
+    setIsGizmoDragging(false);
+    resetSupportDragGroupNow();
+  }, [
+    cancelPendingSupportDragResets,
+    historyTransformResyncToken,
+    resetSupportDragGroupNow,
+  ]);
 
   React.useEffect(() => {
     return () => {
@@ -4711,28 +4731,37 @@ export function SceneCanvas({
                   }}
                   onRotateEnd={() => {
                     markGizmoDragEnded();
-                    const live = captureActiveGroupTransform();
+                    const capturedLive = captureActiveGroupTransform();
+                    const fallbackLive = liveDragTransformRef.current;
+                    const live = capturedLive ?? (fallbackLive
+                      ? {
+                          position: fallbackLive.position.clone(),
+                          rotation: fallbackLive.rotation.clone(),
+                          scale: fallbackLive.scale.clone(),
+                        }
+                      : null);
+
                     if (live && onTransformChange) {
                       flushPendingTransformChange();
                       onTransformChange(live.position, live.rotation, live.scale);
+                    }
 
-                      const startSnapshot = gizmoTransformStartSnapshotRef.current;
-                      if (startSnapshot && startSnapshot.modelId === activeModelId) {
-                        onGizmoTransformCommit?.({
-                          modelId: activeModelId,
-                          operation: startSnapshot.operation,
-                          before: {
-                            position: startSnapshot.before.position.clone(),
-                            rotation: startSnapshot.before.rotation.clone(),
-                            scale: startSnapshot.before.scale.clone(),
-                          },
-                          after: {
-                            position: live.position.clone(),
-                            rotation: live.rotation.clone(),
-                            scale: live.scale.clone(),
-                          },
-                        });
-                      }
+                    const startSnapshot = gizmoTransformStartSnapshotRef.current;
+                    if (live && startSnapshot && startSnapshot.modelId === activeModelId) {
+                      onGizmoTransformCommit?.({
+                        modelId: activeModelId,
+                        operation: startSnapshot.operation,
+                        before: {
+                          position: startSnapshot.before.position.clone(),
+                          rotation: startSnapshot.before.rotation.clone(),
+                          scale: startSnapshot.before.scale.clone(),
+                        },
+                        after: {
+                          position: live.position.clone(),
+                          rotation: live.rotation.clone(),
+                          scale: live.scale.clone(),
+                        },
+                      });
                     }
                     gizmoTransformStartSnapshotRef.current = null;
                     onTransformEnd?.('rotate', live ?? undefined);

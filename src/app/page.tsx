@@ -203,21 +203,66 @@ export default function Home() {
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
   const [displayActiveModelId, setDisplayActiveModelId] = React.useState<string | null>(null);
-  const pendingTransformHistoryRef = React.useRef<{ modelId: string; before: ModelTransform; description?: string } | null>(null);
+  const pendingTransformHistoryRef = React.useRef<{
+    modelId: string;
+    before: ModelTransform;
+    after?: ModelTransform;
+    description?: string;
+  } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
   const transformHistoryCommitNonceRef = React.useRef(0);
   const pendingHistoryTransformResyncRef = React.useRef(false);
   const suppressNextTransformPersistenceRef = React.useRef(false);
-  const skipNextTransformEndCommitRef = React.useRef(false);
+  const skipNextTransformEndCommitRef = React.useRef<{
+    modelId: string;
+    operation: 'move' | 'scale';
+  } | null>(null);
   const transformEndFlushedRef = React.useRef(false);
   const pendingRotateGizmoCommitRef = React.useRef<{
     modelId: string;
     before: ModelTransform;
+    after: ModelTransform;
     description: string;
   } | null>(null);
+  const transformHistoryDebugRef = React.useRef<{
+    lastResult:
+      | 'none'
+      | 'scheduled'
+      | 'invalidated'
+      | 'committed'
+      | 'committed_no_push'
+      | 'skipped_equal_transform'
+      | 'skipped_nonce_mismatch'
+      | 'skipped_no_pending'
+      | 'skipped_model_missing';
+    lastReason: string;
+    lastModelId: string | null;
+    lastDescription: string | null;
+    lastExpectedNonce: number | null;
+    lastScheduledNonce: number | null;
+    lastUndoCountBefore: number | null;
+    lastUndoCountAfter: number | null;
+    lastPushApplied: boolean | null;
+    lastAt: { perfMs: number; epochMs: number } | null;
+  }>({
+    lastResult: 'none',
+    lastReason: 'init',
+    lastModelId: null,
+    lastDescription: null,
+    lastExpectedNonce: null,
+    lastScheduledNonce: null,
+    lastUndoCountBefore: null,
+    lastUndoCountAfter: null,
+    lastPushApplied: null,
+    lastAt: null,
+  });
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
+  const historyTransformResyncTokenRef = React.useRef(0);
+  const historyTransformResyncRafRef = React.useRef<number | null>(null);
+  const historyTransformResyncSecondRafRef = React.useRef<number | null>(null);
+  const historyTransformResyncTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
 
@@ -567,6 +612,8 @@ export default function Home() {
     }
 
     const timeline = transformDebugTimelineRef.current;
+    const pendingHistory = pendingTransformHistoryRef.current;
+    const historyDebug = transformHistoryDebugRef.current;
 
     return {
       activeModel,
@@ -588,6 +635,41 @@ export default function Home() {
         supportBraceStoreUpdatedAt: timeline.supportBraceStoreUpdatedAt,
         activeModelStoreObservedAt: timeline.activeModelStoreObservedAt,
         nowPerfMs: performance.now(),
+      },
+      historyCommit: {
+        pendingModelId: pendingHistory?.modelId ?? null,
+        pendingDescription: pendingHistory?.description ?? null,
+        pendingHasAfter: Boolean(pendingHistory?.after),
+        pendingBeforeRotation: pendingHistory
+          ? {
+              x: pendingHistory.before.rotation.x,
+              y: pendingHistory.before.rotation.y,
+              z: pendingHistory.before.rotation.z,
+            }
+          : null,
+        pendingAfterRotation: pendingHistory?.after
+          ? {
+              x: pendingHistory.after.rotation.x,
+              y: pendingHistory.after.rotation.y,
+              z: pendingHistory.after.rotation.z,
+            }
+          : null,
+        commitRequested: transformHistoryCommitRequestedRef.current,
+        commitNonce: transformHistoryCommitNonceRef.current,
+        pendingResync: pendingHistoryTransformResyncRef.current,
+        suppressNextPersistence: suppressNextTransformPersistenceRef.current,
+        skipToken: skipNextTransformEndCommitRef.current,
+        pendingRotateGizmoModelId: pendingRotateGizmoCommitRef.current?.modelId ?? null,
+        lastResult: historyDebug.lastResult,
+        lastReason: historyDebug.lastReason,
+        lastModelId: historyDebug.lastModelId,
+        lastDescription: historyDebug.lastDescription,
+        lastExpectedNonce: historyDebug.lastExpectedNonce,
+        lastScheduledNonce: historyDebug.lastScheduledNonce,
+        lastUndoCountBefore: historyDebug.lastUndoCountBefore,
+        lastUndoCountAfter: historyDebug.lastUndoCountAfter,
+        lastPushApplied: historyDebug.lastPushApplied,
+        lastAt: historyDebug.lastAt,
       },
       supportCounts: {
         trunks: Object.keys(supportStateSnapshot.trunks).length,
@@ -923,66 +1005,155 @@ export default function Home() {
     && isFiniteNumber(t.scale.z)
   ), [isFiniteNumber]);
 
+  const transformsApproximatelyEqual = React.useCallback((a: ModelTransform, b: ModelTransform) => {
+    const EPSILON = 1e-5;
+    return a.position.distanceToSquared(b.position) <= EPSILON
+      && Math.abs(a.rotation.x - b.rotation.x) <= EPSILON
+      && Math.abs(a.rotation.y - b.rotation.y) <= EPSILON
+      && Math.abs(a.rotation.z - b.rotation.z) <= EPSILON
+      && a.scale.distanceToSquared(b.scale) <= EPSILON;
+  }, []);
+
   const invalidatePendingTransformHistory = React.useCallback((options?: { clearRotateCommit?: boolean }) => {
+    const now = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+    const pending = pendingTransformHistoryRef.current;
     transformHistoryCommitNonceRef.current += 1;
     pendingTransformHistoryRef.current = null;
     transformHistoryCommitRequestedRef.current = false;
+    transformHistoryDebugRef.current = {
+      ...transformHistoryDebugRef.current,
+      lastResult: 'invalidated',
+      lastReason: options?.clearRotateCommit === false ? 'invalidate_keep_rotate' : 'invalidate',
+      lastModelId: pending?.modelId ?? null,
+      lastDescription: pending?.description ?? null,
+      lastExpectedNonce: null,
+      lastPushApplied: null,
+      lastAt: now,
+    };
     if (options?.clearRotateCommit !== false) {
       pendingRotateGizmoCommitRef.current = null;
     }
   }, []);
 
   const commitPendingTransformHistory = React.useCallback((expectedNonce?: number) => {
+    const now = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
     if (typeof expectedNonce === 'number' && expectedNonce !== transformHistoryCommitNonceRef.current) {
+      transformHistoryDebugRef.current = {
+        ...transformHistoryDebugRef.current,
+        lastResult: 'skipped_nonce_mismatch',
+        lastReason: 'expected_nonce_mismatch',
+        lastExpectedNonce: expectedNonce,
+        lastAt: now,
+      };
       return false;
     }
 
     const pending = pendingTransformHistoryRef.current;
-    if (!pending) return false;
+    if (!pending) {
+      transformHistoryDebugRef.current = {
+        ...transformHistoryDebugRef.current,
+        lastResult: 'skipped_no_pending',
+        lastReason: 'no_pending_history',
+        lastExpectedNonce: expectedNonce ?? null,
+        lastAt: now,
+      };
+      return false;
+    }
 
     const targetModel = scene.models.find((model) => model.id === pending.modelId);
     if (!targetModel) {
+      transformHistoryDebugRef.current = {
+        ...transformHistoryDebugRef.current,
+        lastResult: 'skipped_model_missing',
+        lastReason: 'target_model_missing',
+        lastModelId: pending.modelId,
+        lastDescription: pending.description ?? null,
+        lastExpectedNonce: expectedNonce ?? null,
+        lastAt: now,
+      };
       invalidatePendingTransformHistory();
       return false;
     }
 
-    const pendingTransform = transformMgr.pendingTransformRef.current;
-    const afterTransform = (
-      scene.activeModelId === pending.modelId
-      && pendingTransform
-      && isFiniteTransform({
-        position: pendingTransform.pos,
-        rotation: pendingTransform.rot,
-        scale: pendingTransform.scl,
-      })
-    )
+    const explicitAfter = pending.after && isFiniteTransform(pending.after)
       ? {
-          position: pendingTransform.pos.clone(),
-          rotation: pendingTransform.rot.clone(),
-          scale: pendingTransform.scl.clone(),
+          position: pending.after.position.clone(),
+          rotation: pending.after.rotation.clone(),
+          scale: pending.after.scale.clone(),
         }
-      : (
-        scene.activeModelId === pending.modelId && isFiniteTransform(transformMgr.transform)
+      : null;
+
+    const pendingTransform = transformMgr.pendingTransformRef.current;
+    const afterTransform = explicitAfter ?? (
+      (
+        scene.activeModelId === pending.modelId
+        && pendingTransform
+        && isFiniteTransform({
+          position: pendingTransform.pos,
+          rotation: pendingTransform.rot,
+          scale: pendingTransform.scl,
+        })
       )
         ? {
-            position: transformMgr.transform.position.clone(),
-            rotation: transformMgr.transform.rotation.clone(),
-            scale: transformMgr.transform.scale.clone(),
+            position: pendingTransform.pos.clone(),
+            rotation: pendingTransform.rot.clone(),
+            scale: pendingTransform.scl.clone(),
           }
-        : {
-            position: targetModel.transform.position.clone(),
-            rotation: targetModel.transform.rotation.clone(),
-            scale: targetModel.transform.scale.clone(),
-          };
+        : (
+          scene.activeModelId === pending.modelId && isFiniteTransform(transformMgr.transform)
+        )
+          ? {
+              position: transformMgr.transform.position.clone(),
+              rotation: transformMgr.transform.rotation.clone(),
+              scale: transformMgr.transform.scale.clone(),
+            }
+          : {
+              position: targetModel.transform.position.clone(),
+              rotation: targetModel.transform.rotation.clone(),
+              scale: targetModel.transform.scale.clone(),
+            }
+    );
 
-    scene.commitModelTransformHistory(pending.modelId, pending.before, afterTransform, pending.description);
+    const undoCountBefore = getUndoCount();
+    const pushed = scene.commitModelTransformHistory(pending.modelId, pending.before, afterTransform, pending.description);
+    const undoCountAfter = getUndoCount();
+    const equalTransform = transformsApproximatelyEqual(pending.before, afterTransform);
+    transformHistoryDebugRef.current = {
+      ...transformHistoryDebugRef.current,
+      lastResult: pushed ? 'committed' : (equalTransform ? 'skipped_equal_transform' : 'committed_no_push'),
+      lastReason: pushed ? 'commit_success' : (equalTransform ? 'before_after_equal' : 'commit_no_push'),
+      lastModelId: pending.modelId,
+      lastDescription: pending.description ?? null,
+      lastExpectedNonce: expectedNonce ?? null,
+      lastUndoCountBefore: undoCountBefore,
+      lastUndoCountAfter: undoCountAfter,
+      lastPushApplied: Boolean(pushed),
+      lastAt: now,
+    };
     pendingTransformHistoryRef.current = null;
     transformHistoryCommitRequestedRef.current = false;
     return true;
-  }, [invalidatePendingTransformHistory, isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform]);
+  }, [invalidatePendingTransformHistory, isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform, transformsApproximatelyEqual]);
 
   const scheduleCommitPendingTransformHistory = React.useCallback((frameDelay = 1) => {
     const scheduledNonce = ++transformHistoryCommitNonceRef.current;
+    transformHistoryDebugRef.current = {
+      ...transformHistoryDebugRef.current,
+      lastResult: 'scheduled',
+      lastReason: `schedule_delay_${Math.max(0, frameDelay)}`,
+      lastScheduledNonce: scheduledNonce,
+      lastExpectedNonce: scheduledNonce,
+      lastAt: {
+        perfMs: performance.now(),
+        epochMs: Date.now(),
+      },
+    };
     transformHistoryCommitRequestedRef.current = true;
     const run = (remaining: number) => {
       if (scheduledNonce !== transformHistoryCommitNonceRef.current) return;
@@ -1007,6 +1178,7 @@ export default function Home() {
 
       pendingHistoryTransformResyncRef.current = true;
       invalidatePendingTransformHistory();
+      setGizmoResetNonce((value) => value + 1);
       setHistoryTransformResyncTick((value) => value + 1);
 
       setHistoryActionToast({ id: Date.now(), text: description, direction });
@@ -1041,26 +1213,84 @@ export default function Home() {
     };
   }, [invalidatePendingTransformHistory]);
 
+  const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
+    if (historyTransformResyncRafRef.current !== null) {
+      window.cancelAnimationFrame(historyTransformResyncRafRef.current);
+      historyTransformResyncRafRef.current = null;
+    }
+    if (historyTransformResyncSecondRafRef.current !== null) {
+      window.cancelAnimationFrame(historyTransformResyncSecondRafRef.current);
+      historyTransformResyncSecondRafRef.current = null;
+    }
+    if (historyTransformResyncTimeoutRef.current !== null) {
+      window.clearTimeout(historyTransformResyncTimeoutRef.current);
+      historyTransformResyncTimeoutRef.current = null;
+    }
+  }, []);
+
   React.useEffect(() => {
     if (!pendingHistoryTransformResyncRef.current) return;
 
     pendingHistoryTransformResyncRef.current = false;
     invalidatePendingTransformHistory();
+    transformMgr.pendingTransformRef.current = null;
+    transformMgr.setIsTransforming(false);
 
-    if (!scene.activeModelId || !scene.activeModel) {
-      setDisplayActiveModelId(null);
-      return;
-    }
+    cancelPendingHistoryTransformResyncFrames();
+    const token = ++historyTransformResyncTokenRef.current;
 
-    const t = scene.activeModel.transform;
-    if (!isFiniteTransform(t)) return;
+    const syncFromStoreActiveModel = () => {
+      if (token !== historyTransformResyncTokenRef.current) return;
 
-    suppressNextTransformPersistenceRef.current = true;
-    transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
-    transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
-    transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
-    setDisplayActiveModelId(scene.activeModelId);
-  }, [historyTransformResyncTick, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transformHook]);
+      if (!scene.activeModelId || !scene.activeModel) {
+        setDisplayActiveModelId(null);
+        return;
+      }
+
+      const t = scene.activeModel.transform;
+      if (!isFiniteTransform(t)) return;
+
+      suppressNextTransformPersistenceRef.current = true;
+      transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
+      transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
+      transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
+      setDisplayActiveModelId(scene.activeModelId);
+    };
+
+    // Immediate sync + two-frame follow-up to catch async store updates from
+    // history handlers before they visually lag behind selected-model renders.
+    syncFromStoreActiveModel();
+    historyTransformResyncRafRef.current = window.requestAnimationFrame(() => {
+      syncFromStoreActiveModel();
+      historyTransformResyncRafRef.current = null;
+
+      historyTransformResyncSecondRafRef.current = window.requestAnimationFrame(() => {
+        syncFromStoreActiveModel();
+        historyTransformResyncSecondRafRef.current = null;
+      });
+    });
+
+    historyTransformResyncTimeoutRef.current = window.setTimeout(() => {
+      syncFromStoreActiveModel();
+      historyTransformResyncTimeoutRef.current = null;
+    }, 48);
+  }, [
+    cancelPendingHistoryTransformResyncFrames,
+    historyTransformResyncTick,
+    invalidatePendingTransformHistory,
+    isFiniteTransform,
+    scene.activeModel,
+    scene.activeModelId,
+    transformMgr.pendingTransformRef,
+    transformMgr.setIsTransforming,
+    transformMgr.transformHook,
+  ]);
+
+  React.useEffect(() => {
+    return () => {
+      cancelPendingHistoryTransformResyncFrames();
+    };
+  }, [cancelPendingHistoryTransformResyncFrames]);
 
   const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
@@ -1447,7 +1677,18 @@ export default function Home() {
               rotation: modelTransform.rotation.clone(),
               scale: modelTransform.scale.clone(),
             },
+            after: {
+              position: current.position.clone(),
+              rotation: current.rotation.clone(),
+              scale: current.scale.clone(),
+            },
             description: pending?.description,
+          };
+        } else {
+          pending.after = {
+            position: current.position.clone(),
+            rotation: current.rotation.clone(),
+            scale: current.scale.clone(),
           };
         }
 
@@ -3067,6 +3308,11 @@ export default function Home() {
           rotation: pendingRotateGizmoCommitRef.current.before.rotation.clone(),
           scale: pendingRotateGizmoCommitRef.current.before.scale.clone(),
         },
+        after: {
+          position: pendingRotateGizmoCommitRef.current.after.position.clone(),
+          rotation: pendingRotateGizmoCommitRef.current.after.rotation.clone(),
+          scale: pendingRotateGizmoCommitRef.current.after.scale.clone(),
+        },
         description: pendingRotateGizmoCommitRef.current.description,
       };
       pendingRotateGizmoCommitRef.current = null;
@@ -3086,13 +3332,74 @@ export default function Home() {
       transformMgr.pendingTransformRef.current = null;
     }
 
-    if (skipNextTransformEndCommitRef.current) {
-      skipNextTransformEndCommitRef.current = false;
+    if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
+      const pendingTransform = transformMgr.pendingTransformRef.current;
+      const afterFromPending = (
+        pendingTransform
+        && isFiniteTransform({
+          position: pendingTransform.pos,
+          rotation: pendingTransform.rot,
+          scale: pendingTransform.scl,
+        })
+      )
+        ? {
+            position: pendingTransform.pos.clone(),
+            rotation: pendingTransform.rot.clone(),
+            scale: pendingTransform.scl.clone(),
+          }
+        : null;
+
+      const afterFromTransform = isFiniteTransform(transformMgr.transform)
+        ? {
+            position: transformMgr.transform.position.clone(),
+            rotation: transformMgr.transform.rotation.clone(),
+            scale: transformMgr.transform.scale.clone(),
+          }
+        : null;
+
+      const afterFromFinal = finalTransform && isFiniteTransform(finalTransform)
+        ? {
+            position: finalTransform.position.clone(),
+            rotation: finalTransform.rotation.clone(),
+            scale: finalTransform.scale.clone(),
+          }
+        : null;
+
+      const existingAfter = pendingTransformHistoryRef.current.after && isFiniteTransform(pendingTransformHistoryRef.current.after)
+        ? {
+            position: pendingTransformHistoryRef.current.after.position.clone(),
+            rotation: pendingTransformHistoryRef.current.after.rotation.clone(),
+            scale: pendingTransformHistoryRef.current.after.scale.clone(),
+          }
+        : null;
+
+      const existingAfterIsMeaningful = existingAfter
+        ? !transformsApproximatelyEqual(pendingTransformHistoryRef.current.before, existingAfter)
+        : false;
+
+      if (!existingAfterIsMeaningful) {
+        pendingTransformHistoryRef.current.after = afterFromFinal ?? afterFromPending ?? afterFromTransform ?? existingAfter ?? undefined;
+      }
+    }
+
+    const skipCommitToken = skipNextTransformEndCommitRef.current;
+    if (
+      skipCommitToken
+      && targetModelId
+      && skipCommitToken.modelId === targetModelId
+      && skipCommitToken.operation === operation
+    ) {
+      skipNextTransformEndCommitRef.current = null;
       invalidatePendingTransformHistory();
       return;
     }
 
-    scheduleCommitPendingTransformHistory(operation === 'rotate' ? 2 : 1);
+    if (operation === 'rotate') {
+      commitPendingTransformHistory();
+      return;
+    }
+
+    scheduleCommitPendingTransformHistory(1);
   };
 
   const handleGizmoTransformCommit = React.useCallback((payload: {
@@ -3112,9 +3419,14 @@ export default function Home() {
           rotation: payload.before.rotation.clone(),
           scale: payload.before.scale.clone(),
         },
+        after: {
+          position: payload.after.position.clone(),
+          rotation: payload.after.rotation.clone(),
+          scale: payload.after.scale.clone(),
+        },
         description: `transform:${payload.operation} ${targetModelName}`,
       };
-      skipNextTransformEndCommitRef.current = false;
+      skipNextTransformEndCommitRef.current = null;
       return;
     }
 
@@ -3125,7 +3437,10 @@ export default function Home() {
       `transform:${payload.operation} ${targetModelName}`,
     );
 
-    skipNextTransformEndCommitRef.current = true;
+    skipNextTransformEndCommitRef.current = {
+      modelId: payload.modelId,
+      operation: payload.operation,
+    };
   }, [scene]);
 
   const handleGizmoTransformGroupCommit = React.useCallback((payload: {
@@ -3193,13 +3508,15 @@ export default function Home() {
     }
 
     setSupportRenderRefreshNonce((value) => value + 1);
-    skipNextTransformEndCommitRef.current = false;
+    skipNextTransformEndCommitRef.current = null;
   }, [isFiniteTransform, scene, transformMgr.transformHook]);
 
   const handleTransformStart = React.useCallback((
     operation: 'move' | 'rotate' | 'scale',
     details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
   ) => {
+    skipNextTransformEndCommitRef.current = null;
+
     if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
       window.cancelAnimationFrame(supportDragResetRafRef.current);
       supportDragResetRafRef.current = null;
@@ -3242,6 +3559,40 @@ export default function Home() {
     return true;
   }, [requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, transformMgr]);
 
+  const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
+    if (!scene.activeModelId || !scene.activeModel) return;
+
+    const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
+    if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
+      pendingTransformHistoryRef.current = {
+        modelId: scene.activeModelId,
+        before: {
+          position: scene.activeModel.transform.position.clone(),
+          rotation: scene.activeModel.transform.rotation.clone(),
+          scale: scene.activeModel.transform.scale.clone(),
+        },
+        after: isFiniteTransform(transformMgr.transform)
+          ? {
+              position: transformMgr.transform.position.clone(),
+              rotation: transformMgr.transform.rotation.clone(),
+              scale: transformMgr.transform.scale.clone(),
+            }
+          : undefined,
+        description: `transform:${operation} ${targetModelName}`,
+      };
+      return;
+    }
+
+    pendingTransformHistoryRef.current.description = `transform:${operation} ${targetModelName}`;
+    if (isFiniteTransform(transformMgr.transform)) {
+      pendingTransformHistoryRef.current.after = {
+        position: transformMgr.transform.position.clone(),
+        rotation: transformMgr.transform.rotation.clone(),
+        scale: transformMgr.transform.scale.clone(),
+      };
+    }
+  }, [isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transform]);
+
   React.useEffect(() => {
     return () => {
       if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
@@ -3262,25 +3613,23 @@ export default function Home() {
   const handleRotationComplete = () => {
     const targetModelId = scene.activeModelId;
     const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
-    if (!pendingTransformHistoryRef.current && targetModelId && scene.activeModel) {
-      pendingTransformHistoryRef.current = {
-        modelId: targetModelId,
-        before: {
-          position: scene.activeModel.transform.position.clone(),
-          rotation: scene.activeModel.transform.rotation.clone(),
-          scale: scene.activeModel.transform.scale.clone(),
-        },
-        description: `transform:rotate ${targetModelName}`,
-      };
-    }
-
     if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
       pendingTransformHistoryRef.current.description = `transform:rotate ${targetModelName}`;
+      if (isFiniteTransform(transformMgr.transform)) {
+        pendingTransformHistoryRef.current.after = {
+          position: transformMgr.transform.position.clone(),
+          rotation: transformMgr.transform.rotation.clone(),
+          scale: transformMgr.transform.scale.clone(),
+        };
+      }
+    } else {
+      // No pending entry means no meaningful rotation delta was staged.
+      return;
     }
 
     islands.clearScanData();
     applyPostRotateLift();
-    scheduleCommitPendingTransformHistory(2);
+    commitPendingTransformHistory();
   };
 
   const handleCameraChange = React.useCallback(() => {
@@ -3870,6 +4219,11 @@ export default function Home() {
                   const hasDestructiveRotate = Math.abs(x - current.x) > EPS
                     || Math.abs(y - current.y) > EPS;
 
+                  const hasAnyRotateDelta = hasDestructiveRotate || Math.abs(z - current.z) > EPS;
+                  if (hasAnyRotateDelta) {
+                    ensurePendingTransformHistoryForActiveModel('rotate');
+                  }
+
                   if (hasDestructiveRotate) {
                     const proceed = requestDestructiveTransformSupportDeletion('Rotate X/Y');
                     if (!proceed) return;
@@ -3886,6 +4240,10 @@ export default function Home() {
                   const hasDestructiveScale = Math.abs(x - current.x) > EPS
                     || Math.abs(y - current.y) > EPS
                     || Math.abs(z - current.z) > EPS;
+
+                  if (hasDestructiveScale) {
+                    ensurePendingTransformHistoryForActiveModel('scale');
+                  }
 
                   if (hasDestructiveScale) {
                     const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
@@ -4323,6 +4681,38 @@ export default function Home() {
               </div>
             )}
 
+            {scene.mode !== 'support' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Transform History Commit
+                </div>
+                <div>Pending model: {transformDebugStats.historyCommit.pendingModelId ?? 'none'}</div>
+                <div>Pending description: {transformDebugStats.historyCommit.pendingDescription ?? 'none'}</div>
+                <div>Pending has after: {transformDebugStats.historyCommit.pendingHasAfter ? 'true' : 'false'}</div>
+                <div>Pending before rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingBeforeRotation)}</div>
+                <div>Pending after rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingAfterRotation)}</div>
+                <div>Commit requested: {transformDebugStats.historyCommit.commitRequested ? 'true' : 'false'}</div>
+                <div>Commit nonce: {transformDebugStats.historyCommit.commitNonce}</div>
+                <div>Pending resync: {transformDebugStats.historyCommit.pendingResync ? 'true' : 'false'}</div>
+                <div>Suppress next persistence: {transformDebugStats.historyCommit.suppressNextPersistence ? 'true' : 'false'}</div>
+                <div>
+                  Skip token: {transformDebugStats.historyCommit.skipToken
+                    ? `${transformDebugStats.historyCommit.skipToken.operation}:${transformDebugStats.historyCommit.skipToken.modelId}`
+                    : 'none'}
+                </div>
+                <div>Pending rotate-gizmo model: {transformDebugStats.historyCommit.pendingRotateGizmoModelId ?? 'none'}</div>
+                <div>Last result: {transformDebugStats.historyCommit.lastResult}</div>
+                <div>Last reason: {transformDebugStats.historyCommit.lastReason}</div>
+                <div>Last model: {transformDebugStats.historyCommit.lastModelId ?? 'none'}</div>
+                <div>Last description: {transformDebugStats.historyCommit.lastDescription ?? 'none'}</div>
+                <div>Last expected nonce: {transformDebugStats.historyCommit.lastExpectedNonce ?? 'n/a'}</div>
+                <div>Last scheduled nonce: {transformDebugStats.historyCommit.lastScheduledNonce ?? 'n/a'}</div>
+                <div>Last push applied: {transformDebugStats.historyCommit.lastPushApplied === null ? 'n/a' : (transformDebugStats.historyCommit.lastPushApplied ? 'true' : 'false')}</div>
+                <div>Undo before → after: {transformDebugStats.historyCommit.lastUndoCountBefore ?? 'n/a'} → {transformDebugStats.historyCommit.lastUndoCountAfter ?? 'n/a'}</div>
+                <div>Last attempt: {formatDebugTime(transformDebugStats.historyCommit.lastAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              </div>
+            )}
+
             <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
               Toggle: Ctrl+Shift+X
             </div>
@@ -4465,6 +4855,7 @@ export default function Home() {
             }
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             gizmoResetNonce={gizmoResetNonce}
+            historyTransformResyncToken={historyTransformResyncTick}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
