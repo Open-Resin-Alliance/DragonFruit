@@ -3,7 +3,12 @@
 import * as THREE from 'three';
 import React from 'react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { buildProjectedCrossSectionLoopsAtZ } from '@/features/slicing/rasterLayerZipExport';
+import {
+  buildProjectedCrossSectionContext,
+  buildProjectedCrossSectionLoopsAtZ,
+  buildProjectedCrossSectionLoopsAtZFromContext,
+  type ProjectedCrossSectionContext,
+} from '@/features/slicing/rasterLayerZipExport';
 
 // Slice geometry at Z height and return loops in XY plane
 // Applies transform matrix to vertices before slicing for world-space slicing
@@ -166,6 +171,9 @@ export function CrossSectionCap({
   transformMatrix,
   mode = 'smooth',
   pxMm = 0.1,
+  interactive = false,
+  interactiveZStepMm = 0.2,
+  preferProjectedOnlyDuringInteractive = true,
   visible = true
 }: {
   geometry?: THREE.BufferGeometry;
@@ -176,23 +184,95 @@ export function CrossSectionCap({
   transformMatrix?: THREE.Matrix4;
   mode?: 'smooth' | 'rasterized';
   pxMm?: number;
+  interactive?: boolean;
+  interactiveZStepMm?: number;
+  preferProjectedOnlyDuringInteractive?: boolean;
   visible?: boolean;
 }) {
+  const projectedModelSignature = React.useMemo(() => {
+    if (!projectedModels || projectedModels.length === 0) return '';
+    return projectedModels
+      .filter((model) => model.visible)
+      .map((model) => {
+        const t = model.transform;
+        return [
+          model.id,
+          model.geometry.geometry.uuid,
+          t.position.x.toFixed(3),
+          t.position.y.toFixed(3),
+          t.position.z.toFixed(3),
+          t.rotation.x.toFixed(3),
+          t.rotation.y.toFixed(3),
+          t.rotation.z.toFixed(3),
+          t.scale.x.toFixed(3),
+          t.scale.y.toFixed(3),
+          t.scale.z.toFixed(3),
+        ].join('|');
+      })
+      .join(';');
+  }, [projectedModels]);
+
+  const projectedLoopsCacheRef = React.useRef<Map<string, THREE.Vector2[][]>>(new Map());
+  const projectedContextCacheRef = React.useRef<Map<string, ProjectedCrossSectionContext>>(new Map());
+
   const mesh = React.useMemo(() => {
     if (!visible) return null;
+
+    const effectiveY = interactive
+      ? Math.round(y / Math.max(0.001, interactiveZStepMm)) * Math.max(0.001, interactiveZStepMm)
+      : y;
 
     const loops: THREE.Vector2[][] = [];
 
     if (projectedModels) {
-      loops.push(...buildProjectedCrossSectionLoopsAtZ({ models: projectedModels, zMm: y }));
+      const cacheKey = `${projectedModelSignature}|${effectiveY.toFixed(3)}`;
+      const cached = projectedLoopsCacheRef.current.get(cacheKey);
+      if (cached) {
+        loops.push(...cached);
+      } else {
+        let computed: THREE.Vector2[][] = [];
+
+        if (projectedModelSignature) {
+          let context = projectedContextCacheRef.current.get(projectedModelSignature);
+          if (!context) {
+            context = buildProjectedCrossSectionContext(projectedModels) ?? undefined;
+            if (context) {
+              projectedContextCacheRef.current.set(projectedModelSignature, context);
+              if (projectedContextCacheRef.current.size > 8) {
+                const oldestContextKey = projectedContextCacheRef.current.keys().next().value;
+                if (oldestContextKey) projectedContextCacheRef.current.delete(oldestContextKey);
+              }
+            }
+          }
+
+          if (context) {
+            computed = buildProjectedCrossSectionLoopsAtZFromContext({
+              context,
+              zMm: effectiveY,
+            });
+          }
+        }
+
+        if (computed.length === 0) {
+          computed = buildProjectedCrossSectionLoopsAtZ({ models: projectedModels, zMm: effectiveY });
+        }
+
+        loops.push(...computed);
+
+        projectedLoopsCacheRef.current.set(cacheKey, computed);
+        if (projectedLoopsCacheRef.current.size > 48) {
+          const oldestKey = projectedLoopsCacheRef.current.keys().next().value;
+          if (oldestKey) projectedLoopsCacheRef.current.delete(oldestKey);
+        }
+      }
     }
 
-    if (sourceObject) {
-      loops.push(...computeLoopsAtZFromObject(sourceObject, y));
+    if (sourceObject && !(interactive && preferProjectedOnlyDuringInteractive)) {
+      loops.push(...computeLoopsAtZFromObject(sourceObject, effectiveY));
     }
 
     if (!projectedModels && !sourceObject && geometry) {
-      loops.push(...computeLoopsAtZ(geometry, y, transformMatrix));
+      loops.push(...computeLoopsAtZ(geometry, effectiveY, transformMatrix));
     }
 
     if (loops.length === 0) return null;
@@ -246,7 +326,7 @@ export function CrossSectionCap({
               if (grid[row * width + col] === 1) {
                 const worldX = originX + col * pxMm;
                 const worldY = originY + row * pxMm;
-                matrix.setPosition(worldX, worldY, y + 1e-4);
+                matrix.setPosition(worldX, worldY, effectiveY + 1e-4);
                 instancedMesh.setMatrixAt(instanceIndex++, matrix);
               }
             }
@@ -261,7 +341,7 @@ export function CrossSectionCap({
       for (const loop of loops) {
         const shape = new THREE.Shape(loop);
         const shapeGeom = new THREE.ShapeGeometry(shape);
-        shapeGeom.translate(0, 0, y + 1e-4);
+        shapeGeom.translate(0, 0, effectiveY + 1e-4);
 
         const mat = new THREE.MeshBasicMaterial({
           color,
@@ -280,7 +360,21 @@ export function CrossSectionCap({
     }
 
     return group;
-  }, [color, geometry, mode, projectedModels, pxMm, sourceObject, transformMatrix, visible, y]);
+  }, [
+    color,
+    geometry,
+    interactive,
+    interactiveZStepMm,
+    mode,
+    preferProjectedOnlyDuringInteractive,
+    projectedModelSignature,
+    projectedModels,
+    pxMm,
+    sourceObject,
+    transformMatrix,
+    visible,
+    y,
+  ]);
 
   if (!mesh) return null;
   return <primitive object={mesh} />;

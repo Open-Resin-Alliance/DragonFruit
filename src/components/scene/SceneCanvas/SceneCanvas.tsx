@@ -839,6 +839,7 @@ export function SceneCanvas({
   supportRenderRefreshNonce = 0,
   gizmoResetNonce = 0,
   historyTransformResyncToken = 0,
+  isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
 }: {
   models?: LoadedModel[];
@@ -970,6 +971,7 @@ export function SceneCanvas({
   supportRenderRefreshNonce?: number;
   gizmoResetNonce?: number;
   historyTransformResyncToken?: number;
+  isLayerScrubbing?: boolean;
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
@@ -2821,6 +2823,14 @@ export function SceneCanvas({
     transform,
   ]);
 
+  const crossSectionInteractive = Boolean(isLayerScrubbing);
+  const crossSectionModeForRender: 'smooth' | 'rasterized' = crossSectionInteractive
+    ? 'rasterized'
+    : (crossSectionMode ?? 'smooth');
+  const crossSectionPxMmForRender = crossSectionInteractive
+    ? Math.max(pxMm ?? 0.1, 0.35)
+    : pxMm;
+
   const introControllerBounds = introBoundsSnapshot;
 
   const introControllerRunId = cameraIntroRunId;
@@ -4625,8 +4635,11 @@ export function SceneCanvas({
                   sourceObject={supportDragGroupRef?.current ?? null}
                   y={clipUpper}
                   color="#FFFFFF"
-                  mode={crossSectionMode}
-                  pxMm={pxMm}
+                  mode={crossSectionModeForRender}
+                  pxMm={crossSectionPxMmForRender}
+                  interactive={crossSectionInteractive}
+                  interactiveZStepMm={0.4}
+                  preferProjectedOnlyDuringInteractive
                   visible={!hideCrossSectionCap && clipUpper != null}
                 />
               )}

@@ -306,6 +306,7 @@ export default function Home() {
   const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
+  const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
   const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
@@ -1219,6 +1220,11 @@ export default function Home() {
   }, [queuePrintingPreviewPan, scene.mode]);
 
   React.useEffect(() => {
+    if (scene.mode === 'printing') return;
+    setIsSceneLayerScrubbing(false);
+  }, [scene.mode]);
+
+  React.useEffect(() => {
     if (scene.mode !== 'printing') return;
     if (!selectedPrintingLayerPreviewUrl) {
       printingPreviewSettledRef.current = false;
@@ -1638,6 +1644,14 @@ export default function Home() {
     setIsPrintingLayerScrubbing(false);
     schedulePrintingPreviewSettle();
   }, [schedulePrintingPreviewSettle]);
+
+  const handleSceneLayerScrubStart = React.useCallback(() => {
+    setIsSceneLayerScrubbing(true);
+  }, []);
+
+  const handleSceneLayerScrubEnd = React.useCallback(() => {
+    setIsSceneLayerScrubbing(false);
+  }, []);
 
   const usePrintingSettledHiResCanvas = React.useMemo(() => {
     return Boolean(
@@ -5456,6 +5470,8 @@ export default function Home() {
             layerIndex={slicing.layerIndex}
             maxLayers={slicing.numLayers}
             onLayerIndexChange={slicing.setLayerIndex}
+            onScrubStart={handleSceneLayerScrubStart}
+            onScrubEnd={handleSceneLayerScrubEnd}
             onCrossSectionModeChange={slicing.setCrossSectionMode}
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
@@ -5781,6 +5797,7 @@ export default function Home() {
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             gizmoResetNonce={gizmoResetNonce}
             historyTransformResyncToken={historyTransformResyncTick}
+            isLayerScrubbing={scene.mode === 'printing' ? isPrintingLayerScrubbing : isSceneLayerScrubbing}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}

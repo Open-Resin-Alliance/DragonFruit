@@ -117,6 +117,10 @@ type WorldTriangle = {
   zMax: number;
 };
 
+export type ProjectedCrossSectionContext = {
+  triangles: WorldTriangle[];
+};
+
 type SliceSegment2D = {
   x1: number;
   y1: number;
@@ -1688,10 +1692,30 @@ export function buildProjectedCrossSectionLoopsAtZ(options: {
   models: LoadedModel[];
   zMm: number;
 }): THREE.Vector2[][] {
-  const visibleModels = options.models.filter((model) => model.visible);
-  if (visibleModels.length === 0) return [];
+  const context = buildProjectedCrossSectionContext(options.models);
+  if (!context) return [];
+
+  return buildProjectedCrossSectionLoopsAtZFromContext({
+    context,
+    zMm: options.zMm,
+  });
+}
+
+export function buildProjectedCrossSectionContext(models: LoadedModel[]): ProjectedCrossSectionContext | null {
+  const visibleModels = models.filter((model) => model.visible);
+  if (visibleModels.length === 0) return null;
 
   const triangles = buildWorldTriangles(visibleModels);
+  if (triangles.length === 0) return null;
+
+  return { triangles };
+}
+
+export function buildProjectedCrossSectionLoopsAtZFromContext(options: {
+  context: ProjectedCrossSectionContext;
+  zMm: number;
+}): THREE.Vector2[][] {
+  const triangles = options.context.triangles;
   if (triangles.length === 0) return [];
 
   const zMm = options.zMm + 1e-5;
