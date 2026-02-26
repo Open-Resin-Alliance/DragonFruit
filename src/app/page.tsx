@@ -2306,16 +2306,92 @@ export default function Home() {
     await sleep(0);
 
     try {
+      const modelTransformById = new Map(
+        scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
+      );
+
+      const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
+      for (const model of scene.models) {
+        const supportBounds = supportBoundsByModelId.get(model.id);
+        if (!supportBounds || supportBounds.isEmpty()) continue;
+
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const worldMatrix = new THREE.Matrix4().compose(
+          t.position,
+          new THREE.Quaternion().setFromEuler(t.rotation),
+          t.scale,
+        );
+        const invWorldMatrix = worldMatrix.clone().invert();
+
+        const xs = [supportBounds.min.x, supportBounds.max.x];
+        const ys = [supportBounds.min.y, supportBounds.max.y];
+        const zs = [supportBounds.min.z, supportBounds.max.z];
+
+        const points: THREE.Vector3[] = [];
+        const seen = new Set<string>();
+        const tmp = new THREE.Vector3();
+        for (const x of xs) {
+          for (const y of ys) {
+            for (const z of zs) {
+              tmp.set(x, y, z).applyMatrix4(invWorldMatrix);
+              const dedupeKey = `${tmp.x.toFixed(4)}:${tmp.y.toFixed(4)}:${tmp.z.toFixed(4)}`;
+              if (seen.has(dedupeKey)) continue;
+              seen.add(dedupeKey);
+              points.push(tmp.clone());
+            }
+          }
+        }
+
+        if (points.length === 0) continue;
+
+        const key = [
+          supportBounds.min.x.toFixed(4),
+          supportBounds.min.y.toFixed(4),
+          supportBounds.min.z.toFixed(4),
+          supportBounds.max.x.toFixed(4),
+          supportBounds.max.y.toFixed(4),
+          supportBounds.max.z.toFixed(4),
+          points.length,
+        ].join('|');
+
+        supportLocalPointsByModelId.set(model.id, { points, key });
+      }
+
+      const toHighPrecisionArrangeModel = (model: (typeof scene.models)[number]): HighPrecisionArrangeModel => {
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const supportLocal = supportLocalPointsByModelId.get(model.id);
+
+        return {
+          id: model.id,
+          visible: model.visible,
+          transform: {
+            position: t.position.clone(),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+          geometry: {
+            center: model.geometry.center.clone(),
+            geometry: model.geometry.geometry,
+            supportLocalPoints: supportLocal?.points,
+            supportHullKey: supportLocal?.key,
+          },
+        };
+      };
+
+      const visibleIdSet = new Set(visibleModels.map((model) => model.id));
+      const highPrecisionSceneModels = scene.models.map(toHighPrecisionArrangeModel);
+      const highPrecisionVisibleModels = highPrecisionSceneModels.filter((model) => visibleIdSet.has(model.id));
+
       const updates = await computeHighPrecisionArrangeUpdatesWorker({
-        visibleModels: visibleModels as unknown as HighPrecisionArrangeModel[],
-        sceneModels: scene.models as unknown as HighPrecisionArrangeModel[],
+        visibleModels: highPrecisionVisibleModels,
+        sceneModels: highPrecisionSceneModels,
         widthMm: scene.view3dSettings.widthMm,
         depthMm: scene.view3dSettings.depthMm,
         originMode: scene.view3dSettings.originMode,
         arrangeSpacingMm,
         arrangeAllowRotateOnZ,
         arrangeAnchorMode,
-        getArrangeTransform: (model) => getArrangeTransform(model as unknown as (typeof scene.models)[number]),
+        getArrangeTransform: (model) => model.transform,
         hullCache: arrangeHullFootprintCacheRef.current,
       });
 
@@ -2341,6 +2417,7 @@ export default function Home() {
     resolveArrangeVisibleModels,
     scene,
     sleep,
+    supportBoundsByModelId,
     transformMgr,
     applyArrangeTransforms,
   ]);
