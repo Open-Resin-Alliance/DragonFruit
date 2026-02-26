@@ -13,6 +13,30 @@ export type RasterLayerZipExportOptions = {
   onProgress?: (done: number, total: number, phase: string) => void;
 };
 
+type RasterizedLayerEntry = {
+  name: string;
+  blob: Blob;
+};
+
+type RasterizationResult = {
+  settings: EffectiveSettings;
+  totalLayers: number;
+  tallestObjectHeightMm: number;
+  visibleModels: LoadedModel[];
+  layerEntries: RasterizedLayerEntry[];
+  manifest: Record<string, unknown>;
+};
+
+export type RasterizedLayerStackForWasm = {
+  widthPx: number;
+  heightPx: number;
+  layerHeightMm: number;
+  totalLayers: number;
+  tallestObjectHeightMm: number;
+  layerPngs: Uint8Array[];
+  metadataJson: string;
+};
+
 type RasterTriangle = {
   zMin: number;
   zMax: number;
@@ -64,6 +88,15 @@ function shouldEmitProgress(layerIndex: number, totalLayers: number): boolean {
   if (layerIndex === 0) return true;
   if (layerIndex === totalLayers - 1) return true;
   return layerIndex % 10 === 9;
+}
+
+function sameIndexSet(a: number[] | null, b: number[]): boolean {
+  if (!a) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function safeFilenameBase(raw: string): string {
@@ -231,7 +264,7 @@ function resolveEffectiveSettings(options: RasterLayerZipExportOptions): Effecti
   };
 }
 
-export async function exportRasterLayerZip(options: RasterLayerZipExportOptions): Promise<void> {
+async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promise<RasterizationResult> {
   const visibleModels = options.models.filter((model) => model.visible);
   if (visibleModels.length === 0) {
     throw new Error('No visible models available for slicing.');
@@ -253,20 +286,17 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
   const tallestObjectHeightMm = Math.min(buildHeight, maxBuildHeight);
   const totalLayers = Math.max(1, Math.ceil(tallestObjectHeightMm / settings.layerHeightMm));
 
-  const zip = new JSZip();
   const canvas = getCanvas(settings.widthPx, settings.heightPx);
   const ctx = canvas.getContext('2d', { willReadFrequently: false }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
   if (!ctx) {
     throw new Error('Failed to create 2D rendering context for slicing.');
   }
 
-  const zipFolder = zip.folder('layers');
-  if (!zipFolder) {
-    throw new Error('Failed to initialize layers folder in ZIP.');
-  }
-
   const layerTriangleBuckets = buildLayerTriangleBuckets(triangles, totalLayers, settings.layerHeightMm);
   let emptyLayerPngBlob: Blob | null = null;
+  let previousLayerTriangleIndices: number[] | null = null;
+  let previousLayerPngBlob: Blob | null = null;
+  const layerEntries: RasterizedLayerEntry[] = [];
 
   for (let layerIndex = 0; layerIndex < totalLayers; layerIndex += 1) {
     const zStart = layerIndex * settings.layerHeightMm;
@@ -282,6 +312,8 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
         emptyLayerPngBlob = await canvasToPngBlob(canvas);
       }
       pngBlob = emptyLayerPngBlob;
+    } else if (sameIndexSet(previousLayerTriangleIndices, activeTriangleIndices) && previousLayerPngBlob) {
+      pngBlob = previousLayerPngBlob;
     } else {
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
@@ -297,20 +329,24 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
       ctx.fill('nonzero');
       pngBlob = await canvasToPngBlob(canvas);
     }
+
+    previousLayerTriangleIndices = activeTriangleIndices;
+    previousLayerPngBlob = pngBlob;
+
     const layerUm = Math.round(zStart * 1000);
     const layerName = `layer_${String(layerIndex).padStart(5, '0')}_z_${String(layerUm).padStart(6, '0')}um.png`;
-    zipFolder.file(layerName, pngBlob);
+    layerEntries.push({ name: layerName, blob: pngBlob });
 
     if (shouldEmitProgress(layerIndex, totalLayers)) {
       options.onProgress?.(layerIndex + 1, totalLayers, 'Rasterizing layers');
     }
 
-    if (layerIndex % 8 === 7) {
+    if (layerIndex % 16 === 15) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
   }
 
-  zip.file('manifest.json', JSON.stringify({
+  const manifest = {
     version: 1,
     createdAt: new Date().toISOString(),
     mode: 'raster_layer_zip_v0',
@@ -352,14 +388,59 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
         scale: { x: model.transform.scale.x, y: model.transform.scale.y, z: model.transform.scale.z },
       },
     })),
-  }, null, 2));
+  };
 
-  options.onProgress?.(totalLayers, totalLayers, 'Compressing ZIP');
+  return {
+    settings,
+    totalLayers,
+    tallestObjectHeightMm,
+    visibleModels,
+    layerEntries,
+    manifest,
+  };
+}
+
+export async function rasterizeLayersForWasm(options: RasterLayerZipExportOptions): Promise<RasterizedLayerStackForWasm> {
+  const rasterized = await rasterizeLayerStack(options);
+  const layerPngs: Uint8Array[] = [];
+
+  for (let i = 0; i < rasterized.layerEntries.length; i += 1) {
+    const bytes = new Uint8Array(await rasterized.layerEntries[i].blob.arrayBuffer());
+    layerPngs.push(bytes);
+  }
+
+  return {
+    widthPx: rasterized.settings.widthPx,
+    heightPx: rasterized.settings.heightPx,
+    layerHeightMm: rasterized.settings.layerHeightMm,
+    totalLayers: rasterized.totalLayers,
+    tallestObjectHeightMm: rasterized.tallestObjectHeightMm,
+    layerPngs,
+    metadataJson: JSON.stringify(rasterized.manifest),
+  };
+}
+
+export async function exportRasterLayerZip(options: RasterLayerZipExportOptions): Promise<void> {
+  const rasterized = await rasterizeLayerStack(options);
+
+  const zip = new JSZip();
+  const zipFolder = zip.folder('layers');
+  if (!zipFolder) {
+    throw new Error('Failed to initialize layers folder in ZIP.');
+  }
+
+  for (let i = 0; i < rasterized.layerEntries.length; i += 1) {
+    const layer = rasterized.layerEntries[i];
+    zipFolder.file(layer.name, layer.blob);
+  }
+
+  zip.file('manifest.json', JSON.stringify(rasterized.manifest, null, 2));
+
+  options.onProgress?.(rasterized.totalLayers, rasterized.totalLayers, 'Compressing ZIP');
 
   const outputBlob = await zip.generateAsync({
     type: 'blob',
-    compression: 'DEFLATE',
-    compressionOptions: { level: 3 },
+    compression: 'STORE',
   });
 
   const outputName = `${safeFilenameBase(options.filenameBase)}_layers.zip`;

@@ -4,14 +4,6 @@ import { Download, FileType2, Layers3, PackageCheck, Settings2 } from 'lucide-re
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { ExportManager, ExportOptions } from '../logic/ExportManager';
 import { Button, Card, CardHeader, IconButton, Input, Select } from '@/components/ui/primitives';
-import {
-  getActiveMaterialProfile,
-  getActivePrinterProfile,
-  getProfileStoreServerSnapshot,
-  getProfileStoreSnapshot,
-  subscribeToProfileStore,
-} from '@/features/profiles/profileStore';
-import { runSliceExportOrchestrator } from '@/features/slicing/sliceExportOrchestrator';
 
 interface ExportPanelProps {
   models: LoadedModel[];
@@ -71,12 +63,6 @@ export function ExportPanel({
   const [isExpanded, setIsExpanded] = useState(true);
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isExporting, setIsExporting] = useState(false);
-  const [isSlicingZip, setIsSlicingZip] = useState(false);
-  const [sliceStatus, setSliceStatus] = useState<string>('');
-
-  const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
-  const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
-  const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
 
   const [options, setOptions] = useState<ExportOptions>({
     filename: '',
@@ -137,47 +123,6 @@ export function ExportPanel({
     }, 100);
   };
 
-  const handleSliceZipExport = async () => {
-    if (!activePrinterProfile) {
-      alert('Select a printer profile first.');
-      return;
-    }
-
-    if (!activeMaterialProfile) {
-      alert('Select a material profile first.');
-      return;
-    }
-
-    const visibleModels = models.filter((model) => model.visible);
-    if (visibleModels.length === 0) {
-      alert('No visible models available for slicing.');
-      return;
-    }
-
-    setIsSlicingZip(true);
-    setSliceStatus('Preparing slicer…');
-
-    try {
-      await runSliceExportOrchestrator({
-        models: visibleModels,
-        printerProfile: activePrinterProfile,
-        materialProfile: activeMaterialProfile,
-        filenameBase: filename || activePrinterProfile.name || 'slice_export',
-        onProgress: (done, total, phase) => {
-          setSliceStatus(`${phase} ${done}/${total}`);
-        },
-      });
-
-      setSliceStatus('Slice ZIP generated.');
-    } catch (error) {
-      console.error('Slice ZIP export failed:', error);
-      const message = error instanceof Error ? error.message : 'Unknown slicing error.';
-      setSliceStatus(`Failed: ${message}`);
-      alert(`Slice ZIP export failed: ${message}`);
-    } finally {
-      setIsSlicingZip(false);
-    }
-  };
 
   if (models.length === 0) {
     return (
@@ -362,31 +307,6 @@ export function ExportPanel({
               )}
             </Button>
 
-            <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                <Layers3 className="w-3.5 h-3.5" />
-                <span>Slicer Prototype (ZIP PNG Layers)</span>
-              </div>
-
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Uses active printer/material settings. Current: {activePrinterProfile?.name ?? 'No printer'} • {activeMaterialProfile?.name ?? 'No material'}
-              </div>
-
-              {sliceStatus && (
-                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  {sliceStatus}
-                </div>
-              )}
-
-              <Button
-                onClick={handleSliceZipExport}
-                disabled={isSlicingZip || !activePrinterProfile || !activeMaterialProfile || models.length === 0}
-                variant="secondary"
-                className={`w-full !h-8 text-xs inline-flex items-center justify-center gap-1.5 ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
-              >
-                {isSlicingZip ? 'Slicing…' : 'Generate Layer ZIP'}
-              </Button>
-            </div>
           </>
         )}
       </div>

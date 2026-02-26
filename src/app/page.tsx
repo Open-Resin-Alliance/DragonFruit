@@ -28,6 +28,7 @@ import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
+import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { IconButton } from '@/components/ui/primitives';
@@ -4470,14 +4471,22 @@ export default function Home() {
             />
           </>
         ) : scene.mode === 'export' ? (
-          <ExportPanel
-            key="export-main"
-            models={scene.models}
-            activeModel={scene.activeModel}
-            activeModelId={scene.activeModelId}
-            onActiveModelChange={scene.setActiveModelId}
-            supportsRef={supportsRef}
-          />
+          <>
+            <ExportPanel
+              key="export-main"
+              models={scene.models}
+              activeModel={scene.activeModel}
+              activeModelId={scene.activeModelId}
+              onActiveModelChange={scene.setActiveModelId}
+              supportsRef={supportsRef}
+            />
+
+            <SlicingPanel
+              key="export-slicing"
+              models={scene.models}
+              activeModel={scene.activeModel}
+            />
+          </>
 
         ) : scene.mode === 'support' ? (
           <>
