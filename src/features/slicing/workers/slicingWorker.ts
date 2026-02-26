@@ -66,16 +66,6 @@ workerSelf.onmessage = async (event: MessageEvent<SliceWorkerRequest>) => {
       throw new Error('Chunk request received before worker job initialization.');
     }
 
-    const progressStart: SliceWorkerProgress = {
-      type: 'progress',
-      payload: {
-        phase: `Chunk ${chunkId} starting`,
-        done: startLayer,
-        total: Math.max(1, job.totalLayers),
-      },
-    };
-    workerSelf.postMessage(progressStart);
-
     const startMs = performance.now();
     const chunkPayload = await sliceSolidLayersChunkWithSlicerWasm(
       job,
@@ -83,16 +73,6 @@ workerSelf.onmessage = async (event: MessageEvent<SliceWorkerRequest>) => {
       layerCount,
     );
     const elapsedMs = performance.now() - startMs;
-
-    const progressDone: SliceWorkerProgress = {
-      type: 'progress',
-      payload: {
-        phase: `Chunk ${chunkId} completed`,
-        done: Math.min(job.totalLayers, startLayer + layerCount),
-        total: Math.max(1, job.totalLayers),
-      },
-    };
-    workerSelf.postMessage(progressDone);
 
     const chunkBuffer = new Uint8Array(chunkPayload).buffer;
     const result: SliceWorkerResult = {

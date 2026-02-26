@@ -1,5 +1,6 @@
 import type { WasmSolidSliceJobEnvelope } from './wasm/slicerWasmBridge';
 import { Zip, ZipDeflate, strToU8 } from 'fflate';
+import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 
 type SliceInWorkerOptions = {
   job: WasmSolidSliceJobEnvelope;
@@ -405,6 +406,12 @@ type ChunkTask = {
   layerCount: number;
 };
 
+type InFlightChunk = {
+  chunkId: number;
+  layerCount: number;
+  startedAtMs: number;
+};
+
 export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): Promise<SliceInWorkerResult> {
   if (!supportsSlicingWorker()) {
     throw new Error('Web Workers are not available in this runtime.');
@@ -416,13 +423,16 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
 
   return new Promise<SliceInWorkerResult>((resolve, reject) => {
     const totalLayers = Math.max(1, options.job.totalLayers);
+    const perfSettings = getSavedSlicingPerformanceSettings();
     const rawConcurrency = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency ?? 2 : 2;
-    const defaultWorkers = Math.max(1, Math.min(6, rawConcurrency - 1));
+    const reserveThreads = perfSettings.cpuProfile === 'balanced' ? 2 : 1;
+    const defaultWorkers = Math.max(1, rawConcurrency - reserveThreads);
     const targetWorkers = options.maxWorkers ?? defaultWorkers;
 
+    const isGranularProgress = perfSettings.progressGranularity === 'granular';
     const adaptiveChunkSize = Math.max(
-      2,
-      Math.min(16, Math.ceil(totalLayers / Math.max(1, targetWorkers * 3))),
+      isGranularProgress ? 2 : 4,
+      Math.min(isGranularProgress ? 12 : 24, Math.ceil(totalLayers / Math.max(1, Math.ceil(targetWorkers * 1.25)))),
     );
     const chunkSize = Math.max(1, Math.min(totalLayers, options.chunkSize ?? adaptiveChunkSize));
     const workerCount = Math.max(1, Math.min(targetWorkers, Math.ceil(totalLayers / chunkSize)));
@@ -439,6 +449,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
 
     const workers: Worker[] = [];
     const inFlightByWorker = new Map<Worker, ChunkTask | null>();
+    const inFlightByChunk = new Map<number, InFlightChunk>();
     const pendingLayers = new Map<number, Uint8Array>();
     let nextLayerToWrite = 0;
     let doneLayers = 0;
@@ -449,6 +460,8 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     let finalizing = false;
     let firstLayerHeaderReported = false;
     let abortListenerAttached = false;
+    let heartbeatTimer: number | null = null;
+    let averageChunkElapsedMs = 200;
 
     const zipBuilder = new ZipDeflateBlobBuilder(3);
     const metadata = buildNanodlpMetadata(options.job);
@@ -460,11 +473,27 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     zipBuilder.addFile('info.json', '[]');
     let firstLayerPng: Uint8Array | null = null;
     let previewLayerPng: Uint8Array | null = null;
+    const progressChunkStride = Math.max(1, Math.floor(chunkId / 24));
+
+    const preferredBackend = perfSettings.computeBackend;
+    const hasNavigatorGpu = typeof navigator !== 'undefined' && Boolean((navigator as Navigator & { gpu?: unknown }).gpu);
+    if (preferredBackend === 'webgpu') {
+      if (hasNavigatorGpu) {
+        options.onProgress?.(0, totalLayers, 'WebGPU requested (experimental): CPU/WASM fallback currently active');
+      } else {
+        options.onProgress?.(0, totalLayers, 'WebGPU requested but unavailable on this device/browser; using CPU/WASM');
+      }
+    }
 
     const cleanupAll = () => {
       if (abortListenerAttached && options.abortSignal) {
         options.abortSignal.removeEventListener('abort', abortHandler);
         abortListenerAttached = false;
+      }
+
+      if (heartbeatTimer != null && typeof window !== 'undefined') {
+        window.clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
       }
 
       for (const worker of workers) {
@@ -576,6 +605,35 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
       doneLayers = nextLayerToWrite;
     };
 
+    const emitEstimatedProgress = () => {
+      if (rejected || finalizing || totalLayers <= 0) return;
+
+      let estimatedInFlightLayers = 0;
+      if (inFlightByChunk.size > 0) {
+        const nowMs = performance.now();
+        const expectedMs = Math.max(120, averageChunkElapsedMs * 1.15);
+        for (const chunk of inFlightByChunk.values()) {
+          const elapsed = Math.max(0, nowMs - chunk.startedAtMs);
+          const ratio = Math.max(0, Math.min(0.92, elapsed / expectedMs));
+          estimatedInFlightLayers += chunk.layerCount * ratio;
+        }
+      }
+
+      const estimatedDone = Math.max(
+        doneLayers,
+        Math.min(totalLayers - 0.0001, doneLayers + estimatedInFlightLayers),
+      );
+
+      options.onProgress?.(estimatedDone, totalLayers, 'Processing slices…');
+    };
+
+    if (typeof window !== 'undefined') {
+      heartbeatTimer = window.setInterval(
+        emitEstimatedProgress,
+        isGranularProgress ? 110 : 190,
+      );
+    }
+
     const dispatchNext = (worker: Worker) => {
       if (rejected) return;
       if (options.abortSignal?.aborted) {
@@ -595,12 +653,16 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
       }
 
       inFlightByWorker.set(worker, next);
+      inFlightByChunk.set(next.chunkId, {
+        chunkId: next.chunkId,
+        layerCount: next.layerCount,
+        startedAtMs: performance.now(),
+      });
       logDebug('Dispatching chunk', {
         chunkId: next.chunkId,
         startLayer: next.startLayer,
         layerCount: next.layerCount,
       });
-      options.onProgress?.(doneLayers, totalLayers, `Queued chunk ${next.chunkId + 1}/${chunkId}`);
       worker.postMessage({
         type: 'slice-solid-nanodlp-chunk',
         payload: {
@@ -639,8 +701,16 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
 
         if (message.type === 'result') {
           try {
+            const inFlight = inFlightByChunk.get(message.payload.chunkId);
+            if (inFlight) {
+              inFlightByChunk.delete(message.payload.chunkId);
+            }
+
             workerElapsedMsTotal += message.payload.elapsedMs;
             completedChunks += 1;
+            averageChunkElapsedMs = averageChunkElapsedMs <= 0
+              ? message.payload.elapsedMs
+              : ((averageChunkElapsedMs * 0.82) + (message.payload.elapsedMs * 0.18));
             logDebug('Chunk completed', {
               chunkId: message.payload.chunkId,
               startLayer: message.payload.startLayer,
@@ -653,7 +723,9 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
             }
 
             flushReadyLayers();
-            options.onProgress?.(doneLayers, totalLayers, `Completed chunk ${message.payload.chunkId + 1}/${chunkId}`);
+            if ((completedChunks % progressChunkStride) === 0 || completedChunks >= chunkId) {
+              options.onProgress?.(doneLayers, totalLayers, `Completed chunk ${message.payload.chunkId + 1}/${chunkId}`);
+            }
 
             dispatchNext(worker);
             void tryFinalize();
