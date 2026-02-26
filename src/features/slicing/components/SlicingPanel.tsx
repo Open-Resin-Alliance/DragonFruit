@@ -70,6 +70,19 @@ function formatProgressLayerLabel(done: number, total: number): string {
   return `${doneSafe}/${totalSafe}`;
 }
 
+function formatElapsedClock(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
 export function SlicingPanel({
   models,
   activeModel,
@@ -146,6 +159,8 @@ export function SlicingPanel({
     const total = Math.max(1, progressTotal);
     return Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
   }, [progressDone, progressTotal]);
+
+  const slicingElapsedLabel = useMemo(() => formatElapsedClock(currentElapsedMs), [currentElapsedMs]);
 
   useEffect(() => {
     if (!showSlicingModal) {
@@ -747,7 +762,12 @@ export function SlicingPanel({
                 />
               </div>
 
-              <div className="pt-1 flex justify-end">
+              <div className="pt-1 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  <Timer className="h-3.5 w-3.5" />
+                  <span>Elapsed {slicingElapsedLabel}</span>
+                </div>
+
                 <div className="flex items-center gap-2">
                   {slicingModalStage === 'running' && (
                     <Button
