@@ -294,17 +294,23 @@ function composeModelMatrix(transform: LoadedModel['transform']): THREE.Matrix4 
   return new THREE.Matrix4().compose(transform.position, q, transform.scale);
 }
 
-function toPixelX(xMm: number, minX: number, widthMm: number, widthPx: number, mirrorX = false): number {
-  const normalized = (xMm - minX) / widthMm;
-  const mapped = mirrorX ? (1 - normalized) : normalized;
-  return mapped * (widthPx - 1);
+function mirrorWorldX(xMm: number, mirrorX: boolean): number {
+  return mirrorX ? -xMm : xMm;
 }
 
-function toPixelY(yMm: number, minY: number, depthMm: number, heightPx: number, mirrorY = false): number {
+function mirrorWorldY(yMm: number, mirrorY: boolean): number {
+  return mirrorY ? -yMm : yMm;
+}
+
+function toPixelX(xMm: number, minX: number, widthMm: number, widthPx: number): number {
+  const normalized = (xMm - minX) / widthMm;
+  return normalized * (widthPx - 1);
+}
+
+function toPixelY(yMm: number, minY: number, depthMm: number, heightPx: number): number {
   // Canvas Y increases downward, build plate Y increases upward.
   const base = 1 - ((yMm - minY) / depthMm);
-  const mapped = mirrorY ? (1 - base) : base;
-  return mapped * (heightPx - 1);
+  return base * (heightPx - 1);
 }
 
 function getCanvas(widthPx: number, heightPx: number): OffscreenCanvas | HTMLCanvasElement {
@@ -485,15 +491,22 @@ function buildTriangles(
         const zMin = Math.min(v0.z, v1.z, v2.z);
         const zMax = Math.max(v0.z, v1.z, v2.z);
 
+        const v0x = mirrorWorldX(v0.x, settings.mirrorX);
+        const v0y = mirrorWorldY(v0.y, settings.mirrorY);
+        const v1x = mirrorWorldX(v1.x, settings.mirrorX);
+        const v1y = mirrorWorldY(v1.y, settings.mirrorY);
+        const v2x = mirrorWorldX(v2.x, settings.mirrorX);
+        const v2y = mirrorWorldY(v2.y, settings.mirrorY);
+
         triangles.push({
           zMin,
           zMax,
-          x1: toPixelX(v0.x, minX, widthMm, settings.widthPx, settings.mirrorX),
-          y1: toPixelY(v0.y, minY, depthMm, settings.heightPx, settings.mirrorY),
-          x2: toPixelX(v1.x, minX, widthMm, settings.widthPx, settings.mirrorX),
-          y2: toPixelY(v1.y, minY, depthMm, settings.heightPx, settings.mirrorY),
-          x3: toPixelX(v2.x, minX, widthMm, settings.widthPx, settings.mirrorX),
-          y3: toPixelY(v2.y, minY, depthMm, settings.heightPx, settings.mirrorY),
+          x1: toPixelX(v0x, minX, widthMm, settings.widthPx),
+          y1: toPixelY(v0y, minY, depthMm, settings.heightPx),
+          x2: toPixelX(v1x, minX, widthMm, settings.widthPx),
+          y2: toPixelY(v1y, minY, depthMm, settings.heightPx),
+          x3: toPixelX(v2x, minX, widthMm, settings.widthPx),
+          y3: toPixelY(v2y, minY, depthMm, settings.heightPx),
         });
       }
     } else {
@@ -506,15 +519,22 @@ function buildTriangles(
         const zMin = Math.min(v0.z, v1.z, v2.z);
         const zMax = Math.max(v0.z, v1.z, v2.z);
 
+        const v0x = mirrorWorldX(v0.x, settings.mirrorX);
+        const v0y = mirrorWorldY(v0.y, settings.mirrorY);
+        const v1x = mirrorWorldX(v1.x, settings.mirrorX);
+        const v1y = mirrorWorldY(v1.y, settings.mirrorY);
+        const v2x = mirrorWorldX(v2.x, settings.mirrorX);
+        const v2y = mirrorWorldY(v2.y, settings.mirrorY);
+
         triangles.push({
           zMin,
           zMax,
-          x1: toPixelX(v0.x, minX, widthMm, settings.widthPx, settings.mirrorX),
-          y1: toPixelY(v0.y, minY, depthMm, settings.heightPx, settings.mirrorY),
-          x2: toPixelX(v1.x, minX, widthMm, settings.widthPx, settings.mirrorX),
-          y2: toPixelY(v1.y, minY, depthMm, settings.heightPx, settings.mirrorY),
-          x3: toPixelX(v2.x, minX, widthMm, settings.widthPx, settings.mirrorX),
-          y3: toPixelY(v2.y, minY, depthMm, settings.heightPx, settings.mirrorY),
+          x1: toPixelX(v0x, minX, widthMm, settings.widthPx),
+          y1: toPixelY(v0y, minY, depthMm, settings.heightPx),
+          x2: toPixelX(v1x, minX, widthMm, settings.widthPx),
+          y2: toPixelY(v1y, minY, depthMm, settings.heightPx),
+          x3: toPixelX(v2x, minX, widthMm, settings.widthPx),
+          y3: toPixelY(v2y, minY, depthMm, settings.heightPx),
         });
       }
     }
@@ -704,10 +724,15 @@ function buildLayerSegmentsFromWorldTriangles(
 
     if (points.length < 2) continue;
 
-    const x1 = toPixelX(points[0][0], minX, widthMm, settings.widthPx, settings.mirrorX);
-    const y1 = toPixelY(points[0][1], minY, depthMm, settings.heightPx, settings.mirrorY);
-    const x2 = toPixelX(points[1][0], minX, widthMm, settings.widthPx, settings.mirrorX);
-    const y2 = toPixelY(points[1][1], minY, depthMm, settings.heightPx, settings.mirrorY);
+    const p1xMm = mirrorWorldX(points[0][0], settings.mirrorX);
+    const p1yMm = mirrorWorldY(points[0][1], settings.mirrorY);
+    const p2xMm = mirrorWorldX(points[1][0], settings.mirrorX);
+    const p2yMm = mirrorWorldY(points[1][1], settings.mirrorY);
+
+    const x1 = toPixelX(p1xMm, minX, widthMm, settings.widthPx);
+    const y1 = toPixelY(p1yMm, minY, depthMm, settings.heightPx);
+    const x2 = toPixelX(p2xMm, minX, widthMm, settings.widthPx);
+    const y2 = toPixelY(p2yMm, minY, depthMm, settings.heightPx);
 
     const dy = y2 - y1;
     if (Math.abs(dy) < 1e-8) continue;

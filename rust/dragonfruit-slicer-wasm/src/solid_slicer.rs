@@ -214,6 +214,8 @@ fn build_layer_segments(
     triangles: &[Tri],
     triangle_indices: &[usize],
     z_mm: f32,
+    mirror_x: bool,
+    mirror_y: bool,
     min_x_mm: f32,
     min_y_mm: f32,
     build_width_mm: f32,
@@ -246,10 +248,15 @@ fn build_layer_segments(
         let p0 = points[0];
         let p1 = points[1];
 
-        let x1 = mm_to_pixel_x(p0.0, min_x_mm, build_width_mm, width_px);
-        let y1 = mm_to_pixel_y(p0.1, min_y_mm, build_depth_mm, height_px);
-        let x2 = mm_to_pixel_x(p1.0, min_x_mm, build_width_mm, width_px);
-        let y2 = mm_to_pixel_y(p1.1, min_y_mm, build_depth_mm, height_px);
+        let p0x_mm = if mirror_x { -p0.0 } else { p0.0 };
+        let p0y_mm = if mirror_y { -p0.1 } else { p0.1 };
+        let p1x_mm = if mirror_x { -p1.0 } else { p1.0 };
+        let p1y_mm = if mirror_y { -p1.1 } else { p1.1 };
+
+        let x1 = mm_to_pixel_x(p0x_mm, min_x_mm, build_width_mm, width_px);
+        let y1 = mm_to_pixel_y(p0y_mm, min_y_mm, build_depth_mm, height_px);
+        let x2 = mm_to_pixel_x(p1x_mm, min_x_mm, build_width_mm, width_px);
+        let y2 = mm_to_pixel_y(p1y_mm, min_y_mm, build_depth_mm, height_px);
 
         let dy = y2 - y1;
         if dy.abs() < 1e-8 {
@@ -500,6 +507,31 @@ fn extract_source_file(root: &Value) -> String {
         .to_string()
 }
 
+fn extract_mirror_flags(root: &Value) -> (bool, bool) {
+    let printer = root.get("printer");
+
+    let mirror_x_direct = printer
+        .and_then(|p| p.get("mirrorX"))
+        .and_then(Value::as_bool);
+    let mirror_y_direct = printer
+        .and_then(|p| p.get("mirrorY"))
+        .and_then(Value::as_bool);
+
+    let mirror_x_display = printer
+        .and_then(|p| p.get("display"))
+        .and_then(|d| d.get("mirrorX"))
+        .and_then(Value::as_bool);
+    let mirror_y_display = printer
+        .and_then(|p| p.get("display"))
+        .and_then(|d| d.get("mirrorY"))
+        .and_then(Value::as_bool);
+
+    (
+        mirror_x_direct.or(mirror_x_display).unwrap_or(false),
+        mirror_y_direct.or(mirror_y_display).unwrap_or(false),
+    )
+}
+
 fn build_plate_json(job: &SolidSliceJob, source_metadata: &Value) -> Value {
     let total_layers = job.total_layers;
     let z_max_mm = (job.layer_height_mm as f64) * (total_layers as f64);
@@ -541,6 +573,7 @@ fn build_plate_json(job: &SolidSliceJob, source_metadata: &Value) -> Value {
 fn build_profile_json(job: &SolidSliceJob, source_metadata: &Value) -> Value {
     let printer_name = extract_printer_name(source_metadata);
     let source_file = extract_source_file(source_metadata);
+    let (mirror_x, _) = extract_mirror_flags(source_metadata);
     let thickness_um = ((job.layer_height_mm as f64) * 1000.0).round();
 
     json!({
@@ -555,7 +588,7 @@ fn build_profile_json(job: &SolidSliceJob, source_metadata: &Value) -> Value {
         "AutoCenter": 0,
         "XPixelSize": 0.0,
         "YPixelSize": 0.0,
-        "ImageMirror": 1,
+        "ImageMirror": if mirror_x { 1 } else { 0 },
         "DisplayController": 1,
         "Boundary": {
             "XMin": 0.0,
@@ -713,6 +746,8 @@ fn render_layer_png(
     triangles: &[Tri],
     layer_buckets: &[Vec<usize>],
     packing_mode: PackingMode,
+    mirror_x: bool,
+    mirror_y: bool,
     min_x_mm: f32,
     min_y_mm: f32,
     layer_index: u32,
@@ -742,6 +777,8 @@ fn render_layer_png(
         triangles,
         triangle_indices,
         z_mm,
+        mirror_x,
+        mirror_y,
         min_x_mm,
         min_y_mm,
         job.build_width_mm,
@@ -789,6 +826,9 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
     let triangles = parse_triangles(&job.triangles_xyz)?;
+    let source_metadata: Value = serde_json::from_str(&job.metadata_json)
+        .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
+    let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
     let layer_buckets =
@@ -803,6 +843,8 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
             &triangles,
             &layer_buckets,
             packing_mode,
+            mirror_x,
+            mirror_y,
             min_x_mm,
             min_y_mm,
             layer_index,
@@ -840,6 +882,9 @@ pub fn slice_solid_chunk_payload(
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
     let triangles = parse_triangles(&job.triangles_xyz)?;
+    let source_metadata: Value = serde_json::from_str(&job.metadata_json)
+        .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
+    let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
     let layer_buckets =
@@ -857,6 +902,8 @@ pub fn slice_solid_chunk_payload(
             &triangles,
             &layer_buckets,
             packing_mode,
+            mirror_x,
+            mirror_y,
             min_x_mm,
             min_y_mm,
             layer_index,
@@ -885,6 +932,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
     let options_json = json_pretty_bytes(&build_options_json(job))?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let triangles = parse_triangles(&job.triangles_xyz)?;
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
@@ -954,6 +1002,8 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
                     &triangles,
                     triangle_indices,
                     z_mm,
+                    mirror_x,
+                    mirror_y,
                     min_x_mm,
                     min_y_mm,
                     job.build_width_mm,

@@ -484,10 +484,6 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     let hasCommittedLayer = false;
     let lastEmitMs = 0;
 
-    const previewStride = perfSettings.cpuProfile === 'max'
-      ? (totalLayers >= 500 ? 4 : totalLayers >= 220 ? 2 : 1)
-      : (totalLayers >= 300 ? 6 : totalLayers >= 140 ? 3 : 1);
-
     const zipBuilder = new ZipDeflateBlobBuilder(3);
     const metadata = buildNanodlpMetadata(options.job);
     zipBuilder.addFile('meta.json', JSON.stringify(metadata.metaJson, null, 2));
@@ -645,11 +641,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
           previewLayerPng = Uint8Array.from(png);
         }
 
-        const isLastLayer = nextLayerToWrite >= (totalLayers - 1);
-        const shouldEmitPreview = previewStride <= 1 || (nextLayerToWrite % previewStride) === 0 || isLastLayer;
-        if (shouldEmitPreview) {
-          options.onLayerPreview?.(nextLayerToWrite, totalLayers, Uint8Array.from(png));
-        }
+        options.onLayerPreview?.(nextLayerToWrite, totalLayers, Uint8Array.from(png));
 
         zipBuilder.addFile(`${nextLayerToWrite + 1}.png`, png);
         nextLayerToWrite += 1;

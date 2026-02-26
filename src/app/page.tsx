@@ -975,6 +975,15 @@ export default function Home() {
     printingArtifact?.outputName,
   ]);
 
+  const printingPreviewDeMirrorTransform = React.useMemo(() => {
+    const mirrorX = activePrinterProfile?.display?.mirrorX === true;
+    const mirrorY = activePrinterProfile?.display?.mirrorY === true;
+    const scaleX = mirrorX ? -1 : 1;
+    const scaleY = mirrorY ? -1 : 1;
+    if (scaleX === 1 && scaleY === 1) return undefined;
+    return `scale(${scaleX}, ${scaleY})`;
+  }, [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
+
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
 
   const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
@@ -5515,6 +5524,7 @@ export default function Home() {
                       viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
                       preserveAspectRatio="xMidYMid meet"
                       className="block w-full h-full max-w-full max-h-full rounded"
+                      style={printingPreviewDeMirrorTransform ? { transform: printingPreviewDeMirrorTransform, transformOrigin: 'center center' } : undefined}
                       role="img"
                       aria-label={`Layer ${printingSelectedLayer} preview`}
                     >
@@ -5533,7 +5543,11 @@ export default function Home() {
                       src={selectedPrintingLayerPreviewUrl}
                       alt={`Layer ${printingSelectedLayer} preview`}
                       className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
-                      style={{ imageRendering: 'pixelated' }}
+                      style={{
+                        imageRendering: 'pixelated',
+                        transform: printingPreviewDeMirrorTransform,
+                        transformOrigin: 'center center',
+                      }}
                     />
                   )
                 ) : (
@@ -5635,18 +5649,6 @@ export default function Home() {
                   {printingArtifact?.outputName ?? 'Preparing artifact'}
                 </div>
               </div>
-
-              {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
-                <button
-                  type="button"
-                  className="ui-button ui-button-secondary !h-8 px-3 text-[11px]"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                  onClick={() => setPrintingUploadDialogOpen(false)}
-                  disabled={printingSendBusy || printingPrintNowBusy}
-                >
-                  Close
-                </button>
-              )}
             </div>
 
             <div className="p-4 space-y-3">
