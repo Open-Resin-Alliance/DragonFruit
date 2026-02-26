@@ -117,6 +117,8 @@ type EffectiveSettings = {
   sourceResolutionX: number;
   sourceResolutionY: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
+  mirrorX: boolean;
+  mirrorY: boolean;
   layerHeightMm: number;
   totalLayers: number;
   tallestObjectHeightMm: number;
@@ -292,13 +294,17 @@ function composeModelMatrix(transform: LoadedModel['transform']): THREE.Matrix4 
   return new THREE.Matrix4().compose(transform.position, q, transform.scale);
 }
 
-function toPixelX(xMm: number, minX: number, widthMm: number, widthPx: number): number {
-  return ((xMm - minX) / widthMm) * (widthPx - 1);
+function toPixelX(xMm: number, minX: number, widthMm: number, widthPx: number, mirrorX = false): number {
+  const normalized = (xMm - minX) / widthMm;
+  const mapped = mirrorX ? (1 - normalized) : normalized;
+  return mapped * (widthPx - 1);
 }
 
-function toPixelY(yMm: number, minY: number, depthMm: number, heightPx: number): number {
+function toPixelY(yMm: number, minY: number, depthMm: number, heightPx: number, mirrorY = false): number {
   // Canvas Y increases downward, build plate Y increases upward.
-  return (1 - ((yMm - minY) / depthMm)) * (heightPx - 1);
+  const base = 1 - ((yMm - minY) / depthMm);
+  const mapped = mirrorY ? (1 - base) : base;
+  return mapped * (heightPx - 1);
 }
 
 function getCanvas(widthPx: number, heightPx: number): OffscreenCanvas | HTMLCanvasElement {
@@ -482,12 +488,12 @@ function buildTriangles(
         triangles.push({
           zMin,
           zMax,
-          x1: toPixelX(v0.x, minX, widthMm, settings.widthPx),
-          y1: toPixelY(v0.y, minY, depthMm, settings.heightPx),
-          x2: toPixelX(v1.x, minX, widthMm, settings.widthPx),
-          y2: toPixelY(v1.y, minY, depthMm, settings.heightPx),
-          x3: toPixelX(v2.x, minX, widthMm, settings.widthPx),
-          y3: toPixelY(v2.y, minY, depthMm, settings.heightPx),
+          x1: toPixelX(v0.x, minX, widthMm, settings.widthPx, settings.mirrorX),
+          y1: toPixelY(v0.y, minY, depthMm, settings.heightPx, settings.mirrorY),
+          x2: toPixelX(v1.x, minX, widthMm, settings.widthPx, settings.mirrorX),
+          y2: toPixelY(v1.y, minY, depthMm, settings.heightPx, settings.mirrorY),
+          x3: toPixelX(v2.x, minX, widthMm, settings.widthPx, settings.mirrorX),
+          y3: toPixelY(v2.y, minY, depthMm, settings.heightPx, settings.mirrorY),
         });
       }
     } else {
@@ -503,12 +509,12 @@ function buildTriangles(
         triangles.push({
           zMin,
           zMax,
-          x1: toPixelX(v0.x, minX, widthMm, settings.widthPx),
-          y1: toPixelY(v0.y, minY, depthMm, settings.heightPx),
-          x2: toPixelX(v1.x, minX, widthMm, settings.widthPx),
-          y2: toPixelY(v1.y, minY, depthMm, settings.heightPx),
-          x3: toPixelX(v2.x, minX, widthMm, settings.widthPx),
-          y3: toPixelY(v2.y, minY, depthMm, settings.heightPx),
+          x1: toPixelX(v0.x, minX, widthMm, settings.widthPx, settings.mirrorX),
+          y1: toPixelY(v0.y, minY, depthMm, settings.heightPx, settings.mirrorY),
+          x2: toPixelX(v1.x, minX, widthMm, settings.widthPx, settings.mirrorX),
+          y2: toPixelY(v1.y, minY, depthMm, settings.heightPx, settings.mirrorY),
+          x3: toPixelX(v2.x, minX, widthMm, settings.widthPx, settings.mirrorX),
+          y3: toPixelY(v2.y, minY, depthMm, settings.heightPx, settings.mirrorY),
         });
       }
     }
@@ -698,10 +704,10 @@ function buildLayerSegmentsFromWorldTriangles(
 
     if (points.length < 2) continue;
 
-    const x1 = toPixelX(points[0][0], minX, widthMm, settings.widthPx);
-    const y1 = toPixelY(points[0][1], minY, depthMm, settings.heightPx);
-    const x2 = toPixelX(points[1][0], minX, widthMm, settings.widthPx);
-    const y2 = toPixelY(points[1][1], minY, depthMm, settings.heightPx);
+    const x1 = toPixelX(points[0][0], minX, widthMm, settings.widthPx, settings.mirrorX);
+    const y1 = toPixelY(points[0][1], minY, depthMm, settings.heightPx, settings.mirrorY);
+    const x2 = toPixelX(points[1][0], minX, widthMm, settings.widthPx, settings.mirrorX);
+    const y2 = toPixelY(points[1][1], minY, depthMm, settings.heightPx, settings.mirrorY);
 
     const dy = y2 - y1;
     if (Math.abs(dy) < 1e-8) continue;
@@ -816,6 +822,8 @@ function resolveEffectiveSettings(options: RasterLayerZipExportOptions): Effecti
     sourceResolutionX: packed.sourceResolutionX,
     sourceResolutionY: packed.sourceResolutionY,
     xPackingMode: packed.xPackingMode,
+    mirrorX: options.printerProfile.display.mirrorX === true,
+    mirrorY: options.printerProfile.display.mirrorY === true,
     layerHeightMm,
     totalLayers: 1,
     tallestObjectHeightMm: layerHeightMm,
@@ -980,6 +988,8 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       buildVolumeMm: options.printerProfile.buildVolumeMm,
       bitDepth: options.printerProfile.bitDepth,
       outputFormat: options.printerProfile.display.outputFormat,
+      mirrorX: options.printerProfile.display.mirrorX === true,
+      mirrorY: options.printerProfile.display.mirrorY === true,
     },
     material: {
       id: options.materialProfile.id,
@@ -995,6 +1005,8 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       sourceResolutionX: settings.sourceResolutionX,
       sourceResolutionY: settings.sourceResolutionY,
       xPackingMode: settings.xPackingMode,
+      mirrorX: settings.mirrorX,
+      mirrorY: settings.mirrorY,
       layerHeightMm: settings.layerHeightMm,
       totalLayers,
       tallestObjectHeightMm,
@@ -1094,6 +1106,8 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
       buildVolumeMm: options.printerProfile.buildVolumeMm,
       bitDepth: options.printerProfile.bitDepth,
       outputFormat: options.printerProfile.display.outputFormat,
+      mirrorX: options.printerProfile.display.mirrorX === true,
+      mirrorY: options.printerProfile.display.mirrorY === true,
     },
     material: {
       id: options.materialProfile.id,
@@ -1109,6 +1123,8 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
       sourceResolutionX: settings.sourceResolutionX,
       sourceResolutionY: settings.sourceResolutionY,
       xPackingMode: settings.xPackingMode,
+      mirrorX: settings.mirrorX,
+      mirrorY: settings.mirrorY,
       layerHeightMm: settings.layerHeightMm,
       totalLayers,
       tallestObjectHeightMm,

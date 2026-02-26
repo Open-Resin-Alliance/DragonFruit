@@ -132,6 +132,23 @@ function extractSourceFile(metadataRoot: Record<string, unknown>): string {
   return 'dragonfruit_export';
 }
 
+function extractMirrorX(metadataRoot: Record<string, unknown>): boolean {
+  const printer = metadataRoot.printer;
+  if (printer && typeof printer === 'object' && !Array.isArray(printer)) {
+    const mirrorX = (printer as Record<string, unknown>).mirrorX;
+    if (typeof mirrorX === 'boolean') return mirrorX;
+
+    const display = (printer as Record<string, unknown>).display;
+    if (display && typeof display === 'object' && !Array.isArray(display)) {
+      const fromDisplay = (display as Record<string, unknown>).mirrorX;
+      if (typeof fromDisplay === 'boolean') return fromDisplay;
+    }
+  }
+
+  // Backward-compatible default with previous behavior.
+  return true;
+}
+
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.byteLength !== b.byteLength) return false;
   for (let i = 0; i < a.byteLength; i += 1) {
@@ -243,6 +260,7 @@ function buildNanodlpMetadata(job: WasmSolidSliceJobEnvelope): {
   const metadataRoot = parseMetadataRoot(job.metadataJson);
   const printerName = extractPrinterName(metadataRoot);
   const sourceFile = extractSourceFile(metadataRoot);
+  const mirrorX = extractMirrorX(metadataRoot);
   const thicknessUm = Math.round(job.layerHeightMm * 1000);
   const zMaxMm = job.layerHeightMm * job.totalLayers;
   const xPixelSize = job.widthPx > 0 ? job.buildWidthMm / job.widthPx : 0;
@@ -362,7 +380,7 @@ function buildNanodlpMetadata(job: WasmSolidSliceJobEnvelope): {
     AutoCenter: 0,
     XPixelSize: 0,
     YPixelSize: 0,
-    ImageMirror: 1,
+    ImageMirror: mirrorX ? 1 : 0,
     DisplayController: 1,
     Boundary: {
       XMin: 0,

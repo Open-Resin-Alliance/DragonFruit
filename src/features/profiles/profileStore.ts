@@ -68,6 +68,8 @@ export type PrinterPreset = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    mirrorX?: boolean;
+    mirrorY?: boolean;
   };
 };
 
@@ -92,6 +94,8 @@ export type PrinterProfile = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    mirrorX?: boolean;
+    mirrorY?: boolean;
   };
   network?: PrinterNetworkSettings;
   networkConnection?: PrinterNetworkConnectionState;
@@ -261,6 +265,8 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
   display: {
     ...preset.display,
     outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+    mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown } | undefined)?.mirrorX, false),
+    mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown } | undefined)?.mirrorY, false),
   },
 }));
 
@@ -329,6 +335,11 @@ function normalizeOutputFormat(value: unknown): PrinterOutputFormat {
   if (value === '.nanodlp' || value === '.goo' || value === '.lumen') return value;
   if (value === '.luman') return '.lumen';
   return DEFAULT_OUTPUT_FORMAT;
+}
+
+function normalizeMirrorFlag(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  return fallback;
 }
 
 function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProfile[] {
@@ -414,6 +425,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
             resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
             outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
+            mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
+            mirrorY: normalizeMirrorFlag(rawDisplay?.mirrorY, normalizeMirrorFlag(fallbackDisplay?.mirrorY, false)),
           },
           network: sanitizePrinterNetworkSettings((profile as any).network),
           networkConnection: resolveNetworkSupport(profile)
@@ -704,6 +717,8 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       resolutionX: partial?.display?.resolutionX ?? 2560,
       resolutionY: partial?.display?.resolutionY ?? 1620,
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
+      mirrorX: normalizeMirrorFlag(partial?.display?.mirrorX, false),
+      mirrorY: normalizeMirrorFlag(partial?.display?.mirrorY, false),
     },
     network: networkSettings,
     networkConnection: networkSupport
@@ -759,6 +774,8 @@ export function addPrinterProfileFromPreset(presetId: string): string {
       resolutionX: preset.display.resolutionX,
       resolutionY: preset.display.resolutionY,
       outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+      mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
+      mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
     },
   });
 }
@@ -833,7 +850,15 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       isOfficial: profile.isOfficial,
       isCustom: profile.isCustom,
       buildVolumeMm: updates.buildVolumeMm ?? profile.buildVolumeMm,
-      display: updates.display ?? profile.display,
+      display: updates.display
+        ? {
+          resolutionX: Number(updates.display.resolutionX) || profile.display.resolutionX,
+          resolutionY: Number(updates.display.resolutionY) || profile.display.resolutionY,
+          outputFormat: normalizeOutputFormat(updates.display.outputFormat ?? profile.display.outputFormat),
+          mirrorX: normalizeMirrorFlag(updates.display.mirrorX, profile.display.mirrorX === true),
+          mirrorY: normalizeMirrorFlag(updates.display.mirrorY, profile.display.mirrorY === true),
+        }
+        : profile.display,
       network: updates.network !== undefined ? sanitizePrinterNetworkSettings(updates.network) : profile.network,
       networkConnection: updates.networkConnection !== undefined
         ? (

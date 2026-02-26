@@ -130,6 +130,14 @@ function resolveOfficialPresetIdFromProfile(profile: PrinterProfile): string | n
   return null;
 }
 
+type BuildDimensionEditMode = 'manual' | 'auto';
+
+function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): number {
+  const safeResolution = Math.max(1, Math.round(resolutionPx));
+  const safePixelSize = Math.max(0.001, Number(pixelSizeUm) || 0.001);
+  return Number(((safeResolution * safePixelSize) / 1000).toFixed(3));
+}
+
 export function ProfileSettingsModal({
   isOpen,
   onClose,
@@ -202,6 +210,7 @@ export function ProfileSettingsModal({
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
   const [presetSearch, setPresetSearch] = React.useState('');
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('All');
+  const [buildDimensionModeByPrinterId, setBuildDimensionModeByPrinterId] = React.useState<Record<string, BuildDimensionEditMode>>({});
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
@@ -239,6 +248,96 @@ export function ProfileSettingsModal({
     if (!selectedPrinterId) return fallback;
     return profileState.printerProfiles.find((profile) => profile.id === selectedPrinterId) ?? fallback;
   }, [profileState, selectedPrinterId]);
+
+  const selectedBuildDimensionMode: BuildDimensionEditMode = React.useMemo(() => {
+    if (!selectedPrinter) return 'manual';
+    return buildDimensionModeByPrinterId[selectedPrinter.id] ?? 'manual';
+  }, [buildDimensionModeByPrinterId, selectedPrinter]);
+
+  const applyAutoBuildDimensions = React.useCallback((printer: PrinterProfile, overrides?: {
+    resolutionX?: number;
+    resolutionY?: number;
+    pixelSizeX?: number;
+    pixelSizeY?: number;
+  }) => {
+    const resolutionX = overrides?.resolutionX ?? printer.display.resolutionX;
+    const resolutionY = overrides?.resolutionY ?? printer.display.resolutionY;
+    const pixelSizeX = overrides?.pixelSizeX ?? printer.pixelSize?.x ?? 1;
+    const pixelSizeY = overrides?.pixelSizeY ?? printer.pixelSize?.y ?? 1;
+
+    return {
+      ...printer.buildVolumeMm,
+      width: computeBuildDimensionMm(resolutionX, pixelSizeX),
+      depth: computeBuildDimensionMm(resolutionY, pixelSizeY),
+    };
+  }, []);
+
+  const setBuildDimensionMode = React.useCallback((mode: BuildDimensionEditMode) => {
+    if (!selectedPrinter) return;
+    setBuildDimensionModeByPrinterId((prev) => ({
+      ...prev,
+      [selectedPrinter.id]: mode,
+    }));
+
+    if (mode === 'auto') {
+      updatePrinterProfile(selectedPrinter.id, {
+        buildVolumeMm: applyAutoBuildDimensions(selectedPrinter),
+      });
+    }
+  }, [applyAutoBuildDimensions, selectedPrinter]);
+
+  const handlePrinterDisplayChange = React.useCallback((partialDisplay: Partial<PrinterProfile['display']>) => {
+    if (!selectedPrinter) return;
+
+    const nextDisplay: PrinterProfile['display'] = {
+      ...selectedPrinter.display,
+      ...partialDisplay,
+    };
+
+    updatePrinterProfile(selectedPrinter.id, {
+      display: nextDisplay,
+      buildVolumeMm: selectedBuildDimensionMode === 'auto'
+        ? applyAutoBuildDimensions(selectedPrinter, {
+          resolutionX: nextDisplay.resolutionX,
+          resolutionY: nextDisplay.resolutionY,
+        })
+        : selectedPrinter.buildVolumeMm,
+    });
+  }, [applyAutoBuildDimensions, selectedBuildDimensionMode, selectedPrinter]);
+
+  const handlePrinterPixelSizeChange = React.useCallback((axis: 'x' | 'y', value: number) => {
+    if (!selectedPrinter) return;
+
+    const safeValue = Math.max(0.001, Number(value) || 0.001);
+    const currentPixelX = selectedPrinter.pixelSize?.x ?? 1;
+    const currentPixelY = selectedPrinter.pixelSize?.y ?? 1;
+
+    const nextPixelSize = {
+      x: axis === 'x' ? safeValue : currentPixelX,
+      y: axis === 'y' ? safeValue : currentPixelY,
+    };
+
+    updatePrinterProfile(selectedPrinter.id, {
+      pixelSize: nextPixelSize,
+      buildVolumeMm: selectedBuildDimensionMode === 'auto'
+        ? applyAutoBuildDimensions(selectedPrinter, {
+          pixelSizeX: nextPixelSize.x,
+          pixelSizeY: nextPixelSize.y,
+        })
+        : selectedPrinter.buildVolumeMm,
+    });
+  }, [applyAutoBuildDimensions, selectedBuildDimensionMode, selectedPrinter]);
+
+  const handlePrinterBitDepthChange = React.useCallback((value: number) => {
+    if (!selectedPrinter) return;
+    const bits = Math.max(1, Math.round(value));
+    updatePrinterProfile(selectedPrinter.id, {
+      bitDepth: {
+        bits,
+        description: selectedPrinter.bitDepth?.description,
+      },
+    });
+  }, [selectedPrinter]);
 
   const printerMaterials = React.useMemo(() => {
     if (!selectedPrinter) return [];
@@ -302,6 +401,7 @@ export function ProfileSettingsModal({
 
   const selectedNanodlpMaterialIdRef = React.useRef('');
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
+  const wasOpenRef = React.useRef(false);
 
   React.useEffect(() => {
     selectedNanodlpMaterialIdRef.current = selectedNanodlpMaterialId;
@@ -395,7 +495,16 @@ export function ProfileSettingsModal({
   }, [nanodlpEditDraft]);
 
   React.useLayoutEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      return;
+    }
+
+    const justOpened = !wasOpenRef.current;
+    if (!justOpened) {
+      return;
+    }
+    wasOpenRef.current = true;
 
     const shouldOpenPrinterLibrary =
       initialTab === 'printer'
@@ -1415,6 +1524,42 @@ export function ProfileSettingsModal({
                     Edit Printer Profile
                   </div>
 
+                  <div className="mb-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBuildDimensionMode('manual')}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                      style={selectedBuildDimensionMode === 'manual'
+                        ? {
+                            color: 'var(--accent-secondary)',
+                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                          }
+                        : { color: 'var(--text-muted)' }}
+                    >
+                      Manual build mm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBuildDimensionMode('auto')}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                      style={selectedBuildDimensionMode === 'auto'
+                        ? {
+                            color: 'var(--accent-secondary)',
+                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                          }
+                        : { color: 'var(--text-muted)' }}
+                    >
+                      Auto-calc from px + μm
+                    </button>
+                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      {selectedBuildDimensionMode === 'auto'
+                        ? 'Build width/depth are derived from resolution and pixel size.'
+                        : 'Build width/depth are edited directly in mm.'}
+                    </span>
+                  </div>
+
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                     <LabeledInput
                       label="Printer name"
@@ -1429,6 +1574,7 @@ export function ProfileSettingsModal({
 
                     <LabeledNumberInput
                       label="Build width (mm)"
+                      disabled={selectedBuildDimensionMode === 'auto'}
                       value={selectedPrinter.buildVolumeMm.width}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         buildVolumeMm: {
@@ -1439,6 +1585,7 @@ export function ProfileSettingsModal({
                     />
                     <LabeledNumberInput
                       label="Build depth (mm)"
+                      disabled={selectedBuildDimensionMode === 'auto'}
                       value={selectedPrinter.buildVolumeMm.depth}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         buildVolumeMm: {
@@ -1461,34 +1608,54 @@ export function ProfileSettingsModal({
                     <LabeledNumberInput
                       label="Resolution X (px)"
                       value={selectedPrinter.display.resolutionX}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
-                        display: {
-                          ...selectedPrinter.display,
-                          resolutionX: value,
-                        },
+                      onChange={(value) => handlePrinterDisplayChange({
+                        resolutionX: Math.max(1, Math.round(value)),
                       })}
                     />
 
                     <LabeledNumberInput
                       label="Resolution Y (px)"
                       value={selectedPrinter.display.resolutionY}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
-                        display: {
-                          ...selectedPrinter.display,
-                          resolutionY: value,
-                        },
+                      onChange={(value) => handlePrinterDisplayChange({
+                        resolutionY: Math.max(1, Math.round(value)),
                       })}
                     />
+
+                    <LabeledNumberInput
+                      label="Pixel size X (μm)"
+                      value={selectedPrinter.pixelSize?.x ?? 1}
+                      onChange={(value) => handlePrinterPixelSizeChange('x', value)}
+                    />
+
+                    <LabeledNumberInput
+                      label="Pixel size Y (μm)"
+                      value={selectedPrinter.pixelSize?.y ?? 1}
+                      onChange={(value) => handlePrinterPixelSizeChange('y', value)}
+                    />
+
+                    <LabeledNumberInput
+                      label="Bit depth"
+                      value={selectedPrinter.bitDepth?.bits ?? 8}
+                      onChange={handlePrinterBitDepthChange}
+                    />
+
                     <LabeledSelectInput
                       label="Output format"
                       value={selectedPrinter.display.outputFormat}
                       options={OUTPUT_FORMAT_OPTIONS}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
-                        display: {
-                          ...selectedPrinter.display,
-                          outputFormat: value,
-                        },
-                      })}
+                      onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
+                    />
+
+                    <LabeledToggleInput
+                      label="Mirror X"
+                      checked={selectedPrinter.display.mirrorX === true}
+                      onChange={(checked) => handlePrinterDisplayChange({ mirrorX: checked })}
+                    />
+
+                    <LabeledToggleInput
+                      label="Mirror Y"
+                      checked={selectedPrinter.display.mirrorY === true}
+                      onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
                     />
                   </div>
                 </div>
@@ -2895,6 +3062,48 @@ function LabeledSelectInput({ label, value, options, onChange }: LabeledSelectIn
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+type LabeledToggleInputProps = {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+};
+
+function LabeledToggleInput({ label, checked, onChange }: LabeledToggleInputProps) {
+  return (
+    <label className="space-y-1 block">
+      <span className="ui-label font-medium">
+        {label}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm inline-flex items-center justify-between"
+        style={{
+          borderColor: checked
+            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
+            : 'var(--border-subtle)',
+          background: checked
+            ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
+            : 'var(--surface-1)',
+          color: checked ? 'var(--text-strong)' : 'var(--text-muted)',
+        }}
+      >
+        <span>{checked ? 'Enabled' : 'Disabled'}</span>
+        <span
+          className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
+          style={{ background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
+        >
+          <span
+            className={`h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`}
+          />
+        </span>
+      </button>
     </label>
   );
 }
