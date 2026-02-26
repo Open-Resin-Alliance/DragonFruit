@@ -1,0 +1,1044 @@
+use crate::job::{SliceJob, SolidSliceJob};
+use serde_json::{json, Value};
+use std::io::Write;
+use thiserror::Error;
+use zip::write::FileOptions;
+use zip::{CompressionMethod, ZipWriter};
+
+#[derive(Debug, Clone, Copy)]
+struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tri {
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    z_min: f32,
+    z_max: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Segment {
+    x1: f32,
+    y1: f32,
+    dx_dy: f32,
+    y_min: f32,
+    y_max: f32,
+}
+
+#[derive(Debug, Error)]
+pub enum SolidSlicerError {
+    #[error("solid slicing currently supports .nanodlp output only (got {0})")]
+    UnsupportedOutput(String),
+    #[error("invalid raster dimensions {width}x{height}")]
+    InvalidDimensions { width: u32, height: u32 },
+    #[error(
+        "invalid layer settings: layer_height_mm={layer_height_mm}, total_layers={total_layers}"
+    )]
+    InvalidLayerSettings {
+        layer_height_mm: f32,
+        total_layers: u32,
+    },
+    #[error("invalid build volume dimensions: build_width_mm={build_width_mm}, build_depth_mm={build_depth_mm}")]
+    InvalidBuildVolume {
+        build_width_mm: f32,
+        build_depth_mm: f32,
+    },
+    #[error("triangles_xyz length must be a multiple of 9 (got {0})")]
+    InvalidTriangleBuffer(usize),
+    #[error("PNG encoding failed: {0}")]
+    PngEncoding(String),
+    #[error("invalid packing mode: {0}")]
+    InvalidPackingMode(String),
+    #[error("failed to parse metadata json: {0}")]
+    MetadataJson(String),
+    #[error("zip writer failure: {0}")]
+    ZipWrite(String),
+    #[error("invalid chunk range: start_layer={start_layer}, layer_count={layer_count}, total_layers={total_layers}")]
+    InvalidChunkRange {
+        start_layer: u32,
+        layer_count: u32,
+        total_layers: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackingMode {
+    None,
+    Rgb8Div3,
+    Gray3Div2,
+}
+
+fn parse_packing_mode(mode: &str) -> Result<PackingMode, SolidSlicerError> {
+    match mode {
+        "none" => Ok(PackingMode::None),
+        "rgb8_div3" => Ok(PackingMode::Rgb8Div3),
+        "gray3_div2" => Ok(PackingMode::Gray3Div2),
+        other => Err(SolidSlicerError::InvalidPackingMode(other.to_string())),
+    }
+}
+
+fn parse_triangles(flat: &[f32]) -> Result<Vec<Tri>, SolidSlicerError> {
+    if flat.len() % 9 != 0 {
+        return Err(SolidSlicerError::InvalidTriangleBuffer(flat.len()));
+    }
+
+    let mut out = Vec::with_capacity(flat.len() / 9);
+    let mut i = 0;
+    while i + 8 < flat.len() {
+        let a = Vec3 {
+            x: flat[i],
+            y: flat[i + 1],
+            z: flat[i + 2],
+        };
+        let b = Vec3 {
+            x: flat[i + 3],
+            y: flat[i + 4],
+            z: flat[i + 5],
+        };
+        let c = Vec3 {
+            x: flat[i + 6],
+            y: flat[i + 7],
+            z: flat[i + 8],
+        };
+
+        let z_min = a.z.min(b.z).min(c.z);
+        let z_max = a.z.max(b.z).max(c.z);
+
+        out.push(Tri {
+            a,
+            b,
+            c,
+            z_min,
+            z_max,
+        });
+
+        i += 9;
+    }
+
+    Ok(out)
+}
+
+fn mm_to_pixel_x(x_mm: f32, min_x_mm: f32, build_width_mm: f32, width_px: u32) -> f32 {
+    let t = (x_mm - min_x_mm) / build_width_mm;
+    t * ((width_px.saturating_sub(1)) as f32)
+}
+
+fn mm_to_pixel_y(y_mm: f32, min_y_mm: f32, build_depth_mm: f32, height_px: u32) -> f32 {
+    let t = (y_mm - min_y_mm) / build_depth_mm;
+    (1.0 - t) * ((height_px.saturating_sub(1)) as f32)
+}
+
+fn edge_plane_intersection_xy(a: Vec3, b: Vec3, z: f32) -> Option<(f32, f32)> {
+    let dz1 = a.z - z;
+    let dz2 = b.z - z;
+
+    // Half-open edge convention to reduce double-counting when the plane passes vertices.
+    let crosses = (dz1 <= 0.0 && dz2 > 0.0) || (dz2 <= 0.0 && dz1 > 0.0);
+    if !crosses {
+        return None;
+    }
+
+    let denom = b.z - a.z;
+    if denom.abs() < 1e-8 {
+        return None;
+    }
+
+    let t = (z - a.z) / denom;
+    Some((a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
+}
+
+fn distinct_points_push(points: &mut [(f32, f32); 3], count: &mut usize, candidate: (f32, f32)) {
+    let eps = 1e-5;
+    for i in 0..*count {
+        let p = points[i];
+        if (candidate.0 - p.0).abs() <= eps && (candidate.1 - p.1).abs() <= eps {
+            return;
+        }
+    }
+
+    if *count < 3 {
+        points[*count] = candidate;
+        *count += 1;
+    }
+}
+
+fn layer_range_for_triangle(
+    tri: &Tri,
+    layer_height_mm: f32,
+    total_layers: u32,
+) -> Option<(u32, u32)> {
+    let last = (total_layers as i32) - 1;
+    if last < 0 {
+        return None;
+    }
+
+    // z_sample(layer) = (layer + 0.5) * layer_height_mm
+    let start = ((tri.z_min / layer_height_mm) - 0.5).ceil() as i32;
+    let end = ((tri.z_max / layer_height_mm) - 0.5).floor() as i32;
+
+    if end < 0 || start > last {
+        return None;
+    }
+
+    let clamped_start = start.clamp(0, last) as u32;
+    let clamped_end = end.clamp(0, last) as u32;
+    if clamped_end < clamped_start {
+        return None;
+    }
+
+    Some((clamped_start, clamped_end))
+}
+
+fn build_layer_triangle_buckets(
+    triangles: &[Tri],
+    total_layers: u32,
+    layer_height_mm: f32,
+) -> Vec<Vec<usize>> {
+    let mut buckets = vec![Vec::<usize>::new(); total_layers as usize];
+    for (index, tri) in triangles.iter().enumerate() {
+        if let Some((start, end)) = layer_range_for_triangle(tri, layer_height_mm, total_layers) {
+            for layer in start..=end {
+                buckets[layer as usize].push(index);
+            }
+        }
+    }
+    buckets
+}
+
+fn build_layer_segments(
+    triangles: &[Tri],
+    triangle_indices: &[usize],
+    z_mm: f32,
+    min_x_mm: f32,
+    min_y_mm: f32,
+    build_width_mm: f32,
+    build_depth_mm: f32,
+    width_px: u32,
+    height_px: u32,
+) -> Vec<Segment> {
+    let mut segments: Vec<Segment> = Vec::with_capacity(triangle_indices.len());
+
+    for tri_index in triangle_indices {
+        let tri = triangles[*tri_index];
+
+        let mut points = [(0.0f32, 0.0f32); 3];
+        let mut point_count = 0usize;
+
+        if let Some(p) = edge_plane_intersection_xy(tri.a, tri.b, z_mm) {
+            distinct_points_push(&mut points, &mut point_count, p);
+        }
+        if let Some(p) = edge_plane_intersection_xy(tri.b, tri.c, z_mm) {
+            distinct_points_push(&mut points, &mut point_count, p);
+        }
+        if let Some(p) = edge_plane_intersection_xy(tri.c, tri.a, z_mm) {
+            distinct_points_push(&mut points, &mut point_count, p);
+        }
+
+        if point_count < 2 {
+            continue;
+        }
+
+        let p0 = points[0];
+        let p1 = points[1];
+
+        let x1 = mm_to_pixel_x(p0.0, min_x_mm, build_width_mm, width_px);
+        let y1 = mm_to_pixel_y(p0.1, min_y_mm, build_depth_mm, height_px);
+        let x2 = mm_to_pixel_x(p1.0, min_x_mm, build_width_mm, width_px);
+        let y2 = mm_to_pixel_y(p1.1, min_y_mm, build_depth_mm, height_px);
+
+        let dy = y2 - y1;
+        if dy.abs() < 1e-8 {
+            continue;
+        }
+
+        let y_min = y1.min(y2);
+        let y_max = y1.max(y2);
+
+        segments.push(Segment {
+            x1,
+            y1,
+            dx_dy: (x2 - x1) / dy,
+            y_min,
+            y_max,
+        });
+    }
+
+    segments
+}
+
+fn build_row_segment_buckets(height_px: u32, segments: &[Segment]) -> Vec<Vec<usize>> {
+    let mut row_buckets = vec![Vec::<usize>::new(); height_px as usize];
+
+    for (seg_index, seg) in segments.iter().enumerate() {
+        // Row sample is y + 0.5, and valid interval is [y_min, y_max)
+        let row_start = (seg.y_min - 0.5).ceil() as i32;
+        let row_end = (seg.y_max - 0.5).floor() as i32;
+
+        if row_end < 0 || row_start >= height_px as i32 {
+            continue;
+        }
+
+        let clamped_start = row_start.clamp(0, (height_px as i32) - 1) as usize;
+        let clamped_end = row_end.clamp(0, (height_px as i32) - 1) as usize;
+
+        for row in clamped_start..=clamped_end {
+            row_buckets[row].push(seg_index);
+        }
+    }
+
+    row_buckets
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[inline(always)]
+fn fill_row_span_white(mask_row: &mut [u8], x_start: usize, x_end_inclusive: usize) {
+    use core::arch::wasm32::{i8x16_splat, v128, v128_store};
+
+    let span_len = x_end_inclusive + 1 - x_start;
+    let mut offset = 0usize;
+    let base_ptr = unsafe { mask_row.as_mut_ptr().add(x_start) };
+    let white = i8x16_splat(-1);
+
+    unsafe {
+        while offset + 16 <= span_len {
+            v128_store(base_ptr.add(offset) as *mut v128, white);
+            offset += 16;
+        }
+
+        while offset < span_len {
+            *base_ptr.add(offset) = 255;
+            offset += 1;
+        }
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+#[inline(always)]
+fn fill_row_span_white(mask_row: &mut [u8], x_start: usize, x_end_inclusive: usize) {
+    mask_row[x_start..=x_end_inclusive].fill(255);
+}
+
+fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment]) -> Vec<u8> {
+    let width = width_px as usize;
+    let height = height_px as usize;
+    let mut mask = vec![0u8; width * height];
+    let mut intersections: Vec<f32> = Vec::with_capacity(1024);
+    let row_buckets = build_row_segment_buckets(height_px, segments);
+
+    for y in 0..height {
+        intersections.clear();
+        let y_sample = (y as f32) + 0.5;
+
+        for seg_index in &row_buckets[y] {
+            let seg = segments[*seg_index];
+            let x = seg.x1 + (y_sample - seg.y1) * seg.dx_dy;
+            intersections.push(x);
+        }
+
+        if intersections.is_empty() {
+            continue;
+        }
+
+        intersections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let row_start = y * width;
+        let mut i = 0;
+        while i + 1 < intersections.len() {
+            let x0 = intersections[i];
+            let x1 = intersections[i + 1];
+
+            let x_start = x0.min(x1).ceil().max(0.0) as i32;
+            let x_end = x0.max(x1).floor().min((width.saturating_sub(1)) as f32) as i32;
+
+            if x_end >= x_start {
+                let row = &mut mask[row_start..row_start + width];
+                fill_row_span_white(row, x_start as usize, x_end as usize);
+            }
+
+            i += 2;
+        }
+    }
+
+    mask
+}
+
+fn encode_grayscale_png(
+    width_px: u32,
+    height_px: u32,
+    pixels: &[u8],
+) -> Result<Vec<u8>, SolidSlicerError> {
+    let mut out = Vec::new();
+
+    {
+        let mut encoder = png::Encoder::new(&mut out, width_px, height_px);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Best);
+        encoder.set_filter(png::FilterType::Paeth);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()))?;
+
+        writer
+            .write_image_data(pixels)
+            .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()))?;
+    }
+
+    Ok(out)
+}
+
+fn pack_mask_to_nanodlp_png(
+    source_mask: &[u8],
+    source_width_px: u32,
+    source_height_px: u32,
+    output_width_px: u32,
+    output_height_px: u32,
+    packing_mode: PackingMode,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    if source_height_px != output_height_px {
+        return Err(SolidSlicerError::InvalidDimensions {
+            width: output_width_px,
+            height: output_height_px,
+        });
+    }
+
+    let src_w = source_width_px as usize;
+    let out_w = output_width_px as usize;
+    let out_h = output_height_px as usize;
+
+    match packing_mode {
+        PackingMode::None => {
+            if source_width_px != output_width_px {
+                return Err(SolidSlicerError::InvalidDimensions {
+                    width: output_width_px,
+                    height: output_height_px,
+                });
+            }
+            encode_grayscale_png(output_width_px, output_height_px, source_mask)
+        }
+        PackingMode::Rgb8Div3 => {
+            let mut packed = vec![0u8; out_w * out_h];
+            let required_subpixels = out_w.saturating_mul(3);
+            let pad_total = required_subpixels.saturating_sub(src_w);
+            let pad_left = pad_total / 2;
+
+            for y in 0..out_h {
+                let src_row = y * src_w;
+                let out_row = y * out_w;
+                for x in 0..out_w {
+                    let sx = (x as isize * 3) - (pad_left as isize);
+                    let r = if sx >= 0 && (sx as usize) < src_w {
+                        source_mask[src_row + (sx as usize)] as u16
+                    } else {
+                        0
+                    };
+                    let g = if sx + 1 >= 0 && ((sx + 1) as usize) < src_w {
+                        source_mask[src_row + ((sx + 1) as usize)] as u16
+                    } else {
+                        0
+                    };
+                    let b = if sx + 2 >= 0 && ((sx + 2) as usize) < src_w {
+                        source_mask[src_row + ((sx + 2) as usize)] as u16
+                    } else {
+                        0
+                    };
+                    let gray = ((r + g + b) / 3) as u8;
+                    packed[out_row + x] = gray;
+                }
+            }
+
+            encode_grayscale_png(output_width_px, output_height_px, &packed)
+        }
+        PackingMode::Gray3Div2 => {
+            let mut packed = vec![0u8; out_w * out_h];
+            let required_subpixels = out_w.saturating_mul(2);
+            let pad_total = required_subpixels.saturating_sub(src_w);
+            let pad_left = pad_total / 2;
+
+            for y in 0..out_h {
+                let src_row = y * src_w;
+                let out_row = y * out_w;
+                for x in 0..out_w {
+                    let sx = (x as isize * 2) - (pad_left as isize);
+                    let a = if sx >= 0 && (sx as usize) < src_w {
+                        source_mask[src_row + (sx as usize)] as u16
+                    } else {
+                        0
+                    };
+                    let b = if sx + 1 >= 0 && ((sx + 1) as usize) < src_w {
+                        source_mask[src_row + ((sx + 1) as usize)] as u16
+                    } else {
+                        0
+                    };
+                    let gray = ((a + b) >> 1) as u8;
+                    packed[out_row + x] = gray;
+                }
+            }
+
+            encode_grayscale_png(output_width_px, output_height_px, &packed)
+        }
+    }
+}
+
+fn extract_printer_name(root: &Value) -> String {
+    root.get("printer")
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Athena")
+        .to_string()
+}
+
+fn extract_source_file(root: &Value) -> String {
+    root.get("sourceFile")
+        .and_then(Value::as_str)
+        .unwrap_or("dragonfruit_export")
+        .to_string()
+}
+
+fn build_plate_json(job: &SolidSliceJob, source_metadata: &Value) -> Value {
+    let total_layers = job.total_layers;
+    let z_max_mm = (job.layer_height_mm as f64) * (total_layers as f64);
+
+    json!({
+        "PlateID": 0,
+        "ProfileID": 0,
+        "Profile": Value::Null,
+        "CreatedDate": 0,
+        "Path": "",
+        "LayersCount": total_layers,
+        "Processed": true,
+        "TotalSolidArea": 0.0,
+        "MultiMaterial": false,
+        "MC": {
+            "StartX": 0,
+            "StartY": 0,
+            "Width": 0,
+            "Height": 0,
+            "X": Value::Null,
+            "Y": Value::Null,
+            "MultiCureGap": 0,
+            "Count": 0
+        },
+        "XMin": 0.0,
+        "XMax": 0.0,
+        "YMin": 0.0,
+        "YMax": 0.0,
+        "ZMin": 0.0,
+        "ZMax": z_max_mm,
+        "_dragonfruit": {
+            "source": "dragonfruit-wasm",
+            "upstreamRef": "Open-Resin-Alliance/VoxelShift",
+            "metadata": source_metadata
+        }
+    })
+}
+
+fn build_profile_json(job: &SolidSliceJob, source_metadata: &Value) -> Value {
+    let printer_name = extract_printer_name(source_metadata);
+    let source_file = extract_source_file(source_metadata);
+    let thickness_um = ((job.layer_height_mm as f64) * 1000.0).round();
+
+    json!({
+        "ResinID": 0,
+        "ProfileID": 0,
+        "Title": format!("DragonFruit — {}", printer_name),
+        "Desc": format!("Imported from {} via DragonFruit", source_file),
+        "Thickness": thickness_um,
+        "XOffset": (job.width_px / 2),
+        "YOffset": (job.height_px / 2),
+        "ZOffset": 0,
+        "AutoCenter": 0,
+        "XPixelSize": 0.0,
+        "YPixelSize": 0.0,
+        "ImageMirror": 1,
+        "DisplayController": 1,
+        "Boundary": {
+            "XMin": 0.0,
+            "XMax": 0.0,
+            "YMin": 0.0,
+            "YMax": 0.0,
+            "ZMin": 0.0,
+            "ZMax": (job.layer_height_mm as f64) * (job.total_layers as f64)
+        },
+        "Area": { "PlateID": 0, "Layers": [], "Kill": false }
+    })
+}
+
+fn build_options_json(job: &SolidSliceJob) -> Value {
+    let depth_um = ((job.layer_height_mm as f64) * 1000.0).round();
+    json!({
+        "PWidth": job.width_px,
+        "PHeight": job.height_px,
+        "SupportDepth": depth_um,
+        "Depth": depth_um,
+        "LiftSpeed": 0.0,
+        "RetractSpeed": 0.0,
+        "CureTime": 0.0,
+        "ExportType": 0,
+        "OutputPath": "",
+        "Suffix": "",
+        "SkipEmpty": 0,
+        "FillColorRGB": { "R": 255, "G": 255, "B": 255, "A": 255 },
+        "BlankColorRGB": { "R": 0, "G": 0, "B": 0, "A": 255 }
+    })
+}
+
+fn build_meta_json() -> Value {
+    json!({
+        "format_version": 2,
+        "distro": "athena",
+        "program": "DragonFruit",
+        "version": "0.1.0",
+        "os": "windows",
+        "arch": "x86_64",
+        "profile": false
+    })
+}
+
+fn build_slicer_json(job: &SolidSliceJob) -> Value {
+    let thickness_um = ((job.layer_height_mm as f64) * 1000.0).round();
+    let x_pixel_size = if job.width_px > 0 {
+        (job.build_width_mm as f64) / (job.width_px as f64)
+    } else {
+        0.0
+    };
+    let y_pixel_size = if job.height_px > 0 {
+        (job.build_depth_mm as f64) / (job.height_px as f64)
+    } else {
+        0.0
+    };
+
+    json!({
+        "Type": "cws",
+        "URL": "",
+        "PWidth": job.width_px,
+        "PHeight": job.height_px,
+        "ScaleFactor": 0,
+        "StartLayer": 0,
+        "SupportDepth": thickness_um,
+        "SupportLayerNumber": 0,
+        "Thickness": thickness_um,
+        "XOffset": (job.width_px / 2),
+        "YOffset": (job.height_px / 2),
+        "ZOffset": 0,
+        "XPixelSize": x_pixel_size,
+        "YPixelSize": y_pixel_size,
+        "Mask": Value::Null,
+        "AutoCenter": 0,
+        "SliceFromZero": false,
+        "DisableValidator": false,
+        "PreviewGenerate": false,
+        "Running": false,
+        "Debug": false,
+        "IsFaulty": false,
+        "Corrupted": false,
+        "MultiMaterial": false,
+        "AdaptExport": "",
+        "PreviewColor": "",
+        "FaultyLayers": Value::Null,
+        "OverhangLayers": Value::Null,
+        "LayerStatus": Value::Null,
+        "File": "/job.cws",
+        "FileSize": 0,
+        "LayerCount": job.total_layers,
+        "Boundary": {
+            "XMin": 0,
+            "XMax": 0,
+            "YMin": 0,
+            "YMax": 0,
+            "ZMin": 0,
+            "ZMax": (job.layer_height_mm as f64) * (job.total_layers as f64)
+        },
+        "Area": {
+            "PlateID": 0,
+            "Layers": [],
+            "TotalSolidArea": 0.0,
+            "Kill": false
+        },
+        "MC": {
+            "StartX": 0,
+            "StartY": 0,
+            "Width": 0,
+            "Height": 0,
+            "X": Value::Null,
+            "Y": Value::Null,
+            "MultiCureGap": 0,
+            "Count": 0
+        }
+    })
+}
+
+fn json_pretty_bytes(value: &Value) -> Result<Vec<u8>, SolidSlicerError> {
+    serde_json::to_vec_pretty(value).map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))
+}
+
+fn validate_solid_job(job: &SolidSliceJob) -> Result<(), SolidSlicerError> {
+    if job.width_px == 0
+        || job.height_px == 0
+        || job.source_width_px == 0
+        || job.source_height_px == 0
+    {
+        return Err(SolidSlicerError::InvalidDimensions {
+            width: job.width_px,
+            height: job.height_px,
+        });
+    }
+
+    if !(job.layer_height_mm.is_finite() && job.layer_height_mm > 0.0) || job.total_layers == 0 {
+        return Err(SolidSlicerError::InvalidLayerSettings {
+            layer_height_mm: job.layer_height_mm,
+            total_layers: job.total_layers,
+        });
+    }
+
+    if !(job.build_width_mm.is_finite() && job.build_width_mm > 0.0)
+        || !(job.build_depth_mm.is_finite() && job.build_depth_mm > 0.0)
+    {
+        return Err(SolidSlicerError::InvalidBuildVolume {
+            build_width_mm: job.build_width_mm,
+            build_depth_mm: job.build_depth_mm,
+        });
+    }
+
+    Ok(())
+}
+
+fn render_layer_png(
+    job: &SolidSliceJob,
+    triangles: &[Tri],
+    layer_buckets: &[Vec<usize>],
+    packing_mode: PackingMode,
+    min_x_mm: f32,
+    min_y_mm: f32,
+    layer_index: u32,
+    empty_layer_png: &mut Option<Vec<u8>>,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
+    let triangle_indices = &layer_buckets[layer_index as usize];
+
+    if triangle_indices.is_empty() {
+        if empty_layer_png.is_none() {
+            let empty_mask =
+                vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+            *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                &empty_mask,
+                job.source_width_px,
+                job.source_height_px,
+                job.width_px,
+                job.height_px,
+                packing_mode,
+            )?);
+        }
+
+        return Ok(empty_layer_png.clone().unwrap_or_default());
+    }
+
+    let segments = build_layer_segments(
+        triangles,
+        triangle_indices,
+        z_mm,
+        min_x_mm,
+        min_y_mm,
+        job.build_width_mm,
+        job.build_depth_mm,
+        job.source_width_px,
+        job.source_height_px,
+    );
+
+    if segments.is_empty() {
+        if empty_layer_png.is_none() {
+            let empty_mask =
+                vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+            *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                &empty_mask,
+                job.source_width_px,
+                job.source_height_px,
+                job.width_px,
+                job.height_px,
+                packing_mode,
+            )?);
+        }
+
+        return Ok(empty_layer_png.clone().unwrap_or_default());
+    }
+
+    let mask = rasterize_segments_solid(job.source_width_px, job.source_height_px, &segments);
+    pack_mask_to_nanodlp_png(
+        &mask,
+        job.source_width_px,
+        job.source_height_px,
+        job.width_px,
+        job.height_px,
+        packing_mode,
+    )
+}
+
+pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, SolidSlicerError> {
+    if job.output_format != ".nanodlp" {
+        return Err(SolidSlicerError::UnsupportedOutput(
+            job.output_format.clone(),
+        ));
+    }
+
+    validate_solid_job(job)?;
+
+    let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let triangles = parse_triangles(&job.triangles_xyz)?;
+    let min_x_mm = -job.build_width_mm * 0.5;
+    let min_y_mm = -job.build_depth_mm * 0.5;
+    let layer_buckets =
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm);
+
+    let mut layer_pngs: Vec<Vec<u8>> = Vec::with_capacity(job.total_layers as usize);
+    let mut empty_layer_png: Option<Vec<u8>> = None;
+
+    for layer_index in 0..job.total_layers {
+        let png = render_layer_png(
+            job,
+            &triangles,
+            &layer_buckets,
+            packing_mode,
+            min_x_mm,
+            min_y_mm,
+            layer_index,
+            &mut empty_layer_png,
+        )?;
+        layer_pngs.push(png);
+    }
+
+    Ok(layer_pngs)
+}
+
+pub fn slice_solid_chunk_payload(
+    job: &SolidSliceJob,
+    start_layer: u32,
+    layer_count: u32,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    if job.output_format != ".nanodlp" {
+        return Err(SolidSlicerError::UnsupportedOutput(
+            job.output_format.clone(),
+        ));
+    }
+
+    validate_solid_job(job)?;
+
+    if layer_count == 0
+        || start_layer >= job.total_layers
+        || start_layer.saturating_add(layer_count) > job.total_layers
+    {
+        return Err(SolidSlicerError::InvalidChunkRange {
+            start_layer,
+            layer_count,
+            total_layers: job.total_layers,
+        });
+    }
+
+    let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let triangles = parse_triangles(&job.triangles_xyz)?;
+    let min_x_mm = -job.build_width_mm * 0.5;
+    let min_y_mm = -job.build_depth_mm * 0.5;
+    let layer_buckets =
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm);
+    let mut empty_layer_png: Option<Vec<u8>> = None;
+
+    let mut out = Vec::<u8>::new();
+    out.extend_from_slice(b"DFCK");
+    out.extend_from_slice(&layer_count.to_le_bytes());
+
+    let end_layer = start_layer + layer_count;
+    for layer_index in start_layer..end_layer {
+        let png = render_layer_png(
+            job,
+            &triangles,
+            &layer_buckets,
+            packing_mode,
+            min_x_mm,
+            min_y_mm,
+            layer_index,
+            &mut empty_layer_png,
+        )?;
+
+        let png_len = png.len() as u32;
+        out.extend_from_slice(&layer_index.to_le_bytes());
+        out.extend_from_slice(&png_len.to_le_bytes());
+        out.extend_from_slice(&png);
+    }
+
+    Ok(out)
+}
+
+pub fn slice_solid_and_encode_nanodlp_streaming(
+    job: &SolidSliceJob,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    let source_metadata: Value = serde_json::from_str(&job.metadata_json)
+        .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
+
+    let plate_json = json_pretty_bytes(&build_plate_json(job, &source_metadata))?;
+    let meta_json = json_pretty_bytes(&build_meta_json())?;
+    let slicer_json = json_pretty_bytes(&build_slicer_json(job))?;
+    let profile_json = json_pretty_bytes(&build_profile_json(job, &source_metadata))?;
+    let options_json = json_pretty_bytes(&build_options_json(job))?;
+
+    let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let triangles = parse_triangles(&job.triangles_xyz)?;
+    let min_x_mm = -job.build_width_mm * 0.5;
+    let min_y_mm = -job.build_depth_mm * 0.5;
+    let layer_buckets =
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm);
+    let mut empty_layer_png: Option<Vec<u8>> = None;
+    let mut first_layer_png: Option<Vec<u8>> = None;
+    let mut preview_layer_png: Option<Vec<u8>> = None;
+
+    let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+    {
+        let mut zip = ZipWriter::new(&mut cursor);
+        let options = FileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(7));
+
+        zip.start_file("meta.json", options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&meta_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("slicer.json", options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&slicer_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("plate.json", options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&plate_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("profile.json", options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&profile_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("options.json", options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&options_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("info.json", options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(b"[]")
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        for layer_index in 0..job.total_layers {
+            let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
+            let triangle_indices = &layer_buckets[layer_index as usize];
+
+            let layer_png = if triangle_indices.is_empty() {
+                if empty_layer_png.is_none() {
+                    let empty_mask =
+                        vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+                    empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                        &empty_mask,
+                        job.source_width_px,
+                        job.source_height_px,
+                        job.width_px,
+                        job.height_px,
+                        packing_mode,
+                    )?);
+                }
+                empty_layer_png.clone().unwrap_or_default()
+            } else {
+                let segments = build_layer_segments(
+                    &triangles,
+                    triangle_indices,
+                    z_mm,
+                    min_x_mm,
+                    min_y_mm,
+                    job.build_width_mm,
+                    job.build_depth_mm,
+                    job.source_width_px,
+                    job.source_height_px,
+                );
+
+                if segments.is_empty() {
+                    if empty_layer_png.is_none() {
+                        let empty_mask = vec![
+                            0u8;
+                            (job.source_width_px as usize)
+                                * (job.source_height_px as usize)
+                        ];
+                        empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                            &empty_mask,
+                            job.source_width_px,
+                            job.source_height_px,
+                            job.width_px,
+                            job.height_px,
+                            packing_mode,
+                        )?);
+                    }
+                    empty_layer_png.clone().unwrap_or_default()
+                } else {
+                    let mask = rasterize_segments_solid(
+                        job.source_width_px,
+                        job.source_height_px,
+                        &segments,
+                    );
+                    pack_mask_to_nanodlp_png(
+                        &mask,
+                        job.source_width_px,
+                        job.source_height_px,
+                        job.width_px,
+                        job.height_px,
+                        packing_mode,
+                    )?
+                }
+            };
+
+            let name = format!("{}.png", layer_index + 1);
+            zip.start_file(name, options)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+            zip.write_all(&layer_png)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+            if first_layer_png.is_none() {
+                first_layer_png = Some(layer_png.clone());
+            } else if preview_layer_png.is_none() {
+                let first = first_layer_png.as_ref().unwrap();
+                if first.len() != layer_png.len() || first != &layer_png {
+                    preview_layer_png = Some(layer_png.clone());
+                }
+            }
+        }
+
+        if let Some(preview_png) = preview_layer_png.or(first_layer_png) {
+            zip.start_file("3d.png", options)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+            zip.write_all(&preview_png)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+            zip.start_file("3d.png.meta", options)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+            zip.write_all(b"{}")
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        }
+
+        zip.finish()
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+    }
+
+    Ok(cursor.into_inner())
+}
+
+pub fn to_container_job(base: &SolidSliceJob, layer_pngs: Vec<Vec<u8>>) -> SliceJob {
+    SliceJob {
+        output_format: base.output_format.clone(),
+        width_px: base.width_px,
+        height_px: base.height_px,
+        layer_height_mm: base.layer_height_mm,
+        total_layers: base.total_layers,
+        layer_pngs,
+        metadata_json: base.metadata_json.clone(),
+    }
+}

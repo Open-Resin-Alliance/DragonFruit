@@ -16,8 +16,9 @@ wasm-bindgen = "=0.2.100"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 time = "=0.3.36"
 time-core = "=0.1.2"
+png = "0.17"
 
 [profile.release]
 lto = true
-opt-level = "z"
+opt-level = 3
 codegen-units = 1

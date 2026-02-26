@@ -118,6 +118,81 @@ fn build_options_json(job: &SliceJob) -> Value {
     })
 }
 
+fn build_meta_json() -> Value {
+    json!({
+        "format_version": 2,
+        "distro": "athena",
+        "program": "DragonFruit",
+        "version": "0.1.0",
+        "os": "windows",
+        "arch": "x86_64",
+        "profile": false
+    })
+}
+
+fn build_slicer_json(job: &SliceJob) -> Value {
+    let thickness_um = ((job.layer_height_mm as f64) * 1000.0).round();
+
+    json!({
+        "Type": "cws",
+        "URL": "",
+        "PWidth": job.width_px,
+        "PHeight": job.height_px,
+        "ScaleFactor": 0,
+        "StartLayer": 0,
+        "SupportDepth": thickness_um,
+        "SupportLayerNumber": 0,
+        "Thickness": thickness_um,
+        "XOffset": (job.width_px / 2),
+        "YOffset": (job.height_px / 2),
+        "ZOffset": 0,
+        "XPixelSize": 0.0,
+        "YPixelSize": 0.0,
+        "Mask": Value::Null,
+        "AutoCenter": 0,
+        "SliceFromZero": false,
+        "DisableValidator": false,
+        "PreviewGenerate": false,
+        "Running": false,
+        "Debug": false,
+        "IsFaulty": false,
+        "Corrupted": false,
+        "MultiMaterial": false,
+        "AdaptExport": "",
+        "PreviewColor": "",
+        "FaultyLayers": Value::Null,
+        "OverhangLayers": Value::Null,
+        "LayerStatus": Value::Null,
+        "File": "/job.cws",
+        "FileSize": 0,
+        "LayerCount": job.total_layers,
+        "Boundary": {
+            "XMin": 0,
+            "XMax": 0,
+            "YMin": 0,
+            "YMax": 0,
+            "ZMin": 0,
+            "ZMax": (job.layer_height_mm as f64) * (job.total_layers as f64)
+        },
+        "Area": {
+            "PlateID": 0,
+            "Layers": [],
+            "TotalSolidArea": 0.0,
+            "Kill": false
+        },
+        "MC": {
+            "StartX": 0,
+            "StartY": 0,
+            "Width": 0,
+            "Height": 0,
+            "X": Value::Null,
+            "Y": Value::Null,
+            "MultiCureGap": 0,
+            "Count": 0
+        }
+    })
+}
+
 fn json_pretty_bytes(value: &Value) -> Result<Vec<u8>, NanoDlpEncodeError> {
     serde_json::to_vec_pretty(value)
         .map_err(|err| NanoDlpEncodeError::MetadataJson(err.to_string()))
@@ -136,6 +211,8 @@ pub fn encode_nanodlp_container(job: &SliceJob) -> Result<SliceArtifact, NanoDlp
     let source_metadata: Value = serde_json::from_str(&job.metadata_json)
         .map_err(|err| NanoDlpEncodeError::MetadataJson(err.to_string()))?;
 
+    let meta_json = json_pretty_bytes(&build_meta_json())?;
+    let slicer_json = json_pretty_bytes(&build_slicer_json(job))?;
     let plate_json = json_pretty_bytes(&build_plate_json(job, &source_metadata))?;
     let profile_json = json_pretty_bytes(&build_profile_json(job, &source_metadata))?;
     let options_json = json_pretty_bytes(&build_options_json(job))?;
@@ -143,7 +220,19 @@ pub fn encode_nanodlp_container(job: &SliceJob) -> Result<SliceArtifact, NanoDlp
     let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
     {
         let mut zip = ZipWriter::new(&mut cursor);
-        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        let options = FileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(7));
+
+        zip.start_file("meta.json", options)
+            .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
+        zip.write_all(&meta_json)
+            .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("slicer.json", options)
+            .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
+        zip.write_all(&slicer_json)
+            .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
 
         zip.start_file("plate.json", options)
             .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
@@ -170,6 +259,18 @@ pub fn encode_nanodlp_container(job: &SliceJob) -> Result<SliceArtifact, NanoDlp
             zip.start_file(name, options)
                 .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
             zip.write_all(layer_png)
+                .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
+        }
+
+        if let Some(preview_png) = job.layer_pngs.first() {
+            zip.start_file("3d.png", options)
+                .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
+            zip.write_all(preview_png)
+                .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
+
+            zip.start_file("3d.png.meta", options)
+                .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
+            zip.write_all(b"{}")
                 .map_err(|err| NanoDlpEncodeError::ZipWrite(err.to_string()))?;
         }
 
