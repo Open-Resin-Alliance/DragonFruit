@@ -1289,14 +1289,14 @@ export function useSceneCollectionManager() {
   }, []);
 
   const commitModelTransformHistory = useCallback((id: string, beforeTransform: ModelTransform, afterTransform: ModelTransform, description?: string) => {
-    if (transformsEqual(beforeTransform, afterTransform)) return;
+    if (transformsEqual(beforeTransform, afterTransform)) return false;
 
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
     const modelExists = currentModels.some((m) => m.id === id);
-    if (!modelExists) return;
+    if (!modelExists) return false;
 
     const beforeModels = currentModels.map((m) => (
       m.id === id
@@ -1314,6 +1314,7 @@ export function useSceneCollectionManager() {
     const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds);
     const targetModelName = currentModels.find((m) => m.id === id)?.name ?? id;
     pushSceneSnapshotHistory(before, after, description ?? `Transform Model ${targetModelName}`);
+    return true;
   }, [pushSceneSnapshotHistory]);
 
   const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
