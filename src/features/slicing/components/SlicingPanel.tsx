@@ -84,6 +84,7 @@ export function SlicingPanel({
   const [currentRasterMs, setCurrentRasterMs] = useState(0);
   const [showSlicingModal, setShowSlicingModal] = useState(false);
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed'>('running');
+  const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
   const [previewTotalLayers, setPreviewTotalLayers] = useState(0);
   const [previewSelectedLayer, setPreviewSelectedLayer] = useState(1);
@@ -138,6 +139,32 @@ export function SlicingPanel({
     const total = Math.max(1, progressTotal);
     return Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
   }, [progressDone, progressTotal]);
+
+  useEffect(() => {
+    if (!showSlicingModal) {
+      setDisplayProgressPercent(0);
+      return;
+    }
+
+    let rafId = 0;
+    let mounted = true;
+
+    const animate = () => {
+      if (!mounted) return;
+      setDisplayProgressPercent((prev) => {
+        const target = progressPercent;
+        if (Math.abs(target - prev) < 0.2) return target;
+        return prev + ((target - prev) * 0.16);
+      });
+      rafId = window.requestAnimationFrame(animate);
+    };
+
+    rafId = window.requestAnimationFrame(animate);
+    return () => {
+      mounted = false;
+      if (rafId) window.cancelAnimationFrame(rafId);
+    };
+  }, [progressPercent, showSlicingModal]);
 
   useEffect(() => {
     if (!activeModel) return;
@@ -577,22 +604,65 @@ export function SlicingPanel({
       )}
 
       {showSlicingModal && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center" style={{ background: 'rgba(0, 0, 0, 0.45)' }}>
-          <div className="w-[360px] rounded-lg border p-4 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {slicingModalStage === 'running'
-                ? 'Slicing in background…'
-                : slicingModalStage === 'finished'
-                  ? 'Slicing complete'
-                  : 'Slicing failed'}
+        <div className="fixed inset-0 z-[120] flex items-center justify-center backdrop-blur-[2px]" style={{ background: 'rgba(0, 0, 0, 0.5)' }}>
+          <div
+            className="w-[420px] rounded-xl border p-4 space-y-3 shadow-2xl"
+            style={{
+              borderColor: 'color-mix(in srgb, var(--border-subtle), var(--accent) 28%)',
+              background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), #0a0f1d 20%), color-mix(in srgb, var(--surface-0), #050913 28%))',
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-0.5 min-w-0">
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Background Pipeline
+                </div>
+                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Slicing Plate
+                </div>
+                <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                  {sliceStatus}
+                </div>
+              </div>
+              <div
+                className="rounded-md border px-2 py-1 text-[11px] font-medium"
+                style={{
+                  borderColor: slicingModalStage === 'failed'
+                    ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)'
+                    : slicingModalStage === 'finished'
+                      ? 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)'
+                      : 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                  color: slicingModalStage === 'failed'
+                    ? '#fca5a5'
+                    : slicingModalStage === 'finished'
+                      ? '#86efac'
+                      : 'var(--text-strong)',
+                  background: 'color-mix(in srgb, var(--surface-2), transparent 16%)',
+                }}
+              >
+                {slicingModalStage === 'running'
+                  ? 'Running'
+                  : slicingModalStage === 'finished'
+                    ? 'Ready'
+                    : 'Failed'}
+              </div>
             </div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{currentPhase}</div>
-            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{sliceStatus}</div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 18%)' }}>
+                <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Current phase</div>
+                <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>{currentPhase}</div>
+              </div>
+              <div className="rounded-md border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 18%)' }}>
+                <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Progress</div>
+                <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>{Math.round(displayProgressPercent)}%</div>
+              </div>
+            </div>
 
             {slicingModalStage === 'finished' && previewTotalLayers > 0 && (
-              <div className="rounded border p-2 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+              <div className="rounded-lg border p-2.5 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 12%)' }}>
                 <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  Layer preview · {previewSelectedLayer}/{previewTotalLayers}
+                  Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}
                 </div>
                 <input
                   type="range"
@@ -616,15 +686,11 @@ export function SlicingPanel({
                 )}
               </div>
             )}
-            <div className="h-2 rounded overflow-hidden" style={{ background: 'var(--surface-2)' }}>
+            <div className="h-2.5 rounded overflow-hidden" style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}>
               <div
-                className="h-full transition-all duration-150"
-                style={{ width: `${progressPercent}%`, background: 'var(--accent)' }}
+                className="h-full transition-all duration-200"
+                style={{ width: `${Math.round(displayProgressPercent)}%`, background: 'linear-gradient(90deg, var(--accent), #ff79c6)' }}
               />
-            </div>
-            <div className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              <span>{progressDone}/{Math.max(1, progressTotal)}</span>
-              <span>{progressPercent}%</span>
             </div>
             <div className="pt-1 flex justify-end">
               <Button
@@ -633,7 +699,7 @@ export function SlicingPanel({
                 disabled={slicingModalStage === 'running'}
                 onClick={handleCloseSlicingModal}
               >
-                {slicingModalStage === 'running' ? 'Running…' : 'Close'}
+                {slicingModalStage === 'running' ? 'Slicing…' : 'Close Plate'}
               </Button>
             </div>
           </div>

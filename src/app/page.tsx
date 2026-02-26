@@ -307,6 +307,10 @@ export default function Home() {
   const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
+  const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
+  const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
+  const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
+  const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -935,6 +939,10 @@ export default function Home() {
   const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
     setPrintingArtifact(artifact);
     setPrintingSendStatusText(null);
+    setPrintingSendProgress(0);
+    setPrintingSendStageText(null);
+    setPrintingReadyPlateId(null);
+    setPrintingPrintNowBusy(false);
   }, []);
 
   const printingOutputSizeLabel = React.useMemo(() => {
@@ -997,6 +1005,11 @@ export default function Home() {
     && activePrinterProfile.networkConnection?.connected === true
     && (activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '').length > 0,
   );
+  const canPrintNow = Boolean(
+    printingReadyPlateId
+    && activePrinterProfile?.networkSupport === 'nanodlp'
+    && activePrinterProfile.networkConnection?.connected === true,
+  );
 
   const handleDownloadPrintArtifact = React.useCallback(() => {
     if (!printingArtifact) return;
@@ -1029,7 +1042,10 @@ export default function Home() {
       return;
     }
 
+    setPrintingReadyPlateId(null);
     setPrintingSendBusy(true);
+    setPrintingSendProgress(0.01);
+    setPrintingSendStageText('Uploading print job…');
     setPrintingSendStatusText('Uploading print job to printer…');
 
     try {
@@ -1059,22 +1075,139 @@ export default function Home() {
       });
 
       const payload = await response.json().catch(() => ({} as any));
-      if (response.ok && payload?.ok) {
-        const plateIdSuffix = Number.isFinite(Number(payload?.plateId)) && Number(payload.plateId) > 0
-          ? ` Plate #${Number(payload.plateId)}.`
-          : '';
-        setPrintingSendStatusText(`Sent to printer (${host}:${port}).${plateIdSuffix}`);
-      } else {
+      if (!(response.ok && payload?.ok)) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         setPrintingSendStatusText(`Send failed: ${reason}`);
+        setPrintingSendStageText('Upload failed');
+        setPrintingSendProgress(0);
+        return;
+      }
+
+      const importedPlateId = Number(payload?.plateId);
+      let resolvedPlateId = Number.isFinite(importedPlateId) && importedPlateId > 0 ? importedPlateId : null;
+
+      setPrintingSendProgress(0.6);
+      setPrintingSendStageText('Processing file metadata…');
+      setPrintingSendStatusText('Upload complete. NanoDLP is processing metadata…');
+
+      const startedAt = Date.now();
+      const timeoutMs = 3 * 60 * 1000;
+      const pollMs = 1250;
+      let metadataReady = false;
+
+      while ((Date.now() - startedAt) < timeoutMs) {
+        const elapsedMs = Date.now() - startedAt;
+        const responseReady = await fetch('/api/network/plugin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pluginId: 'athena',
+            operation: 'nanodlp/plates/list/json',
+            ipAddress: host,
+            port,
+            plateId: resolvedPlateId,
+            jobName: pathBase,
+          }),
+        });
+
+        const readyPayload = await responseReady.json().catch(() => ({} as any));
+        const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
+        const matchedPlateId = Number(
+          (matchedPlate as any)?.PlateID
+          ?? (matchedPlate as any)?.plateId
+          ?? (matchedPlate as any)?.plate_id
+          ?? (matchedPlate as any)?.id,
+        );
+        if (!resolvedPlateId && Number.isFinite(matchedPlateId) && matchedPlateId > 0) {
+          resolvedPlateId = matchedPlateId;
+        }
+
+        metadataReady = readyPayload?.metadataReady === true;
+        const phaseProgress = Math.max(0, Math.min(1, elapsedMs / timeoutMs));
+        setPrintingSendProgress(0.6 + (phaseProgress * 0.39));
+
+        if (metadataReady) {
+          break;
+        }
+
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, pollMs);
+        });
+      }
+
+      if (resolvedPlateId) {
+        setPrintingReadyPlateId(resolvedPlateId);
+      }
+
+      if (metadataReady) {
+        setPrintingSendProgress(1);
+        setPrintingSendStageText('Ready to print');
+        setPrintingSendStatusText(
+          `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
+        );
+      } else {
+        setPrintingSendProgress(0.95);
+        setPrintingSendStageText('Metadata still processing');
+        setPrintingSendStatusText(
+          `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Metadata is still processing on the device.`,
+        );
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setPrintingSendStatusText(`Send failed: ${message}`);
+      setPrintingSendStageText('Upload failed');
+      setPrintingSendProgress(0);
     } finally {
       setPrintingSendBusy(false);
     }
   }, [activePrinterProfile, printingArtifact]);
+
+  const handlePrintNow = React.useCallback(async () => {
+    if (!activePrinterProfile) return;
+    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (activePrinterProfile.networkConnection?.connected !== true) return;
+    if (!printingReadyPlateId) return;
+
+    const host = (activePrinterProfile.networkConnection.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
+    const port = activePrinterProfile.networkConnection.port || 80;
+    if (!host) {
+      setPrintingSendStatusText('No printer IP address available for Print Now.');
+      return;
+    }
+
+    setPrintingPrintNowBusy(true);
+    setPrintingSendStageText('Starting print…');
+
+    try {
+      const response = await fetch('/api/network/plugin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/printer/start',
+          ipAddress: host,
+          port,
+          plateId: printingReadyPlateId,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (response.ok && payload?.ok) {
+        setPrintingSendStageText('Print started');
+        setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
+      } else {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        setPrintingSendStageText('Start print failed');
+        setPrintingSendStatusText(`Print start failed: ${reason}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setPrintingSendStageText('Start print failed');
+      setPrintingSendStatusText(`Print start failed: ${message}`);
+    } finally {
+      setPrintingPrintNowBusy(false);
+    }
+  }, [activePrinterProfile, printingReadyPlateId]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
     const rounded = Math.round(nextLayer);
@@ -4790,8 +4923,13 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
+              sendProgress={printingSendProgress}
+              sendStageText={printingSendStageText}
+              canPrintNow={canPrintNow}
+              printNowBusy={printingPrintNowBusy}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
+              onPrintNow={handlePrintNow}
             />
           </>
         ) : (
@@ -5162,6 +5300,8 @@ export default function Home() {
                 inBoundsModelIds={inBoundsModelIds}
                 numLayers={slicing.numLayers}
                 heightMm={slicing.heightMm}
+                estimatedPrintTimeLabelOverride={scene.mode === 'printing' ? estimatedPrintTimeLabel : null}
+                estimatedResinLabelOverride={scene.mode === 'printing' ? estimatedVolumeMlLabel : null}
               />
             </div>
           )}
