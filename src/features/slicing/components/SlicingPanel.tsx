@@ -9,7 +9,11 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
-import { runSliceExportOrchestrator, type SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
+import {
+  runSliceExportOrchestrator,
+  type SliceExportArtifact,
+  type SliceExportResult,
+} from '@/features/slicing/sliceExportOrchestrator';
 import { isSlicerWasmAvailable } from '@/features/slicing/wasm/slicerWasmBridge';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 
@@ -17,6 +21,15 @@ interface SlicingPanelProps {
   models: LoadedModel[];
   activeModel: LoadedModel | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
+  onLayerPreviewGenerated?: (payload: {
+    layerIndex: number;
+    totalLayers: number;
+    pngBytes: Uint8Array;
+  }) => void;
+  onSlicingFinished?: (payload: {
+    totalLayers: number;
+  }) => void;
+  onSliceArtifactReady?: (artifact: SliceExportArtifact) => void;
 }
 
 type LifetimeTelemetry = {
@@ -51,7 +64,14 @@ function formatLayerRate(layersPerSecond: number | null): string {
   return `${layersPerSecond.toFixed(1)} layers/s`;
 }
 
-export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: SlicingPanelProps) {
+export function SlicingPanel({
+  models,
+  activeModel,
+  captureSceneThumbnailPng,
+  onLayerPreviewGenerated,
+  onSlicingFinished,
+  onSliceArtifactReady,
+}: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isSlicingZip, setIsSlicingZip] = useState(false);
@@ -212,6 +232,9 @@ export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: 
     let rasterStartedMs: number | null = null;
     let rasterAccumulatedMs = 0;
     let exportThumbnailPng: Uint8Array | null = null;
+    let completedTotalLayers = 0;
+    let slicingSucceeded = false;
+    let completedTotalLayersFromResult = 0;
 
     try {
       if (captureSceneThumbnailPng) {
@@ -227,6 +250,7 @@ export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: 
         printerProfile: activePrinterProfile,
         materialProfile: activeMaterialProfile,
         filenameBase: filename || activePrinterProfile.name || 'slice_export',
+        outputMode: 'return',
         exportThumbnailPng,
         onProgress: (done, total, phase) => {
           setCurrentPhase(phase);
@@ -250,6 +274,12 @@ export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: 
           }
         },
         onLayerPreview: (layerIndex, totalLayers, pngBytes) => {
+          completedTotalLayers = Math.max(completedTotalLayers, totalLayers);
+          onLayerPreviewGenerated?.({
+            layerIndex,
+            totalLayers,
+            pngBytes: Uint8Array.from(pngBytes),
+          });
           const previewBuffer = Uint8Array.from(pngBytes).buffer;
           const blob = new Blob([previewBuffer], { type: 'image/png' });
           const nextUrl = URL.createObjectURL(blob);
@@ -275,6 +305,7 @@ export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: 
       });
 
       const runEndMs = performance.now();
+      completedTotalLayersFromResult = Math.max(completedTotalLayersFromResult, result.benchmark.totalLayers ?? 0);
       if (rasterStartedMs != null) {
         rasterAccumulatedMs += runEndMs - rasterStartedMs;
       }
@@ -309,6 +340,10 @@ export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: 
         setSliceStatus('Slice ZIP generated.');
       }
       setSlicingModalStage('finished');
+      slicingSucceeded = true;
+      if (result.artifact) {
+        onSliceArtifactReady?.(result.artifact);
+      }
     } catch (error) {
       console.error('Slice ZIP export failed:', error);
       const message = error instanceof Error ? error.message : 'Unknown slicing error.';
@@ -318,6 +353,9 @@ export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: 
       alert(`Slice ZIP export failed: ${message}`);
     } finally {
       setIsSlicingZip(false);
+      if (slicingSucceeded) {
+        onSlicingFinished?.({ totalLayers: Math.max(completedTotalLayers, completedTotalLayersFromResult, 1) });
+      }
     }
   };
 

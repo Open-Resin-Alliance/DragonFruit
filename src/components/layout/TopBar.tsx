@@ -8,7 +8,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { Printer } from 'lucide-react';
+import { Lock, Printer } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -60,6 +60,7 @@ interface TopBarProps {
   mode: SupportMode;
   onModeChange: (mode: SupportMode) => void;
   hasModels: boolean;
+  hasPrintingData: boolean;
   viewTypeOverride: MeshShaderType | null;
   onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
 }
@@ -96,6 +97,7 @@ export function TopBar({
   mode,
   onModeChange,
   hasModels,
+  hasPrintingData,
   viewTypeOverride,
   onViewTypeOverrideChange,
 }: TopBarProps) {
@@ -236,6 +238,13 @@ export function TopBar({
       hint: 'Finalize and export output',
       locked: !hasModels,
     },
+    {
+      mode: 'printing',
+      label: 'Printing',
+      step: 5,
+      hint: 'Inspect sliced layers before printing',
+      locked: !hasModels || !hasPrintingData,
+    },
   ];
 
   return (
@@ -255,10 +264,11 @@ export function TopBar({
             style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 10%)' }}
           />
 
-          <div className="relative grid grid-cols-4 gap-2 pointer-events-auto">
+          <div className="relative grid grid-cols-5 gap-2 pointer-events-auto">
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
+              const printingLocked = item.mode === 'printing' && locked;
 
               return (
                 <button
@@ -273,18 +283,26 @@ export function TopBar({
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
-                  } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''}`}
+                  } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''} ${printingLocked ? 'grayscale saturate-0' : ''}`}
                   style={active
                     ? {
                         borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
                         background: 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)',
                       }
                     : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'color-mix(in srgb, var(--surface-1), transparent 4%)',
+                        borderColor: printingLocked
+                          ? 'color-mix(in srgb, var(--border-subtle), black 30%)'
+                          : 'var(--border-subtle)',
+                        background: printingLocked
+                          ? 'color-mix(in srgb, var(--surface-2), black 12%)'
+                          : 'color-mix(in srgb, var(--surface-1), transparent 4%)',
                       }
                   }
-                  title={locked ? 'Load a model in Prepare to unlock this stage' : item.hint}
+                  title={locked
+                    ? (item.mode === 'printing'
+                      ? 'Run slicing in Export to unlock Printing preview'
+                      : 'Load a model in Prepare to unlock this stage')
+                    : item.hint}
                 >
                   <span
                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
@@ -308,6 +326,10 @@ export function TopBar({
                   >
                     {item.label}
                   </span>
+
+                  {printingLocked && (
+                    <Lock className="h-3 w-3 ml-auto" style={{ color: 'var(--text-muted)' }} />
+                  )}
                 </button>
               );
             })}

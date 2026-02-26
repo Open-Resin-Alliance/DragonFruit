@@ -25,10 +25,12 @@ import {
 } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
+import { LayerSlider } from '@/components/controls/LayerSlider';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
+import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { IconButton } from '@/components/ui/primitives';
@@ -86,11 +88,13 @@ import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
+  getActiveMaterialProfile,
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import {
   getSupportBraceSnapshot,
@@ -164,6 +168,7 @@ export default function Home() {
   const scene = useSceneCollectionManager();
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
   // 2. Transform Management (needs geom for bounds)
@@ -296,6 +301,12 @@ export default function Home() {
     segmentId: null,
     point: null,
   });
+  const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
+  const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
+  const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
+  const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
+  const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
+  const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -860,6 +871,216 @@ export default function Home() {
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
   const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
+
+  const clearPrintingLayerPreviewUrls = React.useCallback(() => {
+    setPrintingLayerPreviewUrls((previous) => {
+      for (const url of previous) {
+        if (url) URL.revokeObjectURL(url);
+      }
+      return [];
+    });
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      clearPrintingLayerPreviewUrls();
+    };
+  }, [clearPrintingLayerPreviewUrls]);
+
+  const handlePrintingLayerPreviewGenerated = React.useCallback((payload: {
+    layerIndex: number;
+    totalLayers: number;
+    pngBytes: Uint8Array;
+  }) => {
+    const previewBytes = new Uint8Array(payload.pngBytes.length);
+    previewBytes.set(payload.pngBytes);
+    const blob = new Blob([previewBytes.buffer], { type: 'image/png' });
+    const nextUrl = URL.createObjectURL(blob);
+
+    setPrintingLayerPreviewUrls((previous) => {
+      const next = previous.slice();
+      const requiredLength = Math.max(payload.totalLayers, payload.layerIndex + 1);
+      if (next.length < requiredLength) {
+        next.length = requiredLength;
+      }
+      const prevUrl = next[payload.layerIndex];
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+      next[payload.layerIndex] = nextUrl;
+      return next;
+    });
+
+    setPrintingPreviewTotalLayers(payload.totalLayers);
+    setPrintingSelectedLayer((previous) => {
+      if (!Number.isFinite(previous) || previous <= 0) {
+        return Math.max(1, Math.min(payload.totalLayers, payload.layerIndex + 1));
+      }
+      return Math.max(1, Math.min(payload.totalLayers, previous));
+    });
+  }, []);
+
+  const handleSlicingFinishedForPrinting = React.useCallback((payload: { totalLayers: number }) => {
+    const totalLayers = Math.max(1, payload.totalLayers);
+    setPrintingPreviewTotalLayers(totalLayers);
+    setPrintingSelectedLayer((previous) => Math.max(1, Math.min(totalLayers, previous)));
+    scene.setMode('printing');
+  }, [scene]);
+
+  const selectedPrintingLayerPreviewUrl = React.useMemo(() => {
+    if (printingSelectedLayer < 1) return null;
+    return printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null;
+  }, [printingLayerPreviewUrls, printingSelectedLayer]);
+
+  const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
+
+  const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
+    setPrintingArtifact(artifact);
+    setPrintingSendStatusText(null);
+  }, []);
+
+  const printingOutputSizeLabel = React.useMemo(() => {
+    if (!printingArtifact) return '—';
+    const bytes = Math.max(0, printingArtifact.byteSize);
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }, [printingArtifact]);
+
+  const estimatedVolumeMlLabel = React.useMemo(() => {
+    const visible = scene.models.filter((model) => model.visible);
+    if (visible.length === 0) return '—';
+
+    let totalMm3 = 0;
+    for (const model of visible) {
+      const size = model.geometry.bbox.getSize(new THREE.Vector3());
+      const sx = Math.abs(model.transform.scale.x || 1);
+      const sy = Math.abs(model.transform.scale.y || 1);
+      const sz = Math.abs(model.transform.scale.z || 1);
+      totalMm3 += Math.max(0, size.x * sx) * Math.max(0, size.y * sy) * Math.max(0, size.z * sz);
+    }
+
+    const ml = totalMm3 / 1000;
+    return `${ml.toFixed(2)} mL (bbox estimate)`;
+  }, [scene.models]);
+
+  const estimatedPrintTimeLabel = React.useMemo(() => {
+    if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
+
+    const totalLayers = printingPreviewTotalLayers;
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    const minutes = Math.floor(totalSec / 60);
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hours > 0) return `~${hours}h ${mins}m`;
+    return `~${mins}m`;
+  }, [activeMaterialProfile, printingPreviewTotalLayers]);
+
+  const canDownloadPrintArtifact = Boolean(printingArtifact);
+  const canSendToPrinter = Boolean(
+    printingArtifact
+    && printingArtifact.outputName.toLowerCase().endsWith('.nanodlp')
+    && activePrinterProfile?.networkSupport === 'nanodlp'
+    && activePrinterProfile.networkConnection?.connected === true
+    && (activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '').length > 0,
+  );
+
+  const handleDownloadPrintArtifact = React.useCallback(() => {
+    if (!printingArtifact) return;
+    const objectUrl = URL.createObjectURL(printingArtifact.blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = printingArtifact.outputName;
+    anchor.rel = 'noopener';
+    anchor.style.display = 'none';
+    document.body?.appendChild(anchor);
+    anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }, [printingArtifact]);
+
+  const handleSendToPrinter = React.useCallback(async () => {
+    if (!printingArtifact || !activePrinterProfile) return;
+    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (activePrinterProfile.networkConnection?.connected !== true) return;
+
+    const host = (activePrinterProfile.networkConnection.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
+    const port = activePrinterProfile.networkConnection.port || 80;
+    const selectedMaterialId = (activePrinterProfile.networkConnection.selectedMaterialId ?? '').trim();
+    if (!host) {
+      setPrintingSendStatusText('No printer IP address available for send operation.');
+      return;
+    }
+    if (!selectedMaterialId) {
+      setPrintingSendStatusText('No NanoDLP material profile selected. Choose one in Printer Settings first.');
+      return;
+    }
+
+    setPrintingSendBusy(true);
+    setPrintingSendStatusText('Uploading print job to printer…');
+
+    try {
+      const bytes = new Uint8Array(await printingArtifact.blob.arrayBuffer());
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode(...chunk);
+      }
+      const zipBase64 = btoa(binary);
+
+      const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
+
+      const response = await fetch('/api/network/plugin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/job/import',
+          ipAddress: host,
+          port,
+          zipBase64,
+          path: pathBase,
+          profileId: selectedMaterialId,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (response.ok && payload?.ok) {
+        const plateIdSuffix = Number.isFinite(Number(payload?.plateId)) && Number(payload.plateId) > 0
+          ? ` Plate #${Number(payload.plateId)}.`
+          : '';
+        setPrintingSendStatusText(`Sent to printer (${host}:${port}).${plateIdSuffix}`);
+      } else {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        setPrintingSendStatusText(`Send failed: ${reason}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setPrintingSendStatusText(`Send failed: ${message}`);
+    } finally {
+      setPrintingSendBusy(false);
+    }
+  }, [activePrinterProfile, printingArtifact]);
+
+  const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
+    const rounded = Math.round(nextLayer);
+    const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), rounded));
+    setPrintingSelectedLayer(clamped);
+  }, [printingPreviewTotalLayers]);
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
     if (scene.mode !== 'prepare') return;
@@ -1765,6 +1986,12 @@ export default function Home() {
     zRange: sceneZRange
   });
 
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
+    slicing.setLayerIndex(Math.max(0, clamped - 1));
+  }, [scene.mode, printingPreviewTotalLayers, printingSelectedLayer, slicing.setLayerIndex]);
+
   // 4. Islands (needs geom & transform & layerHeight)
   const islands = useIslandManager({
     geom: scene.geom,
@@ -1780,8 +2007,11 @@ export default function Home() {
       scene.setMode('prepare');
       return;
     }
+    if (nextMode === 'printing' && !hasPrintingWorkspaceData) {
+      return;
+    }
     scene.setMode(nextMode);
-  }, [scene]);
+  }, [hasPrintingWorkspaceData, scene]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
@@ -2984,7 +3214,7 @@ export default function Home() {
 
   // Auto-set cross-section mode based on app mode
   React.useEffect(() => {
-    slicing.setCrossSectionMode(scene.mode === 'export' ? 'rasterized' : 'smooth');
+    slicing.setCrossSectionMode(scene.mode === 'export' || scene.mode === 'printing' ? 'rasterized' : 'smooth');
   }, [scene.mode, slicing.setCrossSectionMode]);
 
   React.useEffect(() => {
@@ -4179,6 +4409,7 @@ export default function Home() {
         mode={scene.mode}
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
+        hasPrintingData={hasPrintingWorkspaceData}
         viewTypeOverride={sessionShaderOverride}
         onViewTypeOverrideChange={setSessionShaderOverride}
       />
@@ -4497,6 +4728,9 @@ export default function Home() {
               models={scene.models}
               activeModel={scene.activeModel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
+              onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
+              onSlicingFinished={handleSlicingFinishedForPrinting}
+              onSliceArtifactReady={handleSliceArtifactReady}
             />
           </>
 
@@ -4542,12 +4776,30 @@ export default function Home() {
               )}
             </div>
           </>
+        ) : scene.mode === 'printing' ? (
+          <>
+            <PrintingPanel
+              outputName={printingArtifact?.outputName ?? null}
+              outputFormat={printingArtifact?.outputName?.split('.').pop() ? `.${printingArtifact.outputName.split('.').pop()}` : null}
+              outputSizeLabel={printingOutputSizeLabel}
+              printerName={activePrinterProfile?.name ?? 'No printer selected'}
+              resinName={activeMaterialProfile?.name ?? 'No resin selected'}
+              estimatedPrintTimeLabel={estimatedPrintTimeLabel}
+              estimatedVolumeLabel={estimatedVolumeMlLabel}
+              canDownload={canDownloadPrintArtifact}
+              canSendToPrinter={canSendToPrinter}
+              sendBusy={printingSendBusy}
+              sendStatusText={printingSendStatusText}
+              onDownload={handleDownloadPrintArtifact}
+              onSendToPrinter={handleSendToPrinter}
+            />
+          </>
         ) : (
           <>
           </>
         )}
 
-        {scene.models.length > 0 && (
+        {scene.models.length > 0 && scene.mode !== 'printing' && (
           <VisualSettingsPanel
             key="visual-settings"
             layerIndex={slicing.layerIndex}
@@ -4741,10 +4993,11 @@ export default function Home() {
         )}
       </FloatingPanelStack>
 
-      <div className="absolute inset-0 top-14 z-0">
+      <div className="absolute inset-0 top-14 z-0 flex">
         <div
           id="scene-root"
-          className="relative h-full w-full"
+          className={`relative h-full ${scene.mode === 'printing' ? 'w-1/2 border-r' : 'w-full'}`}
+          style={scene.mode === 'printing' ? { borderColor: 'var(--border-subtle)' } : undefined}
           onPointerDownCapture={handleEditorPointerDownCapture}
           onPointerMoveCapture={handleEditorPointerMoveCapture}
           onPointerUpCapture={handleEditorPointerUpCapture}
@@ -4945,6 +5198,63 @@ export default function Home() {
           )}
 
         </div>
+
+        {scene.mode === 'printing' && (
+          <div
+            className="h-full w-1/2 min-w-0 min-h-0 grid overflow-hidden"
+            style={{ gridTemplateColumns: '104px minmax(0, 1fr)', background: 'var(--surface-0)' }}
+          >
+            <div
+              className="h-full border-r px-1 py-2"
+              style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
+            >
+              <LayerSlider
+                min={1}
+                max={Math.max(1, printingPreviewTotalLayers)}
+                step={1}
+                value={Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}
+                onChange={handlePrintingLayerChange}
+                currentHeightMm={slicing.currentHeightMm}
+                maxHeightMm={slicing.heightMm}
+                showValue={true}
+                crossSectionMode={slicing.crossSectionMode}
+                docked
+                embedded
+                expandToContainer
+                className="h-full"
+              />
+            </div>
+
+            <div className="h-full min-h-0 min-w-0 p-3 flex flex-col gap-2 overflow-hidden">
+              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Layer PNG Preview
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Layer {Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}/{Math.max(1, printingPreviewTotalLayers)}
+              </div>
+
+              <div
+                className="flex-1 min-h-0 min-w-0 rounded-lg border p-2 flex items-center justify-center overflow-hidden"
+                style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
+              >
+                {selectedPrintingLayerPreviewUrl ? (
+                  <img
+                    src={selectedPrintingLayerPreviewUrl}
+                    alt={`Layer ${printingSelectedLayer} preview`}
+                    className="block h-full w-full rounded object-contain"
+                  />
+                ) : (
+                  <div
+                    className="h-full w-full rounded border border-dashed flex items-center justify-center text-xs"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                  >
+                    No preview PNG available for this layer yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <EditorContextMenu

@@ -10,7 +10,14 @@ export type RasterLayerZipExportOptions = {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   filenameBase: string;
+  outputMode?: 'download' | 'return';
   onProgress?: (done: number, total: number, phase: string) => void;
+};
+
+export type RasterLayerZipArtifact = {
+  blob: Blob;
+  outputName: string;
+  totalLayers: number;
 };
 
 type RasterizedLayerEntry = {
@@ -1082,7 +1089,7 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
   };
 }
 
-export async function exportRasterLayerZip(options: RasterLayerZipExportOptions): Promise<void> {
+export async function exportRasterLayerZip(options: RasterLayerZipExportOptions): Promise<RasterLayerZipArtifact> {
   const rasterized = await rasterizeLayerStack(options);
 
   const zip = new JSZip();
@@ -1106,5 +1113,13 @@ export async function exportRasterLayerZip(options: RasterLayerZipExportOptions)
   });
 
   const outputName = `${safeFilenameBase(options.filenameBase)}_layers.zip`;
-  triggerBlobDownload(outputBlob, outputName);
+  if (options.outputMode !== 'return') {
+    triggerBlobDownload(outputBlob, outputName);
+  }
+
+  return {
+    blob: outputBlob,
+    outputName,
+    totalLayers: rasterized.totalLayers,
+  };
 }

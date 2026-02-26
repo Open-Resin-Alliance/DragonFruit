@@ -17,9 +17,17 @@ export type SliceExportOrchestratorOptions = {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   filenameBase: string;
+  outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
   onProgress?: (done: number, total: number, phase: string) => void;
   onLayerPreview?: (layerIndex: number, totalLayers: number, pngBytes: Uint8Array) => void;
+};
+
+export type SliceExportArtifact = {
+  blob: Blob;
+  outputName: string;
+  mimeType: string;
+  byteSize: number;
 };
 
 export type SliceExportResult = {
@@ -28,6 +36,7 @@ export type SliceExportResult = {
   wasmAvailable: boolean;
   fallbackUsed: boolean;
   wasmError: string | null;
+  artifact: SliceExportArtifact | null;
   benchmark: {
     totalElapsedMs: number;
     meshPrepMs: number | null;
@@ -179,10 +188,17 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         }
 
         const outputName = `${safeFilenameBase(options.filenameBase)}.nanodlp`;
+        let artifactBlob: Blob;
         if (encodedBlob) {
-          triggerBlobDownload(encodedBlob, outputName);
+          artifactBlob = encodedBlob;
+          if (options.outputMode !== 'return') {
+            triggerBlobDownload(encodedBlob, outputName);
+          }
         } else if (encodedBytes) {
-          triggerByteDownload(encodedBytes, outputName);
+          artifactBlob = new Blob([Uint8Array.from(encodedBytes)], { type: 'application/octet-stream' });
+          if (options.outputMode !== 'return') {
+            triggerByteDownload(encodedBytes, outputName);
+          }
         } else {
           throw new Error('Slicing produced no output payload.');
         }
@@ -204,6 +220,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
           wasmAvailable,
           fallbackUsed: false,
           wasmError: null,
+          artifact: {
+            blob: artifactBlob,
+            outputName,
+            mimeType: 'application/octet-stream',
+            byteSize: artifactBlob.size,
+          },
           benchmark: {
             totalElapsedMs,
             meshPrepMs,
@@ -224,11 +246,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     }
   }
 
-  await exportRasterLayerZip({
+  const fallbackArtifact = await exportRasterLayerZip({
     models: options.models,
     printerProfile: options.printerProfile,
     materialProfile: options.materialProfile,
     filenameBase: options.filenameBase,
+    outputMode: options.outputMode,
     onProgress: (done, total, phase) => {
       options.onProgress?.(done, total, `${phase} · ${format.displayName}`);
     },
@@ -249,6 +272,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     wasmAvailable,
     fallbackUsed,
     wasmError,
+    artifact: {
+      blob: fallbackArtifact.blob,
+      outputName: fallbackArtifact.outputName,
+      mimeType: 'application/zip',
+      byteSize: fallbackArtifact.blob.size,
+    },
     benchmark: {
       totalElapsedMs,
       meshPrepMs: null,

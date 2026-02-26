@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import type { TransformMode } from '@/hooks/useModelTransform';
+import type { SupportMode } from '@/supports/types';
 import { useHotkeyConfig } from './HotkeyContext';
 import { matchesConfiguredHotkeyDown } from './hotkeyConfig';
 
 type UsePrepareTransformHotkeysParams = {
-  appMode: 'prepare' | 'analysis' | 'support' | 'export';
+  appMode: SupportMode;
   hasModels: boolean;
   transformMode: TransformMode;
   setTransformMode: (mode: TransformMode) => void;
