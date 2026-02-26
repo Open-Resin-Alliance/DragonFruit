@@ -106,6 +106,7 @@ import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFo
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -2609,10 +2610,21 @@ export default function Home() {
   }, [transformMgr.onTransformChange, transformMgr.setIsTransforming]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
-  const sceneZRange = React.useMemo(() => ({
-    min: scene.sceneBounds?.min.z ?? 0,
-    max: scene.sceneBounds?.max.z ?? 100 // Default range if empty
-  }), [scene.sceneBounds]);
+  const sceneZRange = React.useMemo(() => {
+    const projected = buildProjectedCrossSectionZRange(scene.models);
+    if (projected) return projected;
+
+    return {
+      min: scene.sceneBounds?.min.z ?? 0,
+      max: scene.sceneBounds?.max.z ?? 100, // Default range if empty
+    };
+  }, [
+    scene.models,
+    scene.sceneBounds,
+    supportStateSnapshot,
+    supportBraceStateSnapshot,
+    raftSettingsSnapshot,
+  ]);
 
   const slicing = useSlicingManager({
     hasGeometry: scene.models.length > 0,

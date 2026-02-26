@@ -471,6 +471,24 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
   const out: WorldTriangle[] = [];
   const supportState = getSupportSnapshot();
   const supportBraceState = getSupportBraceSnapshot();
+  const visibleRootIds = new Set<string>();
+  const rootModelKeyById = new Map<string, string>();
+
+  for (const trunk of Object.values(supportState.trunks)) {
+    if (!visibleModelIds.has(trunk.modelId)) continue;
+    visibleRootIds.add(trunk.rootId);
+    if (!rootModelKeyById.has(trunk.rootId)) {
+      rootModelKeyById.set(trunk.rootId, trunk.modelId);
+    }
+  }
+
+  for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+    if (!visibleModelIds.has(supportBrace.modelId)) continue;
+    visibleRootIds.add(supportBrace.rootId);
+    if (!rootModelKeyById.has(supportBrace.rootId)) {
+      rootModelKeyById.set(supportBrace.rootId, supportBrace.modelId);
+    }
+  }
 
   const rootTopRadiusByRootId = new Map<string, number>();
   for (const trunk of Object.values(supportState.trunks)) {
@@ -487,7 +505,10 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
   }
 
   for (const root of Object.values(supportState.roots)) {
-    if (!visibleModelIds.has(root.modelId)) continue;
+    const rootVisibleByModel = visibleModelIds.has(root.modelId);
+    const rootVisibleByLink = visibleRootIds.has(root.id);
+    if (!rootVisibleByModel && !rootVisibleByLink) continue;
+
     const base = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
     const rootRadius = Math.max(0.05, root.diameter * 0.5);
     const topRadius = rootTopRadiusByRootId.get(root.id) ?? Math.max(0.05, rootRadius * 0.45);
@@ -630,15 +651,26 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
   if (raft.bottomMode !== 'off') {
     const rootsByModel = new Map<string, Array<{ x: number; y: number; r: number }>>();
     for (const root of Object.values(supportState.roots)) {
-      if (!visibleModelIds.has(root.modelId)) continue;
-      const arr = rootsByModel.get(root.modelId) ?? [];
+      const rootVisibleByModel = visibleModelIds.has(root.modelId);
+      const rootVisibleByLink = visibleRootIds.has(root.id);
+      if (!rootVisibleByModel && !rootVisibleByLink) continue;
+
+      const modelKey = rootModelKeyById.get(root.id) ?? root.modelId ?? `__root_${root.id}`;
+      const arr = rootsByModel.get(modelKey) ?? [];
       arr.push({ x: root.transform.pos.x, y: root.transform.pos.y, r: root.diameter * 0.5 });
-      rootsByModel.set(root.modelId, arr);
+      rootsByModel.set(modelKey, arr);
     }
 
     for (const circles of rootsByModel.values()) {
       if (circles.length === 0) continue;
-      const profile = computeFootprint(circles as any, { marginMm: 0.2, samplesPerCircle: 24 });
+      const clampedChamfer = Math.min(90, Math.max(45, raft.chamferAngle));
+      const chamferInset = raft.bottomMode === 'line'
+        ? Math.max(0, raft.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - clampedChamfer))
+        : 0;
+      const profile = computeFootprint(circles as any, {
+        marginMm: 0.2 + chamferInset,
+        samplesPerCircle: 24,
+      });
       if (!profile || profile.length < 3) continue;
 
       if (raft.bottomMode === 'solid') {
@@ -1036,6 +1068,24 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
   }
 
   return triangles;
+}
+
+export function buildProjectedCrossSectionZRange(models: LoadedModel[]): { min: number; max: number } | null {
+  const visibleModels = models.filter((model) => model.visible);
+  if (visibleModels.length === 0) return null;
+
+  const triangles = buildWorldTriangles(visibleModels);
+  if (triangles.length === 0) return null;
+
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < triangles.length; i += 1) {
+    minZ = Math.min(minZ, triangles[i].zMin);
+    maxZ = Math.max(maxZ, triangles[i].zMax);
+  }
+
+  if (!Number.isFinite(minZ) || !Number.isFinite(maxZ)) return null;
+  return { min: minZ, max: maxZ };
 }
 
 function layerRangeForTriangle(tri: WorldTriangle, layerHeightMm: number, totalLayers: number): [number, number] | null {
@@ -1632,6 +1682,91 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
     trianglesXYZ,
     metadataJson: JSON.stringify(manifest),
   };
+}
+
+export function buildProjectedCrossSectionLoopsAtZ(options: {
+  models: LoadedModel[];
+  zMm: number;
+}): THREE.Vector2[][] {
+  const visibleModels = options.models.filter((model) => model.visible);
+  if (visibleModels.length === 0) return [];
+
+  const triangles = buildWorldTriangles(visibleModels);
+  if (triangles.length === 0) return [];
+
+  const zMm = options.zMm + 1e-5;
+  const segments: Array<[[number, number], [number, number]]> = [];
+
+  for (let i = 0; i < triangles.length; i += 1) {
+    const tri = triangles[i];
+    if (zMm < tri.zMin || zMm > tri.zMax) continue;
+
+    const points: Array<[number, number]> = [];
+    const p01 = edgePlaneIntersectionXY(tri.ax, tri.ay, tri.az, tri.bx, tri.by, tri.bz, zMm);
+    if (p01) pushDistinctPoint(points, p01);
+
+    const p12 = edgePlaneIntersectionXY(tri.bx, tri.by, tri.bz, tri.cx, tri.cy, tri.cz, zMm);
+    if (p12) pushDistinctPoint(points, p12);
+
+    const p20 = edgePlaneIntersectionXY(tri.cx, tri.cy, tri.cz, tri.ax, tri.ay, tri.az, zMm);
+    if (p20) pushDistinctPoint(points, p20);
+
+    if (points.length === 2) {
+      segments.push([points[0], points[1]]);
+    }
+  }
+
+  const loops: THREE.Vector2[][] = [];
+  const pointsEqual = (a: [number, number], b: [number, number], eps = 1e-5) => (
+    Math.abs(a[0] - b[0]) <= eps && Math.abs(a[1] - b[1]) <= eps
+  );
+
+  while (segments.length > 0) {
+    const [start, end] = segments.shift()!;
+    const loop: Array<[number, number]> = [start, end];
+
+    let changed = true;
+    while (changed && segments.length > 0) {
+      changed = false;
+
+      for (let s = 0; s < segments.length; s += 1) {
+        const [a, b] = segments[s];
+        const first = loop[0];
+        const last = loop[loop.length - 1];
+
+        if (pointsEqual(last, a)) {
+          loop.push(b);
+          segments.splice(s, 1);
+          changed = true;
+          break;
+        }
+        if (pointsEqual(last, b)) {
+          loop.push(a);
+          segments.splice(s, 1);
+          changed = true;
+          break;
+        }
+        if (pointsEqual(first, a)) {
+          loop.unshift(b);
+          segments.splice(s, 1);
+          changed = true;
+          break;
+        }
+        if (pointsEqual(first, b)) {
+          loop.unshift(a);
+          segments.splice(s, 1);
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    if (loop.length >= 3) {
+      loops.push(loop.map(([x, y]) => new THREE.Vector2(x, y)));
+    }
+  }
+
+  return loops;
 }
 
 export async function exportRasterLayerZip(options: RasterLayerZipExportOptions): Promise<RasterLayerZipArtifact> {

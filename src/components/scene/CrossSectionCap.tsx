@@ -2,6 +2,8 @@
 
 import * as THREE from 'three';
 import React from 'react';
+import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
+import { buildProjectedCrossSectionLoopsAtZ } from '@/features/slicing/rasterLayerZipExport';
 
 // Slice geometry at Z height and return loops in XY plane
 // Applies transform matrix to vertices before slicing for world-space slicing
@@ -76,6 +78,37 @@ function computeLoopsAtZ(geometry: THREE.BufferGeometry, z: number, transformMat
   return loops;
 }
 
+function computeLoopsAtZFromObject(sourceObject: THREE.Object3D, z: number): THREE.Vector2[][] {
+  const loops: THREE.Vector2[][] = [];
+  const instanceMatrix = new THREE.Matrix4();
+  const worldInstanceMatrix = new THREE.Matrix4();
+
+  sourceObject.updateWorldMatrix(true, true);
+  sourceObject.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+
+    const bufferGeometry = mesh.geometry as THREE.BufferGeometry | undefined;
+    if (!bufferGeometry) return;
+    const position = bufferGeometry.getAttribute('position');
+    if (!position) return;
+
+    const maybeInstancedMesh = mesh as THREE.InstancedMesh;
+    if (maybeInstancedMesh.isInstancedMesh && maybeInstancedMesh.count > 0) {
+      for (let i = 0; i < maybeInstancedMesh.count; i++) {
+        maybeInstancedMesh.getMatrixAt(i, instanceMatrix);
+        worldInstanceMatrix.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
+        loops.push(...computeLoopsAtZ(bufferGeometry, z, worldInstanceMatrix));
+      }
+      return;
+    }
+
+    loops.push(...computeLoopsAtZ(bufferGeometry, z, mesh.matrixWorld));
+  });
+
+  return loops;
+}
+
 // Rasterize loops into a pixel grid
 function rasterizeLoops(loops: THREE.Vector2[][], pxMm: number, bbox: { minX: number; maxX: number; minY: number; maxY: number }): { grid: Uint8Array; width: number; height: number; originX: number; originY: number } {
   const width = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) / pxMm));
@@ -126,6 +159,8 @@ function rasterizeLoops(loops: THREE.Vector2[][], pxMm: number, bbox: { minX: nu
 
 export function CrossSectionCap({
   geometry,
+  sourceObject,
+  projectedModels,
   y,
   color = '#ffffff',
   transformMatrix,
@@ -133,7 +168,9 @@ export function CrossSectionCap({
   pxMm = 0.1,
   visible = true
 }: {
-  geometry: THREE.BufferGeometry;
+  geometry?: THREE.BufferGeometry;
+  sourceObject?: THREE.Object3D | null;
+  projectedModels?: LoadedModel[];
   y: number;
   color?: string;
   transformMatrix?: THREE.Matrix4;
@@ -144,8 +181,21 @@ export function CrossSectionCap({
   const mesh = React.useMemo(() => {
     if (!visible) return null;
 
-    // Slice at world-space Z height using transformed geometry
-    const loops = computeLoopsAtZ(geometry, y, transformMatrix);
+    const loops: THREE.Vector2[][] = [];
+
+    if (projectedModels) {
+      loops.push(...buildProjectedCrossSectionLoopsAtZ({ models: projectedModels, zMm: y }));
+    }
+
+    if (sourceObject) {
+      loops.push(...computeLoopsAtZFromObject(sourceObject, y));
+    }
+
+    if (!projectedModels && !sourceObject && geometry) {
+      loops.push(...computeLoopsAtZ(geometry, y, transformMatrix));
+    }
+
+    if (loops.length === 0) return null;
 
     const group = new THREE.Group();
     group.renderOrder = 990;
@@ -230,7 +280,7 @@ export function CrossSectionCap({
     }
 
     return group;
-  }, [geometry, y, color, transformMatrix, mode, pxMm]);
+  }, [color, geometry, mode, projectedModels, pxMm, sourceObject, transformMatrix, visible, y]);
 
   if (!mesh) return null;
   return <primitive object={mesh} />;

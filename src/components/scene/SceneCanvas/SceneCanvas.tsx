@@ -685,6 +685,8 @@ function ModelAttachedSupportLayer({
       {!hideRaftPrimitives && (
         <>
           <RaftRenderer
+            clipLower={clipLower}
+            clipUpper={clipUpper}
             colorized={raftColorized}
             hoverized={raftHoverized}
             ghostOpacity={ghostOpacity}
@@ -699,6 +701,8 @@ function ModelAttachedSupportLayer({
             onModelPointerSelect={onModelPointerSelect}
           />
           <LineRaftRenderer
+            clipLower={clipLower}
+            clipUpper={clipUpper}
             colorized={raftColorized}
             hoverized={raftHoverized}
             ghostOpacity={ghostOpacity}
@@ -4293,31 +4297,6 @@ export function SceneCanvas({
                       )}
                     </StlMesh>
 
-                    {/* Cross-section cap (fill) at the cut plane - Render per model */}
-                    {clipUpper != null && !hideCrossSectionCap && (
-                      <CrossSectionCap
-                        geometry={model.geometry.geometry}
-                        y={clipUpper}
-                        color="#FFFFFF"
-                        // We need the matrix for THIS model
-                        transformMatrix={(() => {
-                          // Duplicate logic from previous SceneCanvas to build matrix
-                          const t = animatedTransform;
-                          if (!t) return undefined;
-
-                          const center = model.geometry.center;
-
-                          const matrix = new THREE.Matrix4();
-                          matrix.compose(t.position, quaternionFromGlobalEuler(t.rotation), t.scale);
-                          const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-                          matrix.multiply(offsetMatrix);
-                          return matrix;
-                        })()}
-                        mode={crossSectionMode}
-                        pxMm={pxMm}
-                        visible={!hideCrossSectionCap && clipUpper != null}
-                      />
-                    )}
                   </React.Fragment>
                 );
               })}
@@ -4638,6 +4617,19 @@ export function SceneCanvas({
                 />
               )}
               </group>{/* end supportDragGroupRef */}
+
+              {/* Projection-based cross-section cap sourced from slicer world triangles (models + supports + rafts). */}
+              {clipUpper != null && !hideCrossSectionCap && (
+                <CrossSectionCap
+                  projectedModels={models}
+                  sourceObject={supportDragGroupRef?.current ?? null}
+                  y={clipUpper}
+                  color="#FFFFFF"
+                  mode={crossSectionMode}
+                  pxMm={pxMm}
+                  visible={!hideCrossSectionCap && clipUpper != null}
+                />
+              )}
 
               {!hideRaftPrimitives && !isGizmoDragging && (
                 <FootprintBorderRenderer
