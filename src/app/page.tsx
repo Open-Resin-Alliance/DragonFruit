@@ -3856,11 +3856,6 @@ export default function Home() {
     },
   });
 
-  // Auto-set cross-section mode based on app mode
-  React.useEffect(() => {
-    slicing.setCrossSectionMode(scene.mode === 'export' || scene.mode === 'printing' ? 'rasterized' : 'smooth');
-  }, [scene.mode, slicing.setCrossSectionMode]);
-
   React.useEffect(() => {
     if (scene.models.length > 0) return;
     if (scene.mode === 'prepare') return;
