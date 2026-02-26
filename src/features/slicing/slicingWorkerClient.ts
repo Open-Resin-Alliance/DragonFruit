@@ -462,6 +462,13 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     let abortListenerAttached = false;
     let heartbeatTimer: number | null = null;
     let averageChunkElapsedMs = 200;
+    let maxReportedDone = 0;
+    let hasCommittedLayer = false;
+    let lastEmitMs = 0;
+
+    const previewStride = perfSettings.cpuProfile === 'max'
+      ? (totalLayers >= 500 ? 4 : totalLayers >= 220 ? 2 : 1)
+      : (totalLayers >= 300 ? 6 : totalLayers >= 140 ? 3 : 1);
 
     const zipBuilder = new ZipDeflateBlobBuilder(3);
     const metadata = buildNanodlpMetadata(options.job);
@@ -473,15 +480,40 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     zipBuilder.addFile('info.json', '[]');
     let firstLayerPng: Uint8Array | null = null;
     let previewLayerPng: Uint8Array | null = null;
-    const progressChunkStride = Math.max(1, Math.floor(chunkId / 24));
-
     const preferredBackend = perfSettings.computeBackend;
     const hasNavigatorGpu = typeof navigator !== 'undefined' && Boolean((navigator as Navigator & { gpu?: unknown }).gpu);
+
+    const emitProgress = (done: number, phase: string) => {
+      const bounded = Math.max(0, Math.min(totalLayers, done));
+
+      // Keep progress monotonic, but avoid sudden teleports when many contiguous layers
+      // flush at once after out-of-order chunk completions.
+      const nowMs = performance.now();
+      const dtMs = lastEmitMs > 0 ? Math.max(16, nowMs - lastEmitMs) : 120;
+      lastEmitMs = nowMs;
+
+      if (bounded >= totalLayers) {
+        maxReportedDone = totalLayers;
+        options.onProgress?.(maxReportedDone, totalLayers, phase);
+        return;
+      }
+
+      const maxLayersPerSec = hasCommittedLayer ? 420 : 220;
+      const maxStep = Math.max(1, Math.round((maxLayersPerSec * dtMs) / 1000));
+      const nextTarget = Math.max(maxReportedDone, bounded);
+
+      if (nextTarget > maxReportedDone) {
+        maxReportedDone = Math.min(nextTarget, maxReportedDone + maxStep);
+      }
+
+      options.onProgress?.(maxReportedDone, totalLayers, phase);
+    };
+
     if (preferredBackend === 'webgpu') {
       if (hasNavigatorGpu) {
-        options.onProgress?.(0, totalLayers, 'WebGPU requested (experimental): CPU/WASM fallback currently active');
+        emitProgress(0, 'WebGPU requested (experimental): CPU/WASM fallback currently active');
       } else {
-        options.onProgress?.(0, totalLayers, 'WebGPU requested but unavailable on this device/browser; using CPU/WASM');
+        emitProgress(0, 'WebGPU requested but unavailable on this device/browser; using CPU/WASM');
       }
     }
 
@@ -584,9 +616,8 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
           if (!firstLayerHeaderReported) {
             const hdr = parsePngHeader(firstLayerPng);
             if (hdr) {
-              options.onProgress?.(
+              emitProgress(
                 doneLayers,
-                totalLayers,
                 `NanoDLP layer PNG: ${hdr.width}x${hdr.height}, bitDepth=${hdr.bitDepth}, colorType=${hdr.colorType}`,
               );
               firstLayerHeaderReported = true;
@@ -596,17 +627,29 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
           previewLayerPng = Uint8Array.from(png);
         }
 
-        options.onLayerPreview?.(nextLayerToWrite, totalLayers, Uint8Array.from(png));
+        const isLastLayer = nextLayerToWrite >= (totalLayers - 1);
+        const shouldEmitPreview = previewStride <= 1 || (nextLayerToWrite % previewStride) === 0 || isLastLayer;
+        if (shouldEmitPreview) {
+          options.onLayerPreview?.(nextLayerToWrite, totalLayers, Uint8Array.from(png));
+        }
 
         zipBuilder.addFile(`${nextLayerToWrite + 1}.png`, png);
         nextLayerToWrite += 1;
       }
 
       doneLayers = nextLayerToWrite;
+      if (doneLayers > 0) {
+        hasCommittedLayer = true;
+      }
     };
 
     const emitEstimatedProgress = () => {
       if (rejected || finalizing || totalLayers <= 0) return;
+
+      if (!hasCommittedLayer) {
+        emitProgress(0, 'Processing slices…');
+        return;
+      }
 
       let estimatedInFlightLayers = 0;
       if (inFlightByChunk.size > 0) {
@@ -624,7 +667,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
         Math.min(totalLayers - 0.0001, doneLayers + estimatedInFlightLayers),
       );
 
-      options.onProgress?.(estimatedDone, totalLayers, 'Processing slices…');
+      emitProgress(estimatedDone, 'Processing slices…');
     };
 
     if (typeof window !== 'undefined') {
@@ -689,7 +732,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
 
         if (message.type === 'progress') {
           const boundedDone = Math.max(doneLayers, Math.min(totalLayers - 1, message.payload.done));
-          options.onProgress?.(boundedDone, totalLayers, message.payload.phase);
+          emitProgress(boundedDone, message.payload.phase);
           return;
         }
 
@@ -723,9 +766,6 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
             }
 
             flushReadyLayers();
-            if ((completedChunks % progressChunkStride) === 0 || completedChunks >= chunkId) {
-              options.onProgress?.(doneLayers, totalLayers, `Completed chunk ${message.payload.chunkId + 1}/${chunkId}`);
-            }
 
             dispatchNext(worker);
             void tryFinalize();

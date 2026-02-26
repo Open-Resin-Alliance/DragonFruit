@@ -7,12 +7,14 @@ import type { SlicingPerformanceSettings } from '@/components/settings/performan
 interface PerformanceSettingsTabProps {
   settings: SlicingPerformanceSettings;
   webGpuSupported: boolean;
+  webGpuStatusText: string;
   onChange: (settings: SlicingPerformanceSettings) => void;
 }
 
 export function PerformanceSettingsTab({
   settings,
   webGpuSupported,
+  webGpuStatusText,
   onChange,
 }: PerformanceSettingsTabProps) {
   const patch = React.useCallback((partial: Partial<SlicingPerformanceSettings>) => {
@@ -92,7 +94,10 @@ export function PerformanceSettingsTab({
             </div>
           </div>
           <div className="mt-2 text-[11px]" style={{ color: webGpuSupported ? '#86efac' : 'var(--text-muted)' }}>
-            WebGPU availability: {webGpuSupported ? 'Detected' : 'Not detected on this browser/device'}
+            WebGPU availability: {webGpuSupported ? 'Detected' : 'Not detected'}
+          </div>
+          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            {webGpuStatusText}
           </div>
         </div>
 

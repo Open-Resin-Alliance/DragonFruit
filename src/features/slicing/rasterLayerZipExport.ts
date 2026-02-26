@@ -2,6 +2,8 @@ import JSZip from 'jszip';
 import * as THREE from 'three';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
+import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
+import { packNanodlpRgbaWithWebGpu } from '@/features/slicing/webgpu/nanodlpPackingWebGpu';
 
 const MAX_CANVAS_PIXELS = 24_000_000;
 
@@ -320,6 +322,27 @@ async function nanodlpPackRgbaToPngBlob(
 
   const outImage = new ImageData(outputWidthPx, sourceHeightPx);
   const out = outImage.data;
+
+  const perfSettings = getSavedSlicingPerformanceSettings();
+  const wantsWebGpu = perfSettings.computeBackend === 'webgpu' || perfSettings.computeBackend === 'auto';
+  if (wantsWebGpu && (packingMode === 'rgb8_div3' || packingMode === 'gray3_div2')) {
+    try {
+      const gpuPacked = await packNanodlpRgbaWithWebGpu({
+        sourceRgba,
+        sourceWidthPx,
+        sourceHeightPx,
+        outputWidthPx,
+        packingMode,
+      });
+      if (gpuPacked && gpuPacked.byteLength === out.byteLength) {
+        out.set(gpuPacked);
+        outCtx.putImageData(outImage, 0, 0);
+        return canvasToPngBlob(outCanvas);
+      }
+    } catch {
+      // WebGPU is best-effort for now; fallback to CPU path below.
+    }
+  }
 
   if (packingMode === 'rgb8_div3') {
     const requiredSubpixels = outputWidthPx * 3;

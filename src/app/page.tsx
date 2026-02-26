@@ -312,8 +312,10 @@ export default function Home() {
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
-  const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'running' | 'ready' | 'failed' | 'started'>('running');
+  const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
+  const [printingDeviceProcessingStartedAtMs, setPrintingDeviceProcessingStartedAtMs] = React.useState<number | null>(null);
+  const [printingDeviceProcessingElapsedSec, setPrintingDeviceProcessingElapsedSec] = React.useState(0);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -947,8 +949,10 @@ export default function Home() {
     setPrintingReadyPlateId(null);
     setPrintingPrintNowBusy(false);
     setPrintingUploadDialogOpen(false);
-    setPrintingUploadDialogStage('running');
+    setPrintingUploadDialogStage('uploading');
     setPrintingUploadDisplayProgress(0);
+    setPrintingDeviceProcessingStartedAtMs(null);
+    setPrintingDeviceProcessingElapsedSec(0);
   }, []);
 
   const printingOutputSizeLabel = React.useMemo(() => {
@@ -1017,6 +1021,32 @@ export default function Home() {
     && activePrinterProfile.networkConnection?.connected === true,
   );
 
+  const printingDialogStageLabel = React.useMemo(() => {
+    if (printingSendStageText && printingSendStageText.trim().length > 0) {
+      return printingSendStageText;
+    }
+
+    switch (printingUploadDialogStage) {
+      case 'uploading': return 'Uploading to printer';
+      case 'processing': return 'Processing on device';
+      case 'ready': return 'Ready to print';
+      case 'starting': return 'Starting print';
+      case 'started': return 'Print started';
+      case 'failed': return 'Upload failed';
+      default: return 'Processing';
+    }
+  }, [printingSendStageText, printingUploadDialogStage]);
+
+  const printingDialogIsIndeterminate = printingUploadDialogStage === 'processing';
+  const printingDialogProgressPercent = Math.max(0, Math.min(100, printingUploadDisplayProgress * 100));
+
+  const printingProcessingElapsedLabel = React.useMemo(() => {
+    const total = Math.max(0, printingDeviceProcessingElapsedSec);
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }, [printingDeviceProcessingElapsedSec]);
+
   React.useEffect(() => {
     if (!printingUploadDialogOpen) {
       setPrintingUploadDisplayProgress(printingSendProgress);
@@ -1040,6 +1070,23 @@ export default function Home() {
       window.cancelAnimationFrame(raf);
     };
   }, [printingSendProgress, printingUploadDialogOpen]);
+
+  React.useEffect(() => {
+    if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
+      setPrintingDeviceProcessingElapsedSec(0);
+      return;
+    }
+
+    const updateElapsed = () => {
+      setPrintingDeviceProcessingElapsedSec(Math.max(0, Math.floor((Date.now() - printingDeviceProcessingStartedAtMs) / 1000)));
+    };
+
+    updateElapsed();
+    const id = window.setInterval(updateElapsed, 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [printingDeviceProcessingStartedAtMs, printingUploadDialogOpen, printingUploadDialogStage]);
 
   const handleDownloadPrintArtifact = React.useCallback(() => {
     if (!printingArtifact) return;
@@ -1077,8 +1124,10 @@ export default function Home() {
     setPrintingSendProgress(0.01);
     setPrintingSendStageText('Uploading print job…');
     setPrintingSendStatusText('Uploading print job to printer…');
-    setPrintingUploadDialogStage('running');
+    setPrintingUploadDialogStage('uploading');
     setPrintingUploadDialogOpen(true);
+    setPrintingDeviceProcessingStartedAtMs(null);
+    setPrintingDeviceProcessingElapsedSec(0);
 
     try {
       const bytes = new Uint8Array(await printingArtifact.blob.arrayBuffer());
@@ -1119,48 +1168,56 @@ export default function Home() {
       const importedPlateId = Number(payload?.plateId);
       let resolvedPlateId = Number.isFinite(importedPlateId) && importedPlateId > 0 ? importedPlateId : null;
 
-      setPrintingSendProgress(0.6);
-      setPrintingSendStageText('Processing file metadata…');
-      setPrintingSendStatusText('Upload complete. NanoDLP is processing metadata…');
+      setPrintingSendProgress(1);
+      setPrintingUploadDialogStage('processing');
+      setPrintingSendStageText('Processing on device…');
+      setPrintingSendStatusText('Upload complete. NanoDLP is processing file metadata…');
+      setPrintingDeviceProcessingStartedAtMs(Date.now());
 
       const startedAt = Date.now();
-      const timeoutMs = 3 * 60 * 1000;
+      const timeoutMs = 10 * 60 * 1000;
       const pollMs = 1250;
       let metadataReady = false;
+      let pollFailureCount = 0;
 
       while ((Date.now() - startedAt) < timeoutMs) {
-        const elapsedMs = Date.now() - startedAt;
-        const responseReady = await fetch('/api/network/plugin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pluginId: 'athena',
-            operation: 'nanodlp/plates/list/json',
-            ipAddress: host,
-            port,
-            plateId: resolvedPlateId,
-            jobName: pathBase,
-          }),
-        });
+        try {
+          const responseReady = await fetch('/api/network/plugin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pluginId: 'athena',
+              operation: 'nanodlp/plates/list/json',
+              ipAddress: host,
+              port,
+              plateId: resolvedPlateId,
+              jobName: pathBase,
+            }),
+          });
 
-        const readyPayload = await responseReady.json().catch(() => ({} as any));
-        const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
-        const matchedPlateId = Number(
-          (matchedPlate as any)?.PlateID
-          ?? (matchedPlate as any)?.plateId
-          ?? (matchedPlate as any)?.plate_id
-          ?? (matchedPlate as any)?.id,
-        );
-        if (!resolvedPlateId && Number.isFinite(matchedPlateId) && matchedPlateId > 0) {
-          resolvedPlateId = matchedPlateId;
-        }
+          const readyPayload = await responseReady.json().catch(() => ({} as any));
+          const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
+          const matchedPlateId = Number(
+            (matchedPlate as any)?.PlateID
+            ?? (matchedPlate as any)?.plateId
+            ?? (matchedPlate as any)?.plate_id
+            ?? (matchedPlate as any)?.id,
+          );
+          if (!resolvedPlateId && Number.isFinite(matchedPlateId) && matchedPlateId > 0) {
+            resolvedPlateId = matchedPlateId;
+          }
 
-        metadataReady = readyPayload?.metadataReady === true;
-        const phaseProgress = Math.max(0, Math.min(1, elapsedMs / timeoutMs));
-        setPrintingSendProgress(0.6 + (phaseProgress * 0.39));
+          metadataReady = readyPayload?.metadataReady === true;
+          pollFailureCount = 0;
 
-        if (metadataReady) {
-          break;
+          if (metadataReady) {
+            break;
+          }
+        } catch {
+          pollFailureCount += 1;
+          if (pollFailureCount >= 6) {
+            throw new Error('Lost connection while waiting for device processing.');
+          }
         }
 
         await new Promise<void>((resolve) => {
@@ -1176,15 +1233,17 @@ export default function Home() {
         setPrintingSendProgress(1);
         setPrintingSendStageText('Ready to print');
         setPrintingUploadDialogStage('ready');
+        setPrintingDeviceProcessingStartedAtMs(null);
         setPrintingSendStatusText(
           `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
         );
       } else {
-        setPrintingSendProgress(0.95);
-        setPrintingSendStageText('Metadata still processing');
+        setPrintingSendProgress(1);
+        setPrintingSendStageText('Device still processing');
         setPrintingUploadDialogStage('failed');
+        setPrintingDeviceProcessingStartedAtMs(null);
         setPrintingSendStatusText(
-          `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Metadata is still processing on the device.`,
+          `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Device is still processing metadata after waiting.`,
         );
       }
     } catch (error) {
@@ -1192,6 +1251,7 @@ export default function Home() {
       setPrintingSendStatusText(`Send failed: ${message}`);
       setPrintingSendStageText('Upload failed');
       setPrintingUploadDialogStage('failed');
+      setPrintingDeviceProcessingStartedAtMs(null);
       setPrintingSendProgress(0);
     } finally {
       setPrintingSendBusy(false);
@@ -1213,7 +1273,8 @@ export default function Home() {
 
     setPrintingPrintNowBusy(true);
     setPrintingSendStageText('Starting print…');
-    setPrintingUploadDialogStage('running');
+    setPrintingUploadDialogStage('starting');
+    setPrintingDeviceProcessingStartedAtMs(null);
 
     try {
       const response = await fetch('/api/network/plugin', {
@@ -5492,24 +5553,28 @@ export default function Home() {
       />
 
       {printingUploadDialogOpen && (
-        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/45 backdrop-blur-[1px] px-4">
+        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
           <div
-            className="w-[min(560px,94vw)] rounded-xl border px-5 py-4 shadow-xl"
+            className="w-full max-w-xl overflow-hidden rounded-xl border shadow-2xl"
             style={{
-              background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+              background: 'var(--surface-0)',
               borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
             }}
             role="dialog"
             aria-modal="true"
             aria-live="polite"
             aria-label="Printer upload status"
           >
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Uploading to NanoDLP
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Post-Processing
                 </div>
-                <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Upload to NanoDLP
+                </div>
+                <div className="mt-0.5 text-xs truncate" style={{ color: 'var(--text-muted)' }}>
                   {printingArtifact?.outputName ?? 'Preparing artifact'}
                 </div>
               </div>
@@ -5517,7 +5582,7 @@ export default function Home() {
               {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
                 <button
                   type="button"
-                  className="rounded border px-2 py-1 text-[11px] font-medium"
+                  className="ui-button ui-button-secondary !h-8 px-3 text-[11px]"
                   style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
                   onClick={() => setPrintingUploadDialogOpen(false)}
                   disabled={printingSendBusy || printingPrintNowBusy}
@@ -5527,98 +5592,97 @@ export default function Home() {
               )}
             </div>
 
-            <div className="mt-3 flex items-center gap-2">
-              <div
-                className="rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-wide"
-                style={{
-                  borderColor: printingUploadDialogStage === 'failed'
-                    ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)'
-                    : printingUploadDialogStage === 'started'
-                      ? 'color-mix(in srgb, #60a5fa, var(--border-subtle) 50%)'
-                      : printingUploadDialogStage === 'ready'
-                        ? 'color-mix(in srgb, #34d399, var(--border-subtle) 50%)'
-                        : 'color-mix(in srgb, var(--accent), var(--border-subtle) 60%)',
-                  color: printingUploadDialogStage === 'failed'
-                    ? '#fca5a5'
-                    : printingUploadDialogStage === 'started'
-                      ? '#93c5fd'
-                      : printingUploadDialogStage === 'ready'
-                        ? '#86efac'
-                        : 'var(--accent)',
-                  background: 'color-mix(in srgb, var(--surface-1), transparent 15%)',
-                }}
-              >
-                {printingSendStageText
-                  ?? (printingUploadDialogStage === 'ready'
-                    ? 'Ready to print'
-                    : printingUploadDialogStage === 'started'
-                      ? 'Print started'
-                      : printingUploadDialogStage === 'failed'
-                        ? 'Upload failed'
-                        : 'Processing')}
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Stage</div>
+                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {printingDialogStageLabel}
+                  </div>
+                </div>
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Plate</div>
+                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {printingReadyPlateId ? `#${printingReadyPlateId}` : 'Pending'}
+                  </div>
+                </div>
               </div>
-              {printingReadyPlateId && (
-                <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
-                  Plate #{printingReadyPlateId}
+
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {printingSendStatusText ?? 'Preparing upload pipeline…'}
+              </div>
+
+              {printingDialogIsIndeterminate ? (
+                <>
+                  <div
+                    className="ui-loading-track h-2.5 w-full rounded-full"
+                    style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+                  >
+                    <div
+                      className="ui-loading-indicator"
+                      style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
+                    />
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Processing on NanoDLP… elapsed {printingProcessingElapsedLabel}
+                  </div>
+                </>
+              ) : (
+                <div
+                  className="h-2.5 w-full rounded-full border overflow-hidden"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'color-mix(in srgb, var(--surface-2), black 20%)',
+                  }}
+                >
+                  <div
+                    className="h-full rounded-full transition-all duration-200"
+                    style={{
+                      width: `${printingDialogProgressPercent.toFixed(1)}%`,
+                      background: printingUploadDialogStage === 'failed'
+                        ? 'linear-gradient(90deg, #ef4444, #f97316)'
+                        : printingUploadDialogStage === 'started'
+                          ? 'linear-gradient(90deg, #60a5fa, #22d3ee)'
+                          : 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))',
+                    }}
+                  />
                 </div>
               )}
-            </div>
 
-            <div
-              className="mt-3 h-3 w-full rounded-full border overflow-hidden"
-              style={{
-                borderColor: 'var(--border-subtle)',
-                background: 'color-mix(in srgb, var(--surface-2), black 20%)',
-              }}
-            >
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${Math.max(0, Math.min(100, printingUploadDisplayProgress * 100)).toFixed(1)}%`,
-                  background: printingUploadDialogStage === 'failed'
-                    ? 'linear-gradient(90deg, #ef4444, #f97316)'
-                    : printingUploadDialogStage === 'started'
-                      ? 'linear-gradient(90deg, #60a5fa, #22d3ee)'
-                      : 'linear-gradient(90deg, var(--accent), #ff79c6)',
-                  transition: 'width 220ms ease',
-                }}
-              />
-            </div>
+              <div className="mt-1 flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <span>
+                  {printingUploadDialogStage === 'processing'
+                    ? 'Waiting for metadata readiness'
+                    : 'Transfer progress'}
+                </span>
+                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {printingDialogIsIndeterminate ? '—' : `${printingDialogProgressPercent.toFixed(0)}%`}
+                </span>
+              </div>
 
-            <div className="mt-2 flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              <span>{printingSendStatusText ?? 'Preparing upload pipeline…'}</span>
-              <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
-                {(Math.max(0, Math.min(100, printingUploadDisplayProgress * 100))).toFixed(0)}%
-              </span>
-            </div>
+              <div className="pt-1 flex items-center justify-end gap-2">
+                {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    onClick={() => setPrintingUploadDialogOpen(false)}
+                    disabled={printingSendBusy || printingPrintNowBusy}
+                  >
+                    Close
+                  </button>
+                )}
 
-            <div className="mt-4 flex items-center justify-end gap-2">
-              {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
-                <button
-                  type="button"
-                  className="rounded-md border px-3 py-1.5 text-xs font-medium"
-                  style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                  onClick={() => setPrintingUploadDialogOpen(false)}
-                  disabled={printingSendBusy || printingPrintNowBusy}
-                >
-                  Dismiss
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="rounded-md border px-3 py-1.5 text-xs font-semibold"
-                style={{
-                  borderColor: canPrintNow ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)' : 'var(--border-subtle)',
-                  color: canPrintNow ? 'var(--accent)' : 'var(--text-muted)',
-                  background: canPrintNow ? 'color-mix(in srgb, var(--accent), transparent 88%)' : 'transparent',
-                  opacity: canPrintNow ? 1 : 0.6,
-                }}
-                onClick={handlePrintNow}
-                disabled={!canPrintNow || printingPrintNowBusy || printingSendBusy || printingUploadDialogStage !== 'ready'}
-              >
-                {printingPrintNowBusy ? 'Starting print…' : 'Print Now'}
-              </button>
+                {printingUploadDialogStage === 'ready' && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                    onClick={handlePrintNow}
+                    disabled={!canPrintNow || printingPrintNowBusy || printingSendBusy}
+                  >
+                    {printingPrintNowBusy ? 'Starting print…' : 'Start Print'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -8,6 +8,11 @@ export type SlicingPerformanceSettings = {
   progressGranularity: SlicingProgressGranularity;
 };
 
+export type WebGpuSupportDetails = {
+  supported: boolean;
+  message: string;
+};
+
 export const SLICING_PERFORMANCE_SETTINGS_STORAGE_KEY = 'app-slicing-performance-settings';
 const SLICING_PERFORMANCE_SETTINGS_EVENT = 'app-slicing-performance-settings-changed';
 
@@ -65,19 +70,71 @@ export function saveSlicingPerformanceSettings(settings: SlicingPerformanceSetti
   window.dispatchEvent(new CustomEvent(SLICING_PERFORMANCE_SETTINGS_EVENT, { detail: normalized }));
 }
 
-export async function isWebGpuSupported(): Promise<boolean> {
-  if (typeof navigator === 'undefined' || !(navigator as Navigator & { gpu?: unknown }).gpu) {
-    return false;
+export async function getWebGpuSupportDetails(): Promise<WebGpuSupportDetails> {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return {
+      supported: false,
+      message: 'WebGPU check requires a browser runtime.',
+    };
+  }
+
+  if (window.isSecureContext === false) {
+    const host = window.location.hostname || 'unknown-host';
+    const protocol = window.location.protocol || 'unknown-protocol';
+    const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+
+    return {
+      supported: false,
+      message: isLocalhost
+        ? `This runtime is treating ${protocol}//${host} as non-secure (likely embedded WebView/Electron policy). WebGPU requires a secure context.`
+        : `Current origin is ${protocol}//${host}. WebGPU requires HTTPS (or localhost treated as secure).`,
+    };
+  }
+
+  const nav = navigator as Navigator & { gpu?: { requestAdapter?: (options?: unknown) => Promise<unknown> } };
+  if (!nav.gpu) {
+    const ua = navigator.userAgent || '';
+    const inElectron = /Electron/i.test(ua);
+    return {
+      supported: false,
+      message: inElectron
+        ? 'GPU API is not exposed in this Electron/WebView runtime.'
+        : 'Navigator GPU API is not available in this browser.',
+    };
+  }
+
+  if (typeof nav.gpu.requestAdapter !== 'function') {
+    return {
+      supported: false,
+      message: 'WebGPU API exists but adapter request is unavailable.',
+    };
   }
 
   try {
-    const gpu = (navigator as Navigator & { gpu?: { requestAdapter?: () => Promise<unknown> } }).gpu;
-    if (!gpu?.requestAdapter) return false;
-    const adapter = await gpu.requestAdapter();
-    return Boolean(adapter);
-  } catch {
-    return false;
+    const adapter = await nav.gpu.requestAdapter({ powerPreference: 'high-performance' } as unknown);
+    if (!adapter) {
+      return {
+        supported: false,
+        message: 'No compatible GPU adapter was returned by the browser.',
+      };
+    }
+
+    return {
+      supported: true,
+      message: 'Detected and ready.',
+    };
+  } catch (error) {
+    const base = error instanceof Error ? error.message : String(error);
+    return {
+      supported: false,
+      message: `Adapter request failed: ${base}`,
+    };
   }
+}
+
+export async function isWebGpuSupported(): Promise<boolean> {
+  const details = await getWebGpuSupportDetails();
+  return details.supported;
 }
 
 export function subscribeToSlicingPerformanceSettings(listener: () => void): () => void {

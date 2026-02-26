@@ -190,7 +190,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         if (useWorker) {
           throwIfAborted(options.abortSignal);
           logDebug('Using worker pool path for NanoDLP');
-          options.onProgress?.(0, solidMesh.totalLayers, 'Chunked WASM worker pool active');
+          options.onProgress?.(0, solidMesh.totalLayers, 'Starting high-performance slicing workers…');
           const workerResult = await sliceSolidNanodlpInWorker({
             job: wasmJob,
             previewPngBytes: options.exportThumbnailPng ?? undefined,
