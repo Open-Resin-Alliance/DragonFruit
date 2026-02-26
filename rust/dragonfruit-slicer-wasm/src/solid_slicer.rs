@@ -28,6 +28,7 @@ struct Segment {
     dx_dy: f32,
     y_min: f32,
     y_max: f32,
+    wind: i32,
 }
 
 #[derive(Debug, Error)]
@@ -228,6 +229,18 @@ fn build_layer_segments(
     for tri_index in triangle_indices {
         let tri = triangles[*tri_index];
 
+        let ux = tri.b.x - tri.a.x;
+        let uy = tri.b.y - tri.a.y;
+        let uz = tri.b.z - tri.a.z;
+        let vx = tri.c.x - tri.a.x;
+        let vy = tri.c.y - tri.a.y;
+        let vz = tri.c.z - tri.a.z;
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        // Direction of tri-plane and z-plane intersection line: n × +Z = (ny, -nx, 0)
+        let dir_x = ny;
+        let dir_y = -nx;
+
         let mut points = [(0.0f32, 0.0f32); 3];
         let mut point_count = 0usize;
 
@@ -245,8 +258,16 @@ fn build_layer_segments(
             continue;
         }
 
-        let p0 = points[0];
-        let p1 = points[1];
+        let mut p0 = points[0];
+        let mut p1 = points[1];
+
+        if dir_x.abs() > 1e-10 || dir_y.abs() > 1e-10 {
+            let seg_x = p1.0 - p0.0;
+            let seg_y = p1.1 - p0.1;
+            if (seg_x * dir_x + seg_y * dir_y) < 0.0 {
+                core::mem::swap(&mut p0, &mut p1);
+            }
+        }
 
         let p0x_mm = if mirror_x { -p0.0 } else { p0.0 };
         let p0y_mm = if mirror_y { -p0.1 } else { p0.1 };
@@ -263,6 +284,8 @@ fn build_layer_segments(
             continue;
         }
 
+        let wind = if dy > 0.0 { 1 } else { -1 };
+
         let y_min = y1.min(y2);
         let y_max = y1.max(y2);
 
@@ -272,6 +295,7 @@ fn build_layer_segments(
             dx_dy: (x2 - x1) / dy,
             y_min,
             y_max,
+            wind,
         });
     }
 
@@ -280,11 +304,12 @@ fn build_layer_segments(
 
 fn build_row_segment_buckets(height_px: u32, segments: &[Segment]) -> Vec<Vec<usize>> {
     let mut row_buckets = vec![Vec::<usize>::new(); height_px as usize];
+    let y_epsilon = 1e-9f32;
 
     for (seg_index, seg) in segments.iter().enumerate() {
         // Row sample is y + 0.5, and valid interval is [y_min, y_max)
         let row_start = (seg.y_min - 0.5).ceil() as i32;
-        let row_end = (seg.y_max - 0.5).floor() as i32;
+        let row_end = (seg.y_max - 0.5 - y_epsilon).ceil() as i32 - 1;
 
         if row_end < 0 || row_start >= height_px as i32 {
             continue;
@@ -334,8 +359,9 @@ fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment])
     let width = width_px as usize;
     let height = height_px as usize;
     let mut mask = vec![0u8; width * height];
-    let mut intersections: Vec<f32> = Vec::with_capacity(1024);
+    let mut intersections: Vec<(f32, i32)> = Vec::with_capacity(1024);
     let row_buckets = build_row_segment_buckets(height_px, segments);
+    let x_epsilon = 1e-6f32;
 
     for y in 0..height {
         intersections.clear();
@@ -344,20 +370,39 @@ fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment])
         for seg_index in &row_buckets[y] {
             let seg = segments[*seg_index];
             let x = seg.x1 + (y_sample - seg.y1) * seg.dx_dy;
-            intersections.push(x);
+            if !x.is_finite() {
+                continue;
+            }
+            intersections.push((x, seg.wind));
         }
 
         if intersections.is_empty() {
             continue;
         }
 
-        intersections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        intersections.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
         let row_start = y * width;
-        let mut i = 0;
-        while i + 1 < intersections.len() {
-            let x0 = intersections[i];
-            let x1 = intersections[i + 1];
+        let mut winding = 0i32;
+        let mut i = 0usize;
+        while i < intersections.len() {
+            let x0 = intersections[i].0;
+            let mut delta_wind = 0i32;
+
+            while i < intersections.len() && (intersections[i].0 - x0).abs() <= x_epsilon {
+                delta_wind += intersections[i].1;
+                i += 1;
+            }
+
+            winding += delta_wind;
+            if winding == 0 || i >= intersections.len() {
+                continue;
+            }
+
+            let x1 = intersections[i].0;
+            if (x1 - x0).abs() <= x_epsilon {
+                continue;
+            }
 
             let x_start = x0.min(x1).ceil().max(0.0) as i32;
             let x_end = x0.max(x1).floor().min((width.saturating_sub(1)) as f32) as i32;
@@ -366,8 +411,6 @@ fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment])
                 let row = &mut mask[row_start..row_start + width];
                 fill_row_span_white(row, x_start as usize, x_end as usize);
             }
-
-            i += 2;
         }
     }
 

@@ -1,9 +1,23 @@
 import JSZip from 'jszip';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { packNanodlpRgbaWithWebGpu } from '@/features/slicing/webgpu/nanodlpPackingWebGpu';
+import { getSnapshot as getSupportSnapshot } from '@/supports/state';
+import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
+import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
+import { generatePerimeterWall } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterWall';
+import { generateCrenelatedWallManual } from '@/supports/Rafts/Crenelated/geometry/generateCrenelatedWallManual';
+import { generatePerimeterBorderBeam } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterBorderBeam';
+import type { ContactDisk } from '@/supports/types';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
+import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
+import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
 
 const MAX_CANVAS_PIXELS = 24_000_000;
 
@@ -109,6 +123,7 @@ type SliceSegment2D = {
   dxDy: number;
   yMin: number;
   yMax: number;
+  wind: number;
 };
 
 type EffectiveSettings = {
@@ -292,6 +307,396 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
 function composeModelMatrix(transform: LoadedModel['transform']): THREE.Matrix4 {
   const q = new THREE.Quaternion().setFromEuler(transform.rotation);
   return new THREE.Matrix4().compose(transform.position, q, transform.scale);
+}
+
+function pushWorldTriangle(
+  triangles: WorldTriangle[],
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  cx: number,
+  cy: number,
+  cz: number,
+): void {
+  const zMin = Math.min(az, bz, cz);
+  const zMax = Math.max(az, bz, cz);
+  triangles.push({ ax, ay, az, bx, by, bz, cx, cy, cz, zMin, zMax });
+}
+
+function appendGeometryWorldTriangles(
+  triangles: WorldTriangle[],
+  geometry: THREE.BufferGeometry,
+  matrix?: THREE.Matrix4,
+): void {
+  const position = geometry.getAttribute('position');
+  if (!position) return;
+
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
+
+  const writeTri = (a: number, b: number, c: number) => {
+    v0.set(position.getX(a), position.getY(a), position.getZ(a));
+    v1.set(position.getX(b), position.getY(b), position.getZ(b));
+    v2.set(position.getX(c), position.getY(c), position.getZ(c));
+
+    if (matrix) {
+      v0.applyMatrix4(matrix);
+      v1.applyMatrix4(matrix);
+      v2.applyMatrix4(matrix);
+    }
+
+    pushWorldTriangle(triangles, v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+  };
+
+  const index = geometry.getIndex();
+  if (index) {
+    const idx = index.array;
+    for (let i = 0; i < idx.length; i += 3) {
+      writeTri(Number(idx[i]), Number(idx[i + 1]), Number(idx[i + 2]));
+    }
+    return;
+  }
+
+  for (let i = 0; i + 2 < position.count; i += 3) {
+    writeTri(i, i + 1, i + 2);
+  }
+}
+
+function createFrustumGeometryBetween(
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  radiusStart: number,
+  radiusEnd: number,
+  radialSegments = 12,
+): THREE.BufferGeometry | null {
+  const dir = end.clone().sub(start);
+  const length = dir.length();
+  if (!Number.isFinite(length) || length <= 1e-6) return null;
+
+  const r0 = Math.max(0.001, radiusStart);
+  const r1 = Math.max(0.001, radiusEnd);
+  const geom = new THREE.CylinderGeometry(r1, r0, length, radialSegments, 1, false);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  const m = new THREE.Matrix4().compose(
+    start.clone().add(end).multiplyScalar(0.5),
+    q,
+    new THREE.Vector3(1, 1, 1),
+  );
+  geom.applyMatrix4(m);
+  return geom;
+}
+
+function getDiskTipCenter(disk: ContactDisk): THREE.Vector3 {
+  const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, disk.profile);
+  return new THREE.Vector3(
+    disk.pos.x + disk.surfaceNormal.x * thickness,
+    disk.pos.y + disk.surfaceNormal.y * thickness,
+    disk.pos.z + disk.surfaceNormal.z * thickness,
+  );
+}
+
+function appendSegmentPrimitive(
+  triangles: WorldTriangle[],
+  start: THREE.Vector3,
+  end: THREE.Vector3,
+  diameter: number,
+  segment?: { type?: string; controlPoint1?: { x: number; y: number; z: number }; controlPoint2?: { x: number; y: number; z: number } },
+): void {
+  const radius = Math.max(0.001, diameter * 0.5);
+  if (segment?.type === 'bezier' && segment.controlPoint1 && segment.controlPoint2) {
+    const p0 = { x: start.x, y: start.y, z: start.z };
+    const p1 = segment.controlPoint1;
+    const p2 = segment.controlPoint2;
+    const p3 = { x: end.x, y: end.y, z: end.z };
+
+    const geometries: THREE.BufferGeometry[] = [];
+    const steps = 12;
+    let prev = new THREE.Vector3(start.x, start.y, start.z);
+    for (let i = 1; i <= steps; i += 1) {
+      const t = i / steps;
+      const p = getBezierPointAtT(p0, p1, p2, p3, t);
+      const cur = new THREE.Vector3(p.x, p.y, p.z);
+      const g = createFrustumGeometryBetween(prev, cur, radius, radius, 10);
+      if (g) geometries.push(g);
+      prev = cur;
+    }
+
+    if (geometries.length > 0) {
+      const merged = mergeGeometries(geometries, false);
+      if (merged) appendGeometryWorldTriangles(triangles, merged);
+      for (const g of geometries) g.dispose();
+      merged?.dispose();
+    }
+    return;
+  }
+
+  const geom = createFrustumGeometryBetween(start, end, radius, radius, 12);
+  if (!geom) return;
+  appendGeometryWorldTriangles(triangles, geom);
+  geom.dispose();
+}
+
+function appendContactConePrimitive(
+  triangles: WorldTriangle[],
+  cone: {
+    pos: { x: number; y: number; z: number };
+    normal: { x: number; y: number; z: number };
+    surfaceNormal?: { x: number; y: number; z: number };
+    diskLengthOverride?: number;
+    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number };
+  },
+): void {
+  const socket = getFinalSocketPosition(cone as any);
+  const start = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
+  const end = new THREE.Vector3(socket.x, socket.y, socket.z);
+  const g = createFrustumGeometryBetween(
+    start,
+    end,
+    Math.max(0.05, cone.profile.contactDiameterMm * 0.5),
+    Math.max(0.05, cone.profile.bodyDiameterMm * 0.5),
+    12,
+  );
+  if (!g) return;
+  appendGeometryWorldTriangles(triangles, g);
+  g.dispose();
+}
+
+function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldTriangle[] {
+  if (visibleModelIds.size === 0) return [];
+
+  const out: WorldTriangle[] = [];
+  const supportState = getSupportSnapshot();
+  const supportBraceState = getSupportBraceSnapshot();
+
+  const rootTopRadiusByRootId = new Map<string, number>();
+  for (const trunk of Object.values(supportState.trunks)) {
+    const firstDiameter = trunk.segments[0]?.diameter;
+    if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
+      rootTopRadiusByRootId.set(trunk.rootId, Math.max(0.05, firstDiameter! * 0.5));
+    }
+  }
+  for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+    const firstDiameter = supportBrace.segments[0]?.diameter;
+    if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
+      rootTopRadiusByRootId.set(supportBrace.rootId, Math.max(0.05, firstDiameter! * 0.5));
+    }
+  }
+
+  for (const root of Object.values(supportState.roots)) {
+    if (!visibleModelIds.has(root.modelId)) continue;
+    const base = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
+    const rootRadius = Math.max(0.05, root.diameter * 0.5);
+    const topRadius = rootTopRadiusByRootId.get(root.id) ?? Math.max(0.05, rootRadius * 0.45);
+    const diskTop = base.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, root.diskHeight)));
+    const coneTop = diskTop.clone().add(new THREE.Vector3(0, 0, Math.max(0.01, root.coneHeight)));
+
+    const diskGeom = createFrustumGeometryBetween(base, diskTop, rootRadius, rootRadius, 14);
+    if (diskGeom) {
+      appendGeometryWorldTriangles(out, diskGeom);
+      diskGeom.dispose();
+    }
+
+    const coneGeom = createFrustumGeometryBetween(diskTop, coneTop, rootRadius, topRadius, 14);
+    if (coneGeom) {
+      appendGeometryWorldTriangles(out, coneGeom);
+      coneGeom.dispose();
+    }
+  }
+
+  for (const trunk of Object.values(supportState.trunks)) {
+    if (!visibleModelIds.has(trunk.modelId)) continue;
+    const root = supportState.roots[trunk.rootId];
+    if (!root) continue;
+
+    for (let i = 0; i < trunk.segments.length; i += 1) {
+      const seg = trunk.segments[i];
+      const endpoints = getTrunkSegmentEndpoints(trunk, seg, i, root);
+      if (!endpoints) continue;
+      appendSegmentPrimitive(
+        out,
+        new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
+        new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
+        Math.max(0.05, seg.diameter),
+        seg as any,
+      );
+    }
+
+    if (trunk.contactCone) {
+      appendContactConePrimitive(out, trunk.contactCone as any);
+    }
+  }
+
+  for (const branch of Object.values(supportState.branches)) {
+    const modelId = branch.modelId;
+    if (!modelId || !visibleModelIds.has(modelId)) continue;
+    const parentKnot = supportState.knots[branch.parentKnotId];
+    if (!parentKnot) continue;
+
+    for (let i = 0; i < branch.segments.length; i += 1) {
+      const seg = branch.segments[i];
+      const endpoints = getBranchSegmentEndpoints(branch, seg, i, parentKnot);
+      if (!endpoints) continue;
+      appendSegmentPrimitive(
+        out,
+        new THREE.Vector3(endpoints.start.x, endpoints.start.y, endpoints.start.z),
+        new THREE.Vector3(endpoints.end.x, endpoints.end.y, endpoints.end.z),
+        Math.max(0.05, seg.diameter),
+        seg as any,
+      );
+    }
+
+    if (branch.contactCone) {
+      appendContactConePrimitive(out, branch.contactCone as any);
+    }
+  }
+
+  for (const twig of Object.values(supportState.twigs)) {
+    if (!visibleModelIds.has(twig.modelId)) continue;
+    for (const seg of twig.segments) {
+      const start = seg.bottomJoint
+        ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
+        : getDiskTipCenter(twig.contactDiskA);
+      const end = seg.topJoint
+        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
+        : getDiskTipCenter(twig.contactDiskB);
+      appendSegmentPrimitive(out, start, end, Math.max(0.05, seg.diameter), seg as any);
+    }
+  }
+
+  for (const stick of Object.values(supportState.sticks)) {
+    if (!visibleModelIds.has(stick.modelId)) continue;
+    for (const seg of stick.segments) {
+      const start = seg.bottomJoint
+        ? new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z)
+        : new THREE.Vector3(...Object.values(getFinalSocketPosition(stick.contactConeA)) as [number, number, number]);
+      const end = seg.topJoint
+        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
+        : new THREE.Vector3(...Object.values(getFinalSocketPosition(stick.contactConeB)) as [number, number, number]);
+      appendSegmentPrimitive(out, start, end, Math.max(0.05, seg.diameter), seg as any);
+    }
+
+    appendContactConePrimitive(out, stick.contactConeA as any);
+    appendContactConePrimitive(out, stick.contactConeB as any);
+  }
+
+  for (const brace of Object.values(supportState.braces)) {
+    const modelId = brace.modelId;
+    if (!modelId || !visibleModelIds.has(modelId)) continue;
+    const startKnot = supportState.knots[brace.startKnotId];
+    const endKnot = supportState.knots[brace.endKnotId];
+    if (!startKnot || !endKnot) continue;
+    appendSegmentPrimitive(
+      out,
+      new THREE.Vector3(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z),
+      new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z),
+      Math.max(0.05, brace.profile?.diameter ?? 1),
+      brace.curve as any,
+    );
+  }
+
+  for (const leaf of Object.values(supportState.leaves)) {
+    const modelId = leaf.modelId;
+    if (!modelId || !visibleModelIds.has(modelId)) continue;
+    appendContactConePrimitive(out, leaf.contactCone as any);
+  }
+
+  for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+    const modelId = supportBrace.modelId;
+    if (!modelId || !visibleModelIds.has(modelId)) continue;
+    const root = supportBraceState.roots[supportBrace.rootId];
+    const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
+    if (!root || !hostKnot) continue;
+
+    let currentStart = new THREE.Vector3(
+      root.transform.pos.x,
+      root.transform.pos.y,
+      root.transform.pos.z + root.diskHeight + root.coneHeight,
+    );
+
+    for (const seg of supportBrace.segments) {
+      const endPoint = seg.topJoint
+        ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
+        : new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z);
+      appendSegmentPrimitive(out, currentStart, endPoint, Math.max(0.05, seg.diameter), seg as any);
+      currentStart = endPoint;
+    }
+  }
+
+  const raft = getRaftSettings();
+  if (raft.bottomMode !== 'off') {
+    const rootsByModel = new Map<string, Array<{ x: number; y: number; r: number }>>();
+    for (const root of Object.values(supportState.roots)) {
+      if (!visibleModelIds.has(root.modelId)) continue;
+      const arr = rootsByModel.get(root.modelId) ?? [];
+      arr.push({ x: root.transform.pos.x, y: root.transform.pos.y, r: root.diameter * 0.5 });
+      rootsByModel.set(root.modelId, arr);
+    }
+
+    for (const circles of rootsByModel.values()) {
+      if (circles.length === 0) continue;
+      const profile = computeFootprint(circles as any, { marginMm: 0.2, samplesPerCircle: 24 });
+      if (!profile || profile.length < 3) continue;
+
+      if (raft.bottomMode === 'solid') {
+        const baseMesh = generateChamferedBase(profile, {
+          thickness: raft.thickness,
+          chamferAngle: raft.chamferAngle,
+        });
+        appendGeometryWorldTriangles(out, baseMesh.geometry);
+
+        if (raft.wallEnabled) {
+          const useCrenels = raft.crenulationSpacing > 0 && raft.crenulationGapWidth > 0;
+          const wallMesh = useCrenels
+            ? generateCrenelatedWallManual(profile, {
+              wallHeight: raft.wallHeight,
+              wallThickness: raft.wallThickness,
+              crenulationGapWidth: raft.crenulationGapWidth,
+              crenulationSpacing: raft.crenulationSpacing,
+              thickness: raft.thickness,
+              chamferAngle: raft.chamferAngle,
+            })
+            : generatePerimeterWall(profile, {
+              wallHeight: raft.wallHeight,
+              wallThickness: raft.wallThickness,
+              thickness: raft.thickness,
+            });
+          appendGeometryWorldTriangles(out, wallMesh.geometry);
+        }
+      } else if (raft.bottomMode === 'line') {
+        const borderMesh = generatePerimeterBorderBeam(profile, {
+          widthMm: raft.lineWidthMm,
+          heightMm: raft.lineHeightMm,
+          chamferAngleDeg: raft.chamferAngle,
+        });
+        appendGeometryWorldTriangles(out, borderMesh.geometry);
+
+        if (raft.wallEnabled) {
+          const useCrenels = raft.crenulationSpacing > 0 && raft.crenulationGapWidth > 0;
+          const wallMesh = useCrenels
+            ? generateCrenelatedWallManual(profile, {
+              wallHeight: raft.wallHeight,
+              wallThickness: raft.wallThickness,
+              crenulationGapWidth: raft.crenulationGapWidth,
+              crenulationSpacing: raft.crenulationSpacing,
+              thickness: raft.lineHeightMm,
+              chamferAngle: raft.chamferAngle,
+            })
+            : generatePerimeterWall(profile, {
+              wallHeight: raft.wallHeight,
+              wallThickness: raft.wallThickness,
+              thickness: raft.lineHeightMm,
+            });
+          appendGeometryWorldTriangles(out, wallMesh.geometry);
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 function mirrorWorldX(xMm: number, mirrorX: boolean): number {
@@ -624,6 +1029,12 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
     }
   }
 
+  const visibleModelIds = new Set(models.filter((model) => model.visible).map((model) => model.id));
+  const supportAndRaftTriangles = buildSupportAndRaftWorldTriangles(visibleModelIds);
+  if (supportAndRaftTriangles.length > 0) {
+    triangles.push(...supportAndRaftTriangles);
+  }
+
   return triangles;
 }
 
@@ -712,6 +1123,18 @@ function buildLayerSegmentsFromWorldTriangles(
     const tri = triangles[triangleIndices[i]];
     if (zMm < tri.zMin || zMm > tri.zMax) continue;
 
+    const ux = tri.bx - tri.ax;
+    const uy = tri.by - tri.ay;
+    const uz = tri.bz - tri.az;
+    const vx = tri.cx - tri.ax;
+    const vy = tri.cy - tri.ay;
+    const vz = tri.cz - tri.az;
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    // Line-of-intersection direction for tri plane ∩ z=const plane (n × +Z)
+    const dirX = ny;
+    const dirY = -nx;
+
     const points: Array<[number, number]> = [];
     const p01 = edgePlaneIntersectionXY(tri.ax, tri.ay, tri.az, tri.bx, tri.by, tri.bz, zMm);
     if (p01) pushDistinctPoint(points, p01);
@@ -724,10 +1147,21 @@ function buildLayerSegmentsFromWorldTriangles(
 
     if (points.length < 2) continue;
 
-    const p1xMm = mirrorWorldX(points[0][0], settings.mirrorX);
-    const p1yMm = mirrorWorldY(points[0][1], settings.mirrorY);
-    const p2xMm = mirrorWorldX(points[1][0], settings.mirrorX);
-    const p2yMm = mirrorWorldY(points[1][1], settings.mirrorY);
+    let p1 = points[0];
+    let p2 = points[1];
+    if (Math.abs(dirX) > 1e-10 || Math.abs(dirY) > 1e-10) {
+      const segX = p2[0] - p1[0];
+      const segY = p2[1] - p1[1];
+      if ((segX * dirX + segY * dirY) < 0) {
+        p1 = points[1];
+        p2 = points[0];
+      }
+    }
+
+    const p1xMm = mirrorWorldX(p1[0], settings.mirrorX);
+    const p1yMm = mirrorWorldY(p1[1], settings.mirrorY);
+    const p2xMm = mirrorWorldX(p2[0], settings.mirrorX);
+    const p2yMm = mirrorWorldY(p2[1], settings.mirrorY);
 
     const x1 = toPixelX(p1xMm, minX, widthMm, settings.widthPx);
     const y1 = toPixelY(p1yMm, minY, depthMm, settings.heightPx);
@@ -736,6 +1170,7 @@ function buildLayerSegmentsFromWorldTriangles(
 
     const dy = y2 - y1;
     if (Math.abs(dy) < 1e-8) continue;
+    const wind = dy > 0 ? 1 : -1;
 
     segments.push({
       x1,
@@ -743,6 +1178,7 @@ function buildLayerSegmentsFromWorldTriangles(
       dxDy: (x2 - x1) / dy,
       yMin: Math.min(y1, y2),
       yMax: Math.max(y1, y2),
+      wind,
     });
   }
 
@@ -751,11 +1187,13 @@ function buildLayerSegmentsFromWorldTriangles(
 
 function buildRowSegmentBuckets(heightPx: number, segments: SliceSegment2D[]): number[][] {
   const rowBuckets: number[][] = Array.from({ length: heightPx }, () => []);
+  const Y_EPSILON = 1e-9;
 
   for (let segIndex = 0; segIndex < segments.length; segIndex += 1) {
     const seg = segments[segIndex];
+    // Strict half-open ownership: ySample in [yMin, yMax)
     const rowStart = Math.ceil(seg.yMin - 0.5);
-    const rowEnd = Math.floor(seg.yMax - 0.5);
+    const rowEnd = Math.ceil(seg.yMax - 0.5 - Y_EPSILON) - 1;
 
     if (rowEnd < 0 || rowStart >= heightPx) continue;
 
@@ -780,7 +1218,8 @@ function rasterizeSolidSegmentsToImage(
   data.set(baseOpaqueBlack);
 
   const rowBuckets = buildRowSegmentBuckets(heightPx, segments);
-  const intersections: number[] = [];
+  const intersections: Array<{ x: number; wind: number }> = [];
+  const X_EPSILON = 1e-6;
 
   for (let y = 0; y < heightPx; y += 1) {
     intersections.length = 0;
@@ -789,16 +1228,31 @@ function rasterizeSolidSegmentsToImage(
     const rowSegs = rowBuckets[y];
     for (let i = 0; i < rowSegs.length; i += 1) {
       const seg = segments[rowSegs[i]];
-      intersections.push(seg.x1 + (ySample - seg.y1) * seg.dxDy);
+      const x = seg.x1 + (ySample - seg.y1) * seg.dxDy;
+      if (!Number.isFinite(x)) continue;
+      intersections.push({ x, wind: seg.wind });
     }
 
     if (intersections.length === 0) continue;
-    intersections.sort((a, b) => a - b);
+    intersections.sort((a, b) => a.x - b.x);
 
-    let p = 0;
-    while (p + 1 < intersections.length) {
-      const xStart = Math.ceil(Math.max(0, Math.min(intersections[p], intersections[p + 1])));
-      const xEnd = Math.floor(Math.min(widthPx - 1, Math.max(intersections[p], intersections[p + 1])));
+    let winding = 0;
+    let i = 0;
+    while (i < intersections.length) {
+      const x = intersections[i].x;
+      let deltaWind = 0;
+      while (i < intersections.length && Math.abs(intersections[i].x - x) <= X_EPSILON) {
+        deltaWind += intersections[i].wind;
+        i += 1;
+      }
+
+      winding += deltaWind;
+      if (winding === 0 || i >= intersections.length) continue;
+
+      const nextX = intersections[i].x;
+      if (Math.abs(nextX - x) <= X_EPSILON) continue;
+      const xStart = Math.ceil(Math.max(0, Math.min(x, nextX)));
+      const xEnd = Math.floor(Math.min(widthPx - 1, Math.max(x, nextX)));
 
       if (xEnd >= xStart) {
         let pixelIndex = (y * widthPx + xStart) * 4;
@@ -809,8 +1263,6 @@ function rasterizeSolidSegmentsToImage(
           pixelIndex += 4;
         }
       }
-
-      p += 2;
     }
   }
 }

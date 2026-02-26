@@ -304,6 +304,31 @@ export default function Home() {
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
   const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
+  const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
+  const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
+  const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
+  const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
+  const [printingPreviewPan, setPrintingPreviewPan] = React.useState({ x: 0, y: 0 });
+  const [isPrintingPreviewPanning, setIsPrintingPreviewPanning] = React.useState(false);
+  const printingPreviewViewportRef = React.useRef<HTMLDivElement | null>(null);
+  const printingPreviewCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const printingPreviewSettleTimeoutRef = React.useRef<number | null>(null);
+  const printingPreviewSettledRef = React.useRef(false);
+  const printingPreviewCanvasRenderNonceRef = React.useRef(0);
+  const lastPrintingLayerSyncPerfRef = React.useRef(0);
+  const pendingPrintingSelectedLayerRef = React.useRef<number | null>(null);
+  const printingSelectedLayerRafRef = React.useRef<number | null>(null);
+  const printingPreviewZoomRef = React.useRef(1);
+  const printingPreviewPanRef = React.useRef({ x: 0, y: 0 });
+  const printingPreviewPanPendingRef = React.useRef({ x: 0, y: 0 });
+  const printingPreviewPanRafRef = React.useRef<number | null>(null);
+  const printingPreviewDragRef = React.useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
@@ -896,6 +921,68 @@ export default function Home() {
     };
   }, [clearPrintingLayerPreviewUrls]);
 
+  React.useEffect(() => {
+    printingPreviewZoomRef.current = printingPreviewZoom;
+  }, [printingPreviewZoom]);
+
+  React.useEffect(() => {
+    printingPreviewPanRef.current = printingPreviewPan;
+  }, [printingPreviewPan]);
+
+  React.useEffect(() => {
+    printingPreviewSettledRef.current = isPrintingPreviewSettled;
+  }, [isPrintingPreviewSettled]);
+
+  React.useEffect(() => {
+    return () => {
+      if (printingSelectedLayerRafRef.current !== null) {
+        window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
+      }
+      if (printingPreviewPanRafRef.current !== null) {
+        window.cancelAnimationFrame(printingPreviewPanRafRef.current);
+      }
+      if (printingPreviewSettleTimeoutRef.current !== null) {
+        window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const schedulePrintingPreviewSettle = React.useCallback(() => {
+    if (printingPreviewSettledRef.current) {
+      printingPreviewSettledRef.current = false;
+      setIsPrintingPreviewSettled(false);
+    }
+    if (printingPreviewSettleTimeoutRef.current !== null) {
+      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+    }
+    printingPreviewSettleTimeoutRef.current = window.setTimeout(() => {
+      printingPreviewSettleTimeoutRef.current = null;
+      printingPreviewSettledRef.current = true;
+      setIsPrintingPreviewSettled(true);
+    }, 1000);
+  }, []);
+
+  const queuePrintingPreviewPan = React.useCallback((nextPan: { x: number; y: number }) => {
+    printingPreviewPanPendingRef.current = nextPan;
+    if (printingPreviewPanRafRef.current !== null) return;
+
+    printingPreviewPanRafRef.current = window.requestAnimationFrame(() => {
+      printingPreviewPanRafRef.current = null;
+      const pending = printingPreviewPanPendingRef.current;
+      setPrintingPreviewPan((previous) => {
+        if (Math.abs(previous.x - pending.x) < 0.05 && Math.abs(previous.y - pending.y) < 0.05) {
+          return previous;
+        }
+        return pending;
+      });
+    });
+  }, []);
+
+  const clampPrintingLayer = React.useCallback((nextLayer: number) => {
+    const rounded = Math.round(nextLayer);
+    return Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), rounded));
+  }, [printingPreviewTotalLayers]);
+
   const handlePrintingLayerPreviewGenerated = React.useCallback((payload: {
     layerIndex: number;
     totalLayers: number;
@@ -938,6 +1025,83 @@ export default function Home() {
     if (printingSelectedLayer < 1) return null;
     return printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null;
   }, [printingLayerPreviewUrls, printingSelectedLayer]);
+
+  const handlePrintingPreviewWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    if (!selectedPrintingLayerPreviewUrl) return;
+    event.preventDefault();
+    schedulePrintingPreviewSettle();
+
+    const previousZoom = printingPreviewZoomRef.current;
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    const nextZoom = Math.max(1, Math.min(32, previousZoom * factor));
+
+    if (Math.abs(nextZoom - previousZoom) < 1e-5) return;
+
+    const viewportRect = printingPreviewViewportRef.current?.getBoundingClientRect();
+    if (!viewportRect) {
+      setPrintingPreviewZoom(nextZoom);
+      if (nextZoom <= 1.0001) queuePrintingPreviewPan({ x: 0, y: 0 });
+      return;
+    }
+
+    const pointerX = event.clientX - (viewportRect.left + viewportRect.width * 0.5);
+    const pointerY = event.clientY - (viewportRect.top + viewportRect.height * 0.5);
+    const previousPan = printingPreviewPanRef.current;
+    const contentX = (pointerX - previousPan.x) / Math.max(1e-4, previousZoom);
+    const contentY = (pointerY - previousPan.y) / Math.max(1e-4, previousZoom);
+    const nextPan = nextZoom <= 1.0001
+      ? { x: 0, y: 0 }
+      : {
+          x: pointerX - (contentX * nextZoom),
+          y: pointerY - (contentY * nextZoom),
+        };
+
+    setPrintingPreviewZoom(nextZoom);
+    queuePrintingPreviewPan(nextPan);
+  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
+
+  const handlePrintingPreviewPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!selectedPrintingLayerPreviewUrl) return;
+    if (printingPreviewZoomRef.current <= 1.0001) return;
+    if (event.button !== 0) return;
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const currentPan = printingPreviewPanRef.current;
+    printingPreviewDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      originX: currentPan.x,
+      originY: currentPan.y,
+    };
+    setIsPrintingPreviewPanning(true);
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
+
+  const handlePrintingPreviewPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = printingPreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+
+    const nextPan = {
+      x: drag.originX + (event.clientX - drag.startClientX),
+      y: drag.originY + (event.clientY - drag.startClientY),
+    };
+    queuePrintingPreviewPan(nextPan);
+    schedulePrintingPreviewSettle();
+  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle]);
+
+  const handlePrintingPreviewPointerEnd = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = printingPreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    printingPreviewDragRef.current = null;
+    setIsPrintingPreviewPanning(false);
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle]);
 
   const printingPreviewTargetResolution = React.useMemo(() => {
     let printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
@@ -983,6 +1147,90 @@ export default function Home() {
     if (scaleX === 1 && scaleY === 1) return undefined;
     return `scale(${scaleX}, ${scaleY})`;
   }, [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
+
+  const printingPreviewMirrorScale = React.useMemo(() => ({
+    x: activePrinterProfile?.display?.mirrorX === true ? -1 : 1,
+    y: activePrinterProfile?.display?.mirrorY === true ? -1 : 1,
+  }), [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
+
+  const isPrintingPreviewLowResActive = React.useMemo(() => {
+    return isPrintingLayerScrubbing && printingPreviewZoom <= 1.0001;
+  }, [isPrintingLayerScrubbing, printingPreviewZoom]);
+
+  const printingPreviewScrubQualityScale = React.useMemo(() => {
+    if (!isPrintingPreviewLowResActive) return 1;
+    return 0.5;
+  }, [isPrintingPreviewLowResActive]);
+
+  const printingPreviewScrubUpscaleTransform = React.useMemo(() => {
+    if (printingPreviewScrubQualityScale >= 0.9999) return undefined;
+    const upscale = 1 / printingPreviewScrubQualityScale;
+    return `scale(${upscale})`;
+  }, [printingPreviewScrubQualityScale]);
+
+  const printingPreviewVisualTransform = React.useMemo(() => {
+    const transformParts: string[] = [];
+    if (Math.abs(printingPreviewPan.x) > 0.01 || Math.abs(printingPreviewPan.y) > 0.01) {
+      transformParts.push(`translate(${printingPreviewPan.x}px, ${printingPreviewPan.y}px)`);
+    }
+    if (Math.abs(printingPreviewZoom - 1) > 1e-4) {
+      transformParts.push(`scale(${printingPreviewZoom})`);
+    }
+    if (printingPreviewDeMirrorTransform) {
+      transformParts.push(printingPreviewDeMirrorTransform);
+    }
+    if (printingPreviewScrubUpscaleTransform) {
+      transformParts.push(printingPreviewScrubUpscaleTransform);
+    }
+    return transformParts.length > 0 ? transformParts.join(' ') : undefined;
+  }, [
+    printingPreviewDeMirrorTransform,
+    printingPreviewPan.x,
+    printingPreviewPan.y,
+    printingPreviewScrubUpscaleTransform,
+    printingPreviewZoom,
+  ]);
+
+  const printingPreviewCursor = React.useMemo<React.CSSProperties['cursor']>(() => {
+    if (!selectedPrintingLayerPreviewUrl) return 'default';
+    if (printingPreviewZoom > 1.0001) {
+      return isPrintingPreviewPanning ? 'grabbing' : 'grab';
+    }
+    return 'zoom-in';
+  }, [isPrintingPreviewPanning, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') {
+      setIsPrintingLayerScrubbing(false);
+      setIsPrintingSettledCanvasReady(false);
+      printingPreviewSettledRef.current = false;
+      setIsPrintingPreviewSettled(false);
+      setPrintingPreviewZoom(1);
+      queuePrintingPreviewPan({ x: 0, y: 0 });
+      setIsPrintingPreviewPanning(false);
+      lastPrintingLayerSyncPerfRef.current = 0;
+      printingPreviewDragRef.current = null;
+      if (printingPreviewSettleTimeoutRef.current !== null) {
+        window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+        printingPreviewSettleTimeoutRef.current = null;
+      }
+    }
+  }, [queuePrintingPreviewPan, scene.mode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    if (!selectedPrintingLayerPreviewUrl) {
+      printingPreviewSettledRef.current = false;
+      setIsPrintingPreviewSettled(false);
+      setIsPrintingSettledCanvasReady(false);
+      return;
+    }
+    schedulePrintingPreviewSettle();
+  }, [scene.mode, schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
+
+  React.useEffect(() => {
+    setIsPrintingSettledCanvasReady(false);
+  }, [selectedPrintingLayerPreviewUrl]);
 
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
 
@@ -1356,10 +1604,116 @@ export default function Home() {
   }, [activePrinterProfile, printingReadyPlateId]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
-    const rounded = Math.round(nextLayer);
-    const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), rounded));
-    setPrintingSelectedLayer(clamped);
-  }, [printingPreviewTotalLayers]);
+    const clamped = clampPrintingLayer(nextLayer);
+    schedulePrintingPreviewSettle();
+    pendingPrintingSelectedLayerRef.current = clamped;
+
+    if (printingSelectedLayerRafRef.current !== null) return;
+
+    printingSelectedLayerRafRef.current = window.requestAnimationFrame(() => {
+      printingSelectedLayerRafRef.current = null;
+      const pending = pendingPrintingSelectedLayerRef.current;
+      pendingPrintingSelectedLayerRef.current = null;
+      if (pending == null) return;
+      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
+    });
+  }, [clampPrintingLayer, schedulePrintingPreviewSettle]);
+
+  const handlePrintingLayerScrubStart = React.useCallback(() => {
+    setIsPrintingLayerScrubbing(true);
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle]);
+
+  const handlePrintingLayerScrubEnd = React.useCallback(() => {
+    if (printingSelectedLayerRafRef.current !== null) {
+      window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
+      printingSelectedLayerRafRef.current = null;
+    }
+    const pending = pendingPrintingSelectedLayerRef.current;
+    pendingPrintingSelectedLayerRef.current = null;
+    if (pending != null) {
+      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
+    }
+    setIsPrintingLayerScrubbing(false);
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle]);
+
+  const usePrintingSettledHiResCanvas = React.useMemo(() => {
+    return Boolean(
+      selectedPrintingLayerPreviewUrl
+      && isPrintingPreviewSettled
+      && printingPreviewZoom > 1.0001
+      && !isPrintingLayerScrubbing,
+    );
+  }, [isPrintingLayerScrubbing, isPrintingPreviewSettled, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
+
+  React.useEffect(() => {
+    if (!usePrintingSettledHiResCanvas) return;
+    if (!selectedPrintingLayerPreviewUrl) return;
+
+    const canvas = printingPreviewCanvasRef.current;
+    const viewport = printingPreviewViewportRef.current;
+    if (!canvas || !viewport) return;
+
+    const rect = viewport.getBoundingClientRect();
+    const viewportWidth = Math.max(1, Math.round(rect.width));
+    const viewportHeight = Math.max(1, Math.round(rect.height));
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr));
+    const canvasHeight = Math.max(1, Math.round(viewportHeight * dpr));
+
+    if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const renderNonce = ++printingPreviewCanvasRenderNonceRef.current;
+    let cancelled = false;
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => {
+      if (cancelled) return;
+      if (renderNonce !== printingPreviewCanvasRenderNonceRef.current) return;
+
+      const naturalWidth = Math.max(1, image.naturalWidth || 1);
+      const naturalHeight = Math.max(1, image.naturalHeight || 1);
+      const logicalSourceWidth = Math.max(1, printingPreviewTargetResolution?.viewportWidth ?? naturalWidth);
+      const logicalSourceHeight = Math.max(1, printingPreviewTargetResolution?.viewportHeight ?? naturalHeight);
+      const baseScale = Math.min(viewportWidth / logicalSourceWidth, viewportHeight / logicalSourceHeight);
+      const drawWidth = logicalSourceWidth * baseScale;
+      const drawHeight = logicalSourceHeight * baseScale;
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(dpr, dpr);
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(viewportWidth * 0.5 + printingPreviewPan.x, viewportHeight * 0.5 + printingPreviewPan.y);
+      ctx.scale(printingPreviewZoom, printingPreviewZoom);
+      ctx.scale(printingPreviewMirrorScale.x, printingPreviewMirrorScale.y);
+      ctx.drawImage(image, -drawWidth * 0.5, -drawHeight * 0.5, drawWidth, drawHeight);
+      ctx.restore();
+      setIsPrintingSettledCanvasReady(true);
+    };
+    image.src = selectedPrintingLayerPreviewUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    printingPreviewMirrorScale.x,
+    printingPreviewMirrorScale.y,
+    printingPreviewPan.x,
+    printingPreviewPan.y,
+    printingPreviewTargetResolution?.viewportHeight,
+    printingPreviewTargetResolution?.viewportWidth,
+    printingPreviewZoom,
+    selectedPrintingLayerPreviewUrl,
+    usePrintingSettledHiResCanvas,
+  ]);
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
     if (scene.mode !== 'prepare') return;
@@ -2268,8 +2622,19 @@ export default function Home() {
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
     const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
+
+    if (isPrintingLayerScrubbing) {
+      const now = performance.now();
+      if ((now - lastPrintingLayerSyncPerfRef.current) < 42) {
+        return;
+      }
+      lastPrintingLayerSyncPerfRef.current = now;
+    } else {
+      lastPrintingLayerSyncPerfRef.current = 0;
+    }
+
     slicing.setLayerIndex(Math.max(0, clamped - 1));
-  }, [scene.mode, printingPreviewTotalLayers, printingSelectedLayer, slicing.setLayerIndex]);
+  }, [scene.mode, printingPreviewTotalLayers, printingSelectedLayer, slicing.setLayerIndex, isPrintingLayerScrubbing]);
 
   // 4. Islands (needs geom & transform & layerHeight)
   const islands = useIslandManager({
@@ -5495,6 +5860,8 @@ export default function Home() {
                 step={1}
                 value={Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}
                 onChange={handlePrintingLayerChange}
+                onScrubStart={handlePrintingLayerScrubStart}
+                onScrubEnd={handlePrintingLayerScrubEnd}
                 currentHeightMm={slicing.currentHeightMm}
                 maxHeightMm={slicing.heightMm}
                 showValue={true}
@@ -5515,8 +5882,19 @@ export default function Home() {
               </div>
 
               <div
-                className="flex-1 min-h-0 min-w-0 rounded-lg border p-2 flex items-center justify-center overflow-hidden"
-                style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
+                className="relative flex-1 min-h-0 min-w-0 rounded-lg border p-2 flex items-center justify-center overflow-hidden"
+                ref={printingPreviewViewportRef}
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
+                  cursor: printingPreviewCursor,
+                  touchAction: 'none',
+                }}
+                onWheel={handlePrintingPreviewWheel}
+                onPointerDown={handlePrintingPreviewPointerDown}
+                onPointerMove={handlePrintingPreviewPointerMove}
+                onPointerUp={handlePrintingPreviewPointerEnd}
+                onPointerCancel={handlePrintingPreviewPointerEnd}
               >
                 {selectedPrintingLayerPreviewUrl ? (
                   printingPreviewTargetResolution ? (
@@ -5524,16 +5902,22 @@ export default function Home() {
                       viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
                       preserveAspectRatio="xMidYMid meet"
                       className="block w-full h-full max-w-full max-h-full rounded"
-                      style={printingPreviewDeMirrorTransform ? { transform: printingPreviewDeMirrorTransform, transformOrigin: 'center center' } : undefined}
+                      style={printingPreviewVisualTransform
+                        ? {
+                            transform: printingPreviewVisualTransform,
+                            transformOrigin: 'center center',
+                            willChange: 'transform',
+                          }
+                        : undefined}
                       role="img"
                       aria-label={`Layer ${printingSelectedLayer} preview`}
                     >
                       <image
                         href={selectedPrintingLayerPreviewUrl}
-                        x={0}
-                        y={0}
-                        width={printingPreviewTargetResolution.viewportWidth}
-                        height={printingPreviewTargetResolution.viewportHeight}
+                        x={(printingPreviewTargetResolution.viewportWidth * (1 - printingPreviewScrubQualityScale)) * 0.5}
+                        y={(printingPreviewTargetResolution.viewportHeight * (1 - printingPreviewScrubQualityScale)) * 0.5}
+                        width={printingPreviewTargetResolution.viewportWidth * printingPreviewScrubQualityScale}
+                        height={printingPreviewTargetResolution.viewportHeight * printingPreviewScrubQualityScale}
                         preserveAspectRatio="none"
                         style={{ imageRendering: 'pixelated' }}
                       />
@@ -5542,11 +5926,16 @@ export default function Home() {
                     <img
                       src={selectedPrintingLayerPreviewUrl}
                       alt={`Layer ${printingSelectedLayer} preview`}
-                      className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
+                      className={isPrintingPreviewLowResActive
+                        ? 'block rounded max-w-none max-h-none w-auto h-auto object-contain'
+                        : 'block rounded max-w-full max-h-full w-auto h-auto object-contain'}
                       style={{
                         imageRendering: 'pixelated',
-                        transform: printingPreviewDeMirrorTransform,
+                        width: isPrintingPreviewLowResActive ? `${printingPreviewScrubQualityScale * 100}%` : undefined,
+                        height: isPrintingPreviewLowResActive ? `${printingPreviewScrubQualityScale * 100}%` : undefined,
+                        transform: printingPreviewVisualTransform,
                         transformOrigin: 'center center',
+                        willChange: 'transform',
                       }}
                     />
                   )
@@ -5557,6 +5946,18 @@ export default function Home() {
                   >
                     No preview PNG available for this layer yet.
                   </div>
+                )}
+
+                {selectedPrintingLayerPreviewUrl && usePrintingSettledHiResCanvas && (
+                  <canvas
+                    ref={printingPreviewCanvasRef}
+                    className="pointer-events-none absolute inset-0 block h-full w-full rounded transition-opacity duration-75"
+                    style={{
+                      imageRendering: 'pixelated',
+                      opacity: isPrintingSettledCanvasReady ? 1 : 0,
+                    }}
+                    aria-label={`Layer ${printingSelectedLayer} settled preview`}
+                  />
                 )}
               </div>
             </div>
