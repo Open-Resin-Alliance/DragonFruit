@@ -940,14 +940,24 @@ export default function Home() {
   }, [printingLayerPreviewUrls, printingSelectedLayer]);
 
   const printingPreviewTargetResolution = React.useMemo(() => {
-    const printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
+    let printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
     const printerHeight = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionY ?? 0));
     const pixelSizeX = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.x ?? 1));
     const pixelSizeY = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.y ?? 1));
+    const bitDepth = Math.max(0, Math.round(Number(activePrinterProfile?.bitDepth?.bits ?? 0)));
     const isNanodlpArtifact = (printingArtifact?.outputName ?? '').toLowerCase().endsWith('.nanodlp');
 
     if (!isNanodlpArtifact || printerWidth <= 0 || printerHeight <= 0) {
       return null;
+    }
+
+    const isLikely16kClass = printerWidth >= 15000 && printerWidth <= 15400;
+    if (isLikely16kClass) {
+      if (bitDepth === 3) {
+        printerWidth = 15136;
+      } else if (bitDepth === 8) {
+        printerWidth = 15120;
+      }
     }
 
     return {
@@ -961,6 +971,7 @@ export default function Home() {
     activePrinterProfile?.display?.resolutionY,
     activePrinterProfile?.pixelSize?.x,
     activePrinterProfile?.pixelSize?.y,
+    activePrinterProfile?.bitDepth?.bits,
     printingArtifact?.outputName,
   ]);
 
