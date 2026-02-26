@@ -38,33 +38,73 @@ export function useInteractionWarning() {
 export function PickingOrbitPauser() {
   const { pause, resume } = usePicking();
   const resumeTimeoutRef = React.useRef<number | null>(null);
+  const orbitFallbackResumeRef = React.useRef<number | null>(null);
   const isPausedRef = React.useRef(false);
 
   useEffect(() => {
-    const handleOrbitChange = () => {
+    const pauseIfNeeded = () => {
       if (resumeTimeoutRef.current !== null) {
         window.clearTimeout(resumeTimeoutRef.current);
         resumeTimeoutRef.current = null;
       }
+      if (orbitFallbackResumeRef.current !== null) {
+        window.clearTimeout(orbitFallbackResumeRef.current);
+      }
+      orbitFallbackResumeRef.current = window.setTimeout(() => {
+        orbitFallbackResumeRef.current = null;
+        if (!isPausedRef.current) return;
+        isPausedRef.current = false;
+        resume();
+      }, 420);
       if (!isPausedRef.current) {
         isPausedRef.current = true;
         pause();
       }
     };
+
+    const resumeIfNeeded = () => {
+      if (resumeTimeoutRef.current !== null) {
+        window.clearTimeout(resumeTimeoutRef.current);
+        resumeTimeoutRef.current = null;
+      }
+      if (orbitFallbackResumeRef.current !== null) {
+        window.clearTimeout(orbitFallbackResumeRef.current);
+        orbitFallbackResumeRef.current = null;
+      }
+      if (!isPausedRef.current) return;
+      isPausedRef.current = false;
+      resume();
+    };
+
+    const handleOrbitStart = () => {
+      pauseIfNeeded();
+    };
+
+    const handleOrbitChange = () => {
+      pauseIfNeeded();
+    };
     const handleOrbitEnd = () => {
       resumeTimeoutRef.current = window.setTimeout(() => {
-        isPausedRef.current = false;
         resumeTimeoutRef.current = null;
-        resume();
+        resumeIfNeeded();
       }, 150);
     };
 
+    window.addEventListener('picking-orbit-start', handleOrbitStart);
     window.addEventListener('picking-orbit-change', handleOrbitChange);
     window.addEventListener('picking-orbit-end', handleOrbitEnd);
+    window.addEventListener('pointerup', resumeIfNeeded, true);
+    window.addEventListener('pointercancel', resumeIfNeeded, true);
+    window.addEventListener('blur', resumeIfNeeded);
     return () => {
+      window.removeEventListener('picking-orbit-start', handleOrbitStart);
       window.removeEventListener('picking-orbit-change', handleOrbitChange);
       window.removeEventListener('picking-orbit-end', handleOrbitEnd);
+      window.removeEventListener('pointerup', resumeIfNeeded, true);
+      window.removeEventListener('pointercancel', resumeIfNeeded, true);
+      window.removeEventListener('blur', resumeIfNeeded);
       if (resumeTimeoutRef.current !== null) window.clearTimeout(resumeTimeoutRef.current);
+      if (orbitFallbackResumeRef.current !== null) window.clearTimeout(orbitFallbackResumeRef.current);
     };
   }, [pause, resume]);
 
@@ -87,7 +127,7 @@ function PickingModeConfigSync({ mode }: { mode?: SupportMode }) {
 
     setConfig({
       includeGizmo: true,
-      allowedCategories: ['model', 'gizmo'],
+      allowedCategories: ['model', 'gizmo', 'support', 'joint', 'knot', 'segment', 'raft'],
     });
   }, [mode, setConfig]);
 

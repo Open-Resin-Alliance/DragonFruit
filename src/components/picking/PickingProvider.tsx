@@ -14,6 +14,7 @@ import { PickingContext, EMPTY_PICK_RESULT } from './PickingContext';
 import { PickingRenderer } from './PickingRenderer';
 import { DEFAULT_PICKING_CONFIG, PICK_ID, GIZMO_PICK_IDS, GIZMO_PICK_ID_TO_HANDLE } from './constants';
 import { isGizmoPickId } from './pickingUtils';
+import { reportPickingRegistrations, reportPickingRuntimeState } from './pickingDiagnostics';
 import type { 
   PickingConfig, 
   PickingResult, 
@@ -104,6 +105,7 @@ export function PickingProvider({
     };
     
     registrationsRef.current.set(pickId, fullRegistration);
+    reportPickingRegistrations(registrationsRef.current);
     
     // Debug logging disabled - uncomment if needed
     // if (config.debug) {
@@ -119,6 +121,7 @@ export function PickingProvider({
   const unregister = useCallback((pickId: number) => {
     const registration = registrationsRef.current.get(pickId);
     registrationsRef.current.delete(pickId);
+    reportPickingRegistrations(registrationsRef.current);
     
     // Debug logging disabled - uncomment if needed
     // if (config.debug && registration) {
@@ -248,6 +251,18 @@ export function PickingProvider({
     isPaused,
     isDragging, // Exposed
   }), [hit, register, unregister, setConfig, config, onDragStart, onDragEnd, pause, resume, isPaused, isDragging]);
+
+  React.useEffect(() => {
+    reportPickingRuntimeState({
+      enabled: config.enabled,
+      isPaused,
+      isDragging,
+    });
+  }, [config.enabled, isPaused, isDragging]);
+
+  React.useEffect(() => {
+    reportPickingRegistrations(registrationsRef.current);
+  }, []);
   
   return (
     <PickingContext.Provider value={contextValue}>

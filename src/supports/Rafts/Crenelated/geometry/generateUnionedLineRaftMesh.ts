@@ -22,11 +22,17 @@ function buildBeamPolygon(a: THREE.Vector2, b: THREE.Vector2, widthMm: number): 
   if (!Number.isFinite(len) || len < 1e-6) return [];
   dir.multiplyScalar(1 / len);
 
+  // Extend both ends by half-width to create square caps.
+  // This ensures adjacent beams sharing a node overlap in area rather than
+  // merely touching at a point, which helps prevent non-manifold unions.
+  const aExt = new THREE.Vector2().copy(a).addScaledVector(dir, -halfW);
+  const bExt = new THREE.Vector2().copy(b).addScaledVector(dir, halfW);
+
   const n = new THREE.Vector2(-dir.y, dir.x);
-  const p0 = new THREE.Vector2().copy(a).addScaledVector(n, halfW);
-  const p1 = new THREE.Vector2().copy(b).addScaledVector(n, halfW);
-  const p2 = new THREE.Vector2().copy(b).addScaledVector(n, -halfW);
-  const p3 = new THREE.Vector2().copy(a).addScaledVector(n, -halfW);
+  const p0 = new THREE.Vector2().copy(aExt).addScaledVector(n, halfW);
+  const p1 = new THREE.Vector2().copy(bExt).addScaledVector(n, halfW);
+  const p2 = new THREE.Vector2().copy(bExt).addScaledVector(n, -halfW);
+  const p3 = new THREE.Vector2().copy(aExt).addScaledVector(n, -halfW);
 
   return [toIntPoint(p0), toIntPoint(p1), toIntPoint(p2), toIntPoint(p3)];
 }

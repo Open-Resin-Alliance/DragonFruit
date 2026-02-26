@@ -2,8 +2,6 @@ import * as THREE from 'three';
 import { STLExporter } from 'three-stdlib';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
-import { SupportGeometryGenerator } from './SupportGeometryGenerator';
-import { SupportData } from '@/supports/rendering/SupportBuilder';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
 import { generatePerimeterWall } from '@/supports/Rafts/Crenelated/geometry/generatePerimeterWall';
@@ -37,6 +35,44 @@ export interface ExportOptions {
 }
 
 export class ExportManager {
+  private static expandInstancedMeshes(root: THREE.Object3D): void {
+    const instancedMeshes: THREE.InstancedMesh[] = [];
+
+    root.traverse((child) => {
+      if (child instanceof THREE.InstancedMesh && child.count > 0) {
+        instancedMeshes.push(child);
+      }
+    });
+
+    const tempMatrix = new THREE.Matrix4();
+    const combinedMatrix = new THREE.Matrix4();
+
+    for (const instanced of instancedMeshes) {
+      const parent = instanced.parent;
+      if (!parent) continue;
+
+      for (let i = 0; i < instanced.count; i += 1) {
+        instanced.getMatrixAt(i, tempMatrix);
+        combinedMatrix.multiplyMatrices(instanced.matrix, tempMatrix);
+
+        const mesh = new THREE.Mesh(
+          instanced.geometry,
+          Array.isArray(instanced.material)
+            ? instanced.material.map((m) => m.clone())
+            : instanced.material.clone(),
+        );
+        mesh.matrixAutoUpdate = false;
+        mesh.matrix.copy(combinedMatrix);
+        mesh.castShadow = instanced.castShadow;
+        mesh.receiveShadow = instanced.receiveShadow;
+        mesh.name = `${instanced.name || 'InstancedMesh'}_${i}`;
+        parent.add(mesh);
+      }
+
+      parent.remove(instanced);
+    }
+  }
+
   private static normalizeExportFilenameBase(filename: string): string {
     const trimmed = filename.trim();
     if (!trimmed) return 'export';
@@ -71,6 +107,10 @@ export class ExportManager {
       // Clone the actual supports group from the scene
       const clonedSupports = supportsGroup.clone();
       clonedSupports.name = 'Supports';
+
+      // STLExporter doesn't serialize InstancedMesh directly.
+      // Expand batched/instanced supports into regular meshes for export.
+      this.expandInstancedMeshes(clonedSupports);
       
       // Remove invisible hitbox meshes and other non-exportable objects
       // STL exporter ignores visibility, so we must actually remove them

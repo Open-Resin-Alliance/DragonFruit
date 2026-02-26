@@ -18,6 +18,7 @@ interface BezierRendererProps {
     color?: string;
     emissive?: string;
     emissiveIntensity?: number;
+    selectedColor?: string;
     transparent?: boolean;
     opacity?: number;
     raycast?: any;
@@ -62,6 +63,14 @@ export function BezierRenderer({
 
     const startRadius = (diameterStart ?? diameter) / 2;
     const endRadius = (diameterEnd ?? diameter) / 2;
+    const PICK_RADIUS_MULTIPLIER = 1.9;
+    const MIN_PICK_RADIUS_MM = 0.45;
+    const selectedVisualScale = isSelected ? 1.03 : 1;
+    const visualStartRadius = startRadius * selectedVisualScale;
+    const visualEndRadius = endRadius * selectedVisualScale;
+    const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
+    const { altActive: braceAltActive } = useBracePlacementState();
+    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
 
     const geometry = useMemo(() => {
         const tubularSegments = Math.max(2, resolution);
@@ -75,7 +84,7 @@ export function BezierRenderer({
         for (let i = 0; i < ringCount; i++) {
             const u = i / tubularSegments;
             const center = curve.getPointAt(u);
-            const r = THREE.MathUtils.lerp(startRadius, endRadius, u);
+            const r = THREE.MathUtils.lerp(visualStartRadius, visualEndRadius, u);
 
             for (let j = 0; j < ringSize; j++) {
                 const idx = i * ringSize + j;
@@ -99,33 +108,51 @@ export function BezierRenderer({
         g.computeBoundingBox();
         g.computeBoundingSphere();
         return g;
-    }, [curve, resolution, startRadius, endRadius]);
+    }, [curve, resolution, visualStartRadius, visualEndRadius]);
+
+    const pickGeometry = useMemo(() => {
+        if (!enableSegmentInteraction) return null;
+        const tubularSegments = Math.max(2, resolution);
+        const radialSegments = 8;
+        const g = new THREE.TubeGeometry(curve, tubularSegments, pickRadius, radialSegments, false);
+        g.computeBoundingBox();
+        g.computeBoundingSphere();
+        return g;
+    }, [curve, enableSegmentInteraction, pickRadius, resolution]);
 
     useEffect(() => {
         return () => {
             geometry.dispose();
         };
     }, [geometry]);
+
+    useEffect(() => {
+        return () => {
+            pickGeometry?.dispose();
+        };
+    }, [pickGeometry]);
     const groupRef = useRef<THREE.Group>(null);
 
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
     const { register, unregister, hit } = usePicking();
 
-    const { altActive: braceAltActive } = useBracePlacementState();
-
     // Register with picking system
     useEffect(() => {
-        if (!groupRef.current) return;
+        if (!groupRef.current || !enableSegmentInteraction) {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+            return;
+        }
         
         // Only register if parent is selected (editable mode)
-        if (isParentSelected) {
-            pickIdRef.current = register({
-                category: 'segment',
-                objectId: id,
-                object: groupRef.current,
-            });
-        }
+        pickIdRef.current = register({
+            category: 'segment',
+            objectId: id,
+            object: groupRef.current,
+        });
         
         return () => {
             if (pickIdRef.current !== null) {
@@ -133,10 +160,10 @@ export function BezierRenderer({
                 pickIdRef.current = null;
             }
         };
-    }, [register, unregister, id, isParentSelected]);
+    }, [register, unregister, id, enableSegmentInteraction]);
 
     // Determine Hover State
-    const isPickingHovered = hit.category === 'segment' && hit.objectId === id;
+    const isPickingHovered = enableSegmentInteraction && hit.category === 'segment' && hit.objectId === id;
     const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
 
     const handleClick = (e: any) => {
@@ -153,16 +180,33 @@ export function BezierRenderer({
             }
         }
 
-        window.dispatchEvent(new CustomEvent('shaft-click', {
-            detail: {
-                segmentId: id,
-                point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
-                intersection: e
-            }
-        }));
+        if (altDown || ctrlDown || isParentSelected) {
+            window.dispatchEvent(new CustomEvent('shaft-click', {
+                detail: {
+                    segmentId: id,
+                    point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+                    intersection: e
+                }
+            }));
+        }
 
         // Ctrl is reserved for Support Brace placement and should not re-select segments.
         if (ctrlDown) return;
+
+        // UX: for curved segments, a direct click should select the segment immediately
+        // (so bezier handles appear on first click) instead of requiring a support-first click.
+        if (!isParentSelected && !altDown && onClick) {
+            e.stopPropagation();
+            if (e.nativeEvent) {
+                e.nativeEvent.stopPropagation();
+                e.nativeEvent.stopImmediatePropagation();
+            }
+            onClick(e);
+            return;
+        }
+
+        // When not in an editable context, let parent support handlers own the click.
+        if (!isParentSelected && !altDown) return;
 
         if (isParentSelected && onClick) {
             e.stopPropagation();
@@ -178,6 +222,8 @@ export function BezierRenderer({
     };
 
     const handlePointerMove = (e: any) => {
+        if (!enableSegmentInteraction) return;
+
         window.dispatchEvent(new CustomEvent('shaft-hover', {
             detail: {
                 segmentId: id,
@@ -188,18 +234,36 @@ export function BezierRenderer({
     };
 
     const handlePointerOut = () => {
+        if (!enableSegmentInteraction) return;
+
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
         }));
     };
 
-    const finalColor = isSelected ? '#ff80ff' : color; // Light Magenta when selected
+    const finalColor = isSelected ? '#ff80ff' : color;
     const finalEmissive = isSelected ? '#440044' : (isHovered ? '#ffffff' : emissive);
     const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.3 : emissiveIntensity);
 
     return (
         <group ref={groupRef}>
-            <mesh raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+            {pickGeometry && (
+                <mesh
+                    raycast={raycast}
+                    onClick={handleClick}
+                    onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
+                    onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
+                >
+                    <primitive object={pickGeometry} attach="geometry" />
+                    <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+                </mesh>
+            )}
+            <mesh
+                raycast={raycast}
+                onClick={handleClick}
+                onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
+                onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
+            >
                 <primitive object={geometry} attach="geometry" />
                 <meshStandardMaterial 
                     color={finalColor} 
@@ -208,6 +272,9 @@ export function BezierRenderer({
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
+                    polygonOffset={!!isSelected}
+                    polygonOffsetFactor={isSelected ? -2 : 0}
+                    polygonOffsetUnits={isSelected ? -2 : 0}
                 />
             </mesh>
         </group>

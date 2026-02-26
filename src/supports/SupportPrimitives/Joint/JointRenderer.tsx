@@ -12,6 +12,7 @@ interface JointRendererProps {
     color?: string; 
     emissive?: string;
     emissiveIntensity?: number;
+    selectedColor?: string;
     onClick?: (e: any) => void;
     onSelect?: (id: string) => void;
     transparent?: boolean;
@@ -27,6 +28,7 @@ export function JointRenderer({
     color: propColor = '#ff8800', 
     emissive: propEmissive = '#000000', 
     emissiveIntensity: propEmissiveIntensity = 0,
+    selectedColor: _selectedColor,
     onClick,
     onSelect,
     transparent = false,
@@ -144,13 +146,13 @@ export function JointRenderer({
         >
             {/* Hitbox Mesh - Only expanded when parent is selected */}
             <mesh raycast={raycast}>
-                <sphereGeometry args={[hitboxRadius, 32, 32]} />
+                <sphereGeometry args={[hitboxRadius, 16, 12]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
 
             {/* Visual Mesh - Purely display */}
             <mesh raycast={raycast}>
-                <sphereGeometry args={[radius, 32, 32]} />
+                <sphereGeometry args={[radius, 16, 12]} />
                 <meshStandardMaterial 
                     color={displayColor} 
                     emissive={displayEmissive} 

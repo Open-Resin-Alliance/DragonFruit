@@ -40,6 +40,17 @@ const deserializeModel = (m: SerializedArrangeModel): ArrangeModel => {
     geometry: {
       center: toVec3(m.geometry.center),
       geometry,
+      supportLocalPoints: m.geometry.supportLocalPoints
+        ? (() => {
+            const points: THREE.Vector3[] = [];
+            const arr = m.geometry.supportLocalPoints;
+            for (let i = 0; i + 2 < arr.length; i += 3) {
+              points.push(new THREE.Vector3(arr[i], arr[i + 1], arr[i + 2]));
+            }
+            return points;
+          })()
+        : undefined,
+      supportHullKey: m.geometry.supportHullKey,
     },
   };
 };

@@ -51,6 +51,7 @@ export function TransformGizmo({
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
   handleScale = 1.0, // New prop
+  suppressAxisAnimations = false,
   onMoveStart,
   onMove,
   onMoveEnd,
@@ -61,6 +62,7 @@ export function TransformGizmo({
   onScale,
   onScaleEnd,
   onDragStateChange,
+  rootRef,
 }: TransformGizmoProps) {
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
@@ -89,6 +91,13 @@ export function TransformGizmo({
       }
     });
   }, []);
+
+  const setGizmoRootRef = React.useCallback((node: THREE.Group | null) => {
+    gizmoRootRef.current = node;
+    if (rootRef) {
+      rootRef.current = node;
+    }
+  }, [rootRef]);
 
   if (!visible) return null;
 
@@ -119,7 +128,29 @@ export function TransformGizmo({
     }
   };
 
-  const handleDragStart = (part: string, isUniform?: boolean) => {
+  const handleDragStart = (part: string, isUniform?: boolean): boolean => {
+    const axisFromPart = (part.endsWith('-x') ? 'x' : part.endsWith('-y') ? 'y' : 'z') as GizmoAxis;
+
+    if (part === 'center' && onMoveStart) {
+      const allowed = onMoveStart();
+      if (allowed === false) return false;
+    }
+
+    if (part.startsWith('axis-') && onMoveStart) {
+      const allowed = onMoveStart();
+      if (allowed === false) return false;
+    }
+
+    if (part.startsWith('ring-') && onRotateStart) {
+      const allowed = onRotateStart(axisFromPart);
+      if (allowed === false) return false;
+    }
+
+    if (part.startsWith('scale-') && onScaleStart) {
+      const allowed = onScaleStart(axisFromPart, Boolean(isUniform));
+      if (allowed === false) return false;
+    }
+
     setActivePart(part);
     setHoveredPart(null);
     
@@ -130,11 +161,8 @@ export function TransformGizmo({
     
     // Notify parent that dragging started (to disable OrbitControls)
     if (onDragStateChange) onDragStateChange(true);
-    
-    if (part === 'center' && onMoveStart) onMoveStart();
-    if (part.startsWith('axis-') && onMoveStart) onMoveStart();
-    if (part.startsWith('ring-') && onRotateStart) onRotateStart();
-    if (part.startsWith('scale-') && onScaleStart) onScaleStart();
+
+    return true;
   };
 
   const handleDragEnd = () => {
@@ -196,7 +224,7 @@ export function TransformGizmo({
   };
 
   return (
-    <group ref={gizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
+    <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
       {/* Center plane - XY movement only */}
       {enableMove && showCenter && (
         <GizmoCenter
@@ -273,6 +301,7 @@ export function TransformGizmo({
             isActive={activePart === 'ring-x'}
             isDimmed={isDimmed('ring-x')}
             isHidden={isHidden('ring-x')}
+            suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-x')}
             onDrag={(angle: number) => handleRotate('x', angle)}
@@ -286,6 +315,7 @@ export function TransformGizmo({
             isActive={activePart === 'ring-y'}
             isDimmed={isDimmed('ring-y')}
             isHidden={isHidden('ring-y')}
+            suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-y')}
             onDrag={(angle: number) => handleRotate('y', angle)}
@@ -299,6 +329,7 @@ export function TransformGizmo({
             isActive={activePart === 'ring-z'}
             isDimmed={isDimmed('ring-z')}
             isHidden={isHidden('ring-z')}
+            suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-z')}
             onDrag={(angle: number) => handleRotate('z', angle)}

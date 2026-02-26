@@ -196,7 +196,7 @@ export interface SupportState {
     selectedId: string | null;
     selectedCategory?: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | null;
     hoveredId: string | null;
-    hoveredCategory?: 'model' | 'support' | 'joint' | 'raft' | 'gizmo' | 'none';
+    hoveredCategory?: 'model' | 'support' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none';
     interactionWarning?: WarningCode | null;
 }
 

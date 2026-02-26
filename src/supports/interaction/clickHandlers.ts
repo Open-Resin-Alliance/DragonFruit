@@ -1,12 +1,102 @@
-import { selectSupport, selectJoint } from './SupportSelection';
+import { selectSupport, selectSupportWithToggle, selectJoint } from './SupportSelection';
 import { setSelectedId } from '../state';
+
+let hoverGuardInitialized = false;
+let orbitInteractionActive = false;
+let shiftModifierActive = false;
+let lastDispatchedHoverModelId: string | null = null;
+
+function initializeHoverGuards() {
+    if (hoverGuardInitialized || typeof window === 'undefined') return;
+    hoverGuardInitialized = true;
+
+    const markOrbitActive = () => {
+        orbitInteractionActive = true;
+    };
+
+    const markOrbitInactive = () => {
+        orbitInteractionActive = false;
+    };
+
+    const markOrbitInactiveFromPointer = () => {
+        orbitInteractionActive = false;
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Shift') shiftModifierActive = true;
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+        if (event.key === 'Shift') shiftModifierActive = false;
+    };
+
+    const clearModifiers = () => {
+        shiftModifierActive = false;
+    };
+
+    window.addEventListener('picking-orbit-start', markOrbitActive);
+    window.addEventListener('picking-orbit-change', markOrbitActive);
+    window.addEventListener('picking-orbit-end', markOrbitInactive);
+    window.addEventListener('pointerup', markOrbitInactiveFromPointer, true);
+    window.addEventListener('pointercancel', markOrbitInactiveFromPointer, true);
+    window.addEventListener('mouseup', markOrbitInactiveFromPointer, true);
+    window.addEventListener('contextmenu', markOrbitInactiveFromPointer, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    window.addEventListener('blur', markOrbitInactiveFromPointer);
+    window.addEventListener('blur', clearModifiers);
+    document.addEventListener('visibilitychange', markOrbitInactiveFromPointer);
+    document.addEventListener('visibilitychange', clearModifiers);
+}
+
+function isShiftActiveFromEvent(e: any) {
+    return !!(
+        e?.shiftKey
+        || e?.nativeEvent?.shiftKey
+        || e?.sourceEvent?.shiftKey
+        || shiftModifierActive
+    );
+}
+
+export function emitSupportModelPointerHover(modelId: string | null) {
+    if (typeof window === 'undefined') return;
+
+    initializeHoverGuards();
+
+    if (orbitInteractionActive) return;
+
+    if (modelId === lastDispatchedHoverModelId) return;
+    lastDispatchedHoverModelId = modelId;
+
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+        detail: {
+            modelId,
+            category: 'support',
+        },
+    }));
+}
+
+export function emitSupportModelPointerSelect(modelId: string | null) {
+    if (typeof window === 'undefined') return;
+    if (!modelId) return;
+
+    window.dispatchEvent(new CustomEvent('support-model-pointer-select', {
+        detail: {
+            modelId,
+        },
+    }));
+}
 
 /**
  * Logic for handling clicks on Support objects (Trunks, Branches).
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.
  */
 export function handleSupportClick(e: any, id: string, isInteractable: boolean) {
-    if (!isInteractable) return;
+    if (!isInteractable) {
+        return;
+    }
+
+    const shiftDown = isShiftActiveFromEvent(e);
     
     e.stopPropagation(); // Stop R3F propagation
     
@@ -16,7 +106,11 @@ export function handleSupportClick(e: any, id: string, isInteractable: boolean) 
         e.nativeEvent.stopImmediatePropagation();
     }
     
-    selectSupport(id);
+    if (shiftDown) {
+        selectSupportWithToggle(id);
+    } else {
+        selectSupport(id);
+    }
 }
 
 /**

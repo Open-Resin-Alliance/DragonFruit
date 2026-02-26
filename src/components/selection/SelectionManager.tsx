@@ -16,6 +16,8 @@ interface SelectionManagerProps {
   enabled?: boolean;
   /** App mode - selection only works in prepare mode */
   mode?: SupportMode;
+  /** Whether SelectionManager should handle background canvas deselect itself */
+  handleCanvasDeselect?: boolean;
 }
 
 /**
@@ -28,6 +30,7 @@ interface SelectionManagerProps {
 export function SelectionManager({
   enabled = true,
   mode = 'prepare',
+  handleCanvasDeselect = true,
 }: SelectionManagerProps) {
   const { select, deselect, state } = useSelection();
 
@@ -47,14 +50,13 @@ export function SelectionManager({
 
   // Listen for canvas clicks - toggle selection
   useEffect(() => {
-    if (!enabled || mode !== 'prepare') return;
+    if (!enabled || mode !== 'prepare' || !handleCanvasDeselect) return;
 
     const handleCanvasClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'CANVAS') {
         // If model-clicked event fired this frame, it was a direct mesh click - already handled
         if (window.__modelClickedThisFrame) {
-          window.__modelClickedThisFrame = false;
           return;
         }
 
@@ -76,7 +78,7 @@ export function SelectionManager({
 
     document.addEventListener('click', handleCanvasClick);
     return () => document.removeEventListener('click', handleCanvasClick);
-  }, [enabled, mode, deselect, select, state.hasSelection]);
+  }, [enabled, mode, handleCanvasDeselect, deselect, select, state.hasSelection]);
 
   return null;
 }
@@ -85,6 +87,7 @@ export function SelectionManager({
 declare global {
   interface Window {
     __modelClickedThisFrame?: boolean;
+    __modelClickGuardUntil?: number;
     __gizmoDragEndedThisFrame?: boolean;
   }
 }

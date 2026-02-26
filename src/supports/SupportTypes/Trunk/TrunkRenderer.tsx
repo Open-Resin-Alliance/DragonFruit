@@ -4,11 +4,12 @@ import { useSyncExternalStore } from 'react';
 import { Trunk, Roots, Vec3 } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { validateBezierConstraints } from '../../Curves/BezierUtils';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
@@ -22,19 +23,32 @@ interface TrunkRendererProps {
     isHovered?: boolean; // Legacy prop
     suppressHover?: boolean;
     isInteractable?: boolean;
+    deferStraightShaftsToSceneBatch?: boolean;
+    deferInteractionToSceneBatch?: boolean;
+    deferRootsToSceneBatch?: boolean;
+    deferContactConesToSceneBatch?: boolean;
     hidePlateContactPrimitives?: boolean;
+    baseColor?: string;
+    hoverColor?: string;
+    selectedColor?: string;
 }
 
-export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, hidePlateContactPrimitives = false }: TrunkRendererProps) {
+export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, deferRootsToSceneBatch = false, deferContactConesToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
+    const highDetailPrimitiveSegments = 24;
+    const lowDetailPrimitiveSegments = 8;
+    const useLowDetailPrimitives = !isSelected && !propHovered;
+
     // Use universal highlight hook
     const { pickRef, visuals } = useHighlight({
         id: trunk.id,
         category: 'support',
+        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
         isSelected,
         suppressHover,
         externalHover: propHovered,
-        baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-        selectedColor: '#80fffd'
+        baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+        selectedColor,
+        hoverColor,
     });
 
     // Subscribe to settings for Base Flare reactivity
@@ -47,6 +61,14 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
     const handleClick = (e: any) => {
         handleSupportClick(e, trunk.id, !!isInteractable);
     };
+
+    const handlePointerMove = React.useCallback(() => {
+        emitSupportModelPointerHover(trunk.modelId ?? null);
+    }, [trunk.modelId]);
+
+    const handlePointerOut = React.useCallback(() => {
+        emitSupportModelPointerHover(null);
+    }, []);
 
     // --- Roots parameters for segment start calculation ---
     const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
@@ -78,6 +100,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
     let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
 
     const shafts: React.ReactNode[] = [];
+    const batchedStraightShafts: InstancedShaft[] = [];
     const joints: React.ReactNode[] = [];
 
     trunk.segments.forEach((seg, index) => {
@@ -101,11 +124,17 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
         const isSegSelected = selectedId === seg.id;
 
         // Add Shaft
-        if (seg.type === 'bezier') {
-            // If parent is selected, Bezier segments appear Magenta to distinguish from Cyan straight segments
-            // If not selected, they match the standard Orange color
-            const bezierColor = isSelected ? '#ff00ff' : visuals.color;
+        const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier';
 
+        if (canBatchShaft) {
+            batchedStraightShafts.push({
+                id: seg.id,
+                start: startPos,
+                end: endPos,
+                diameter: seg.diameter,
+            });
+        } else if (seg.type === 'bezier') {
+            const bezierColor = isSelected ? '#ff00ff' : visuals.color;
             shafts.push(
                 <BezierRenderer
                     key={`shaft-${seg.id}`}
@@ -119,12 +148,13 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                     color={bezierColor}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={isSegSelected}
                     onClick={() => setSelectedId(seg.id)}
                 />
             );
-        } else {
+        } else if (!deferStraightShaftsToSceneBatch || isSelected) {
             shafts.push(
                 <ShaftRenderer
                     key={`shaft-${seg.id}`}
@@ -135,6 +165,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={isSegSelected}
                     onClick={() => setSelectedId(seg.id)}
@@ -143,7 +174,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
         }
 
         // Add Joint
-        if (seg.topJoint) {
+        if (isSelected && seg.topJoint) {
             joints.push(
                 <JointRenderer
                     key={`joint-${seg.topJoint.id}`}
@@ -155,6 +186,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={isSelected}
                 />
@@ -164,7 +196,7 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
 
     // --- Render Contact Cone ---
     let coneRender = null;
-    if (trunk.contactCone) {
+    if (trunk.contactCone && !deferContactConesToSceneBatch) {
         coneRender = (
             <ContactConeRenderer
                 pos={trunk.contactCone.pos}
@@ -175,6 +207,8 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
                 color={visuals.color}
                 emissive={visuals.emissive}
                 emissiveIntensity={visuals.emissiveIntensity}
+                radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                 socketJointId={trunk.contactCone.socketJointId}
                 isInteractable={isInteractable}
                 isParentSelected={isSelected}
@@ -183,18 +217,31 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
     }
 
     return (
-        <group onClick={handleClick}>
+        <group
+            onClick={handleClick}
+            onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+            onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+        >
             {/* Trunk Picking Group - Contains Roots, Shafts, Cones */}
             <group ref={pickRef as any}>
-                {!hidePlateContactPrimitives && (
+                {!hidePlateContactPrimitives && !deferRootsToSceneBatch && (
                     <RootsRenderer
                         root={root}
                         shaftDiameter={shaftDiameter}
                         color={visuals.color}
                         emissive={visuals.emissive}
                         emissiveIntensity={visuals.emissiveIntensity}
+                        selectedColor={visuals.selectedColor}
+                        radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                        sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                     />
                 )}
+                <InstancedShaftGroup
+                    shafts={batchedStraightShafts}
+                    color={visuals.color}
+                    emissive={visuals.emissive}
+                    emissiveIntensity={visuals.emissiveIntensity}
+                />
                 {shafts}
                 {coneRender}
             </group>
@@ -203,4 +250,6 @@ export function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelec
             {joints}
         </group>
     );
-}
+});
+
+TrunkRenderer.displayName = 'TrunkRenderer';

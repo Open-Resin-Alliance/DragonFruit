@@ -16,6 +16,7 @@ type CameraIntroControllerProps = {
 
 type OrbitLikeControls = {
   target: THREE.Vector3;
+  enableDamping?: boolean;
   update: () => void;
 };
 
@@ -23,6 +24,14 @@ function isOrbitLikeControls(value: unknown): value is OrbitLikeControls {
   if (!value || typeof value !== 'object') return false;
   const maybe = value as Partial<OrbitLikeControls>;
   return !!maybe.target && typeof maybe.update === 'function';
+}
+
+function easeInOutQuint(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t < 0.5
+    ? 16 * t * t * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 5) / 2;
 }
 
 export function CameraIntroController({
@@ -36,6 +45,7 @@ export function CameraIntroController({
 }: CameraIntroControllerProps) {
   const { camera, controls, size } = useThree();
   const animatingRef = React.useRef(false);
+  const rafRef = React.useRef<number | null>(null);
   const activeRunIdRef = React.useRef<number>(0);
   const completedRunIdRef = React.useRef<number>(0);
 
@@ -123,6 +133,10 @@ export function CameraIntroController({
     }
 
     animatingRef.current = true;
+    const prevEnableDamping = orbitControls.enableDamping;
+    if (typeof prevEnableDamping === 'boolean') {
+      orbitControls.enableDamping = false;
+    }
     const duration = 1000;
     let startTime: number | null = null;
 
@@ -132,7 +146,8 @@ export function CameraIntroController({
 
       const elapsed = now - startTime;
       const t = Math.min(elapsed / duration, 1);
-      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const smoothStep = THREE.MathUtils.smootherstep(t, 0, 1);
+      const eased = THREE.MathUtils.lerp(smoothStep, easeInOutQuint(t), 0.72);
 
       camera.position.lerpVectors(startPos, endPos, eased);
 
@@ -150,20 +165,35 @@ export function CameraIntroController({
       orbitControls.update();
 
       if (t < 1) {
-        requestAnimationFrame(animate);
+        rafRef.current = requestAnimationFrame(animate);
       } else {
         animatingRef.current = false;
+        rafRef.current = null;
         activeRunIdRef.current = 0;
         completedRunIdRef.current = runId;
+        if (typeof prevEnableDamping === 'boolean') {
+          orbitControls.enableDamping = prevEnableDamping;
+        }
+
+        camera.position.copy(endPos);
+        orbitControls.target.copy(center);
+        orbitControls.update();
 
         onComplete?.(runId);
       }
     };
 
-    requestAnimationFrame(animate);
+    rafRef.current = requestAnimationFrame(animate);
 
     return () => {
       animatingRef.current = false;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (typeof prevEnableDamping === 'boolean') {
+        orbitControls.enableDamping = prevEnableDamping;
+      }
       if (activeRunIdRef.current === runId && completedRunIdRef.current !== runId) {
         activeRunIdRef.current = 0;
       }

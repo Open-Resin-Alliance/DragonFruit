@@ -16,6 +16,12 @@ import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { useSupportBraceStoreState } from '../SupportBrace/supportBraceStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
+import { generateUuid } from '@/utils/uuid';
+
+interface ShaftHoverDetail {
+    segmentId?: string | null;
+    point?: Vec3 | null;
+}
 
 function vecEq(a: Vec3, b: Vec3) {
     return a.x === b.x && a.y === b.y && a.z === b.z;
@@ -27,6 +33,7 @@ export function BracePlacementController() {
     const supportBraceState = useSupportBraceStoreState();
 
     const { raycaster, camera, pointer } = useThree();
+    const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
 
     const segmentMeta = useMemo(() => {
         const map = new Map<string, { modelId: string; supportKey: string; isBezier: boolean }>();
@@ -391,7 +398,24 @@ export function BracePlacementController() {
 
     const targetById = useMemo(() => {
         const map = new Map<string, SnapTarget>();
-        for (const t of allTargets) map.set(t.id, t);
+        for (const t of allTargets) {
+            if (!map.has(t.id)) {
+                map.set(t.id, t);
+            }
+        }
+        return map;
+    }, [allTargets]);
+
+    const targetCandidatesById = useMemo(() => {
+        const map = new Map<string, SnapTarget[]>();
+        for (const t of allTargets) {
+            const existing = map.get(t.id);
+            if (existing) {
+                existing.push(t);
+            } else {
+                map.set(t.id, [t]);
+            }
+        }
         return map;
     }, [allTargets]);
 
@@ -400,6 +424,13 @@ export function BracePlacementController() {
             return targetById.get(id) ?? null;
         },
         [targetById]
+    );
+
+    const getTargetCandidates = useCallback(
+        (id: string): SnapTarget[] => {
+            return targetCandidatesById.get(id) ?? [];
+        },
+        [targetCandidatesById]
     );
 
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
@@ -417,56 +448,91 @@ export function BracePlacementController() {
         resetSnapping();
     }, [altActive, resetSnapping]);
 
+    const projectPointToPathTarget = useCallback((target: SnapTarget, point: Vec3) => {
+        if (!target.pathSegment) return null;
+
+        const a = new THREE.Vector3(target.pathSegment.start.x, target.pathSegment.start.y, target.pathSegment.start.z);
+        const b = new THREE.Vector3(target.pathSegment.end.x, target.pathSegment.end.y, target.pathSegment.end.z);
+        const p = new THREE.Vector3(point.x, point.y, point.z);
+
+        let t = 0;
+        let snapped = a.clone();
+
+        if (target.pathSegment.bezier) {
+            const c1 = new THREE.Vector3(
+                target.pathSegment.bezier.control1.x,
+                target.pathSegment.bezier.control1.y,
+                target.pathSegment.bezier.control1.z
+            );
+            const c2 = new THREE.Vector3(
+                target.pathSegment.bezier.control2.x,
+                target.pathSegment.bezier.control2.y,
+                target.pathSegment.bezier.control2.z
+            );
+
+            let bestT = 0;
+            let bestDistSq = Infinity;
+            const curve = new THREE.CubicBezierCurve3(a, c1, c2, b);
+            const steps = 40;
+            for (let i = 0; i <= steps; i++) {
+                const tt = i / steps;
+                const q = curve.getPoint(tt);
+                const d = q.distanceToSquared(p);
+                if (d < bestDistSq) {
+                    bestDistSq = d;
+                    bestT = tt;
+                    snapped = q;
+                }
+            }
+            t = bestT;
+        } else {
+            const ab = b.clone().sub(a);
+            const abLenSq = ab.lengthSq();
+            if (abLenSq > 0.0000001) {
+                t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / abLenSq, 0, 1);
+                snapped = a.clone().add(ab.multiplyScalar(t));
+            }
+        }
+
+        return {
+            t,
+            snapped,
+            distSq: snapped.distanceToSquared(p),
+        };
+    }, []);
+
+    const resolveNearestPathTarget = useCallback((targetId: string, point: Vec3) => {
+        const candidates = getTargetCandidates(targetId).filter((target) => !!target.pathSegment);
+        if (candidates.length === 0) return null;
+        if (candidates.length === 1) return candidates[0];
+
+        let bestTarget: SnapTarget | null = null;
+        let bestDistSq = Infinity;
+
+        for (const candidate of candidates) {
+            const projected = projectPointToPathTarget(candidate, point);
+            if (!projected) continue;
+            if (projected.distSq < bestDistSq) {
+                bestDistSq = projected.distSq;
+                bestTarget = candidate;
+            }
+        }
+
+        return bestTarget ?? candidates[0];
+    }, [getTargetCandidates, projectPointToPathTarget]);
+
     const resolveSnapFromClick = useCallback(
         (segmentId: string, point: Vec3) => {
-            const target = getTarget(segmentId);
+            const target = resolveNearestPathTarget(segmentId, point) ?? getTarget(segmentId);
             if (!target?.pathSegment) return null;
 
             let hostDiameterMm = target.pathSegment.radius * 2;
             let ownerModelId = segmentMeta.get(segmentId)?.modelId;
 
-            const a = new THREE.Vector3(target.pathSegment.start.x, target.pathSegment.start.y, target.pathSegment.start.z);
-            const b = new THREE.Vector3(target.pathSegment.end.x, target.pathSegment.end.y, target.pathSegment.end.z);
-            const p = new THREE.Vector3(point.x, point.y, point.z);
+            const projected = projectPointToPathTarget(target, point);
+            if (!projected) return null;
 
-            // Straight: analytic projection. Bezier: approximate by sampling.
-            let t = 0;
-            let snapped = a.clone();
-
-            if (target.pathSegment.bezier) {
-                const c1 = new THREE.Vector3(
-                    target.pathSegment.bezier.control1.x,
-                    target.pathSegment.bezier.control1.y,
-                    target.pathSegment.bezier.control1.z
-                );
-                const c2 = new THREE.Vector3(
-                    target.pathSegment.bezier.control2.x,
-                    target.pathSegment.bezier.control2.y,
-                    target.pathSegment.bezier.control2.z
-                );
-
-                let bestT = 0;
-                let bestDistSq = Infinity;
-                const steps = 40;
-                for (let i = 0; i <= steps; i++) {
-                    const tt = i / steps;
-                    const q = new THREE.CubicBezierCurve3(a, c1, c2, b).getPoint(tt);
-                    const d = q.distanceToSquared(p);
-                    if (d < bestDistSq) {
-                        bestDistSq = d;
-                        bestT = tt;
-                        snapped = q;
-                    }
-                }
-                t = bestT;
-            } else {
-                const ab = b.clone().sub(a);
-                const abLenSq = ab.lengthSq();
-                if (abLenSq > 0.0000001) {
-                    t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / abLenSq, 0, 1);
-                    snapped = a.clone().add(ab.multiplyScalar(t));
-                }
-            }
+            const { t, snapped } = projected;
 
             return {
                 kind: 'shaft' as const,
@@ -477,7 +543,7 @@ export function BracePlacementController() {
                 ownerModelId,
             };
         },
-        [getTarget, segmentMeta, supportState.braces, supportState.knots]
+        [getTarget, projectPointToPathTarget, resolveNearestPathTarget, segmentMeta, supportState.braces, supportState.knots]
     );
 
     const resolveLeafSnapFromClick = useCallback(
@@ -516,6 +582,12 @@ export function BracePlacementController() {
         [leafMeta, resolveLeafSurface]
     );
 
+    const resolveHoveredShaftSnap = useCallback(() => {
+        const hovered = hoveredShaftRef.current;
+        if (!hovered?.segmentId || !hovered.point) return null;
+        return resolveSnapFromClick(hovered.segmentId, hovered.point);
+    }, [hoveredShaftRef, resolveSnapFromClick]);
+
     useFrame(() => {
         if (!altActive && stage === 'idle') return;
 
@@ -527,6 +599,21 @@ export function BracePlacementController() {
             if (branchPlacementStore.getSnapshot().stage === 'awaitingBase') {
                 bracePlacementStore.setSnapTarget(null);
                 bracePlacementStore.setPreview(null);
+                return;
+            }
+
+            const hoveredSnap = resolveHoveredShaftSnap();
+            if (hoveredSnap) {
+                const settings = getSettings();
+                const fallbackDia = settings.shaft.diameterMm;
+                const hostDia = hoveredSnap.hostDiameterMm ?? fallbackDia;
+                bracePlacementStore.setPreview({
+                    start: hoveredSnap.snappedPos,
+                    end: hoveredSnap.snappedPos,
+                    startDiameterMm: hostDia,
+                    endDiameterMm: hostDia,
+                });
+                bracePlacementStore.setSnapTarget(null);
                 return;
             }
 
@@ -547,7 +634,7 @@ export function BracePlacementController() {
                         bracePlacementStore.setPreview(null);
                     }
                 } else {
-                    const target = getTarget(result.targetId);
+                    const target = resolveNearestPathTarget(result.targetId, result.snappedPos) ?? getTarget(result.targetId);
                     let hostDia = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : fallbackDia;
                     if (result.targetId.startsWith('braceSegment:')) {
                         const braceId = result.targetId.slice('braceSegment:'.length);
@@ -607,7 +694,35 @@ export function BracePlacementController() {
         let endPos: Vec3 = freeEnd;
         let endDiam: number = startDiam;
 
-        if (result.state === 'locked' && result.targetId && result.t !== undefined) {
+        const hoveredSnap = resolveHoveredShaftSnap();
+        if (hoveredSnap && hoveredSnap.segmentId && hoveredSnap.t !== undefined) {
+            const snapTarget = {
+                kind: 'shaft' as const,
+                segmentId: hoveredSnap.segmentId,
+                snappedPos: hoveredSnap.snappedPos,
+                t: hoveredSnap.t,
+                hostDiameterMm: hoveredSnap.hostDiameterMm,
+                ownerModelId: hoveredSnap.ownerModelId,
+            };
+
+            if (start.kind === 'leaf') {
+                if (start.ownerModelId && snapTarget.ownerModelId && start.ownerModelId !== snapTarget.ownerModelId) {
+                    bracePlacementStore.setSnapTarget(null);
+                } else {
+                    bracePlacementStore.setSnapTarget(snapTarget);
+                    endPos = snapTarget.snappedPos;
+                    endDiam = snapTarget.hostDiameterMm ?? fallbackDia;
+                }
+            } else {
+                if (snapTarget.segmentId && isValidEndSegment(snapTarget.segmentId)) {
+                    bracePlacementStore.setSnapTarget(snapTarget);
+                    endPos = snapTarget.snappedPos;
+                    endDiam = snapTarget.hostDiameterMm ?? fallbackDia;
+                } else {
+                    bracePlacementStore.setSnapTarget(null);
+                }
+            }
+        } else if (result.state === 'locked' && result.targetId && result.t !== undefined) {
             if (leafMeta.has(result.targetId)) {
                 const startModelId = start.ownerModelId;
                 const meta = leafMeta.get(result.targetId);
@@ -638,7 +753,7 @@ export function BracePlacementController() {
                     }
                 }
             } else {
-                const target = getTarget(result.targetId);
+                const target = resolveNearestPathTarget(result.targetId, result.snappedPos) ?? getTarget(result.targetId);
                 let hostDiameterMm = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : undefined;
                 let ownerModelId = segmentMeta.get(result.targetId)?.modelId;
 
@@ -702,6 +817,38 @@ export function BracePlacementController() {
     });
 
     useEffect(() => {
+        const handleShaftHover = (evt: Event) => {
+            const detail = (evt as CustomEvent<ShaftHoverDetail>).detail;
+            if (!detail?.segmentId || !detail.point) return;
+            hoveredShaftRef.current = {
+                segmentId: detail.segmentId,
+                point: detail.point,
+            };
+        };
+
+        const handleShaftLeave = (evt: Event) => {
+            const detail = (evt as CustomEvent<{ segmentId?: string | null }>).detail;
+            if (!detail?.segmentId) {
+                hoveredShaftRef.current = null;
+                return;
+            }
+
+            if (hoveredShaftRef.current?.segmentId === detail.segmentId) {
+                hoveredShaftRef.current = null;
+            }
+        };
+
+        window.addEventListener('shaft-hover', handleShaftHover as EventListener);
+        window.addEventListener('shaft-leave', handleShaftLeave as EventListener);
+
+        return () => {
+            window.removeEventListener('shaft-hover', handleShaftHover as EventListener);
+            window.removeEventListener('shaft-leave', handleShaftLeave as EventListener);
+            hoveredShaftRef.current = null;
+        };
+    }, [hoveredShaftRef]);
+
+    useEffect(() => {
         if (!altActive && stage === 'idle') {
             resetSnapping();
         }
@@ -757,9 +904,9 @@ export function BracePlacementController() {
                 const startDiam = start.hostDiameterMm ?? fallback;
                 const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-                const braceId = crypto.randomUUID();
-                const startKnotId = crypto.randomUUID();
-                const endKnotId = crypto.randomUUID();
+                const braceId = generateUuid();
+                const startKnotId = generateUuid();
+                const endKnotId = generateUuid();
 
                 const startKnot: Knot = {
                     id: startKnotId,
@@ -824,9 +971,9 @@ export function BracePlacementController() {
             const startDiam = start.hostDiameterMm ?? fallback;
             const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-            const braceId = crypto.randomUUID();
-            const startKnotId = crypto.randomUUID();
-            const endKnotId = crypto.randomUUID();
+            const braceId = generateUuid();
+            const startKnotId = generateUuid();
+            const endKnotId = generateUuid();
 
             const startKnot: Knot = {
                 id: startKnotId,
@@ -924,9 +1071,9 @@ export function BracePlacementController() {
                 const startDiam = start.hostDiameterMm ?? fallback;
                 const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-                const braceId = crypto.randomUUID();
-                const startKnotId = crypto.randomUUID();
-                const endKnotId = crypto.randomUUID();
+                const braceId = generateUuid();
+                const startKnotId = generateUuid();
+                const endKnotId = generateUuid();
 
                 const startKnot: Knot = {
                     id: startKnotId,
@@ -987,9 +1134,9 @@ export function BracePlacementController() {
             const startDiam = start.hostDiameterMm ?? fallback;
             const endDiam = endSnap.hostDiameterMm ?? fallback;
 
-            const braceId = crypto.randomUUID();
-            const startKnotId = crypto.randomUUID();
-            const endKnotId = crypto.randomUUID();
+            const braceId = generateUuid();
+            const startKnotId = generateUuid();
+            const endKnotId = generateUuid();
 
             const startKnot: Knot = {
                 id: startKnotId,

@@ -70,6 +70,19 @@ const serializeModel = (model: ArrangeModel, transform: ReturnType<HighPrecision
   const positions = rawArray instanceof Float32Array
     ? rawArray.slice()
     : new Float32Array(positionAttr ? Array.from(rawArray as ArrayLike<number>) : []);
+  const supportLocalPoints = model.geometry.supportLocalPoints;
+  const supportLocalPointArray = supportLocalPoints && supportLocalPoints.length > 0
+    ? (() => {
+        const arr = new Float32Array(supportLocalPoints.length * 3);
+        for (let i = 0; i < supportLocalPoints.length; i += 1) {
+          const p = supportLocalPoints[i];
+          arr[(i * 3) + 0] = p.x;
+          arr[(i * 3) + 1] = p.y;
+          arr[(i * 3) + 2] = p.z;
+        }
+        return arr;
+      })()
+    : undefined;
 
   return {
     id: model.id,
@@ -83,6 +96,8 @@ const serializeModel = (model: ArrangeModel, transform: ReturnType<HighPrecision
       center: [model.geometry.center.x, model.geometry.center.y, model.geometry.center.z],
       uuid: model.geometry.geometry.uuid,
       positions,
+      supportLocalPoints: supportLocalPointArray,
+      supportHullKey: model.geometry.supportHullKey,
     },
   };
 };
@@ -114,6 +129,12 @@ export async function computeHighPrecisionArrangeUpdatesWorker(input: HighPrecis
   const transferables: Transferable[] = [];
   for (const model of request.input.visibleModels) transferables.push(model.geometry.positions.buffer);
   for (const model of request.input.sceneModels) transferables.push(model.geometry.positions.buffer);
+  for (const model of request.input.visibleModels) {
+    if (model.geometry.supportLocalPoints) transferables.push(model.geometry.supportLocalPoints.buffer);
+  }
+  for (const model of request.input.sceneModels) {
+    if (model.geometry.supportLocalPoints) transferables.push(model.geometry.supportLocalPoints.buffer);
+  }
 
   return new Promise<HighPrecisionArrangeUpdate[]>((resolve, reject) => {
     pending.set(requestId, { resolve, reject });

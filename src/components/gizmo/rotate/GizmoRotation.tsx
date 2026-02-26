@@ -15,9 +15,10 @@ interface GizmoRotationProps {
   isActive?: boolean;
   isDimmed?: boolean;
   isHidden?: boolean;
+  suppressAxisAnimations?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
-  onDragStart: () => void;
+  onDragStart: () => boolean | void;
   onDrag: (angle: number) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
@@ -33,6 +34,7 @@ export function GizmoRotation({
   isActive,
   isDimmed,
   isHidden,
+  suppressAxisAnimations = false,
   enableLighting = true,
   gizmoPosition,
   onDragStart,
@@ -121,6 +123,17 @@ export function GizmoRotation({
     return Math.atan2(cameraDir.y, cameraDir.x);
   }, [axis, camera.position, gizmoPosition]);
 
+  React.useEffect(() => {
+    if (!suppressAxisAnimations || isDragging) return;
+    shouldFlipRef.current = computeShouldFlip();
+    const aligned = getCameraAlignedAngle();
+    handleAngleRef.current = aligned;
+    targetHandleAngleRef.current = aligned;
+
+    const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
+    billboardRotationRef.current = Math.atan2(cameraDir.y, cameraDir.x);
+  }, [camera.position, computeShouldFlip, getCameraAlignedAngle, gizmoPosition, isDragging, suppressAxisAnimations]);
+
   // Ref-based temporal smoothing to avoid micro-shimmer from per-frame React state updates.
   useFrame(() => {
     if (!isDragging) {
@@ -132,7 +145,7 @@ export function GizmoRotation({
     if (delta > Math.PI) delta -= 2 * Math.PI;
     if (delta < -Math.PI) delta += 2 * Math.PI;
 
-    const smoothing = isDragging ? 1 : 0.2;
+    const smoothing = isDragging || suppressAxisAnimations ? 1 : 0.2;
     handleAngleRef.current += delta * smoothing;
 
     const handleAngle = handleAngleRef.current;
@@ -155,11 +168,15 @@ export function GizmoRotation({
 
     const cameraDir = new THREE.Vector3().subVectors(camera.position, gizmoPosition).normalize();
     const billboardTarget = Math.atan2(cameraDir.y, cameraDir.x);
-    billboardRotationRef.current += (billboardTarget - billboardRotationRef.current) * 0.2;
+    if (suppressAxisAnimations) {
+      billboardRotationRef.current = billboardTarget;
+    } else {
+      billboardRotationRef.current += (billboardTarget - billboardRotationRef.current) * 0.2;
+    }
     if (billboardGroupRef.current) {
       billboardGroupRef.current.rotation.x = billboardRotationRef.current;
     }
-  });
+  }, -1);
 
   // Rotation for each axis
   const rotation: [number, number, number] =
@@ -181,8 +198,11 @@ export function GizmoRotation({
     // Calculate initial mouse angle
     lastMouseAngle.current = getMouseAngle(e.clientX, e.clientY);
     
+    const allowed = onDragStart();
+    if (allowed === false) {
+      return;
+    }
     setIsDragging(true);
-    onDragStart();
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {

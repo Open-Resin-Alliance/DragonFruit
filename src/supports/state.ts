@@ -5,7 +5,7 @@ import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { addSupportBrace, getSupportBraceSnapshot, removeSupportBrace, resetSupportBraceStore, transformSupportBracesForModel, updateSupportBrace } from './SupportTypes/SupportBrace/supportBraceStore';
+import { addSupportBrace, getSupportBraceSnapshot, reassignAllSupportBraceModelIds, removeSupportBrace, resetSupportBraceStore, transformAllSupportBraces, transformSupportBracesForModel, updateSupportBrace } from './SupportTypes/SupportBrace/supportBraceStore';
 import type { SupportBrace, SupportBraceBuildResult } from './SupportTypes/SupportBrace/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -732,6 +732,99 @@ export function getSnapshot() {
     return state;
 }
 
+export function reassignAllSupportModelIds(modelId: string): boolean {
+    if (!modelId) return false;
+
+    let changed = false;
+    let nextRoots = state.roots;
+    let nextTrunks = state.trunks;
+    let nextBranches = state.branches;
+    let nextLeaves = state.leaves;
+    let nextTwigs = state.twigs;
+    let nextSticks = state.sticks;
+    let nextBraces = state.braces;
+
+    for (const root of Object.values(state.roots)) {
+        if (root.modelId === modelId) continue;
+        if (!changed) {
+            nextRoots = { ...state.roots };
+            changed = true;
+        }
+        nextRoots[root.id] = { ...root, modelId };
+    }
+
+    for (const trunk of Object.values(state.trunks)) {
+        if (trunk.modelId === modelId) continue;
+        if (!changed) {
+            nextTrunks = { ...state.trunks };
+            changed = true;
+        }
+        nextTrunks[trunk.id] = { ...trunk, modelId };
+    }
+
+    for (const branch of Object.values(state.branches)) {
+        if (branch.modelId === modelId) continue;
+        if (!changed) {
+            nextBranches = { ...state.branches };
+            changed = true;
+        }
+        nextBranches[branch.id] = { ...branch, modelId };
+    }
+
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.modelId === modelId) continue;
+        if (!changed) {
+            nextLeaves = { ...state.leaves };
+            changed = true;
+        }
+        nextLeaves[leaf.id] = { ...leaf, modelId };
+    }
+
+    for (const twig of Object.values(state.twigs)) {
+        if (twig.modelId === modelId) continue;
+        if (!changed) {
+            nextTwigs = { ...state.twigs };
+            changed = true;
+        }
+        nextTwigs[twig.id] = { ...twig, modelId };
+    }
+
+    for (const stick of Object.values(state.sticks)) {
+        if (stick.modelId === modelId) continue;
+        if (!changed) {
+            nextSticks = { ...state.sticks };
+            changed = true;
+        }
+        nextSticks[stick.id] = { ...stick, modelId };
+    }
+
+    for (const brace of Object.values(state.braces)) {
+        if (brace.modelId === modelId) continue;
+        if (!changed) {
+            nextBraces = { ...state.braces };
+            changed = true;
+        }
+        nextBraces[brace.id] = { ...brace, modelId };
+    }
+
+    if (changed) {
+        state = {
+            ...state,
+            roots: nextRoots,
+            trunks: nextTrunks,
+            branches: nextBranches,
+            leaves: nextLeaves,
+            twigs: nextTwigs,
+            sticks: nextSticks,
+            braces: nextBraces,
+        };
+        notify();
+    }
+
+    const supportBraceChanged = reassignAllSupportBraceModelIds(modelId);
+    return changed || supportBraceChanged;
+}
+
 export function setSnapshot(next: SupportState) {
     state = next;
     notify();
@@ -740,6 +833,14 @@ export function setSnapshot(next: SupportState) {
 function transformVec3(value: Vec3, matrix: THREE.Matrix4): Vec3 {
     const v = new THREE.Vector3(value.x, value.y, value.z).applyMatrix4(matrix);
     return { x: v.x, y: v.y, z: v.z };
+}
+
+function transformVec3PreserveZ(value: Vec3, matrix: THREE.Matrix4): Vec3 {
+    const transformed = transformVec3(value, matrix);
+    return {
+        ...transformed,
+        z: value.z,
+    };
 }
 
 function transformDirection(value: Vec3, normalMatrix: THREE.Matrix3): Vec3 {
@@ -765,10 +866,11 @@ function transformSegment(segment: Segment, matrix: THREE.Matrix4, normalMatrix:
     };
 
     if (segment.type === 'bezier') {
-        next.controlPoint1 = transformVec3(segment.controlPoint1, matrix);
-        next.controlPoint2 = transformVec3(segment.controlPoint2, matrix);
-        next.startTangent = transformDirection(segment.startTangent, normalMatrix);
-        next.endTangent = transformDirection(segment.endTangent, normalMatrix);
+        const bezierNext = next as BezierSegment;
+        bezierNext.controlPoint1 = transformVec3(segment.controlPoint1, matrix);
+        bezierNext.controlPoint2 = transformVec3(segment.controlPoint2, matrix);
+        bezierNext.startTangent = transformDirection(segment.startTangent, normalMatrix);
+        bezierNext.endTangent = transformDirection(segment.endTangent, normalMatrix);
     }
 
     return next;
@@ -809,6 +911,19 @@ function transformsRoughlyEqual(a: THREE.Matrix4, b: THREE.Matrix4, epsilon = 1e
     return true;
 }
 
+function vectorsRoughlyEqual(a: THREE.Vector3, b: THREE.Vector3, epsilon = 1e-8) {
+    return Math.abs(a.x - b.x) <= epsilon
+        && Math.abs(a.y - b.y) <= epsilon
+        && Math.abs(a.z - b.z) <= epsilon;
+}
+
+function eulersRoughlyEqual(a: THREE.Euler, b: THREE.Euler, epsilon = 1e-8) {
+    return Math.abs(a.x - b.x) <= epsilon
+        && Math.abs(a.y - b.y) <= epsilon
+        && Math.abs(a.z - b.z) <= epsilon
+        && a.order === b.order;
+}
+
 export function transformSupportsForModel(
     modelId: string,
     beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
@@ -831,6 +946,11 @@ export function transformSupportsForModel(
         return;
     }
 
+    const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
+        && vectorsRoughlyEqual(beforeTransform.scale, afterTransform.scale);
+    const deltaTranslation = afterTransform.position.clone().sub(beforeTransform.position);
+    const preserveRootZ = isPureTranslation && Math.abs(deltaTranslation.z) > 1e-8;
+
     const deltaMatrix = afterMatrix.clone().multiply(beforeMatrix.clone().invert());
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
@@ -844,10 +964,63 @@ export function transformSupportsForModel(
     let nextBraces = state.braces;
     let nextKnots = state.knots;
 
+    const touchedRootIds = new Set<string>();
     const touchedSegmentIds = new Set<string>();
+    const touchedJointIds = new Set<string>();
     const touchedKnotIds = new Set<string>();
     const touchedLeafIds = new Set<string>();
     const touchedBraceIds = new Set<string>();
+    const affectedBranchIds = new Set<string>();
+    const affectedLeafIds = new Set<string>();
+    const affectedBraceIds = new Set<string>();
+    const affectedTwigIds = new Set<string>();
+    const affectedStickIds = new Set<string>();
+
+    const segmentModelIdById = new Map<string, string | undefined>();
+    for (const trunk of Object.values(state.trunks)) {
+        for (const segment of trunk.segments) segmentModelIdById.set(segment.id, trunk.modelId);
+    }
+    for (const branch of Object.values(state.branches)) {
+        for (const segment of branch.segments) segmentModelIdById.set(segment.id, branch.modelId);
+    }
+    for (const twig of Object.values(state.twigs)) {
+        for (const segment of twig.segments) segmentModelIdById.set(segment.id, twig.modelId);
+    }
+    for (const stick of Object.values(state.sticks)) {
+        for (const segment of stick.segments) segmentModelIdById.set(segment.id, stick.modelId);
+    }
+
+    const resolveModelIdFromParentShaft = (parentShaftId: string, visitedBraceIds?: Set<string>): string | undefined => {
+        if (parentShaftId.startsWith('leafCone:')) {
+            const leafId = parentShaftId.slice('leafCone:'.length);
+            const leaf = state.leaves[leafId];
+            if (!leaf) return undefined;
+            return leaf.modelId ?? resolveModelIdFromKnot(leaf.parentKnotId, visitedBraceIds);
+        }
+
+        if (parentShaftId.startsWith('braceSegment:')) {
+            const braceId = parentShaftId.slice('braceSegment:'.length);
+            const brace = state.braces[braceId];
+            if (!brace) return undefined;
+
+            const nextVisited = visitedBraceIds ?? new Set<string>();
+            if (nextVisited.has(braceId)) return brace.modelId;
+            nextVisited.add(braceId);
+
+            return brace.modelId
+                ?? resolveModelIdFromKnot(brace.startKnotId, nextVisited)
+                ?? resolveModelIdFromKnot(brace.endKnotId, nextVisited);
+        }
+
+        return segmentModelIdById.get(parentShaftId);
+    };
+
+    const resolveModelIdFromKnot = (knotId: string | undefined, visitedBraceIds?: Set<string>): string | undefined => {
+        if (!knotId) return undefined;
+        const knot = state.knots[knotId];
+        if (!knot) return undefined;
+        return resolveModelIdFromParentShaft(knot.parentShaftId, visitedBraceIds);
+    };
 
     for (const root of Object.values(state.roots)) {
         if (root.modelId !== modelId) continue;
@@ -855,11 +1028,14 @@ export function transformSupportsForModel(
             nextRoots = { ...state.roots };
             changed = true;
         }
+        touchedRootIds.add(root.id);
         nextRoots[root.id] = {
             ...root,
             transform: {
                 ...root.transform,
-                pos: transformVec3(root.transform.pos, deltaMatrix),
+                pos: preserveRootZ
+                    ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
+                    : transformVec3(root.transform.pos, deltaMatrix),
             },
         };
     }
@@ -872,6 +1048,13 @@ export function transformSupportsForModel(
         }
 
         trunk.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
+        trunk.segments.forEach((segment) => {
+            if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+            if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+        });
+        if (trunk.contactCone?.socketJointId) {
+            touchedJointIds.add(trunk.contactCone.socketJointId);
+        }
         const nextTrunk: Trunk = {
             ...trunk,
             segments: trunk.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
@@ -881,47 +1064,167 @@ export function transformSupportsForModel(
         nextTrunks[trunk.id] = nextTrunk;
     }
 
-    for (const branch of Object.values(state.branches)) {
-        if (branch.modelId !== modelId) continue;
+    let expandedGraph = true;
+    while (expandedGraph) {
+        expandedGraph = false;
+
+        for (const branch of Object.values(state.branches)) {
+            if (affectedBranchIds.has(branch.id)) continue;
+
+            const parentKnot = state.knots[branch.parentKnotId];
+            const isConnectedToMovedGraph = touchedKnotIds.has(branch.parentKnotId)
+                || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
+            const resolvedBranchModelId = branch.modelId ?? resolveModelIdFromKnot(branch.parentKnotId);
+
+            if (resolvedBranchModelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedBranchIds.add(branch.id);
+            touchedKnotIds.add(branch.parentKnotId);
+            branch.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
+            branch.segments.forEach((segment) => {
+                if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+                if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+            });
+            if (branch.contactCone?.socketJointId) {
+                touchedJointIds.add(branch.contactCone.socketJointId);
+            }
+            expandedGraph = true;
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (affectedLeafIds.has(leaf.id)) continue;
+
+            const parentKnot = state.knots[leaf.parentKnotId];
+            const isConnectedToMovedGraph = touchedKnotIds.has(leaf.parentKnotId)
+                || (!!parentKnot && touchedSegmentIds.has(parentKnot.parentShaftId));
+            const resolvedLeafModelId = leaf.modelId ?? resolveModelIdFromKnot(leaf.parentKnotId);
+
+            if (resolvedLeafModelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedLeafIds.add(leaf.id);
+            touchedKnotIds.add(leaf.parentKnotId);
+            touchedLeafIds.add(leaf.id);
+            expandedGraph = true;
+        }
+
+        for (const brace of Object.values(state.braces)) {
+            if (affectedBraceIds.has(brace.id)) continue;
+
+            const startKnot = state.knots[brace.startKnotId];
+            const endKnot = state.knots[brace.endKnotId];
+            const startParentShaftId = startKnot?.parentShaftId;
+            const endParentShaftId = endKnot?.parentShaftId;
+            const isConnectedToMovedGraph = touchedKnotIds.has(brace.startKnotId)
+                || touchedKnotIds.has(brace.endKnotId)
+                || (!!startParentShaftId && (touchedSegmentIds.has(startParentShaftId)
+                    || (startParentShaftId.startsWith('braceSegment:')
+                        && touchedBraceIds.has(startParentShaftId.slice('braceSegment:'.length)))))
+                || (!!endParentShaftId && (touchedSegmentIds.has(endParentShaftId)
+                    || (endParentShaftId.startsWith('braceSegment:')
+                        && touchedBraceIds.has(endParentShaftId.slice('braceSegment:'.length)))));
+            const resolvedBraceModelId = brace.modelId
+                ?? resolveModelIdFromKnot(brace.startKnotId)
+                ?? resolveModelIdFromKnot(brace.endKnotId);
+
+            if (resolvedBraceModelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedBraceIds.add(brace.id);
+            touchedKnotIds.add(brace.startKnotId);
+            touchedKnotIds.add(brace.endKnotId);
+            touchedBraceIds.add(brace.id);
+            touchedSegmentIds.add(`braceSegment:${brace.id}`);
+            expandedGraph = true;
+        }
+
+        for (const twig of Object.values(state.twigs)) {
+            if (affectedTwigIds.has(twig.id)) continue;
+
+            const isConnectedToMovedGraph = twig.segments.some((segment) => {
+                const bottomJointId = segment.bottomJoint?.id;
+                const topJointId = segment.topJoint?.id;
+                return (!!bottomJointId && touchedJointIds.has(bottomJointId))
+                    || (!!topJointId && touchedJointIds.has(topJointId));
+            });
+
+            if (twig.modelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedTwigIds.add(twig.id);
+            twig.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
+            twig.segments.forEach((segment) => {
+                if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+                if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+            });
+            expandedGraph = true;
+        }
+
+        for (const stick of Object.values(state.sticks)) {
+            if (affectedStickIds.has(stick.id)) continue;
+
+            const isConnectedToMovedGraph = stick.segments.some((segment) => {
+                const bottomJointId = segment.bottomJoint?.id;
+                const topJointId = segment.topJoint?.id;
+                return (!!bottomJointId && touchedJointIds.has(bottomJointId))
+                    || (!!topJointId && touchedJointIds.has(topJointId));
+            });
+
+            if (stick.modelId !== modelId && !isConnectedToMovedGraph) continue;
+
+            affectedStickIds.add(stick.id);
+            stick.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
+            stick.segments.forEach((segment) => {
+                if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+                if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+            });
+            if (stick.contactConeA?.socketJointId) touchedJointIds.add(stick.contactConeA.socketJointId);
+            if (stick.contactConeB?.socketJointId) touchedJointIds.add(stick.contactConeB.socketJointId);
+            expandedGraph = true;
+        }
+    }
+
+    for (const branchId of affectedBranchIds) {
+        const branch = state.branches[branchId];
+        if (!branch) continue;
+
         if (!changed) {
             nextBranches = { ...state.branches };
             changed = true;
         }
 
-        touchedKnotIds.add(branch.parentKnotId);
-        branch.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
-        const nextBranch: Branch = {
+        nextBranches[branch.id] = {
             ...branch,
             segments: branch.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
             contactCone: branch.contactCone ? transformContactCone(branch.contactCone, deltaMatrix, normalMatrix) : branch.contactCone,
         };
-
-        nextBranches[branch.id] = nextBranch;
     }
 
-    for (const leaf of Object.values(state.leaves)) {
-        if (leaf.modelId !== modelId) continue;
+    for (const leafId of affectedLeafIds) {
+        const leaf = state.leaves[leafId];
+        if (!leaf) continue;
+
         if (!changed) {
             nextLeaves = { ...state.leaves };
             changed = true;
         }
 
-        touchedKnotIds.add(leaf.parentKnotId);
-        touchedLeafIds.add(leaf.id);
         nextLeaves[leaf.id] = {
             ...leaf,
             contactCone: transformContactCone(leaf.contactCone, deltaMatrix, normalMatrix),
         };
     }
 
-    for (const twig of Object.values(state.twigs)) {
-        if (twig.modelId !== modelId) continue;
+    for (const twigId of affectedTwigIds) {
+        const twig = state.twigs[twigId];
+        if (!twig) continue;
         if (!changed) {
             nextTwigs = { ...state.twigs };
             changed = true;
         }
 
         twig.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
+        twig.segments.forEach((segment) => {
+            if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+            if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+        });
         nextTwigs[twig.id] = {
             ...twig,
             segments: twig.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
@@ -930,14 +1233,21 @@ export function transformSupportsForModel(
         };
     }
 
-    for (const stick of Object.values(state.sticks)) {
-        if (stick.modelId !== modelId) continue;
+    for (const stickId of affectedStickIds) {
+        const stick = state.sticks[stickId];
+        if (!stick) continue;
         if (!changed) {
             nextSticks = { ...state.sticks };
             changed = true;
         }
 
         stick.segments.forEach((segment) => touchedSegmentIds.add(segment.id));
+        stick.segments.forEach((segment) => {
+            if (segment.bottomJoint?.id) touchedJointIds.add(segment.bottomJoint.id);
+            if (segment.topJoint?.id) touchedJointIds.add(segment.topJoint.id);
+        });
+        if (stick.contactConeA?.socketJointId) touchedJointIds.add(stick.contactConeA.socketJointId);
+        if (stick.contactConeB?.socketJointId) touchedJointIds.add(stick.contactConeB.socketJointId);
         nextSticks[stick.id] = {
             ...stick,
             segments: stick.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
@@ -946,16 +1256,14 @@ export function transformSupportsForModel(
         };
     }
 
-    for (const brace of Object.values(state.braces)) {
-        if (brace.modelId !== modelId) continue;
+    for (const braceId of affectedBraceIds) {
+        const brace = state.braces[braceId];
+        if (!brace) continue;
+
         if (!changed) {
             nextBraces = { ...state.braces };
             changed = true;
         }
-
-        touchedKnotIds.add(brace.startKnotId);
-        touchedKnotIds.add(brace.endKnotId);
-        touchedBraceIds.add(brace.id);
 
         nextBraces[brace.id] = {
             ...brace,
@@ -1010,7 +1318,133 @@ export function transformSupportsForModel(
         notify();
     }
 
-    transformSupportBracesForModel(modelId, deltaMatrix);
+    transformSupportBracesForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds, preserveRootZ);
+}
+
+export function transformAllSupportsForSingleModel(
+    beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+    afterTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
+) {
+    const beforeMatrix = new THREE.Matrix4().compose(
+        beforeTransform.position.clone(),
+        quaternionFromGlobalEuler(beforeTransform.rotation),
+        beforeTransform.scale.clone(),
+    );
+    const afterMatrix = new THREE.Matrix4().compose(
+        afterTransform.position.clone(),
+        quaternionFromGlobalEuler(afterTransform.rotation),
+        afterTransform.scale.clone(),
+    );
+
+    if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
+        return;
+    }
+
+    const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
+        && vectorsRoughlyEqual(beforeTransform.scale, afterTransform.scale);
+    const deltaTranslation = afterTransform.position.clone().sub(beforeTransform.position);
+    const preserveRootZ = isPureTranslation && Math.abs(deltaTranslation.z) > 1e-8;
+
+    const deltaMatrix = afterMatrix.clone().multiply(beforeMatrix.clone().invert());
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
+
+    const nextRoots: Record<string, Roots> = {};
+    for (const root of Object.values(state.roots)) {
+        nextRoots[root.id] = {
+            ...root,
+            transform: {
+                ...root.transform,
+                pos: preserveRootZ
+                    ? transformVec3PreserveZ(root.transform.pos, deltaMatrix)
+                    : transformVec3(root.transform.pos, deltaMatrix),
+            },
+        };
+    }
+
+    const nextTrunks: Record<string, Trunk> = {};
+    for (const trunk of Object.values(state.trunks)) {
+        nextTrunks[trunk.id] = {
+            ...trunk,
+            segments: trunk.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+            contactCone: trunk.contactCone ? transformContactCone(trunk.contactCone, deltaMatrix, normalMatrix) : trunk.contactCone,
+        };
+    }
+
+    const nextBranches: Record<string, Branch> = {};
+    for (const branch of Object.values(state.branches)) {
+        nextBranches[branch.id] = {
+            ...branch,
+            segments: branch.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+            contactCone: branch.contactCone ? transformContactCone(branch.contactCone, deltaMatrix, normalMatrix) : branch.contactCone,
+        };
+    }
+
+    const nextLeaves: Record<string, Leaf> = {};
+    for (const leaf of Object.values(state.leaves)) {
+        nextLeaves[leaf.id] = {
+            ...leaf,
+            contactCone: transformContactCone(leaf.contactCone, deltaMatrix, normalMatrix),
+        };
+    }
+
+    const nextTwigs: Record<string, Twig> = {};
+    for (const twig of Object.values(state.twigs)) {
+        nextTwigs[twig.id] = {
+            ...twig,
+            segments: twig.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+            contactDiskA: transformContactDisk(twig.contactDiskA, deltaMatrix, normalMatrix),
+            contactDiskB: transformContactDisk(twig.contactDiskB, deltaMatrix, normalMatrix),
+        };
+    }
+
+    const nextSticks: Record<string, Stick> = {};
+    for (const stick of Object.values(state.sticks)) {
+        nextSticks[stick.id] = {
+            ...stick,
+            segments: stick.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+            contactConeA: transformContactCone(stick.contactConeA, deltaMatrix, normalMatrix),
+            contactConeB: transformContactCone(stick.contactConeB, deltaMatrix, normalMatrix),
+        };
+    }
+
+    const nextBraces: Record<string, Brace> = {};
+    for (const brace of Object.values(state.braces)) {
+        nextBraces[brace.id] = {
+            ...brace,
+            curve: brace.curve
+                ? {
+                    ...brace.curve,
+                    controlPoint1: transformVec3(brace.curve.controlPoint1, deltaMatrix),
+                    controlPoint2: transformVec3(brace.curve.controlPoint2, deltaMatrix),
+                    startTangent: transformDirection(brace.curve.startTangent, normalMatrix),
+                    endTangent: transformDirection(brace.curve.endTangent, normalMatrix),
+                }
+                : brace.curve,
+        };
+    }
+
+    const nextKnots: Record<string, Knot> = {};
+    for (const knot of Object.values(state.knots)) {
+        nextKnots[knot.id] = {
+            ...knot,
+            pos: transformVec3(knot.pos, deltaMatrix),
+        };
+    }
+
+    state = {
+        ...state,
+        roots: nextRoots,
+        trunks: nextTrunks,
+        branches: nextBranches,
+        leaves: nextLeaves,
+        twigs: nextTwigs,
+        sticks: nextSticks,
+        braces: nextBraces,
+        knots: nextKnots,
+    };
+    notify();
+
+    transformAllSupportBraces(deltaMatrix, preserveRootZ);
 }
 
 export function removeRootById(rootId: string): Roots | null {
@@ -1513,7 +1947,7 @@ export function setHoveredId(id: string | null) {
     notify();
 }
 
-export function setHoveredCategory(category: 'model' | 'support' | 'joint' | 'raft' | 'gizmo' | 'none') {
+export function setHoveredCategory(category: 'model' | 'support' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none') {
     if (state.hoveredCategory === category) return;
     state = { ...state, hoveredCategory: category };
     notify();
@@ -2396,6 +2830,81 @@ export function getHoveredId() {
 
 export function getHoveredCategory() {
     return state.hoveredCategory;
+}
+
+export function getModelIdForSupportEntityId(id: string | null | undefined): string | null {
+    if (!id) return null;
+
+    if (id.startsWith('braceSegment:')) {
+        const braceId = id.slice('braceSegment:'.length);
+        return state.braces[braceId]?.modelId ?? null;
+    }
+
+    if (state.roots[id]) return state.roots[id].modelId ?? null;
+    if (state.trunks[id]) return state.trunks[id].modelId ?? null;
+    if (state.branches[id]) return state.branches[id].modelId ?? null;
+    if (state.leaves[id]) return state.leaves[id].modelId ?? null;
+    if (state.twigs[id]) return state.twigs[id].modelId ?? null;
+    if (state.sticks[id]) return state.sticks[id].modelId ?? null;
+    if (state.braces[id]) return state.braces[id].modelId ?? null;
+
+    const supportBraceState = getSupportBraceSnapshot();
+    const directSupportBrace = supportBraceState.supportBraces[id];
+    if (directSupportBrace) return directSupportBrace.modelId ?? null;
+
+    for (const trunk of Object.values(state.trunks)) {
+        if (trunk.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return trunk.modelId ?? null;
+        }
+    }
+
+    for (const branch of Object.values(state.branches)) {
+        if (branch.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return branch.modelId ?? null;
+        }
+    }
+
+    for (const twig of Object.values(state.twigs)) {
+        if (twig.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return twig.modelId ?? null;
+        }
+    }
+
+    for (const stick of Object.values(state.sticks)) {
+        if (stick.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return stick.modelId ?? null;
+        }
+    }
+
+    for (const brace of Object.values(state.braces)) {
+        if (brace.startKnotId === id || brace.endKnotId === id) {
+            return brace.modelId ?? null;
+        }
+    }
+
+    for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
+        if (supportBrace.hostKnotId === id) return supportBrace.modelId ?? null;
+        if (supportBrace.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return supportBrace.modelId ?? null;
+        }
+    }
+
+    if (state.knots[id]) {
+        const parentShaftId = state.knots[id].parentShaftId;
+        if (parentShaftId) {
+            const byParent = getModelIdForSupportEntityId(parentShaftId);
+            if (byParent) return byParent;
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.parentKnotId === id) return branch.modelId ?? null;
+        }
+        for (const leaf of Object.values(state.leaves)) {
+            if (leaf.parentKnotId === id) return leaf.modelId ?? null;
+        }
+    }
+
+    return null;
 }
 
 export function getTrunkById(trunkId: string) {

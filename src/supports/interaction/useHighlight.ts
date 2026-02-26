@@ -1,17 +1,16 @@
-import { useEffect } from 'react';
 import { usePickingSubscription } from '@/components/picking';
 import { PickableCategory } from '@/components/picking';
-import { setHoveredId } from '../state';
 
 export interface HighlightOptions {
     id: string;
     category: PickableCategory;
+    enabled?: boolean;
     isSelected?: boolean;
     suppressHover?: boolean;
     externalHover?: boolean; // Legacy/External override
     baseColor?: string;
     selectedColor?: string;
-    hoverColor?: string; // Emissive color
+    hoverColor?: string;
 }
 
 /**
@@ -21,6 +20,7 @@ export interface HighlightOptions {
 export function useHighlight({
     id,
     category,
+    enabled = true,
     isSelected = false,
     suppressHover = false,
     externalHover = false,
@@ -32,7 +32,8 @@ export function useHighlight({
     // Register with picking system and track hover
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
         category,
-        objectId: id
+        objectId: id,
+        enabled,
     });
 
     // Determine effective hover state
@@ -49,6 +50,8 @@ export function useHighlight({
         isHighlighted,
         visuals: {
             color,
+            selectedColor,
+            hoverColor,
             emissive,
             emissiveIntensity
         }

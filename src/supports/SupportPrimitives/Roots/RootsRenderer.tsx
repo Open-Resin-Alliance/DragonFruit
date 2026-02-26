@@ -17,6 +17,8 @@ interface RootsRendererProps {
     diskColor?: string; // Granular override for base disk
     coneColor?: string; // Granular override for cone part
     diskMaterialOverride?: { transparent?: boolean; opacity?: number; depthWrite?: boolean };
+    radialSegments?: number;
+    sphereSegments?: number;
 }
 
 /**
@@ -41,7 +43,9 @@ export function RootsRenderer({
     raftOverride, // Optional override for preview
     diskColor,
     coneColor,
-    diskMaterialOverride
+    diskMaterialOverride,
+    radialSegments = 24,
+    sphereSegments = 24,
 }: RootsRendererProps & { raftOverride?: { bottomMode: 'off' | 'solid' | 'line'; thickness: number } }) {
     const storeRaft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
@@ -99,7 +103,7 @@ export function RootsRenderer({
             {/* Bottom disk - footprint on plate */}
             <group position={[diskCenter.x, diskCenter.y, diskCenter.z]} quaternion={coneQuaternion}>
                 <mesh raycast={raycast}>
-                    <cylinderGeometry args={[bottomRadius, bottomRadius, effectiveDiskHeight, 32]} />
+                    <cylinderGeometry args={[bottomRadius, bottomRadius, effectiveDiskHeight, radialSegments]} />
                     <meshStandardMaterial
                         color={finalDiskColor}
                         emissive={emissive}
@@ -115,7 +119,7 @@ export function RootsRenderer({
             {coneHeight > 0 && (
                 <group position={[coneCenter.x, coneCenter.y, coneCenter.z]} quaternion={coneQuaternion}>
                     <mesh raycast={raycast}>
-                        <cylinderGeometry args={[topRadius, bottomRadius, coneHeight, 32]} />
+                        <cylinderGeometry args={[topRadius, bottomRadius, coneHeight, radialSegments]} />
                         <meshStandardMaterial
                             color={finalConeColor}
                             emissive={emissive}
@@ -131,7 +135,7 @@ export function RootsRenderer({
             {/* Spherical top - trunk shaft embeds into this */}
             {coneHeight > 0 && (
                 <mesh position={[sphereCenter.x, sphereCenter.y, sphereCenter.z]} raycast={raycast}>
-                    <sphereGeometry args={[sphereRadius, 32, 24]} />
+                    <sphereGeometry args={[sphereRadius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                     <meshStandardMaterial
                         color={finalConeColor}
                         emissive={emissive}

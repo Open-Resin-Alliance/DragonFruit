@@ -1,5 +1,14 @@
 import * as THREE from 'three';
 
+function signedArea(poly: THREE.Vector2[]): number {
+  let area = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const j = (i + 1) % poly.length;
+    area += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
+  }
+  return area * 0.5;
+}
+
 /**
  * Compute an inward offset (inset) of a convex polygon by distance d.
  * Input polygon must be CCW, non-self-intersecting, convex.
@@ -8,15 +17,22 @@ import * as THREE from 'three';
 export function insetConvexPolygon(poly: THREE.Vector2[], d: number): THREE.Vector2[] {
   if (poly.length < 3 || Math.abs(d) < 1e-5) return poly.map(p => p.clone());
 
-  const n = poly.length;
+  // Normalize winding so the "left normal" is consistently inward.
+  // Convex hull generators typically return CCW, but imported/derived profiles
+  // can occasionally be CW.
+  const isCcw = signedArea(poly) > 0;
+  const workPoly = isCcw ? poly : [...poly].reverse();
+
+  const n = workPoly.length;
 
   // Build offset lines for each edge
   const linePoints: THREE.Vector2[] = new Array(n);
   const lineDirs: THREE.Vector2[] = new Array(n);
+  const inwardNormals: THREE.Vector2[] = new Array(n);
 
   for (let i = 0; i < n; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % n];
+    const a = workPoly[i];
+    const b = workPoly[(i + 1) % n];
     const dir = new THREE.Vector2().subVectors(b, a);
     // Left normal points inward for CCW polygon
     const inward = new THREE.Vector2(-dir.y, dir.x);
@@ -24,9 +40,11 @@ export function insetConvexPolygon(poly: THREE.Vector2[], d: number): THREE.Vect
     if (len === 0) {
       linePoints[i] = a.clone();
       lineDirs[i] = new THREE.Vector2(1, 0);
+      inwardNormals[i] = new THREE.Vector2(0, 0);
       continue;
     }
     inward.multiplyScalar(1 / len);
+    inwardNormals[i] = inward.clone();
     // Shift the edge line inward by distance d
     const pShift = new THREE.Vector2(a.x + inward.x * d, a.y + inward.y * d);
     linePoints[i] = pShift;
@@ -42,10 +60,34 @@ export function insetConvexPolygon(poly: THREE.Vector2[], d: number): THREE.Vect
     const p2 = linePoints[i];
     const d2 = lineDirs[i];
     const v = intersectLines(p1, d1, p2, d2);
-    inset[i] = v ?? poly[i].clone();
+    if (v) {
+      inset[i] = v;
+      continue;
+    }
+
+    // Near-parallel adjacent edges: avoid falling back to the original vertex,
+    // which can collapse local ring thickness to nearly zero.
+    const prevInward = inwardNormals[iPrev] ?? new THREE.Vector2(0, 0);
+    const currInward = inwardNormals[i] ?? new THREE.Vector2(0, 0);
+    const avgInward = new THREE.Vector2().addVectors(prevInward, currInward);
+
+    if (avgInward.lengthSq() > 1e-12) {
+      avgInward.normalize();
+      inset[i] = new THREE.Vector2(
+        workPoly[i].x + avgInward.x * d,
+        workPoly[i].y + avgInward.y * d,
+      );
+    } else if (currInward.lengthSq() > 1e-12) {
+      inset[i] = new THREE.Vector2(
+        workPoly[i].x + currInward.x * d,
+        workPoly[i].y + currInward.y * d,
+      );
+    } else {
+      inset[i] = workPoly[i].clone();
+    }
   }
 
-  return inset;
+  return isCcw ? inset : inset.reverse();
 }
 
 function intersectLines(p1: THREE.Vector2, d1: THREE.Vector2, p2: THREE.Vector2, d2: THREE.Vector2): THREE.Vector2 | null {

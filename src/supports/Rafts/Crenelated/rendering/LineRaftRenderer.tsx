@@ -109,23 +109,95 @@ function buildNonCrossingEdges(points: THREE.Vector2[], maxDegree: number, maxLe
   return chosen;
 }
 
-export default function LineRaftRenderer() {
+interface LineRaftRendererProps {
+  colorized?: boolean;
+  hoverized?: boolean;
+  ghostOpacity?: number;
+  ghostRenderOrder?: number;
+  activeModelId?: string | null;
+  selectedModelIds?: string[];
+  hoverModelId?: string | null;
+  modelFilterId?: string | null;
+  excludeModelId?: string | null;
+  excludeModelIds?: string[];
+  navigationLodActive?: boolean;
+  onModelPointerSelect?: (modelId: string, e: any) => void;
+}
+
+export default function LineRaftRenderer({
+  colorized = true,
+  hoverized = false,
+  ghostOpacity = 1,
+  ghostRenderOrder = 0,
+  activeModelId = null,
+  selectedModelIds = [],
+  hoverModelId = null,
+  modelFilterId = null,
+  excludeModelId = null,
+  excludeModelIds = [],
+  navigationLodActive = false,
+  onModelPointerSelect,
+}: LineRaftRendererProps) {
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
 
-  const meshes = React.useMemo(() => {
+  React.useEffect(() => {
+    const handleImmediateModelHover = (event: Event) => {
+      if (navigationLodActive) return;
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      setImmediateModelHoverId(customEvent.detail?.modelId ?? null);
+    };
+
+    window.addEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    return () => {
+      window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
+    };
+  }, []);
+
+  const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
+  const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
+  const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
+  const raftOpacity = Math.max(0.05, Math.min(1, ghostOpacity));
+  const raftTransparent = raftOpacity < 0.999;
+
+  const raftMeshes = React.useMemo(() => {
     if (raft.bottomMode !== 'line') return null;
 
-    const roots = Object.values(supportState.roots);
-    if (roots.length === 0) return null;
+    const rootsByModel = new Map<string, typeof supportState.roots[string][]>();
+    for (const root of Object.values(supportState.roots)) {
+      if (excludeModelId && root.modelId === excludeModelId) continue;
+      if (root.modelId && excludedModelIdSet.has(root.modelId)) continue;
+      if (modelFilterId && root.modelId !== modelFilterId) continue;
+      const key = root.modelId || 'unknown';
+      if (!rootsByModel.has(key)) rootsByModel.set(key, []);
+      rootsByModel.get(key)!.push(root);
+    }
 
-    const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
+    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
+      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength).getStyle();
 
-    const circles: SupportBaseCircle[] = roots.map((r) => ({
-      x: r.transform.pos.x,
-      y: r.transform.pos.y,
-      r: r.diameter / 2,
-    }));
+    const resolveTintStrength = (modelId: string) => {
+      if (!colorized) return 0;
+      if (modelId === activeModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
+      if (hasSelectedModels) return 0;
+      return hoverized ? 0.5 : 1;
+    };
+
+    const meshes: Array<{ beamMeshes: THREE.Mesh[]; wallMesh: THREE.Mesh | null }> = [];
+
+    for (const [modelId, roots] of rootsByModel) {
+      if (roots.length === 0) continue;
+
+      const nodes2d = roots.map((r) => new THREE.Vector2(r.transform.pos.x, r.transform.pos.y));
+
+      const circles: SupportBaseCircle[] = roots.map((r) => ({
+        x: r.transform.pos.x,
+        y: r.transform.pos.y,
+        r: r.diameter / 2,
+      }));
 
     // Footprint polygon wraps around the *outer edge* of all supports.
     // Important: the border is chamfered (bottom inset). To ensure the *bottom* of the chamfer
@@ -226,9 +298,11 @@ export default function LineRaftRenderer() {
       // Interior network only: keep this unioned mesh flat to avoid sloppy chamfer stitching.
       borderProfile: null,
     });
-    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
+    unionMesh.renderOrder = ghostRenderOrder;
+    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
     unionMesh.castShadow = false;
     unionMesh.receiveShadow = true;
+    unionMesh.userData.modelId = modelId;
 
     const unionHasGeometry = (unionMesh.geometry as any)?.attributes?.position?.count > 0;
     const beamMeshes: THREE.Mesh[] = [];
@@ -243,9 +317,11 @@ export default function LineRaftRenderer() {
           heightMm: beamHeight,
           chamferAngleDeg: 90,
         });
-        mesh.material = new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
+        mesh.renderOrder = ghostRenderOrder;
+        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
         mesh.castShadow = false;
         mesh.receiveShadow = true;
+        mesh.userData.modelId = modelId;
         beamMeshes.push(mesh);
       }
     }
@@ -253,9 +329,11 @@ export default function LineRaftRenderer() {
     // Perimeter border beam: single manifold ring mesh (chamfered outer edge).
     if (hasBorderRing) {
       const borderMesh = generatePerimeterBorderBeam(profile, { widthMm: raft.lineWidthMm, heightMm: beamHeight, chamferAngleDeg: raft.chamferAngle });
-      borderMesh.material = new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide });
+      borderMesh.renderOrder = ghostRenderOrder;
+      borderMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
       borderMesh.castShadow = false;
       borderMesh.receiveShadow = true;
+      borderMesh.userData.modelId = modelId;
       beamMeshes.push(borderMesh);
     }
 
@@ -279,14 +357,52 @@ export default function LineRaftRenderer() {
               thickness: beamHeight,
             });
 
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#22c55e', roughness: 0.9, metalness: 0.0 });
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
+  wallMesh.renderOrder = ghostRenderOrder;
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
+        wallMesh.userData.modelId = modelId;
+        wallMesh.userData.isWall = true;
       }
     }
 
-    return { beamMeshes, wallMesh } as const;
-  }, [raft, supportState]);
+      meshes.push({ beamMeshes, wallMesh });
+    }
+
+    return meshes;
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, raft, supportState, raftOpacity, raftTransparent, ghostRenderOrder]);
+
+  const handleClick = React.useCallback((e: any) => {
+    const modelId = e?.object?.userData?.modelId;
+    if (!modelId || !onModelPointerSelect) return;
+
+    e.stopPropagation();
+    if (e.nativeEvent) {
+      e.nativeEvent.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+    }
+
+    onModelPointerSelect(modelId, e);
+  }, [onModelPointerSelect]);
+
+  const handlePointerMove = React.useCallback((e: any) => {
+    const modelId = e?.object?.userData?.modelId ?? null;
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+      detail: {
+        modelId,
+        category: 'raft',
+      },
+    }));
+  }, []);
+
+  const handlePointerOut = React.useCallback(() => {
+    window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
+      detail: {
+        modelId: null,
+        category: 'raft',
+      },
+    }));
+  }, []);
 
   const groupRef = React.useRef<THREE.Group>(null);
   React.useEffect(() => {
@@ -295,12 +411,64 @@ export default function LineRaftRenderer() {
 
     while (group.children.length) group.remove(group.children[0]);
 
-    if (meshes) {
-      for (const m of meshes.beamMeshes) group.add(m);
-      if (meshes.wallMesh) group.add(meshes.wallMesh);
+    if (raftMeshes) {
+      for (const meshes of raftMeshes) {
+        for (const m of meshes.beamMeshes) group.add(m);
+        if (meshes.wallMesh) group.add(meshes.wallMesh);
+      }
     }
-  }, [meshes]);
+  }, [raftMeshes]);
+
+  React.useEffect(() => {
+    const group = groupRef.current;
+    if (!group) return;
+
+    const blendColor = (baseHex: string, tintHex: string, strength: number) =>
+      new THREE.Color(baseHex).lerp(new THREE.Color(tintHex), strength);
+
+    const resolveTintStrength = (modelId: string | null) => {
+      if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
+      if (!colorized) return 0;
+      if (modelId === activeModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
+      if (hasSelectedModels) return 0;
+      return hoverized ? 0.5 : 1;
+    };
+
+    for (const child of group.children) {
+      const mesh = child as THREE.Mesh;
+      const material = mesh.material;
+      if (!material || Array.isArray(material) || !(material instanceof THREE.MeshStandardMaterial)) continue;
+
+      const modelId = (mesh.userData?.modelId as string | undefined) ?? null;
+      const tintStrength = resolveTintStrength(modelId);
+      const isWall = mesh.userData?.isWall === true
+        || (!!mesh.geometry && ((mesh.geometry as THREE.BufferGeometry).boundingBox?.max?.z ?? 0) > (raft.lineHeightMm + 0.001));
+      const tintHex = isWall ? '#22c55e' : '#f97316';
+      const nextColor = blendColor('#a3a3a3', tintHex, tintStrength);
+      if (!material.color.equals(nextColor)) {
+        material.color.copy(nextColor);
+      }
+
+      if (material.transparent !== raftTransparent) {
+        material.transparent = raftTransparent;
+      }
+
+      if (Math.abs(material.opacity - raftOpacity) > 1e-4) {
+        material.opacity = raftOpacity;
+      }
+
+      const nextDepthWrite = !raftTransparent;
+      if (material.depthWrite !== nextDepthWrite) {
+        material.depthWrite = nextDepthWrite;
+      }
+
+      if (mesh.renderOrder !== ghostRenderOrder) {
+        mesh.renderOrder = ghostRenderOrder;
+      }
+    }
+  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet]);
 
   if (raft.bottomMode !== 'line') return null;
-  return <group ref={groupRef} position={[0, 0, 0]} />;
+  return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
 }

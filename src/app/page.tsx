@@ -34,6 +34,8 @@ import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
+import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
+import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -88,6 +90,17 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
+import {
+  getSupportBraceSnapshot,
+  subscribeToSupportBraceStore,
+} from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
+import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
+import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
+import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
+import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -95,9 +108,53 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
 
+interface ShaftHoverDebugDetail {
+  segmentId: string | null;
+  point: { x: number; y: number; z: number } | null;
+}
+
+function installReactDevtoolsSemverGuard() {
+  if (process.env.NODE_ENV !== 'development') return;
+  if (typeof window === 'undefined') return;
+
+  const hook = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!hook || hook.__dragonfruitSemverGuardInstalled) return;
+  if (typeof hook.inject !== 'function') return;
+
+  const originalInject = hook.inject;
+
+  const withSafeSemver = (renderer: any) => {
+    if (!renderer || typeof renderer !== 'object') return renderer;
+
+    const patched = { ...renderer };
+    if (typeof patched.version !== 'string' || patched.version.trim() === '') {
+      patched.version = '0.0.0';
+    }
+    if (typeof patched.reconcilerVersion !== 'string' || patched.reconcilerVersion.trim() === '') {
+      patched.reconcilerVersion = '0.0.0';
+    }
+    return patched;
+  };
+
+  hook.inject = function injectWithSemverGuard(renderer: any) {
+    try {
+      return originalInject.call(this, renderer);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.toLowerCase().includes('not valid semver')) {
+        return originalInject.call(this, withSafeSemver(renderer));
+      }
+      throw error;
+    }
+  };
+
+  hook.__dragonfruitSemverGuardInstalled = true;
+}
+
 // Initialize BVH acceleration globally
 if (typeof window !== 'undefined') {
   initializeBVH();
+  installReactDevtoolsSemverGuard();
   console.log('[App] BVH acceleration initialized');
 }
 
@@ -113,21 +170,99 @@ export default function Home() {
 
   // Ref for supports group (used for export)
   const supportsRef = React.useRef<THREE.Group | null>(null);
+  // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
+  const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
+  const supportDragResetRafRef = React.useRef<number | null>(null);
+  const supportDragResetSecondRafRef = React.useRef<number | null>(null);
+  const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
+  const pendingSupportSyncReleasePerfRef = React.useRef<number | null>(null);
+  const supportSyncFallbackTimeoutRef = React.useRef<number | null>(null);
+  const lastSupportStoreUpdatePerfRef = React.useRef<number>(0);
+  const lastSupportBraceStoreUpdatePerfRef = React.useRef<number>(0);
+  const transformDebugTimelineRef = React.useRef<{
+    lastOperation: 'move' | 'rotate' | 'scale' | null;
+    dragReleasedAt: { perfMs: number; epochMs: number } | null;
+    liveCalculatedAt: { perfMs: number; epochMs: number } | null;
+    storeUpdateStartedAt: { perfMs: number; epochMs: number } | null;
+    storeUpdatedAt: { perfMs: number; epochMs: number } | null;
+    supportStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
+    supportBraceStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
+    activeModelStoreObservedAt: { perfMs: number; epochMs: number } | null;
+  }>({
+    lastOperation: null,
+    dragReleasedAt: null,
+    liveCalculatedAt: null,
+    storeUpdateStartedAt: null,
+    storeUpdatedAt: null,
+    supportStoreUpdatedAt: null,
+    supportBraceStoreUpdatedAt: null,
+    activeModelStoreObservedAt: null,
+  });
+  const activeModelStoreTransformKeyRef = React.useRef<string | null>(null);
 
   // Local state to coordinate transform sync with active model switching
   // This prevents 1-frame flickers where SceneCanvas renders new model with old transform
   const [displayActiveModelId, setDisplayActiveModelId] = React.useState<string | null>(null);
-  const pendingTransformHistoryRef = React.useRef<{ modelId: string; before: ModelTransform; description?: string } | null>(null);
+  const pendingTransformHistoryRef = React.useRef<{
+    modelId: string;
+    before: ModelTransform;
+    after?: ModelTransform;
+    description?: string;
+  } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
+  const transformHistoryCommitNonceRef = React.useRef(0);
   const pendingHistoryTransformResyncRef = React.useRef(false);
-  const skipNextTransformEndCommitRef = React.useRef(false);
+  const suppressNextTransformPersistenceRef = React.useRef(false);
+  const skipNextTransformEndCommitRef = React.useRef<{
+    modelId: string;
+    operation: 'move' | 'scale';
+  } | null>(null);
+  const transformEndFlushedRef = React.useRef(false);
   const pendingRotateGizmoCommitRef = React.useRef<{
     modelId: string;
     before: ModelTransform;
+    after: ModelTransform;
     description: string;
   } | null>(null);
+  const transformHistoryDebugRef = React.useRef<{
+    lastResult:
+      | 'none'
+      | 'scheduled'
+      | 'invalidated'
+      | 'committed'
+      | 'committed_no_push'
+      | 'skipped_equal_transform'
+      | 'skipped_nonce_mismatch'
+      | 'skipped_no_pending'
+      | 'skipped_model_missing';
+    lastReason: string;
+    lastModelId: string | null;
+    lastDescription: string | null;
+    lastExpectedNonce: number | null;
+    lastScheduledNonce: number | null;
+    lastUndoCountBefore: number | null;
+    lastUndoCountAfter: number | null;
+    lastPushApplied: boolean | null;
+    lastAt: { perfMs: number; epochMs: number } | null;
+  }>({
+    lastResult: 'none',
+    lastReason: 'init',
+    lastModelId: null,
+    lastDescription: null,
+    lastExpectedNonce: null,
+    lastScheduledNonce: null,
+    lastUndoCountBefore: null,
+    lastUndoCountAfter: null,
+    lastPushApplied: null,
+    lastAt: null,
+  });
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
+  const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
+  const historyTransformResyncTokenRef = React.useRef(0);
+  const historyTransformResyncRafRef = React.useRef<number | null>(null);
+  const historyTransformResyncSecondRafRef = React.useRef<number | null>(null);
+  const historyTransformResyncTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
 
@@ -142,6 +277,13 @@ export default function Home() {
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
+  const [supportsInfoModelId, setSupportsInfoModelId] = React.useState<string | null>(null);
+  const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
+  const [transformDebugTick, setTransformDebugTick] = React.useState(0);
+  const [supportShaftHoverDebug, setSupportShaftHoverDebug] = React.useState<ShaftHoverDebugDetail>({
+    segmentId: null,
+    point: null,
+  });
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -269,10 +411,409 @@ export default function Home() {
     rotation: THREE.Euler;
     scale: THREE.Vector3;
   } | null>(null);
+  const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
+  const [gizmoResetNonce, setGizmoResetNonce] = React.useState(0);
+  const [pendingDestructiveTransform, setPendingDestructiveTransform] = React.useState<{
+    modelId: string;
+    modelName: string;
+    supportCount: number;
+    operationLabel: string;
+  } | null>(null);
   const dragDepthRef = React.useRef(0);
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
+  const supportStateSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
+  const supportBraceStateSnapshot = React.useSyncExternalStore(subscribeToSupportBraceStore, getSupportBraceSnapshot, getSupportBraceSnapshot);
+  const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
+  const bracePlacementSnapshot = React.useSyncExternalStore(
+    bracePlacementStore.subscribe,
+    bracePlacementStore.getSnapshot,
+    bracePlacementStore.getSnapshot,
+  );
+
+  React.useEffect(() => {
+    transformDebugTimelineRef.current.supportStoreUpdatedAt = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+    lastSupportStoreUpdatePerfRef.current = transformDebugTimelineRef.current.supportStoreUpdatedAt.perfMs;
+  }, [supportStateSnapshot]);
+
+  React.useEffect(() => {
+    transformDebugTimelineRef.current.supportBraceStoreUpdatedAt = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+    lastSupportBraceStoreUpdatePerfRef.current = transformDebugTimelineRef.current.supportBraceStoreUpdatedAt.perfMs;
+  }, [supportBraceStateSnapshot]);
+
+  React.useEffect(() => {
+    if (!holdSupportDragDeltaUntilSupportSync) return;
+
+    const releasedAt = pendingSupportSyncReleasePerfRef.current;
+    if (releasedAt == null) return;
+
+    const synced =
+      lastSupportStoreUpdatePerfRef.current > releasedAt
+      || lastSupportBraceStoreUpdatePerfRef.current > releasedAt;
+
+    if (!synced) return;
+
+    setHoldSupportDragDeltaUntilSupportSync(false);
+    pendingSupportSyncReleasePerfRef.current = null;
+    if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
+      window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+      supportSyncFallbackTimeoutRef.current = null;
+    }
+  }, [holdSupportDragDeltaUntilSupportSync, supportBraceStateSnapshot, supportStateSnapshot]);
+
+  React.useEffect(() => {
+    const activeModel = scene.models.find((m) => m.id === scene.activeModelId);
+    if (!activeModel) {
+      activeModelStoreTransformKeyRef.current = null;
+      return;
+    }
+
+    const t = activeModel.transform;
+    const key = [
+      activeModel.id,
+      t.position.x.toFixed(6),
+      t.position.y.toFixed(6),
+      t.position.z.toFixed(6),
+      t.rotation.x.toFixed(6),
+      t.rotation.y.toFixed(6),
+      t.rotation.z.toFixed(6),
+      t.scale.x.toFixed(6),
+      t.scale.y.toFixed(6),
+      t.scale.z.toFixed(6),
+    ].join('|');
+
+    if (activeModelStoreTransformKeyRef.current === key) return;
+    activeModelStoreTransformKeyRef.current = key;
+    transformDebugTimelineRef.current.activeModelStoreObservedAt = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+  }, [scene.activeModelId, scene.models]);
+
+  React.useEffect(() => {
+    if (!isTransformDebugOverlayOpen) return;
+
+    const intervalId = window.setInterval(() => {
+      setTransformDebugTick((prev) => prev + 1);
+    }, 120);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isTransformDebugOverlayOpen]);
+
+  React.useEffect(() => {
+    const handleShaftHover = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ segmentId?: string | null; point?: { x: number; y: number; z: number } | null }>).detail;
+      setSupportShaftHoverDebug({
+        segmentId: detail?.segmentId ?? null,
+        point: detail?.point ?? null,
+      });
+    };
+
+    const handleShaftLeave = (evt: Event) => {
+      const detail = (evt as CustomEvent<{ segmentId?: string | null }>).detail;
+      setSupportShaftHoverDebug((prev) => {
+        if (!detail?.segmentId || prev.segmentId === detail.segmentId) {
+          return { segmentId: null, point: null };
+        }
+        return prev;
+      });
+    };
+
+    window.addEventListener('shaft-hover', handleShaftHover as EventListener);
+    window.addEventListener('shaft-leave', handleShaftLeave as EventListener);
+    return () => {
+      window.removeEventListener('shaft-hover', handleShaftHover as EventListener);
+      window.removeEventListener('shaft-leave', handleShaftLeave as EventListener);
+    };
+  }, []);
+
+  const activeSupportEntityCounts = React.useMemo(() => {
+    const modelId = scene.activeModelId;
+    if (!modelId) {
+      return {
+        trunks: 0,
+        branches: 0,
+        leaves: 0,
+        twigs: 0,
+        sticks: 0,
+        braces: 0,
+        roots: 0,
+        knots: 0,
+        supportBraces: 0,
+      };
+    }
+
+    const trunks = Object.values(supportStateSnapshot.trunks).filter((item) => item.modelId === modelId).length;
+    const branches = Object.values(supportStateSnapshot.branches).filter((item) => item.modelId === modelId).length;
+    const leaves = Object.values(supportStateSnapshot.leaves).filter((item) => item.modelId === modelId).length;
+    const twigs = Object.values(supportStateSnapshot.twigs).filter((item) => item.modelId === modelId).length;
+    const sticks = Object.values(supportStateSnapshot.sticks).filter((item) => item.modelId === modelId).length;
+    const braces = Object.values(supportStateSnapshot.braces).filter((item) => item.modelId === modelId).length;
+    const roots = Object.values(supportStateSnapshot.roots).filter((item) => item.modelId === modelId).length;
+    const knots = Object.values(supportStateSnapshot.knots).filter((item) => {
+      const parent = item.parentShaftId;
+      const trunk = supportStateSnapshot.trunks[parent];
+      if (trunk) return trunk.modelId === modelId;
+      const branch = supportStateSnapshot.branches[parent];
+      if (branch) return branch.modelId === modelId;
+      const twig = supportStateSnapshot.twigs[parent];
+      if (twig) return twig.modelId === modelId;
+      const stick = supportStateSnapshot.sticks[parent];
+      if (stick) return stick.modelId === modelId;
+      if (parent.startsWith('braceSegment:')) {
+        const braceId = parent.slice('braceSegment:'.length);
+        return supportStateSnapshot.braces[braceId]?.modelId === modelId;
+      }
+      return false;
+    }).length;
+    const supportBraces = Object.values(supportBraceStateSnapshot.supportBraces).filter((item) => item.modelId === modelId).length;
+
+    return { trunks, branches, leaves, twigs, sticks, braces, roots, knots, supportBraces };
+  }, [scene.activeModelId, supportBraceStateSnapshot.supportBraces, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs]);
+
+  const transformDebugStats = React.useMemo(() => {
+    const activeModel = scene.models.find((m) => m.id === scene.activeModelId) ?? null;
+    const storeTransform = activeModel?.transform ?? null;
+    const liveTransform = transformMgr.transform;
+
+    const posDelta = storeTransform
+      ? liveTransform.position.distanceTo(storeTransform.position)
+      : 0;
+    const rotDelta = storeTransform
+      ? Math.max(
+        Math.abs(liveTransform.rotation.x - storeTransform.rotation.x),
+        Math.abs(liveTransform.rotation.y - storeTransform.rotation.y),
+        Math.abs(liveTransform.rotation.z - storeTransform.rotation.z),
+      )
+      : 0;
+    const scaleDelta = storeTransform
+      ? liveTransform.scale.distanceTo(storeTransform.scale)
+      : 0;
+
+    const dragGroup = supportDragGroupRef.current;
+    let dragGroupPos: THREE.Vector3 | null = null;
+    let dragGroupScale: THREE.Vector3 | null = null;
+    if (dragGroup) {
+      const pos = new THREE.Vector3();
+      const quat = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
+      dragGroup.matrix.decompose(pos, quat, scale);
+      dragGroupPos = pos;
+      dragGroupScale = scale;
+    }
+
+    const timeline = transformDebugTimelineRef.current;
+    const pendingHistory = pendingTransformHistoryRef.current;
+    const historyDebug = transformHistoryDebugRef.current;
+
+    return {
+      activeModel,
+      storeTransform,
+      liveTransform,
+      posDelta,
+      rotDelta,
+      scaleDelta,
+      dragGroupAutoUpdate: dragGroup?.matrixAutoUpdate ?? null,
+      dragGroupPos,
+      dragGroupScale,
+      timeline: {
+        lastOperation: timeline.lastOperation,
+        dragReleasedAt: timeline.dragReleasedAt,
+        liveCalculatedAt: timeline.liveCalculatedAt,
+        storeUpdateStartedAt: timeline.storeUpdateStartedAt,
+        storeUpdatedAt: timeline.storeUpdatedAt,
+        supportStoreUpdatedAt: timeline.supportStoreUpdatedAt,
+        supportBraceStoreUpdatedAt: timeline.supportBraceStoreUpdatedAt,
+        activeModelStoreObservedAt: timeline.activeModelStoreObservedAt,
+        nowPerfMs: performance.now(),
+      },
+      historyCommit: {
+        pendingModelId: pendingHistory?.modelId ?? null,
+        pendingDescription: pendingHistory?.description ?? null,
+        pendingHasAfter: Boolean(pendingHistory?.after),
+        pendingBeforeRotation: pendingHistory
+          ? {
+              x: pendingHistory.before.rotation.x,
+              y: pendingHistory.before.rotation.y,
+              z: pendingHistory.before.rotation.z,
+            }
+          : null,
+        pendingAfterRotation: pendingHistory?.after
+          ? {
+              x: pendingHistory.after.rotation.x,
+              y: pendingHistory.after.rotation.y,
+              z: pendingHistory.after.rotation.z,
+            }
+          : null,
+        commitRequested: transformHistoryCommitRequestedRef.current,
+        commitNonce: transformHistoryCommitNonceRef.current,
+        pendingResync: pendingHistoryTransformResyncRef.current,
+        suppressNextPersistence: suppressNextTransformPersistenceRef.current,
+        skipToken: skipNextTransformEndCommitRef.current,
+        pendingRotateGizmoModelId: pendingRotateGizmoCommitRef.current?.modelId ?? null,
+        lastResult: historyDebug.lastResult,
+        lastReason: historyDebug.lastReason,
+        lastModelId: historyDebug.lastModelId,
+        lastDescription: historyDebug.lastDescription,
+        lastExpectedNonce: historyDebug.lastExpectedNonce,
+        lastScheduledNonce: historyDebug.lastScheduledNonce,
+        lastUndoCountBefore: historyDebug.lastUndoCountBefore,
+        lastUndoCountAfter: historyDebug.lastUndoCountAfter,
+        lastPushApplied: historyDebug.lastPushApplied,
+        lastAt: historyDebug.lastAt,
+      },
+      supportCounts: {
+        trunks: Object.keys(supportStateSnapshot.trunks).length,
+        branches: Object.keys(supportStateSnapshot.branches).length,
+        leaves: Object.keys(supportStateSnapshot.leaves).length,
+        twigs: Object.keys(supportStateSnapshot.twigs).length,
+        sticks: Object.keys(supportStateSnapshot.sticks).length,
+        braces: Object.keys(supportStateSnapshot.braces).length,
+        roots: Object.keys(supportStateSnapshot.roots).length,
+        knots: Object.keys(supportStateSnapshot.knots).length,
+        supportBraces: Object.keys(supportBraceStateSnapshot.supportBraces).length,
+      },
+    };
+  }, [scene.activeModelId, scene.models, supportBraceStateSnapshot.supportBraces, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
+
+  const supportDebugStats = React.useMemo(() => {
+    const snapTarget = bracePlacementSnapshot.snapTarget;
+    const preview = bracePlacementSnapshot.preview;
+    const hoveredSegmentId = supportShaftHoverDebug.segmentId;
+    const snappedSegmentId = snapTarget?.kind === 'shaft' ? (snapTarget.segmentId ?? null) : null;
+    const hoveredVsSnapMismatch = Boolean(
+      hoveredSegmentId
+      && snappedSegmentId
+      && hoveredSegmentId !== snappedSegmentId,
+    );
+
+    const supportRendererDebug = (typeof window !== 'undefined')
+      ? ((window as any).__supportRendererDebug as {
+        supportInteractionSuppressed?: boolean;
+        disableSelectionAndHover?: boolean;
+        gizmoInteractionLockActive?: boolean;
+        knotGizmoDragging?: boolean;
+        jointGizmoDragging?: boolean;
+        knotGizmoGuardUntil?: number;
+        knotOnlyGuardUntil?: number;
+        jointOnlyGuardUntil?: number;
+        immediateModelHoverId?: string | null;
+        externalHoverModelId?: string | null;
+        effectiveHoverModelId?: string | null;
+        sceneHoveredSupportId?: string | null;
+        marqueeHoveredSupportId?: string | null;
+        rawHoveredCategory?: string | null;
+        rawHoveredId?: string | null;
+        hoveredCategoryForVisual?: string | null;
+        hoveredIdForVisual?: string | null;
+      } | undefined)
+      : undefined;
+
+    const nowEpoch = Date.now();
+    const knotGuardUntil = supportRendererDebug?.knotGizmoGuardUntil ?? 0;
+    const knotGuardRemainingMs = Math.max(0, knotGuardUntil - nowEpoch);
+    const knotOnlyGuardRemainingMs = Math.max(0, (supportRendererDebug?.knotOnlyGuardUntil ?? 0) - nowEpoch);
+    const jointOnlyGuardRemainingMs = Math.max(0, (supportRendererDebug?.jointOnlyGuardUntil ?? 0) - nowEpoch);
+
+    return {
+      hoveredCategory: supportStateSnapshot.hoveredCategory,
+      hoveredId: supportStateSnapshot.hoveredId,
+      shaftHoveredSegmentId: hoveredSegmentId,
+      shaftHoverPoint: supportShaftHoverDebug.point,
+      braceAltActive: bracePlacementSnapshot.altActive,
+      braceStage: bracePlacementSnapshot.stage,
+      braceStartKind: bracePlacementSnapshot.start?.kind ?? null,
+      braceStartSegmentId: bracePlacementSnapshot.start?.kind === 'shaft'
+        ? (bracePlacementSnapshot.start.segmentId ?? null)
+        : null,
+      braceSnapKind: snapTarget?.kind ?? null,
+      braceSnapSegmentId: snappedSegmentId,
+      braceSnapLeafId: snapTarget?.kind === 'leaf' ? (snapTarget.leafId ?? null) : null,
+      previewStart: preview?.start ?? null,
+      previewEnd: preview?.end ?? null,
+      hoveredVsSnapMismatch,
+
+      supportInteractionSuppressed: !!supportRendererDebug?.supportInteractionSuppressed,
+      disableSelectionAndHover: !!supportRendererDebug?.disableSelectionAndHover,
+      gizmoInteractionLockActive: !!supportRendererDebug?.gizmoInteractionLockActive,
+      knotGizmoDragging: !!supportRendererDebug?.knotGizmoDragging,
+      jointGizmoDragging: !!supportRendererDebug?.jointGizmoDragging,
+      knotGuardRemainingMs,
+      knotOnlyGuardRemainingMs,
+      jointOnlyGuardRemainingMs,
+      immediateModelHoverId: supportRendererDebug?.immediateModelHoverId ?? null,
+      externalHoverModelId: supportRendererDebug?.externalHoverModelId ?? null,
+      effectiveHoverModelId: supportRendererDebug?.effectiveHoverModelId ?? null,
+      sceneHoveredSupportId: supportRendererDebug?.sceneHoveredSupportId ?? null,
+      marqueeHoveredSupportId: supportRendererDebug?.marqueeHoveredSupportId ?? null,
+      rawHoveredCategory: supportRendererDebug?.rawHoveredCategory ?? null,
+      rawHoveredId: supportRendererDebug?.rawHoveredId ?? null,
+      hoveredCategoryForVisual: supportRendererDebug?.hoveredCategoryForVisual ?? null,
+      hoveredIdForVisual: supportRendererDebug?.hoveredIdForVisual ?? null,
+    };
+  }, [bracePlacementSnapshot, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, supportStateSnapshot.hoveredCategory, supportStateSnapshot.hoveredId, transformDebugTick]);
+
+  const getSupportPrimitiveCountForModel = React.useCallback((modelId: string | null | undefined) => {
+    if (!modelId) return 0;
+
+    const supportIds = getSupportsForModel(supportStateSnapshot, modelId);
+    const supportBraceCount = Object.values(supportBraceStateSnapshot.supportBraces)
+      .filter((supportBrace) => supportBrace.modelId === modelId)
+      .length;
+
+    return supportIds.roots.length
+      + supportIds.trunks.length
+      + supportIds.branches.length
+      + supportIds.braces.length
+      + supportIds.leaves.length
+      + supportIds.twigs.length
+      + supportIds.sticks.length
+      + supportBraceCount;
+  }, [supportBraceStateSnapshot.supportBraces, supportStateSnapshot]);
+
+  const requestDestructiveTransformSupportDeletion = React.useCallback((operationLabel: string) => {
+    if (scene.mode !== 'prepare') return true;
+    if (!scene.activeModelId) return true;
+    if (pendingDestructiveTransform) return false;
+
+    const supportCount = getSupportPrimitiveCountForModel(scene.activeModelId);
+    if (supportCount <= 0) return true;
+
+    setPendingDestructiveTransform({
+      modelId: scene.activeModelId,
+      modelName: (scene.activeModel?.name ?? scene.activeModelId).trim(),
+      supportCount,
+      operationLabel,
+    });
+    return false;
+  }, [getSupportPrimitiveCountForModel, pendingDestructiveTransform, scene]);
+
+  const handleConfirmDestructiveTransform = React.useCallback(() => {
+    const pending = pendingDestructiveTransform;
+    if (!pending) return;
+
+    scene.deleteSupportsForModels(
+      [pending.modelId],
+      `Delete Supports Before ${pending.operationLabel} ${pending.modelName}`,
+    );
+
+    setSupportRenderRefreshNonce((value) => value + 1);
+    setGizmoResetNonce((value) => value + 1);
+    setPendingDestructiveTransform(null);
+  }, [pendingDestructiveTransform, scene]);
+
+  const handleCancelDestructiveTransform = React.useCallback(() => {
+    setPendingDestructiveTransform(null);
+  }, []);
 
   React.useEffect(() => {
     if (arrangePrecisionMode !== 'high_precision') return;
@@ -385,6 +926,10 @@ export default function Home() {
     setEditorContextMenuPos(position);
   }, [scene]);
 
+  const handleOpenModelSupportsInfo = React.useCallback((modelId: string) => {
+    setSupportsInfoModelId(modelId);
+  }, []);
+
   const handleModelSelection = React.useCallback((modelId: string, mode: 'single' | 'toggle' | 'add' = 'single') => {
     scene.selectModel(modelId, mode);
   }, [scene]);
@@ -460,57 +1005,160 @@ export default function Home() {
     && isFiniteNumber(t.scale.z)
   ), [isFiniteNumber]);
 
-  const commitPendingTransformHistory = React.useCallback(() => {
-    const pending = pendingTransformHistoryRef.current;
-    if (!pending) return false;
+  const transformsApproximatelyEqual = React.useCallback((a: ModelTransform, b: ModelTransform) => {
+    const EPSILON = 1e-5;
+    return a.position.distanceToSquared(b.position) <= EPSILON
+      && Math.abs(a.rotation.x - b.rotation.x) <= EPSILON
+      && Math.abs(a.rotation.y - b.rotation.y) <= EPSILON
+      && Math.abs(a.rotation.z - b.rotation.z) <= EPSILON
+      && a.scale.distanceToSquared(b.scale) <= EPSILON;
+  }, []);
 
-    const targetModel = scene.models.find((model) => model.id === pending.modelId);
-    if (!targetModel) {
-      pendingTransformHistoryRef.current = null;
-      transformHistoryCommitRequestedRef.current = false;
+  const invalidatePendingTransformHistory = React.useCallback((options?: { clearRotateCommit?: boolean }) => {
+    const now = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+    const pending = pendingTransformHistoryRef.current;
+    transformHistoryCommitNonceRef.current += 1;
+    pendingTransformHistoryRef.current = null;
+    transformHistoryCommitRequestedRef.current = false;
+    transformHistoryDebugRef.current = {
+      ...transformHistoryDebugRef.current,
+      lastResult: 'invalidated',
+      lastReason: options?.clearRotateCommit === false ? 'invalidate_keep_rotate' : 'invalidate',
+      lastModelId: pending?.modelId ?? null,
+      lastDescription: pending?.description ?? null,
+      lastExpectedNonce: null,
+      lastPushApplied: null,
+      lastAt: now,
+    };
+    if (options?.clearRotateCommit !== false) {
+      pendingRotateGizmoCommitRef.current = null;
+    }
+  }, []);
+
+  const commitPendingTransformHistory = React.useCallback((expectedNonce?: number) => {
+    const now = {
+      perfMs: performance.now(),
+      epochMs: Date.now(),
+    };
+    if (typeof expectedNonce === 'number' && expectedNonce !== transformHistoryCommitNonceRef.current) {
+      transformHistoryDebugRef.current = {
+        ...transformHistoryDebugRef.current,
+        lastResult: 'skipped_nonce_mismatch',
+        lastReason: 'expected_nonce_mismatch',
+        lastExpectedNonce: expectedNonce,
+        lastAt: now,
+      };
       return false;
     }
 
-    const pendingTransform = transformMgr.pendingTransformRef.current;
-    const afterTransform = (
-      scene.activeModelId === pending.modelId
-      && pendingTransform
-      && isFiniteTransform({
-        position: pendingTransform.pos,
-        rotation: pendingTransform.rot,
-        scale: pendingTransform.scl,
-      })
-    )
+    const pending = pendingTransformHistoryRef.current;
+    if (!pending) {
+      transformHistoryDebugRef.current = {
+        ...transformHistoryDebugRef.current,
+        lastResult: 'skipped_no_pending',
+        lastReason: 'no_pending_history',
+        lastExpectedNonce: expectedNonce ?? null,
+        lastAt: now,
+      };
+      return false;
+    }
+
+    const targetModel = scene.models.find((model) => model.id === pending.modelId);
+    if (!targetModel) {
+      transformHistoryDebugRef.current = {
+        ...transformHistoryDebugRef.current,
+        lastResult: 'skipped_model_missing',
+        lastReason: 'target_model_missing',
+        lastModelId: pending.modelId,
+        lastDescription: pending.description ?? null,
+        lastExpectedNonce: expectedNonce ?? null,
+        lastAt: now,
+      };
+      invalidatePendingTransformHistory();
+      return false;
+    }
+
+    const explicitAfter = pending.after && isFiniteTransform(pending.after)
       ? {
-          position: pendingTransform.pos.clone(),
-          rotation: pendingTransform.rot.clone(),
-          scale: pendingTransform.scl.clone(),
+          position: pending.after.position.clone(),
+          rotation: pending.after.rotation.clone(),
+          scale: pending.after.scale.clone(),
         }
-      : (
-        scene.activeModelId === pending.modelId && isFiniteTransform(transformMgr.transform)
+      : null;
+
+    const pendingTransform = transformMgr.pendingTransformRef.current;
+    const afterTransform = explicitAfter ?? (
+      (
+        scene.activeModelId === pending.modelId
+        && pendingTransform
+        && isFiniteTransform({
+          position: pendingTransform.pos,
+          rotation: pendingTransform.rot,
+          scale: pendingTransform.scl,
+        })
       )
         ? {
-            position: transformMgr.transform.position.clone(),
-            rotation: transformMgr.transform.rotation.clone(),
-            scale: transformMgr.transform.scale.clone(),
+            position: pendingTransform.pos.clone(),
+            rotation: pendingTransform.rot.clone(),
+            scale: pendingTransform.scl.clone(),
           }
-        : {
-            position: targetModel.transform.position.clone(),
-            rotation: targetModel.transform.rotation.clone(),
-            scale: targetModel.transform.scale.clone(),
-          };
+        : (
+          scene.activeModelId === pending.modelId && isFiniteTransform(transformMgr.transform)
+        )
+          ? {
+              position: transformMgr.transform.position.clone(),
+              rotation: transformMgr.transform.rotation.clone(),
+              scale: transformMgr.transform.scale.clone(),
+            }
+          : {
+              position: targetModel.transform.position.clone(),
+              rotation: targetModel.transform.rotation.clone(),
+              scale: targetModel.transform.scale.clone(),
+            }
+    );
 
-    scene.commitModelTransformHistory(pending.modelId, pending.before, afterTransform, pending.description);
+    const undoCountBefore = getUndoCount();
+    const pushed = scene.commitModelTransformHistory(pending.modelId, pending.before, afterTransform, pending.description);
+    const undoCountAfter = getUndoCount();
+    const equalTransform = transformsApproximatelyEqual(pending.before, afterTransform);
+    transformHistoryDebugRef.current = {
+      ...transformHistoryDebugRef.current,
+      lastResult: pushed ? 'committed' : (equalTransform ? 'skipped_equal_transform' : 'committed_no_push'),
+      lastReason: pushed ? 'commit_success' : (equalTransform ? 'before_after_equal' : 'commit_no_push'),
+      lastModelId: pending.modelId,
+      lastDescription: pending.description ?? null,
+      lastExpectedNonce: expectedNonce ?? null,
+      lastUndoCountBefore: undoCountBefore,
+      lastUndoCountAfter: undoCountAfter,
+      lastPushApplied: Boolean(pushed),
+      lastAt: now,
+    };
     pendingTransformHistoryRef.current = null;
     transformHistoryCommitRequestedRef.current = false;
     return true;
-  }, [isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform]);
+  }, [invalidatePendingTransformHistory, isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform, transformsApproximatelyEqual]);
 
   const scheduleCommitPendingTransformHistory = React.useCallback((frameDelay = 1) => {
+    const scheduledNonce = ++transformHistoryCommitNonceRef.current;
+    transformHistoryDebugRef.current = {
+      ...transformHistoryDebugRef.current,
+      lastResult: 'scheduled',
+      lastReason: `schedule_delay_${Math.max(0, frameDelay)}`,
+      lastScheduledNonce: scheduledNonce,
+      lastExpectedNonce: scheduledNonce,
+      lastAt: {
+        perfMs: performance.now(),
+        epochMs: Date.now(),
+      },
+    };
     transformHistoryCommitRequestedRef.current = true;
     const run = (remaining: number) => {
+      if (scheduledNonce !== transformHistoryCommitNonceRef.current) return;
       if (remaining <= 0) {
-        commitPendingTransformHistory();
+        commitPendingTransformHistory(scheduledNonce);
         return;
       }
       window.requestAnimationFrame(() => run(remaining - 1));
@@ -528,9 +1176,10 @@ export default function Home() {
       const sourceDescription = action.description?.trim() || fallbackDescription(action.type);
       const description = formatHistoryLabel(sourceDescription);
 
-      if (action.type === 'scene_models_snapshot_apply') {
-        pendingHistoryTransformResyncRef.current = true;
-      }
+      pendingHistoryTransformResyncRef.current = true;
+      invalidatePendingTransformHistory();
+      setGizmoResetNonce((value) => value + 1);
+      setHistoryTransformResyncTick((value) => value + 1);
 
       setHistoryActionToast({ id: Date.now(), text: description, direction });
       setIsHistoryActionToastVisible(true);
@@ -562,28 +1211,86 @@ export default function Home() {
         window.clearTimeout(historyActionToastClearTimeoutRef.current);
       }
     };
+  }, [invalidatePendingTransformHistory]);
+
+  const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
+    if (historyTransformResyncRafRef.current !== null) {
+      window.cancelAnimationFrame(historyTransformResyncRafRef.current);
+      historyTransformResyncRafRef.current = null;
+    }
+    if (historyTransformResyncSecondRafRef.current !== null) {
+      window.cancelAnimationFrame(historyTransformResyncSecondRafRef.current);
+      historyTransformResyncSecondRafRef.current = null;
+    }
+    if (historyTransformResyncTimeoutRef.current !== null) {
+      window.clearTimeout(historyTransformResyncTimeoutRef.current);
+      historyTransformResyncTimeoutRef.current = null;
+    }
   }, []);
 
   React.useEffect(() => {
     if (!pendingHistoryTransformResyncRef.current) return;
 
     pendingHistoryTransformResyncRef.current = false;
-    pendingTransformHistoryRef.current = null;
-    transformHistoryCommitRequestedRef.current = false;
+    invalidatePendingTransformHistory();
+    transformMgr.pendingTransformRef.current = null;
+    transformMgr.setIsTransforming(false);
 
-    if (!scene.activeModelId || !scene.activeModel) {
-      setDisplayActiveModelId(null);
-      return;
-    }
+    cancelPendingHistoryTransformResyncFrames();
+    const token = ++historyTransformResyncTokenRef.current;
 
-    const t = scene.activeModel.transform;
-    if (!isFiniteTransform(t)) return;
+    const syncFromStoreActiveModel = () => {
+      if (token !== historyTransformResyncTokenRef.current) return;
 
-    transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
-    transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
-    transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
-    setDisplayActiveModelId(scene.activeModelId);
-  }, [isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transformHook]);
+      if (!scene.activeModelId || !scene.activeModel) {
+        setDisplayActiveModelId(null);
+        return;
+      }
+
+      const t = scene.activeModel.transform;
+      if (!isFiniteTransform(t)) return;
+
+      suppressNextTransformPersistenceRef.current = true;
+      transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
+      transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
+      transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
+      setDisplayActiveModelId(scene.activeModelId);
+    };
+
+    // Immediate sync + two-frame follow-up to catch async store updates from
+    // history handlers before they visually lag behind selected-model renders.
+    syncFromStoreActiveModel();
+    historyTransformResyncRafRef.current = window.requestAnimationFrame(() => {
+      syncFromStoreActiveModel();
+      historyTransformResyncRafRef.current = null;
+
+      historyTransformResyncSecondRafRef.current = window.requestAnimationFrame(() => {
+        syncFromStoreActiveModel();
+        historyTransformResyncSecondRafRef.current = null;
+      });
+    });
+
+    historyTransformResyncTimeoutRef.current = window.setTimeout(() => {
+      syncFromStoreActiveModel();
+      historyTransformResyncTimeoutRef.current = null;
+    }, 48);
+  }, [
+    cancelPendingHistoryTransformResyncFrames,
+    historyTransformResyncTick,
+    invalidatePendingTransformHistory,
+    isFiniteTransform,
+    scene.activeModel,
+    scene.activeModelId,
+    transformMgr.pendingTransformRef,
+    transformMgr.setIsTransforming,
+    transformMgr.transformHook,
+  ]);
+
+  React.useEffect(() => {
+    return () => {
+      cancelPendingHistoryTransformResyncFrames();
+    };
+  }, [cancelPendingHistoryTransformResyncFrames]);
 
   const handleEditorPointerDownCapture = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 2) return;
@@ -733,13 +1440,64 @@ export default function Home() {
       setIsHistoryDebugOpen((prev) => !prev);
     };
 
+    const handleTransformDebugOverlayHotkey = (event: KeyboardEvent) => {
+      const isCtrlShiftX = event.ctrlKey
+        && event.shiftKey
+        && (event.code === 'KeyX' || event.key.toLowerCase() === 'x');
+      if (!isCtrlShiftX) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setIsTransformDebugOverlayOpen((prev) => !prev);
+    };
+
     window.addEventListener('keydown', handleDiagnosticsHotkey, true);
     window.addEventListener('keydown', handleHistoryDebugHotkey, true);
+    window.addEventListener('keydown', handleTransformDebugOverlayHotkey, true);
     return () => {
       window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
       window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
+      window.removeEventListener('keydown', handleTransformDebugOverlayHotkey, true);
     };
   }, []);
+
+  const formatDebugVec3 = React.useCallback((v: THREE.Vector3 | null | undefined) => {
+    if (!v) return 'n/a';
+    const f = (n: number) => (Number.isFinite(n) ? n.toFixed(3) : 'NaN');
+    return `${f(v.x)}, ${f(v.y)}, ${f(v.z)}`;
+  }, []);
+
+  const formatDebugVec3Like = React.useCallback((v: { x: number; y: number; z: number } | null | undefined) => {
+    if (!v) return 'n/a';
+    const f = (n: number) => (Number.isFinite(n) ? n.toFixed(3) : 'NaN');
+    return `${f(v.x)}, ${f(v.y)}, ${f(v.z)}`;
+  }, []);
+
+  const formatDebugNumber = React.useCallback((value: number, digits = 4) => {
+    if (!Number.isFinite(value)) return 'NaN';
+    return value.toFixed(digits);
+  }, []);
+
+  const formatDebugTime = React.useCallback((stamp: { perfMs: number; epochMs: number } | null, nowPerfMs: number) => {
+    if (!stamp) return 'n/a';
+    const d = new Date(stamp.epochMs);
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    const ss = d.getSeconds().toString().padStart(2, '0');
+    const mmm = d.getMilliseconds().toString().padStart(3, '0');
+    const wall = `${hh}:${mm}:${ss}.${mmm}`;
+    const ageMs = Math.max(0, Math.round(nowPerfMs - stamp.perfMs));
+    return `${wall} (${ageMs} ms ago)`;
+  }, []);
+
+  const formatDebugLatencyMs = React.useCallback(
+    (start: { perfMs: number; epochMs: number } | null, end: { perfMs: number; epochMs: number } | null) => {
+      if (!start || !end) return 'n/a';
+      const deltaMs = Math.max(0, Math.round(end.perfMs - start.perfMs));
+      return `${deltaMs} ms`;
+    },
+    [],
+  );
 
   React.useEffect(() => {
     if (!editorContextMenuPos) return;
@@ -785,13 +1543,6 @@ export default function Home() {
   // Sync transform manager when active model changes
   useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
-      // Only run this sync when selection changes.
-      // If we re-run on every activeModel object mutation, it can fight
-      // with local transform/autolift updates and create feedback loops.
-      if (displayActiveModelId === scene.activeModelId) {
-        return;
-      }
-
       const t = scene.activeModel.transform;
 
       if (!isFiniteTransform(t)) {
@@ -812,6 +1563,7 @@ export default function Home() {
         });
 
         scene.updateModelTransform(scene.activeModelId, fallback);
+        suppressNextTransformPersistenceRef.current = true;
         transformMgr.transformHook.setPosition(fallback.position.x, fallback.position.y, fallback.position.z);
         transformMgr.transformHook.setRotation(fallback.rotation.x, fallback.rotation.y, fallback.rotation.z);
         transformMgr.transformHook.setScale(fallback.scale.x, fallback.scale.y, fallback.scale.z);
@@ -845,6 +1597,7 @@ export default function Home() {
       const scaleChanged = currentT.scale.distanceToSquared(t.scale) > EPSILON;
 
       if (posChanged || rotChanged || scaleChanged) {
+        suppressNextTransformPersistenceRef.current = true;
         transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
         transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
         transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
@@ -854,12 +1607,36 @@ export default function Home() {
       setDisplayActiveModelId(scene.activeModelId);
     } else {
       setDisplayActiveModelId(null);
+      invalidatePendingTransformHistory();
+      suppressNextTransformPersistenceRef.current = true;
+      transformMgr.transformHook.setPosition(0, 0, 0);
+      transformMgr.transformHook.setRotation(0, 0, 0);
+      transformMgr.transformHook.setScale(1, 1, 1);
     }
-  }, [displayActiveModelId, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
+  }, [displayActiveModelId, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
   useEffect(() => {
+    // Only suppress persistence while a live gizmo transform is actively driving
+    // transient values (pendingTransformRef is set from SceneCanvas drag updates).
+    // If isTransforming ever lingers true without a pending gizmo payload, we still
+    // need manual Transform panel edits to persist and reflow support geometry.
+    if (transformMgr.isTransforming && transformMgr.pendingTransformRef.current) return;
+
+    // Skip if handleTransformEnd already flushed the final transform synchronously.
+    // The persistence effect would otherwise re-apply the delta because React state
+    // (scene.activeModel) hasn't committed yet while modelsRef is still stale.
+    if (transformEndFlushedRef.current) {
+      transformEndFlushedRef.current = false;
+      return;
+    }
+
+    if (suppressNextTransformPersistenceRef.current) {
+      suppressNextTransformPersistenceRef.current = false;
+      return;
+    }
+
     // Only update if the local transform state has been synchronized with the new model
     // This prevents overwriting the new model's transform with the old transform state on load
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
@@ -900,15 +1677,31 @@ export default function Home() {
               rotation: modelTransform.rotation.clone(),
               scale: modelTransform.scale.clone(),
             },
+            after: {
+              position: current.position.clone(),
+              rotation: current.rotation.clone(),
+              scale: current.scale.clone(),
+            },
             description: pending?.description,
+          };
+        } else {
+          pending.after = {
+            position: current.position.clone(),
+            rotation: current.rotation.clone(),
+            scale: current.scale.clone(),
           };
         }
 
+        const isDirectTransformPath = !transformMgr.pendingTransformRef.current;
         scene.updateModelTransform(scene.activeModelId, current);
+
+        if (isDirectTransformPath) {
+          setSupportRenderRefreshNonce((prev) => prev + 1);
+        }
 
         if (transformHistoryCommitRequestedRef.current) {
           window.requestAnimationFrame(() => {
-            commitPendingTransformHistory();
+            commitPendingTransformHistory(transformHistoryCommitNonceRef.current);
           });
         }
       }
@@ -927,6 +1720,7 @@ export default function Home() {
     transformMgr.transform.scale.x,
     transformMgr.transform.scale.y,
     transformMgr.transform.scale.z,
+    transformMgr.isTransforming,
     isFiniteTransform,
   ]);
 
@@ -937,15 +1731,16 @@ export default function Home() {
       return;
     }
     if (scene.activeModelId === pending.modelId) return;
-    pendingTransformHistoryRef.current = null;
-    transformHistoryCommitRequestedRef.current = false;
-  }, [scene.activeModelId]);
+    invalidatePendingTransformHistory();
+  }, [invalidatePendingTransformHistory, scene.activeModelId]);
 
-  // Wrap transform change to update local state
-  const handleTransformChange = (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
+  // Wrap transform change to update local state.
+  // Keep this callback stable during active drags to avoid callback-identity
+  // churn feeding back into gizmo drag listeners/effects.
+  const handleTransformChange = React.useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
     transformMgr.setIsTransforming(true);
     transformMgr.onTransformChange(pos, rot, scl);
-  };
+  }, [transformMgr.onTransformChange, transformMgr.setIsTransforming]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
   const sceneZRange = React.useMemo(() => ({
@@ -1086,33 +1881,241 @@ export default function Home() {
     return model.transform;
   }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
 
-  const getModelBoundingFootprintMm = React.useCallback((
+  const supportBoundsByModelId = React.useMemo(() => {
+    const boundsByModelId = new Map<string, THREE.Box3>();
+
+    const ensureBounds = (modelId: string) => {
+      let bounds = boundsByModelId.get(modelId);
+      if (!bounds) {
+        bounds = new THREE.Box3();
+        boundsByModelId.set(modelId, bounds);
+      }
+      return bounds;
+    };
+
+    const expand = (modelId: string | null | undefined, pos: { x: number; y: number; z: number } | null | undefined, radiusMm = 0) => {
+      if (!modelId || !pos) return;
+      const bounds = ensureBounds(modelId);
+      const radius = Math.max(0, radiusMm);
+      bounds.expandByPoint(new THREE.Vector3(pos.x - radius, pos.y - radius, pos.z - radius));
+      bounds.expandByPoint(new THREE.Vector3(pos.x + radius, pos.y + radius, pos.z + radius));
+    };
+
+    const knotModelById = new Map<string, string>();
+
+    for (const branch of Object.values(supportStateSnapshot.branches)) {
+      if (branch.modelId) knotModelById.set(branch.parentKnotId, branch.modelId);
+    }
+    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
+      if (leaf.modelId) knotModelById.set(leaf.parentKnotId, leaf.modelId);
+    }
+    for (const brace of Object.values(supportStateSnapshot.braces)) {
+      if (!brace.modelId) continue;
+      knotModelById.set(brace.startKnotId, brace.modelId);
+      knotModelById.set(brace.endKnotId, brace.modelId);
+    }
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      if (supportBrace.modelId) knotModelById.set(supportBrace.hostKnotId, supportBrace.modelId);
+    }
+
+    for (const root of Object.values(supportStateSnapshot.roots)) {
+      expand(root.modelId, root.transform?.pos, Math.max(0.001, root.diameter / 2));
+      expand(root.modelId, {
+        x: root.transform.pos.x,
+        y: root.transform.pos.y,
+        z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+      }, Math.max(0.001, root.diameter / 2));
+    }
+
+    if (raftSettingsSnapshot.bottomMode !== 'off') {
+      const rootsByModel = new Map<string, SupportBaseCircle[]>();
+
+      for (const root of Object.values(supportStateSnapshot.roots)) {
+        if (!root.modelId) continue;
+        if (!rootsByModel.has(root.modelId)) rootsByModel.set(root.modelId, []);
+        rootsByModel.get(root.modelId)!.push({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          r: root.diameter / 2,
+        });
+      }
+
+      for (const [modelId, circles] of rootsByModel) {
+        if (circles.length === 0) continue;
+
+        const chamferInset = raftSettingsSnapshot.bottomMode === 'line'
+          ? Math.max(0, raftSettingsSnapshot.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsSnapshot.chamferAngle))))
+          : 0;
+
+        const baseProfile = computeFootprint(circles, {
+          marginMm: 0.2 + chamferInset,
+          samplesPerCircle: 24,
+        });
+
+        if (!baseProfile || baseProfile.length < 3) continue;
+
+        const outerProfile = raftSettingsSnapshot.wallEnabled
+          ? computeRaftOuterBoundary(baseProfile, raftSettingsSnapshot)
+          : baseProfile;
+
+        const raftTopZ = raftSettingsSnapshot.bottomMode === 'line'
+          ? raftSettingsSnapshot.lineHeightMm
+          : raftSettingsSnapshot.thickness;
+        const raftMaxZ = raftTopZ + (raftSettingsSnapshot.wallEnabled ? raftSettingsSnapshot.wallHeight : 0);
+
+        for (const p of outerProfile) {
+          expand(modelId, { x: p.x, y: p.y, z: 0 }, 0);
+          expand(modelId, { x: p.x, y: p.y, z: raftMaxZ }, 0);
+        }
+      }
+    }
+
+    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
+      const modelId = trunk.modelId;
+      if (!modelId) continue;
+      for (const seg of trunk.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      if (trunk.contactCone) {
+        expand(modelId, trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+      }
+    }
+
+    for (const branch of Object.values(supportStateSnapshot.branches)) {
+      const modelId = branch.modelId;
+      if (!modelId) continue;
+      for (const seg of branch.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      if (branch.contactCone) {
+        expand(modelId, branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
+      }
+    }
+
+    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
+      if (!leaf.modelId || !leaf.contactCone) continue;
+      expand(leaf.modelId, leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
+    }
+
+    for (const twig of Object.values(supportStateSnapshot.twigs)) {
+      const modelId = twig.modelId;
+      if (!modelId) continue;
+      for (const seg of twig.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      expand(modelId, twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
+      expand(modelId, twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
+    }
+
+    for (const stick of Object.values(supportStateSnapshot.sticks)) {
+      const modelId = stick.modelId;
+      if (!modelId) continue;
+      for (const seg of stick.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+      expand(modelId, stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
+      expand(modelId, stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
+    }
+
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      const modelId = supportBrace.modelId;
+      if (!modelId) continue;
+      for (const seg of supportBrace.segments) {
+        expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
+        expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
+      }
+    }
+
+    for (const knot of Object.values(supportStateSnapshot.knots)) {
+      const parent = knot.parentShaftId;
+      let modelId = knotModelById.get(knot.id) ?? null;
+      if (!modelId) {
+        const trunk = supportStateSnapshot.trunks[parent];
+        const branch = supportStateSnapshot.branches[parent];
+        const twig = supportStateSnapshot.twigs[parent];
+        const stick = supportStateSnapshot.sticks[parent];
+        if (trunk?.modelId) modelId = trunk.modelId;
+        else if (branch?.modelId) modelId = branch.modelId;
+        else if (twig?.modelId) modelId = twig.modelId;
+        else if (stick?.modelId) modelId = stick.modelId;
+        else if (parent.startsWith('braceSegment:')) {
+          const braceId = parent.slice('braceSegment:'.length);
+          modelId = supportStateSnapshot.braces[braceId]?.modelId ?? null;
+        }
+      }
+      expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
+    }
+
+    for (const knot of Object.values(supportBraceStateSnapshot.knots)) {
+      const modelId = knotModelById.get(knot.id) ?? null;
+      expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
+    }
+
+    return boundsByModelId;
+  }, [
+    supportStateSnapshot.braces,
+    supportStateSnapshot.branches,
+    supportStateSnapshot.knots,
+    supportStateSnapshot.leaves,
+    supportStateSnapshot.roots,
+    supportStateSnapshot.sticks,
+    supportStateSnapshot.trunks,
+    supportStateSnapshot.twigs,
+    supportBraceStateSnapshot.knots,
+    supportBraceStateSnapshot.supportBraces,
+    raftSettingsSnapshot,
+  ]);
+
+  const getModelSupportAwareDimensionsMm = React.useCallback((
     model: (typeof scene.models)[number],
     rotationZOverride?: number,
     transformOverride?: (typeof scene.models)[number]['transform'],
   ) => {
     const t = transformOverride ?? getArrangeTransform(model);
-    const rotation = new THREE.Euler(
-      t.rotation.x,
-      t.rotation.y,
-      rotationZOverride ?? t.rotation.z,
-      t.rotation.order,
+    const effectiveTransform = {
+      position: t.position.clone(),
+      rotation: new THREE.Euler(
+        t.rotation.x,
+        t.rotation.y,
+        rotationZOverride ?? t.rotation.z,
+        t.rotation.order,
+      ),
+      scale: t.scale.clone(),
+    };
+
+    const meshBounds = computeApproxModelWorldBounds(
+      model.geometry,
+      effectiveTransform,
     );
 
-    const bounds = computeApproxModelWorldBounds(
-      model.geometry,
-      {
-        position: new THREE.Vector3(0, 0, 0),
-        rotation,
-        scale: t.scale,
-      },
-    );
+    const supportBoundsBase = supportBoundsByModelId.get(model.id);
+    const combinedBounds = meshBounds.clone();
+    if (supportBoundsBase && !supportBoundsBase.isEmpty()) {
+      const sourceMatrix = new THREE.Matrix4().compose(
+        model.transform.position,
+        new THREE.Quaternion().setFromEuler(model.transform.rotation),
+        model.transform.scale,
+      );
+      const targetMatrix = new THREE.Matrix4().compose(
+        effectiveTransform.position,
+        new THREE.Quaternion().setFromEuler(effectiveTransform.rotation),
+        effectiveTransform.scale,
+      );
+      const delta = new THREE.Matrix4().multiplyMatrices(targetMatrix, sourceMatrix.clone().invert());
+      const transformedSupportBounds = supportBoundsBase.clone().applyMatrix4(delta);
+      combinedBounds.union(transformedSupportBounds);
+    }
 
     return {
-      width: Math.max(2, bounds.max.x - bounds.min.x),
-      depth: Math.max(2, bounds.max.y - bounds.min.y),
+      width: Math.max(2, combinedBounds.max.x - combinedBounds.min.x),
+      depth: Math.max(2, combinedBounds.max.y - combinedBounds.min.y),
+      height: Math.max(2, combinedBounds.max.z - combinedBounds.min.z),
     };
-  }, [computeApproxModelWorldBounds, getArrangeTransform]);
+  }, [computeApproxModelWorldBounds, getArrangeTransform, supportBoundsByModelId]);
 
   const sleep = React.useCallback((ms: number) => new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1172,6 +2175,7 @@ export default function Home() {
     }
 
     scene.updateModelTransforms(sanitizedUpdates);
+    setSupportRenderRefreshNonce((prev) => prev + 1);
 
     if (!scene.activeModelId || displayActiveModelId !== scene.activeModelId) {
       return;
@@ -1193,6 +2197,13 @@ export default function Home() {
 
     if (visibleModels.length <= 1) return;
 
+    // Arrange and Duplicate previews should never overlap.
+    setDuplicateApplySourceModel(null);
+    setDuplicateApplySourceTransform(null);
+    setDuplicateSourcePreviewTransform(null);
+    setDuplicatePreviewTransforms([]);
+    setDuplicateTotalCopies(1);
+
     const minSpinnerMs = 220;
     const startedAt = performance.now();
     setActiveArrangeOperation('standard');
@@ -1207,7 +2218,7 @@ export default function Home() {
 
       const modelsWithFootprints = visibleModels.map((model) => {
         const t = modelTransformById.get(model.id) ?? model.transform;
-        const baseFootprint = getModelBoundingFootprintMm(model, undefined, t);
+        const baseFootprint = getModelSupportAwareDimensionsMm(model, undefined, t);
         return {
           model,
           baseWidth: baseFootprint.width,
@@ -1276,7 +2287,7 @@ export default function Home() {
           const cached = placementSizeCache.get(key);
           if (cached) return cached;
 
-          const dims = getModelBoundingFootprintMm(model, angleZ, t);
+          const dims = getModelSupportAwareDimensionsMm(model, angleZ, t);
 
           placementSizeCache.set(key, dims);
           return dims;
@@ -1596,13 +2607,20 @@ export default function Home() {
       setActiveArrangeOperation(null);
       setArrangeOverlayModelCount(null);
     }
-  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelBoundingFootprintMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
+  }, [arrangeAllowRotateOnZ, arrangeAnchorMode, arrangeSpacingMm, getArrangeTransform, getModelSupportAwareDimensionsMm, isAutoArranging, resolveArrangeVisibleModels, scene, sleep, transformMgr, applyArrangeTransforms]);
 
   const handleHighPrecisionArrangeModels = React.useCallback(async (scope: 'all' | 'selected', explicitSelectedIds?: string[]) => {
     if (isAutoArranging) return;
 
     const visibleModels = resolveArrangeVisibleModels(scope, explicitSelectedIds);
     if (visibleModels.length <= 1) return;
+
+    // Arrange and Duplicate previews should never overlap.
+    setDuplicateApplySourceModel(null);
+    setDuplicateApplySourceTransform(null);
+    setDuplicateSourcePreviewTransform(null);
+    setDuplicatePreviewTransforms([]);
+    setDuplicateTotalCopies(1);
 
     const minSpinnerMs = 220;
     const startedAt = performance.now();
@@ -1612,16 +2630,92 @@ export default function Home() {
     await sleep(0);
 
     try {
+      const modelTransformById = new Map(
+        scene.models.map((model) => [model.id, getArrangeTransform(model)] as const),
+      );
+
+      const supportLocalPointsByModelId = new Map<string, { points: THREE.Vector3[]; key: string }>();
+      for (const model of scene.models) {
+        const supportBounds = supportBoundsByModelId.get(model.id);
+        if (!supportBounds || supportBounds.isEmpty()) continue;
+
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const worldMatrix = new THREE.Matrix4().compose(
+          t.position,
+          new THREE.Quaternion().setFromEuler(t.rotation),
+          t.scale,
+        );
+        const invWorldMatrix = worldMatrix.clone().invert();
+
+        const xs = [supportBounds.min.x, supportBounds.max.x];
+        const ys = [supportBounds.min.y, supportBounds.max.y];
+        const zs = [supportBounds.min.z, supportBounds.max.z];
+
+        const points: THREE.Vector3[] = [];
+        const seen = new Set<string>();
+        const tmp = new THREE.Vector3();
+        for (const x of xs) {
+          for (const y of ys) {
+            for (const z of zs) {
+              tmp.set(x, y, z).applyMatrix4(invWorldMatrix);
+              const dedupeKey = `${tmp.x.toFixed(4)}:${tmp.y.toFixed(4)}:${tmp.z.toFixed(4)}`;
+              if (seen.has(dedupeKey)) continue;
+              seen.add(dedupeKey);
+              points.push(tmp.clone());
+            }
+          }
+        }
+
+        if (points.length === 0) continue;
+
+        const key = [
+          supportBounds.min.x.toFixed(4),
+          supportBounds.min.y.toFixed(4),
+          supportBounds.min.z.toFixed(4),
+          supportBounds.max.x.toFixed(4),
+          supportBounds.max.y.toFixed(4),
+          supportBounds.max.z.toFixed(4),
+          points.length,
+        ].join('|');
+
+        supportLocalPointsByModelId.set(model.id, { points, key });
+      }
+
+      const toHighPrecisionArrangeModel = (model: (typeof scene.models)[number]): HighPrecisionArrangeModel => {
+        const t = modelTransformById.get(model.id) ?? model.transform;
+        const supportLocal = supportLocalPointsByModelId.get(model.id);
+
+        return {
+          id: model.id,
+          visible: model.visible,
+          transform: {
+            position: t.position.clone(),
+            rotation: t.rotation.clone(),
+            scale: t.scale.clone(),
+          },
+          geometry: {
+            center: model.geometry.center.clone(),
+            geometry: model.geometry.geometry,
+            supportLocalPoints: supportLocal?.points,
+            supportHullKey: supportLocal?.key,
+          },
+        };
+      };
+
+      const visibleIdSet = new Set(visibleModels.map((model) => model.id));
+      const highPrecisionSceneModels = scene.models.map(toHighPrecisionArrangeModel);
+      const highPrecisionVisibleModels = highPrecisionSceneModels.filter((model) => visibleIdSet.has(model.id));
+
       const updates = await computeHighPrecisionArrangeUpdatesWorker({
-        visibleModels: visibleModels as unknown as HighPrecisionArrangeModel[],
-        sceneModels: scene.models as unknown as HighPrecisionArrangeModel[],
+        visibleModels: highPrecisionVisibleModels,
+        sceneModels: highPrecisionSceneModels,
         widthMm: scene.view3dSettings.widthMm,
         depthMm: scene.view3dSettings.depthMm,
         originMode: scene.view3dSettings.originMode,
         arrangeSpacingMm,
         arrangeAllowRotateOnZ,
         arrangeAnchorMode,
-        getArrangeTransform: (model) => getArrangeTransform(model as unknown as (typeof scene.models)[number]),
+        getArrangeTransform: (model) => model.transform,
         hullCache: arrangeHullFootprintCacheRef.current,
       });
 
@@ -1647,6 +2741,7 @@ export default function Home() {
     resolveArrangeVisibleModels,
     scene,
     sleep,
+    supportBoundsByModelId,
     transformMgr,
     applyArrangeTransforms,
   ]);
@@ -1670,9 +2765,8 @@ export default function Home() {
 
     const baseDims = visibleModels.map((model) => {
       const t = modelTransformById.get(model.id) ?? model.transform;
-      const projected = getModelBoundingFootprintMm(model, undefined, t);
-      const size = model.geometry.size;
-      const scaledHeight = Math.max(2, Math.abs(size.z * t.scale.z));
+      const projected = getModelSupportAwareDimensionsMm(model, undefined, t);
+      const scaledHeight = projected.height;
 
       return {
         width: projected.width,
@@ -1755,7 +2849,7 @@ export default function Home() {
     scene.view3dSettings.originMode,
     scene.view3dSettings.widthMm,
     getArrangeTransform,
-    getModelBoundingFootprintMm,
+    getModelSupportAwareDimensionsMm,
     resolveArrangeVisibleModels,
   ]);
 
@@ -2107,7 +3201,102 @@ export default function Home() {
     }
   };
 
-  const handleTransformEnd = (operation: 'move' | 'rotate' | 'scale') => {
+  const handleTransformEnd = (
+    operation: 'move' | 'rotate' | 'scale',
+    finalTransform?: ModelTransform,
+    options?: { skipStoreCommit?: boolean },
+  ) => {
+    const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
+    const releasePerf = performance.now();
+    pendingSupportSyncReleasePerfRef.current = releasePerf;
+    setHoldSupportDragDeltaUntilSupportSync(true);
+    if (typeof window !== 'undefined') {
+      if (supportSyncFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+      }
+      // Fallback release guard: avoid indefinite hold when no support updates occur.
+      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
+        setHoldSupportDragDeltaUntilSupportSync(false);
+        pendingSupportSyncReleasePerfRef.current = null;
+        supportSyncFallbackTimeoutRef.current = null;
+      }, 120);
+    }
+
+    transformDebugTimelineRef.current.lastOperation = operation;
+    transformDebugTimelineRef.current.dragReleasedAt = {
+      perfMs: releasePerf,
+      epochMs: Date.now(),
+    };
+    if (finalTransform) {
+      transformDebugTimelineRef.current.liveCalculatedAt = stampNow();
+    }
+
+    if (options?.skipStoreCommit) {
+      transformMgr.setIsTransforming(false);
+      transformMgr.pendingTransformRef.current = null;
+      invalidatePendingTransformHistory();
+      return;
+    }
+
+    // Flush the final model transform into the store synchronously so
+    // transformSupportsForModel() recalculates all support positions before
+    // we reset the visual drag-group matrix. This eliminates the 1-frame
+    // flash where supports snap back to their pre-drag positions.
+    if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
+      const pending = transformMgr.pendingTransformRef.current;
+      const pendingHistory = pendingTransformHistoryRef.current;
+      const current = (
+        finalTransform && isFiniteTransform(finalTransform)
+      )
+        ? {
+            position: finalTransform.position.clone(),
+            rotation: finalTransform.rotation.clone(),
+            scale: finalTransform.scale.clone(),
+          }
+        : (
+          pending && isFiniteTransform({ position: pending.pos, rotation: pending.rot, scale: pending.scl })
+        )
+          ? {
+              position: pending.pos.clone(),
+              rotation: pending.rot.clone(),
+              scale: pending.scl.clone(),
+            }
+          : transformMgr.transform;
+      if (isFiniteTransform(current)) {
+        if (!finalTransform) {
+          transformDebugTimelineRef.current.liveCalculatedAt = stampNow();
+        }
+
+        // Keep drag delta active through store commit so live preview remains
+        // visually stable; SceneCanvas reconciliation clears the matrix only
+        // after committed/live transforms are actually aligned.
+
+        const explicitBeforeTransform = (
+          pendingHistory && pendingHistory.modelId === scene.activeModelId
+        )
+          ? {
+              position: pendingHistory.before.position.clone(),
+              rotation: pendingHistory.before.rotation.clone(),
+              scale: pendingHistory.before.scale.clone(),
+            }
+          : undefined;
+
+        transformDebugTimelineRef.current.storeUpdateStartedAt = stampNow();
+        scene.updateModelTransform(scene.activeModelId, {
+          position: current.position.clone(),
+          rotation: current.rotation.clone(),
+          scale: current.scale.clone(),
+        }, explicitBeforeTransform);
+        transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
+        // Prevent the persistence effect from applying the same delta a second time
+        transformEndFlushedRef.current = true;
+      }
+    }
+
+    // Do not eagerly reset support drag-group matrix here.
+    // SceneCanvas reconciles dragGroup matrix from committed-vs-live transforms
+    // and only returns to identity/auto-update once both are actually in sync.
+
     const targetModelId = scene.activeModelId;
     const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
 
@@ -2118,6 +3307,11 @@ export default function Home() {
           position: pendingRotateGizmoCommitRef.current.before.position.clone(),
           rotation: pendingRotateGizmoCommitRef.current.before.rotation.clone(),
           scale: pendingRotateGizmoCommitRef.current.before.scale.clone(),
+        },
+        after: {
+          position: pendingRotateGizmoCommitRef.current.after.position.clone(),
+          rotation: pendingRotateGizmoCommitRef.current.after.rotation.clone(),
+          scale: pendingRotateGizmoCommitRef.current.after.scale.clone(),
         },
         description: pendingRotateGizmoCommitRef.current.description,
       };
@@ -2138,15 +3332,74 @@ export default function Home() {
       transformMgr.pendingTransformRef.current = null;
     }
 
-    if (skipNextTransformEndCommitRef.current) {
-      skipNextTransformEndCommitRef.current = false;
-      pendingTransformHistoryRef.current = null;
-      transformHistoryCommitRequestedRef.current = false;
-      pendingRotateGizmoCommitRef.current = null;
+    if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
+      const pendingTransform = transformMgr.pendingTransformRef.current;
+      const afterFromPending = (
+        pendingTransform
+        && isFiniteTransform({
+          position: pendingTransform.pos,
+          rotation: pendingTransform.rot,
+          scale: pendingTransform.scl,
+        })
+      )
+        ? {
+            position: pendingTransform.pos.clone(),
+            rotation: pendingTransform.rot.clone(),
+            scale: pendingTransform.scl.clone(),
+          }
+        : null;
+
+      const afterFromTransform = isFiniteTransform(transformMgr.transform)
+        ? {
+            position: transformMgr.transform.position.clone(),
+            rotation: transformMgr.transform.rotation.clone(),
+            scale: transformMgr.transform.scale.clone(),
+          }
+        : null;
+
+      const afterFromFinal = finalTransform && isFiniteTransform(finalTransform)
+        ? {
+            position: finalTransform.position.clone(),
+            rotation: finalTransform.rotation.clone(),
+            scale: finalTransform.scale.clone(),
+          }
+        : null;
+
+      const existingAfter = pendingTransformHistoryRef.current.after && isFiniteTransform(pendingTransformHistoryRef.current.after)
+        ? {
+            position: pendingTransformHistoryRef.current.after.position.clone(),
+            rotation: pendingTransformHistoryRef.current.after.rotation.clone(),
+            scale: pendingTransformHistoryRef.current.after.scale.clone(),
+          }
+        : null;
+
+      const existingAfterIsMeaningful = existingAfter
+        ? !transformsApproximatelyEqual(pendingTransformHistoryRef.current.before, existingAfter)
+        : false;
+
+      if (!existingAfterIsMeaningful) {
+        pendingTransformHistoryRef.current.after = afterFromFinal ?? afterFromPending ?? afterFromTransform ?? existingAfter ?? undefined;
+      }
+    }
+
+    const skipCommitToken = skipNextTransformEndCommitRef.current;
+    if (
+      skipCommitToken
+      && targetModelId
+      && skipCommitToken.modelId === targetModelId
+      && skipCommitToken.operation === operation
+    ) {
+      skipNextTransformEndCommitRef.current = null;
+      invalidatePendingTransformHistory();
       return;
     }
 
-    scheduleCommitPendingTransformHistory(operation === 'rotate' ? 2 : 1);
+    if (operation === 'rotate') {
+      commitPendingTransformHistory();
+      return;
+    }
+
+    scheduleCommitPendingTransformHistory(1);
   };
 
   const handleGizmoTransformCommit = React.useCallback((payload: {
@@ -2166,9 +3419,14 @@ export default function Home() {
           rotation: payload.before.rotation.clone(),
           scale: payload.before.scale.clone(),
         },
+        after: {
+          position: payload.after.position.clone(),
+          rotation: payload.after.rotation.clone(),
+          scale: payload.after.scale.clone(),
+        },
         description: `transform:${payload.operation} ${targetModelName}`,
       };
-      skipNextTransformEndCommitRef.current = false;
+      skipNextTransformEndCommitRef.current = null;
       return;
     }
 
@@ -2179,10 +3437,105 @@ export default function Home() {
       `transform:${payload.operation} ${targetModelName}`,
     );
 
-    skipNextTransformEndCommitRef.current = true;
+    skipNextTransformEndCommitRef.current = {
+      modelId: payload.modelId,
+      operation: payload.operation,
+    };
   }, [scene]);
 
-  const handleTransformStart = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
+  const handleGizmoTransformGroupCommit = React.useCallback((payload: {
+    operation: 'move' | 'rotate' | 'scale';
+    entries: Array<{
+      modelId: string;
+      before: ModelTransform;
+      after: ModelTransform;
+    }>;
+  }) => {
+    if (payload.entries.length === 0) return;
+
+    const hasMeaningfulChange = (before: ModelTransform, after: ModelTransform) => {
+      const EPSILON = 1e-6;
+      return (
+        before.position.distanceToSquared(after.position) > EPSILON
+        || before.scale.distanceToSquared(after.scale) > EPSILON
+        || Math.abs(before.rotation.x - after.rotation.x) > EPSILON
+        || Math.abs(before.rotation.y - after.rotation.y) > EPSILON
+        || Math.abs(before.rotation.z - after.rotation.z) > EPSILON
+      );
+    };
+
+    const updates = payload.entries
+      .filter((entry) => isFiniteTransform(entry.after) && hasMeaningfulChange(entry.before, entry.after))
+      .map((entry) => ({
+        id: entry.modelId,
+        transform: {
+          position: entry.after.position.clone(),
+          rotation: entry.after.rotation.clone(),
+          scale: entry.after.scale.clone(),
+        },
+      }));
+
+    const formatVec3 = (v: THREE.Vector3) => `(${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)})`;
+    console.groupCollapsed(`[MultiGizmo][Page] ${payload.operation} commit`);
+    console.log('selected models:', payload.entries.map((entry) => entry.modelId));
+    console.log('model positions:', payload.entries.map((entry) => ({
+      modelId: entry.modelId,
+      position: formatVec3(entry.before.position),
+    })));
+    const draggedEntry = payload.entries.find((entry) => entry.modelId === scene.activeModelId) ?? payload.entries[0] ?? null;
+    console.log('model dragged to:', draggedEntry ? {
+      modelId: draggedEntry.modelId,
+      position: formatVec3(draggedEntry.after.position),
+    } : null);
+    console.log('model updated position:', updates.map((entry) => ({
+      modelId: entry.id,
+      position: formatVec3(entry.transform.position),
+    })));
+    console.groupEnd();
+
+    if (updates.length === 0) return;
+
+    scene.updateModelTransforms(updates);
+
+    const activeUpdate = scene.activeModelId
+      ? updates.find((entry) => entry.id === scene.activeModelId)
+      : undefined;
+    if (activeUpdate) {
+      const { position, rotation, scale } = activeUpdate.transform;
+      transformMgr.transformHook.setPosition(position.x, position.y, position.z);
+      transformMgr.transformHook.setRotation(rotation.x, rotation.y, rotation.z);
+      transformMgr.transformHook.setScale(scale.x, scale.y, scale.z);
+    }
+
+    setSupportRenderRefreshNonce((value) => value + 1);
+    skipNextTransformEndCommitRef.current = null;
+  }, [isFiniteTransform, scene, transformMgr.transformHook]);
+
+  const handleTransformStart = React.useCallback((
+    operation: 'move' | 'rotate' | 'scale',
+    details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
+  ) => {
+    skipNextTransformEndCommitRef.current = null;
+
+    if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
+      window.cancelAnimationFrame(supportDragResetRafRef.current);
+      supportDragResetRafRef.current = null;
+    }
+    if (typeof window !== 'undefined' && supportDragResetSecondRafRef.current !== null) {
+      window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
+      supportDragResetSecondRafRef.current = null;
+    }
+
+    if (operation === 'rotate' && (details?.axis === 'x' || details?.axis === 'y')) {
+      const proceed = requestDestructiveTransformSupportDeletion('Rotate X/Y');
+      if (!proceed) return false;
+    }
+
+    if (operation === 'scale') {
+      const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
+      if (!proceed) return false;
+    }
+
     if (!scene.activeModelId || !scene.activeModel) return;
     const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
 
@@ -2203,30 +3556,80 @@ export default function Home() {
     }
 
     transformMgr.setIsTransforming(true);
-  }, [scene.activeModel, scene.activeModelId, transformMgr]);
+    return true;
+  }, [requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, transformMgr]);
 
-  const handleRotationComplete = () => {
-    const targetModelId = scene.activeModelId;
-    const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
-    if (!pendingTransformHistoryRef.current && targetModelId && scene.activeModel) {
+  const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
+    if (!scene.activeModelId || !scene.activeModel) return;
+
+    const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
+    if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
       pendingTransformHistoryRef.current = {
-        modelId: targetModelId,
+        modelId: scene.activeModelId,
         before: {
           position: scene.activeModel.transform.position.clone(),
           rotation: scene.activeModel.transform.rotation.clone(),
           scale: scene.activeModel.transform.scale.clone(),
         },
-        description: `transform:rotate ${targetModelName}`,
+        after: isFiniteTransform(transformMgr.transform)
+          ? {
+              position: transformMgr.transform.position.clone(),
+              rotation: transformMgr.transform.rotation.clone(),
+              scale: transformMgr.transform.scale.clone(),
+            }
+          : undefined,
+        description: `transform:${operation} ${targetModelName}`,
       };
+      return;
     }
 
+    pendingTransformHistoryRef.current.description = `transform:${operation} ${targetModelName}`;
+    if (isFiniteTransform(transformMgr.transform)) {
+      pendingTransformHistoryRef.current.after = {
+        position: transformMgr.transform.position.clone(),
+        rotation: transformMgr.transform.rotation.clone(),
+        scale: transformMgr.transform.scale.clone(),
+      };
+    }
+  }, [isFiniteTransform, scene.activeModel, scene.activeModelId, transformMgr.transform]);
+
+  React.useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
+        window.cancelAnimationFrame(supportDragResetRafRef.current);
+        supportDragResetRafRef.current = null;
+      }
+      if (typeof window !== 'undefined' && supportDragResetSecondRafRef.current !== null) {
+        window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
+        supportDragResetSecondRafRef.current = null;
+      }
+      if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+        supportSyncFallbackTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleRotationComplete = () => {
+    const targetModelId = scene.activeModelId;
+    const targetModelName = (scene.activeModel?.name ?? targetModelId ?? 'Model').trim();
     if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
       pendingTransformHistoryRef.current.description = `transform:rotate ${targetModelName}`;
+      if (isFiniteTransform(transformMgr.transform)) {
+        pendingTransformHistoryRef.current.after = {
+          position: transformMgr.transform.position.clone(),
+          rotation: transformMgr.transform.rotation.clone(),
+          scale: transformMgr.transform.scale.clone(),
+        };
+      }
+    } else {
+      // No pending entry means no meaningful rotation delta was staged.
+      return;
     }
 
     islands.clearScanData();
     applyPostRotateLift();
-    scheduleCommitPendingTransformHistory(2);
+    commitPendingTransformHistory();
   };
 
   const handleCameraChange = React.useCallback(() => {
@@ -2385,14 +3788,10 @@ export default function Home() {
     }
 
     const model = scene.activeModel;
-    const baseWidth = Math.max(2, Math.abs(model.geometry.size.x * model.transform.scale.x));
-    const baseDepth = Math.max(2, Math.abs(model.geometry.size.y * model.transform.scale.y));
-    const z = model.transform.rotation.z;
-    const c = Math.abs(Math.cos(z));
-    const s = Math.abs(Math.sin(z));
-    const width = (baseWidth * c) + (baseDepth * s);
-    const depth = (baseWidth * s) + (baseDepth * c);
-    const height = Math.max(2, Math.abs(model.geometry.size.z * model.transform.scale.z));
+    const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
+    const width = sourceDims.width;
+    const depth = sourceDims.depth;
+    const height = sourceDims.height;
 
     const slots: THREE.Vector3[] = [];
 
@@ -2445,17 +3844,13 @@ export default function Home() {
       type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
       const intersectsRect = (a: Rect2D, b: Rect2D) => {
-        return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+        return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
       };
 
       const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-        const mBaseW = Math.max(2, Math.abs(m.geometry.size.x * m.transform.scale.x));
-        const mBaseD = Math.max(2, Math.abs(m.geometry.size.y * m.transform.scale.y));
-        const rz = m.transform.rotation.z;
-        const rc = Math.abs(Math.cos(rz));
-        const rs = Math.abs(Math.sin(rz));
-        const mW = (mBaseW * rc) + (mBaseD * rs);
-        const mD = (mBaseW * rs) + (mBaseD * rc);
+        const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
+        const mW = dims.width;
+        const mD = dims.depth;
         return {
           minX: m.transform.position.x - (mW * 0.5),
           maxX: m.transform.position.x + (mW * 0.5),
@@ -2578,6 +3973,7 @@ export default function Home() {
     resolveArrangeVisibleModels,
     duplicateSpacingMm,
     duplicateTotalCopies,
+    getModelSupportAwareDimensionsMm,
     scene.activeModel,
     scene.models,
     scene.mode,
@@ -2609,7 +4005,7 @@ export default function Home() {
     await sleep(0);
 
     try {
-      scene.duplicateModelWithTransforms(
+      const createdIds = scene.duplicateModelWithTransforms(
         scene.activeModelId,
         duplicatePreviewTransforms,
         duplicateSourcePreviewTransform
@@ -2620,6 +4016,28 @@ export default function Home() {
             }
           : null,
       );
+
+      const firstCreatedId = createdIds[0] ?? null;
+      const firstCreatedTransform = duplicatePreviewTransforms[0] ?? null;
+      if (firstCreatedId && firstCreatedTransform) {
+        setDisplayActiveModelId(firstCreatedId);
+        transformMgr.transformHook.setPosition(
+          firstCreatedTransform.position.x,
+          firstCreatedTransform.position.y,
+          firstCreatedTransform.position.z,
+        );
+        transformMgr.transformHook.setRotation(
+          firstCreatedTransform.rotation.x,
+          firstCreatedTransform.rotation.y,
+          firstCreatedTransform.rotation.z,
+        );
+        transformMgr.transformHook.setScale(
+          firstCreatedTransform.scale.x,
+          firstCreatedTransform.scale.y,
+          firstCreatedTransform.scale.z,
+        );
+      }
+
       setDuplicateTotalCopies(1);
       setDuplicateSourcePreviewTransform(null);
       setDuplicatePreviewTransforms([]);
@@ -2632,7 +4050,7 @@ export default function Home() {
       setDuplicateApplySourceModel(null);
       setDuplicateApplySourceTransform(null);
     }
-  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep]);
+  }, [duplicatePreviewTransforms, duplicateSourcePreviewTransform, isDuplicating, scene, sleep, transformMgr.transformHook]);
 
   const handleFillPlateDuplicate = React.useCallback(() => {
     if (isDuplicating) return;
@@ -2640,13 +4058,9 @@ export default function Home() {
     const model = scene.activeModel;
     if (!model) return;
 
-    const baseWidth = Math.max(2, Math.abs(model.geometry.size.x * model.transform.scale.x));
-    const baseDepth = Math.max(2, Math.abs(model.geometry.size.y * model.transform.scale.y));
-    const rz = model.transform.rotation.z;
-    const rc = Math.abs(Math.cos(rz));
-    const rs = Math.abs(Math.sin(rz));
-    const width = (baseWidth * rc) + (baseDepth * rs);
-    const depth = (baseWidth * rs) + (baseDepth * rc);
+    const sourceDims = getModelSupportAwareDimensionsMm(model, undefined, model.transform);
+    const width = sourceDims.width;
+    const depth = sourceDims.depth;
     const spacing = Math.max(0, duplicateSpacingMm);
 
     const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
@@ -2667,17 +4081,13 @@ export default function Home() {
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
-      return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+      return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
     };
 
     const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
-      const mBaseW = Math.max(2, Math.abs(m.geometry.size.x * m.transform.scale.x));
-      const mBaseD = Math.max(2, Math.abs(m.geometry.size.y * m.transform.scale.y));
-      const z = m.transform.rotation.z;
-      const c = Math.abs(Math.cos(z));
-      const s = Math.abs(Math.sin(z));
-      const mW = (mBaseW * c) + (mBaseD * s);
-      const mD = (mBaseW * s) + (mBaseD * c);
+      const dims = getModelSupportAwareDimensionsMm(m, undefined, m.transform);
+      const mW = dims.width;
+      const mD = dims.depth;
       return {
         minX: m.transform.position.x - (mW * 0.5),
         maxX: m.transform.position.x + (mW * 0.5),
@@ -2721,7 +4131,7 @@ export default function Home() {
 
     const targetCopies = Math.min(128, Math.max(1, capacity));
     setDuplicateTotalCopies(targetCopies);
-  }, [duplicateLayoutMode, duplicateSpacingMm, isDuplicating, scene]);
+  }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
 
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden">
@@ -2778,6 +4188,7 @@ export default function Home() {
               onUngroupGroup={handleUngroupFolder}
               onRenameGroup={handleRenameFolder}
               onModelContextMenu={handleModelListContextMenu}
+              onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
               onLoadMeshChange={scene.onFileChange}
@@ -2802,11 +4213,45 @@ export default function Home() {
                 onCenter={transformMgr.transformHook.centerXY}
                 onPlatform={transformMgr.transformHook.setPlatformZ}
                 rotation={transformMgr.transform.rotation}
-                onRotationChange={transformMgr.transformHook.setRotation}
+                onRotationChange={(x, y, z) => {
+                  const current = transformMgr.transform.rotation;
+                  const EPS = 1e-6;
+                  const hasDestructiveRotate = Math.abs(x - current.x) > EPS
+                    || Math.abs(y - current.y) > EPS;
+
+                  const hasAnyRotateDelta = hasDestructiveRotate || Math.abs(z - current.z) > EPS;
+                  if (hasAnyRotateDelta) {
+                    ensurePendingTransformHistoryForActiveModel('rotate');
+                  }
+
+                  if (hasDestructiveRotate) {
+                    const proceed = requestDestructiveTransformSupportDeletion('Rotate X/Y');
+                    if (!proceed) return;
+                  }
+
+                  transformMgr.transformHook.setRotation(x, y, z);
+                }}
                 onResetRotation={transformMgr.transformHook.resetRotation}
                 onRotationComplete={handleRotationComplete}
                 scale={transformMgr.transform.scale}
-                onScaleChange={transformMgr.transformHook.setScale}
+                onScaleChange={(x, y, z) => {
+                  const current = transformMgr.transform.scale;
+                  const EPS = 1e-6;
+                  const hasDestructiveScale = Math.abs(x - current.x) > EPS
+                    || Math.abs(y - current.y) > EPS
+                    || Math.abs(z - current.z) > EPS;
+
+                  if (hasDestructiveScale) {
+                    ensurePendingTransformHistoryForActiveModel('scale');
+                  }
+
+                  if (hasDestructiveScale) {
+                    const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
+                    if (!proceed) return;
+                  }
+
+                  transformMgr.transformHook.setScale(x, y, z);
+                }}
                 onResetScale={transformMgr.transformHook.resetScale}
                 modelBBox={scene.geom.bbox}
                 autoLift={transformMgr.autoLift}
@@ -3093,6 +4538,186 @@ export default function Home() {
             crossSectionMode={slicing.crossSectionMode}
           />
         )}
+
+        {isTransformDebugOverlayOpen && (
+          <div
+            key="transform-debug-overlay"
+            className="rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              color: 'var(--text-strong)',
+              background: 'color-mix(in srgb, var(--surface-0), black 14%)',
+              fontSize: '10px',
+            }}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
+                {scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
+              </div>
+              <button
+                type="button"
+                className="rounded border px-2 py-0.5 text-[10px]"
+                style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                onClick={() => setIsTransformDebugOverlayOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            {scene.mode === 'support' ? (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Hovered category</div><div>{supportDebugStats.hoveredCategory}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Hovered id</div><div>{supportDebugStats.hoveredId ?? 'none'}</div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Transform mode</div><div>{transformMgr.transformMode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
+              </div>
+            )}
+
+            {scene.mode === 'support' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Placement Lock Debug
+                </div>
+                <div>Hovered category/id: {supportDebugStats.hoveredCategory} / {supportDebugStats.hoveredId ?? 'none'}</div>
+                <div>Shaft hovered segment: {supportDebugStats.shaftHoveredSegmentId ?? 'none'}</div>
+                <div>Shaft hover point: {formatDebugVec3Like(supportDebugStats.shaftHoverPoint)}</div>
+                <div>Brace Alt active: {supportDebugStats.braceAltActive ? 'true' : 'false'}</div>
+                <div>Brace stage: {supportDebugStats.braceStage}</div>
+                <div>Brace start: {supportDebugStats.braceStartKind ?? 'none'} / {supportDebugStats.braceStartSegmentId ?? 'n/a'}</div>
+                <div>Brace snap: {supportDebugStats.braceSnapKind ?? 'none'} / {supportDebugStats.braceSnapSegmentId ?? supportDebugStats.braceSnapLeafId ?? 'n/a'}</div>
+                <div>Preview start: {formatDebugVec3Like(supportDebugStats.previewStart)}</div>
+                <div>Preview end: {formatDebugVec3Like(supportDebugStats.previewEnd)}</div>
+                <div>Suppressed: {supportDebugStats.supportInteractionSuppressed ? 'true' : 'false'}</div>
+                <div>disableSelectionAndHover: {supportDebugStats.disableSelectionAndHover ? 'true' : 'false'}</div>
+                <div>Gizmo lock active: {supportDebugStats.gizmoInteractionLockActive ? 'true' : 'false'}</div>
+                <div>Knot dragging: {supportDebugStats.knotGizmoDragging ? 'true' : 'false'}</div>
+                <div>Joint dragging: {supportDebugStats.jointGizmoDragging ? 'true' : 'false'}</div>
+                <div>Knot guard remaining: {supportDebugStats.knotGuardRemainingMs} ms</div>
+                <div>Knot-only guard: {supportDebugStats.knotOnlyGuardRemainingMs} ms</div>
+                <div>Joint-only guard: {supportDebugStats.jointOnlyGuardRemainingMs} ms</div>
+                <div>Immediate hover model: {supportDebugStats.immediateModelHoverId ?? 'none'}</div>
+                <div>External hover model: {supportDebugStats.externalHoverModelId ?? 'none'}</div>
+                <div>Effective hover model: {supportDebugStats.effectiveHoverModelId ?? 'none'}</div>
+                <div>Scene hovered support: {supportDebugStats.sceneHoveredSupportId ?? 'none'}</div>
+                <div>Marquee hovered support: {supportDebugStats.marqueeHoveredSupportId ?? 'none'}</div>
+                <div>Raw hovered category/id: {supportDebugStats.rawHoveredCategory ?? 'none'} / {supportDebugStats.rawHoveredId ?? 'none'}</div>
+                <div>Visual hovered category/id: {supportDebugStats.hoveredCategoryForVisual ?? 'none'} / {supportDebugStats.hoveredIdForVisual ?? 'none'}</div>
+                <div>
+                  Hover vs snap segment mismatch:{' '}
+                  <span style={{ color: supportDebugStats.hoveredVsSnapMismatch ? '#ff8a8a' : 'var(--text-strong)' }}>
+                    {supportDebugStats.hoveredVsSnapMismatch ? 'YES' : 'no'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {scene.mode !== 'support' && (
+              <>
+                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Transform Delta (live vs store)
+                  </div>
+                  <div>Δpos: {formatDebugNumber(transformDebugStats.posDelta)} mm</div>
+                  <div>Δrot max: {formatDebugNumber(transformDebugStats.rotDelta)} rad</div>
+                  <div>Δscale: {formatDebugNumber(transformDebugStats.scaleDelta)}</div>
+                </div>
+
+                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                  <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Active Model Transform
+                  </div>
+                  <div>Store pos: {formatDebugVec3(transformDebugStats.storeTransform?.position)}</div>
+                  <div>Live pos: {formatDebugVec3(transformDebugStats.liveTransform.position)}</div>
+                  <div>Drag Δ pos: {formatDebugVec3(transformDebugStats.dragGroupPos)}</div>
+                  <div>Drag Δ scale: {formatDebugVec3(transformDebugStats.dragGroupScale)}</div>
+                </div>
+              </>
+            )}
+
+            <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Support Counts (all / active model)
+              </div>
+              <div>Trunks: {transformDebugStats.supportCounts.trunks} / {activeSupportEntityCounts.trunks}</div>
+              <div>Branches: {transformDebugStats.supportCounts.branches} / {activeSupportEntityCounts.branches}</div>
+              <div>Leaves: {transformDebugStats.supportCounts.leaves} / {activeSupportEntityCounts.leaves}</div>
+              <div>Twigs: {transformDebugStats.supportCounts.twigs} / {activeSupportEntityCounts.twigs}</div>
+              <div>Sticks: {transformDebugStats.supportCounts.sticks} / {activeSupportEntityCounts.sticks}</div>
+              <div>Braces: {transformDebugStats.supportCounts.braces} / {activeSupportEntityCounts.braces}</div>
+              <div>Roots: {transformDebugStats.supportCounts.roots} / {activeSupportEntityCounts.roots}</div>
+              <div>Knots: {transformDebugStats.supportCounts.knots} / {activeSupportEntityCounts.knots}</div>
+              <div>SupportBraces: {transformDebugStats.supportCounts.supportBraces} / {activeSupportEntityCounts.supportBraces}</div>
+            </div>
+
+            {scene.mode !== 'support' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Transform Timeline
+                </div>
+                <div>Last op: {transformDebugStats.timeline.lastOperation ?? 'n/a'}</div>
+                <div>Drag released: {formatDebugTime(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Live calculated: {formatDebugTime(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Store update start: {formatDebugTime(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Store updated: {formatDebugTime(transformDebugStats.timeline.storeUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Support store updated: {formatDebugTime(transformDebugStats.timeline.supportStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>SupportBrace store updated: {formatDebugTime(transformDebugStats.timeline.supportBraceStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Active model store observed: {formatDebugTime(transformDebugStats.timeline.activeModelStoreObservedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Release → Live: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.liveCalculatedAt)}</div>
+                <div>Live → Store start: {formatDebugLatencyMs(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.storeUpdateStartedAt)}</div>
+                <div>Store start → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
+                <div>Release → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
+                <div>Release → Support store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportStoreUpdatedAt)}</div>
+                <div>Release → SupportBrace store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportBraceStoreUpdatedAt)}</div>
+                <div>Release → Active model observed: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.activeModelStoreObservedAt)}</div>
+              </div>
+            )}
+
+            {scene.mode !== 'support' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Transform History Commit
+                </div>
+                <div>Pending model: {transformDebugStats.historyCommit.pendingModelId ?? 'none'}</div>
+                <div>Pending description: {transformDebugStats.historyCommit.pendingDescription ?? 'none'}</div>
+                <div>Pending has after: {transformDebugStats.historyCommit.pendingHasAfter ? 'true' : 'false'}</div>
+                <div>Pending before rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingBeforeRotation)}</div>
+                <div>Pending after rot: {formatDebugVec3Like(transformDebugStats.historyCommit.pendingAfterRotation)}</div>
+                <div>Commit requested: {transformDebugStats.historyCommit.commitRequested ? 'true' : 'false'}</div>
+                <div>Commit nonce: {transformDebugStats.historyCommit.commitNonce}</div>
+                <div>Pending resync: {transformDebugStats.historyCommit.pendingResync ? 'true' : 'false'}</div>
+                <div>Suppress next persistence: {transformDebugStats.historyCommit.suppressNextPersistence ? 'true' : 'false'}</div>
+                <div>
+                  Skip token: {transformDebugStats.historyCommit.skipToken
+                    ? `${transformDebugStats.historyCommit.skipToken.operation}:${transformDebugStats.historyCommit.skipToken.modelId}`
+                    : 'none'}
+                </div>
+                <div>Pending rotate-gizmo model: {transformDebugStats.historyCommit.pendingRotateGizmoModelId ?? 'none'}</div>
+                <div>Last result: {transformDebugStats.historyCommit.lastResult}</div>
+                <div>Last reason: {transformDebugStats.historyCommit.lastReason}</div>
+                <div>Last model: {transformDebugStats.historyCommit.lastModelId ?? 'none'}</div>
+                <div>Last description: {transformDebugStats.historyCommit.lastDescription ?? 'none'}</div>
+                <div>Last expected nonce: {transformDebugStats.historyCommit.lastExpectedNonce ?? 'n/a'}</div>
+                <div>Last scheduled nonce: {transformDebugStats.historyCommit.lastScheduledNonce ?? 'n/a'}</div>
+                <div>Last push applied: {transformDebugStats.historyCommit.lastPushApplied === null ? 'n/a' : (transformDebugStats.historyCommit.lastPushApplied ? 'true' : 'false')}</div>
+                <div>Undo before → after: {transformDebugStats.historyCommit.lastUndoCountBefore ?? 'n/a'} → {transformDebugStats.historyCommit.lastUndoCountAfter ?? 'n/a'}</div>
+                <div>Last attempt: {formatDebugTime(transformDebugStats.historyCommit.lastAt, transformDebugStats.timeline.nowPerfMs)}</div>
+              </div>
+            )}
+
+            <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              Toggle: Ctrl+Shift+X
+            </div>
+          </div>
+        )}
       </FloatingPanelStack>
 
       <div className="absolute inset-0 top-14 z-0">
@@ -3146,6 +4771,7 @@ export default function Home() {
           <SceneCanvas
             models={scene.models}
             activeModelId={displayActiveModelId}
+            visualActiveModelId={scene.activeModelId}
             selectedModelIds={scene.selectedModelIds}
             clipLower={slicing.clipLower}
             clipUpper={slicing.clipUpper}
@@ -3184,6 +4810,7 @@ export default function Home() {
             transform={transformMgr.transform}
             onTransformStart={handleTransformStart}
             onGizmoTransformCommit={handleGizmoTransformCommit}
+            onGizmoTransformGroupCommit={handleGizmoTransformGroupCommit}
             onTransformChange={handleTransformChange}
             onTransformEnd={handleTransformEnd}
             mode={scene.mode}
@@ -3212,6 +4839,8 @@ export default function Home() {
             crossSectionMode={slicing.crossSectionMode}
             pxMm={islands.pxMm}
             supportsRef={supportsRef}
+            supportDragGroupRef={supportDragGroupRef}
+            holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
             ghostData={ghostData}
             duplicatePreviewModel={
               isDuplicating
@@ -3224,6 +4853,9 @@ export default function Home() {
                 ? duplicateApplySourceTransform
                 : duplicateSourcePreviewTransform
             }
+            supportRenderRefreshNonce={supportRenderRefreshNonce}
+            gizmoResetNonce={gizmoResetNonce}
+            historyTransformResyncToken={historyTransformResyncTick}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
@@ -3290,7 +4922,6 @@ export default function Home() {
             </div>
           )}
 
-
         </div>
       </div>
 
@@ -3336,6 +4967,21 @@ export default function Home() {
           clearHistory();
           clearHistoryDebugEvents();
         }}
+      />
+
+      <ModelSupportsModal
+        isOpen={supportsInfoModelId !== null}
+        onClose={() => setSupportsInfoModelId(null)}
+        model={scene.models.find((m) => m.id === supportsInfoModelId) ?? null}
+      />
+
+      <DestructiveTransformModal
+        isOpen={pendingDestructiveTransform !== null}
+        modelName={pendingDestructiveTransform?.modelName ?? null}
+        supportCount={pendingDestructiveTransform?.supportCount ?? 0}
+        operationLabel={pendingDestructiveTransform?.operationLabel ?? 'Transform'}
+        onCancel={handleCancelDestructiveTransform}
+        onConfirm={handleConfirmDestructiveTransform}
       />
 
       {showArrangeBlockingOverlay && (

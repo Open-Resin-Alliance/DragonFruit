@@ -24,6 +24,8 @@ interface ContactConeRendererProps {
     transparent?: boolean;
     opacity?: number;
     raycast?: any;
+    radialSegments?: number;
+    sphereSegments?: number;
 
     // Joint Interaction Props
     socketJointId?: string;
@@ -52,6 +54,8 @@ export function ContactConeRenderer({
     transparent = false,
     opacity = 1,
     raycast,
+    radialSegments = 24,
+    sphereSegments = 24,
     socketJointId,
     isInteractable = true,
     isParentSelected = false,
@@ -126,6 +130,8 @@ export function ContactConeRenderer({
                     color={finalDiskColor}
                     transparent={transparent}
                     opacity={opacity}
+                    radialSegments={radialSegments}
+                    sphereSegments={sphereSegments}
                     raycast={raycast}
                 />
             )}
@@ -139,7 +145,7 @@ export function ContactConeRenderer({
                     {/* CylinderGeometry: radiusTop, radiusBottom, height, radialSegments */}
                     {/* Top = contact (small), Bottom = socket (large) in Y-up space */}
                     {/* After rotation, "top" faces the model */}
-                    <cylinderGeometry args={[contactRadius, bodyRadius, length, 32]} />
+                    <cylinderGeometry args={[contactRadius, bodyRadius, length, radialSegments]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
                         emissive={emissive}
@@ -155,7 +161,7 @@ export function ContactConeRenderer({
             {/* Renders at coneStartPos, size = contactRadius */}
             <group position={[coneStartPos.x, coneStartPos.y, coneStartPos.z]}>
                 <mesh raycast={raycast}>
-                    <sphereGeometry args={[contactRadius, 32, 32]} />
+                    <sphereGeometry args={[contactRadius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
                         emissive={emissive}
