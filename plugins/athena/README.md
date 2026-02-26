@@ -81,6 +81,12 @@ Athena's `.nanodlp` container format is plugin-owned:
 - TS metadata definition:
   - `plugins/athena/slicing/nanodlpFormatDefinition.ts`
 - Rust/WASM format module scaffold:
-  - `rust/dragonfruit-slicer-wasm/src/formats/nanodlp.rs`
+  - `plugins/athena/slicing/rust/nanodlp_impl.rs`
+  - (loaded by core shim `rust/dragonfruit-slicer-wasm/src/formats/nanodlp.rs`)
 
 This keeps vendor-specific container rules localized while the UI stays generic.
+
+### Supported vs unsupported container targets
+
+- Supported for Athena plugin: `.nanodlp`
+- Not supported: `.ctb`

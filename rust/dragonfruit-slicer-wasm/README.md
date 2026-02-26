@@ -23,9 +23,15 @@ This is a **scaffold**:
   - `src/formats/goo.rs`
   - `src/formats/lumen.rs`
 - Athena NanoDLP complex-plugin format:
-  - `src/formats/nanodlp.rs`
+  - `src/formats/nanodlp.rs` (shim)
+  - `plugins/athena/slicing/rust/nanodlp_impl.rs` (plugin-owned implementation)
 
 When adding a new plugin-owned format, add a new Rust module under `src/formats/` and route it from `src/lib.rs`.
+
+## Format scope
+
+- Athena target in this scaffold: `.nanodlp`
+- Explicitly not supported in this project scope: `.ctb`
 
 ## Suggested build commands (once rust toolchain is available)
 
