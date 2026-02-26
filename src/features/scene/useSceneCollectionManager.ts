@@ -3,19 +3,22 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromLychee, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
 import type { HistoryAction, HistoryDirection } from '@/history/types';
 import type { ModelTransform } from '@/hooks/useModelTransform';
-import type { SupportMode } from '@/supports/types';
+import type { SupportMode, SupportState } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { generateUuid } from '@/utils/uuid';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
+import { getSupportBraceSnapshot, setSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import type { SupportBraceState } from '@/supports/SupportTypes/SupportBrace/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   DEFAULT_VIEW3D_SETTINGS,
@@ -81,6 +84,12 @@ type SceneSnapshot = {
   models: LoadedModel[];
   activeModelId: string | null;
   selectedModelIds: string[];
+  supportState?: SupportState;
+  supportBraceState?: SupportBraceState;
+};
+
+type SceneSnapshotCaptureOptions = {
+  includeSupportState?: boolean;
 };
 
 type SceneSnapshotPair = {
@@ -115,11 +124,30 @@ function cloneLoadedModel(model: LoadedModel): LoadedModel {
   };
 }
 
-function captureSceneSnapshot(models: LoadedModel[], activeModelId: string | null, selectedModelIds: string[]): SceneSnapshot {
+function clonePlainObject<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function captureSceneSnapshot(
+  models: LoadedModel[],
+  activeModelId: string | null,
+  selectedModelIds: string[],
+  options?: SceneSnapshotCaptureOptions,
+): SceneSnapshot {
+  const includeSupportState = options?.includeSupportState ?? false;
+
   return {
     models: models.map(cloneLoadedModel),
     activeModelId,
     selectedModelIds: [...selectedModelIds],
+    ...(includeSupportState
+      ? {
+          // Store immutable store snapshots by reference for speed.
+          // They are deep-cloned on restore in applySceneSnapshot.
+          supportState: getSnapshot(),
+          supportBraceState: getSupportBraceSnapshot(),
+        }
+      : {}),
   };
 }
 
@@ -398,10 +426,7 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
 }
 
 function generateRecentEntryId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return generateUuid();
 }
 
 export interface LoadedModel {
@@ -429,8 +454,17 @@ type DebugPrimitiveType =
 
 type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
 
-import { deleteSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { deleteSupportsForModel, getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import {
+  captureModelSupportsToClipboard,
+  pasteModelSupportsFromClipboard,
+  type SupportClipboardPayload,
+} from '@/supports/PlacementLogic/supportClipboard';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
+import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
+import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 
 type ImportProgressState = {
   active: boolean;
@@ -448,6 +482,7 @@ type ModelClipboardEntry = {
   transform: ModelTransform;
   color: string;
   polygonCount: number;
+  supportClipboard: SupportClipboardPayload | null;
 };
 
 export function useSceneCollectionManager() {
@@ -481,6 +516,8 @@ export function useSceneCollectionManager() {
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
   const deferredAccelerationProcessingRef = useRef(false);
   const deferredAccelerationPausedRef = useRef(false);
+  const deferredDisposalQueueRef = useRef<THREE.BufferGeometry[]>([]);
+  const deferredDisposalProcessingRef = useRef(false);
   const trackedGeometriesRef = useRef<Set<THREE.BufferGeometry>>(new Set());
 
   const tryRevokeObjectUrl = useCallback((url: string) => {
@@ -778,15 +815,20 @@ export function useSceneCollectionManager() {
   const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
-    const currentModels = modelsRef.current;
-    const nextById = new Map(snapshot.models.map((model) => [model.id, model] as const));
+    if (snapshot.supportState && snapshot.supportBraceState) {
+      setSupportSnapshot(clonePlainObject(snapshot.supportState));
+      setSupportBraceSnapshot(clonePlainObject(snapshot.supportBraceState));
+    } else {
+      const currentModels = modelsRef.current;
+      const nextById = new Map(snapshot.models.map((model) => [model.id, model] as const));
 
-    for (const currentModel of currentModels) {
-      const nextModel = nextById.get(currentModel.id);
-      if (!nextModel) continue;
-      if (transformsEqual(currentModel.transform, nextModel.transform)) continue;
+      for (const currentModel of currentModels) {
+        const nextModel = nextById.get(currentModel.id);
+        if (!nextModel) continue;
+        if (transformsEqual(currentModel.transform, nextModel.transform)) continue;
 
-      transformSupportsForModel(currentModel.id, currentModel.transform, nextModel.transform);
+        transformSupportsForModel(currentModel.id, currentModel.transform, nextModel.transform);
+      }
     }
 
     setModels(snapshot.models.map(cloneLoadedModel));
@@ -824,7 +866,7 @@ export function useSceneCollectionManager() {
   }, []);
 
   // Helper to generate IDs
-  const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+  const generateId = () => generateUuid();
 
   const cloneGeometryWithBounds = useCallback((source: GeometryWithBounds, options?: { accelerate?: boolean; shared?: boolean }): GeometryWithBounds => {
     if (options?.shared) {
@@ -919,6 +961,56 @@ export function useSceneCollectionManager() {
       processDeferredAccelerationQueue();
     }
   }, [processDeferredAccelerationQueue]);
+
+  const processDeferredDisposalQueue = useCallback(() => {
+    if (deferredDisposalProcessingRef.current) return;
+    if (deferredDisposalQueueRef.current.length === 0) return;
+
+    deferredDisposalProcessingRef.current = true;
+
+    const scheduleNext = (cb: () => void) => {
+      if (typeof window !== 'undefined' && typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(cb, { timeout: 120 });
+      } else {
+        setTimeout(cb, 16);
+      }
+    };
+
+    const step = () => {
+      const geometry = deferredDisposalQueueRef.current.shift();
+      if (!geometry) {
+        deferredDisposalProcessingRef.current = false;
+        return;
+      }
+
+      try {
+        disposeGeometryBVH(geometry);
+      } catch {
+        // ignore disposal failures
+      }
+      try {
+        geometry.dispose();
+      } catch {
+        // ignore disposal failures
+      }
+
+      if (deferredDisposalQueueRef.current.length === 0) {
+        deferredDisposalProcessingRef.current = false;
+        return;
+      }
+
+      scheduleNext(step);
+    };
+
+    scheduleNext(step);
+  }, []);
+
+  const deferDisposeGeometries = useCallback((geometries: THREE.BufferGeometry[]) => {
+    if (geometries.length === 0) return;
+
+    deferredDisposalQueueRef.current.push(...geometries);
+    processDeferredDisposalQueue();
+  }, [processDeferredDisposalQueue]);
 
   const trackRecentOpenedFiles = useCallback((files: File[], kind: RecentOpenedFileKind) => {
     if (files.length === 0) return;
@@ -1191,10 +1283,21 @@ export function useSceneCollectionManager() {
   }, [loadFiles]);
 
   // Model Management
-  const updateModelTransform = useCallback((id: string, transform: ModelTransform) => {
+  const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
     const currentModel = modelsRef.current.find((m) => m.id === id);
-    if (currentModel && !transformsEqual(currentModel.transform, transform)) {
-      transformSupportsForModel(id, currentModel.transform, transform);
+    if (!currentModel) return;
+
+    if (previousTransformOverride && modelsRef.current.length === 1) {
+      reassignAllSupportModelIds(id);
+    }
+
+    const beforeTransform = previousTransformOverride ?? currentModel.transform;
+    if (transformsEqual(beforeTransform, transform)) return;
+
+    if (previousTransformOverride && modelsRef.current.length === 1) {
+      transformAllSupportsForSingleModel(beforeTransform, transform);
+    } else {
+      transformSupportsForModel(id, beforeTransform, transform);
     }
 
     setModels(prev => prev.map(m =>
@@ -1203,14 +1306,14 @@ export function useSceneCollectionManager() {
   }, []);
 
   const commitModelTransformHistory = useCallback((id: string, beforeTransform: ModelTransform, afterTransform: ModelTransform, description?: string) => {
-    if (transformsEqual(beforeTransform, afterTransform)) return;
+    if (transformsEqual(beforeTransform, afterTransform)) return false;
 
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
     const currentSelectedModelIds = selectedModelIdsRef.current;
 
     const modelExists = currentModels.some((m) => m.id === id);
-    if (!modelExists) return;
+    if (!modelExists) return false;
 
     const beforeModels = currentModels.map((m) => (
       m.id === id
@@ -1228,6 +1331,7 @@ export function useSceneCollectionManager() {
     const after = captureSceneSnapshot(afterModels, currentActiveModelId, currentSelectedModelIds);
     const targetModelName = currentModels.find((m) => m.id === id)?.name ?? id;
     pushSceneSnapshotHistory(before, after, description ?? `Transform Model ${targetModelName}`);
+    return true;
   }, [pushSceneSnapshotHistory]);
 
   const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
@@ -1357,49 +1461,184 @@ export function useSceneCollectionManager() {
     });
   }, [models]);
 
-  const deleteModels = useCallback((idsInput: string[]) => {
+  const deleteModels = useCallback(async (idsInput: string[]) => {
     const ids = new Set(idsInput);
     if (ids.size === 0) return;
 
-    const existing = models.filter((m) => ids.has(m.id));
+    const existing = modelsRef.current.filter((m) => ids.has(m.id));
     if (existing.length === 0) return;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const supportStateBeforeDelete = getSnapshot();
+    const supportBraceSnapshotBefore = getSupportBraceSnapshot();
+
+    const supportBraceCountByModel = new Map<string, number>();
+    for (const supportBrace of Object.values(supportBraceSnapshotBefore.supportBraces)) {
+      const current = supportBraceCountByModel.get(supportBrace.modelId) ?? 0;
+      supportBraceCountByModel.set(supportBrace.modelId, current + 1);
+    }
+
+    const supportsByModel = new Map<string, ReturnType<typeof getSupportsForModel>>();
+    const supportPrimitiveCountByModel = new Map<string, number>();
+
+    for (const model of existing) {
+      const supportIds = getSupportsForModel(supportStateBeforeDelete, model.id);
+      supportsByModel.set(model.id, supportIds);
+
+      const supportBraceCount = supportBraceCountByModel.get(model.id) ?? 0;
+      const supportPrimitiveCount = supportIds.roots.length
+        + supportIds.trunks.length
+        + supportIds.branches.length
+        + supportIds.braces.length
+        + supportIds.leaves.length
+        + supportIds.twigs.length
+        + supportIds.sticks.length
+        + supportBraceCount;
+
+      supportPrimitiveCountByModel.set(model.id, supportPrimitiveCount);
+    }
+
+    const shouldShowDeleteOverlayImmediately = existing.some((model) => {
+      const supportPrimitiveCount = supportPrimitiveCountByModel.get(model.id) ?? 0;
+      return supportPrimitiveCount > 100 || model.polygonCount > 600000;
+    });
+
+    await waitForUiYield();
+
+    const modelHasSupports = (modelId: string) => {
+      const supportIds = supportsByModel.get(modelId) ?? getSupportsForModel(getSnapshot(), modelId);
+      if (!supportsByModel.has(modelId)) {
+        supportsByModel.set(modelId, supportIds);
+      }
+
+      const hasMainSupports = supportIds.roots.length > 0
+        || supportIds.trunks.length > 0
+        || supportIds.branches.length > 0
+        || supportIds.braces.length > 0
+        || supportIds.leaves.length > 0
+        || supportIds.twigs.length > 0
+        || supportIds.sticks.length > 0;
+
+      if (hasMainSupports) return true;
+
+      return (supportBraceCountByModel.get(modelId) ?? 0) > 0;
+    };
+
+    const includeSupportHistory = existing.some((model) => modelHasSupports(model.id));
+    const currentModels = modelsRef.current;
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: includeSupportHistory });
 
     existing.forEach((model) => {
       tryRevokeObjectUrl(model.fileUrl);
     });
 
-    const nextModels = models.filter((m) => !ids.has(m.id));
-    const nextActiveModelId = activeModelId && ids.has(activeModelId) ? null : activeModelId;
-    const nextSelectedModelIds = selectedModelIds.filter((sid) => !ids.has(sid));
+    const nextModels = currentModels.filter((m) => !ids.has(m.id));
+    const nextActiveModelId = currentActiveModelId && ids.has(currentActiveModelId) ? null : currentActiveModelId;
+    const nextSelectedModelIds = currentSelectedModelIds.filter((sid) => !ids.has(sid));
 
     setModels(nextModels);
     setActiveModelId(nextActiveModelId);
     setSelectedModelIds(nextSelectedModelIds);
 
-    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds);
+    // Clean up associated supports before capturing the "after" snapshot so undo/redo remains atomic.
+    const supportState = getSnapshot();
+    let totalRemovedSupports = 0;
+    if (includeSupportHistory) {
+      ids.forEach((id) => {
+        totalRemovedSupports += deleteSupportsForModel(supportState, id);
+      });
+
+      // Defensive pass: guarantee no orphaned supports survive model deletion.
+      for (const modelId of ids) {
+        const remaining = getSupportsForModel(getSnapshot(), modelId);
+        const hasRemainingMainSupports = remaining.roots.length > 0
+          || remaining.trunks.length > 0
+          || remaining.branches.length > 0
+          || remaining.braces.length > 0
+          || remaining.leaves.length > 0
+          || remaining.twigs.length > 0
+          || remaining.sticks.length > 0;
+
+        const hasRemainingSupportBraces = Object.values(getSupportBraceSnapshot().supportBraces)
+          .some((supportBrace) => supportBrace.modelId === modelId);
+
+        if (hasRemainingMainSupports || hasRemainingSupportBraces) {
+          totalRemovedSupports += deleteSupportsForModel(getSnapshot(), modelId);
+        }
+      }
+    }
+
+    const after = captureSceneSnapshot(nextModels, nextActiveModelId, nextSelectedModelIds, { includeSupportState: includeSupportHistory });
     const deletedLabel = existing.length === 1
       ? `Delete Model ${existing[0].name}`
       : `Delete ${existing.length} Models`;
     pushSceneSnapshotHistory(before, after, deletedLabel);
 
-    // Clean up associated supports.
-    const supportState = getSnapshot();
-    let totalRemovedSupports = 0;
-    ids.forEach((id) => {
-      totalRemovedSupports += deleteSupportsForModel(supportState, id);
-    });
     console.log(`[SceneCollection] Deleted ${ids.size} model(s) and ${totalRemovedSupports} associated supports.`);
-  }, [activeModelId, models, pushSceneSnapshotHistory, selectedModelIds, tryRevokeObjectUrl]);
+  }, [pushSceneSnapshotHistory, tryRevokeObjectUrl, waitForUiYield]);
 
   const deleteModel = useCallback((id: string) => {
-    deleteModels([id]);
+    void deleteModels([id]);
   }, [deleteModels]);
+
+  const deleteSupportsForModels = useCallback((idsInput: string[], description?: string) => {
+    const ids = new Set(idsInput);
+    if (ids.size === 0) return 0;
+
+    const currentModels = modelsRef.current;
+    const existingModelIds = currentModels
+      .filter((model) => ids.has(model.id))
+      .map((model) => model.id);
+    if (existingModelIds.length === 0) return 0;
+
+    const supportStateBefore = getSnapshot();
+    const supportBraceStateBefore = getSupportBraceSnapshot();
+
+    const hasSupportsForModel = (modelId: string) => {
+      const supportIds = getSupportsForModel(supportStateBefore, modelId);
+      const hasMainSupports = supportIds.roots.length > 0
+        || supportIds.trunks.length > 0
+        || supportIds.branches.length > 0
+        || supportIds.braces.length > 0
+        || supportIds.leaves.length > 0
+        || supportIds.twigs.length > 0
+        || supportIds.sticks.length > 0;
+
+      if (hasMainSupports) return true;
+
+      return Object.values(supportBraceStateBefore.supportBraces)
+        .some((supportBrace) => supportBrace.modelId === modelId);
+    };
+
+    const targetIds = existingModelIds.filter((modelId) => hasSupportsForModel(modelId));
+    if (targetIds.length === 0) return 0;
+
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });
+
+    let totalRemovedSupports = 0;
+    const supportState = getSnapshot();
+    targetIds.forEach((modelId) => {
+      totalRemovedSupports += deleteSupportsForModel(supportState, modelId);
+    });
+
+    const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });
+    const defaultDescription = targetIds.length === 1
+      ? `Delete Supports for Model ${currentModels.find((m) => m.id === targetIds[0])?.name ?? targetIds[0]}`
+      : `Delete Supports for ${targetIds.length} Models`;
+
+    pushSceneSnapshotHistory(before, after, description ?? defaultDescription);
+    return totalRemovedSupports;
+  }, [pushSceneSnapshotHistory]);
 
   const copyModel = useCallback((id: string) => {
     const source = models.find((m) => m.id === id);
     if (!source) return false;
+
+    const supportClipboard = captureModelSupportsToClipboard(source.id);
 
     setModelClipboard([
       {
@@ -1414,6 +1653,7 @@ export function useSceneCollectionManager() {
         },
         color: source.color,
         polygonCount: source.polygonCount,
+        supportClipboard,
       },
     ]);
 
@@ -1427,19 +1667,23 @@ export function useSceneCollectionManager() {
     const selected = models.filter((m) => idSet.has(m.id));
     if (selected.length === 0) return false;
 
-    setModelClipboard(selected.map((source) => ({
-      sourceId: source.id,
-      name: source.name,
-      fileSizeBytes: source.fileSizeBytes,
-      geometry: source.geometry,
-      transform: {
-        position: source.transform.position.clone(),
-        rotation: source.transform.rotation.clone(),
-        scale: source.transform.scale.clone(),
-      },
-      color: source.color,
-      polygonCount: source.polygonCount,
-    })));
+    setModelClipboard(selected.map((source) => {
+      const supportClipboard = captureModelSupportsToClipboard(source.id);
+      return {
+        sourceId: source.id,
+        name: source.name,
+        fileSizeBytes: source.fileSizeBytes,
+        geometry: source.geometry,
+        transform: {
+          position: source.transform.position.clone(),
+          rotation: source.transform.rotation.clone(),
+          scale: source.transform.scale.clone(),
+        },
+        color: source.color,
+        polygonCount: source.polygonCount,
+        supportClipboard,
+      };
+    }));
 
     return true;
   }, [models, selectedModelIds]);
@@ -1454,7 +1698,7 @@ export function useSceneCollectionManager() {
   const pasteModel = useCallback(() => {
     if (modelClipboard.length === 0) return null;
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
     const first = modelClipboard[0];
 
@@ -1482,7 +1726,14 @@ export function useSceneCollectionManager() {
     setActiveModelId(id);
     setSelectedModelIds([id]);
 
-    const after = captureSceneSnapshot(nextModels, id, [id]);
+    pasteModelSupportsFromClipboard(
+      first.supportClipboard,
+      id,
+      first.transform,
+      pastedModel.transform,
+    );
+
+    const after = captureSceneSnapshot(nextModels, id, [id], { includeSupportState: true });
     pushSceneSnapshotHistory(before, after, `Paste Model ${first.name}`);
 
     return id;
@@ -1491,7 +1742,7 @@ export function useSceneCollectionManager() {
   const pasteCopiedModelsAutoArrange = useCallback((spacingMm = 5) => {
     if (modelClipboard.length === 0) return [] as string[];
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
     const entries = modelClipboard;
 
@@ -1505,7 +1756,7 @@ export function useSceneCollectionManager() {
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
-      return !(a.maxX <= b.minX || a.minX >= b.maxX || a.maxY <= b.minY || a.minY >= b.maxY);
+      return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
     };
 
     const isRectInsidePlate = (rect: Rect2D) => (
@@ -1527,20 +1778,180 @@ export function useSceneCollectionManager() {
       };
     };
 
-    const maxWidth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).width));
-    const maxDepth = Math.max(...entries.map((entry) => footprintFor(entry.geometry.size, entry.transform).depth));
+    const supportRectForPayload = (payload: SupportClipboardPayload | null | undefined): Rect2D | null => {
+      if (!payload) return null;
+
+      const raftSettings = getRaftSettings();
+
+      let minX = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      let hasAny = false;
+
+      const expand = (pos?: { x: number; y: number; z: number } | null, radius = 0) => {
+        if (!pos) return;
+        const r = Math.max(0, radius);
+        minX = Math.min(minX, pos.x - r);
+        maxX = Math.max(maxX, pos.x + r);
+        minY = Math.min(minY, pos.y - r);
+        maxY = Math.max(maxY, pos.y + r);
+        hasAny = true;
+      };
+
+      payload.roots.forEach((root) => {
+        const rr = Math.max(0.001, root.diameter / 2);
+        expand(root.transform.pos, rr);
+        expand({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+        }, rr);
+      });
+
+      if (raftSettings.bottomMode !== 'off' && payload.roots.length > 0) {
+        const circles: SupportBaseCircle[] = payload.roots.map((root) => ({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          r: root.diameter / 2,
+        }));
+
+        const chamferInset = raftSettings.bottomMode === 'line'
+          ? Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))))
+          : 0;
+
+        const baseProfile = computeFootprint(circles, {
+          marginMm: 0.2 + chamferInset,
+          samplesPerCircle: 24,
+        });
+
+        if (baseProfile && baseProfile.length >= 3) {
+          const outerProfile = raftSettings.wallEnabled
+            ? computeRaftOuterBoundary(baseProfile, raftSettings)
+            : baseProfile;
+
+          outerProfile.forEach((point) => expand({ x: point.x, y: point.y, z: 0 }, 0));
+        }
+      }
+
+      payload.knots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
+      payload.supportBraceKnots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
+
+      const expandSegments = (segments: Array<any>) => {
+        segments.forEach((segment) => {
+          expand(segment.topJoint?.pos, Math.max(0.001, (segment.topJoint?.diameter ?? segment.diameter) / 2));
+          expand(segment.bottomJoint?.pos, Math.max(0.001, (segment.bottomJoint?.diameter ?? segment.diameter) / 2));
+        });
+      };
+
+      payload.trunks.forEach((trunk) => {
+        expandSegments(trunk.segments as any[]);
+        if (trunk.contactCone) {
+          expand(trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+        }
+      });
+
+      payload.branches.forEach((branch) => {
+        expandSegments(branch.segments as any[]);
+        if (branch.contactCone) {
+          expand(branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
+        }
+      });
+
+      payload.leaves.forEach((leaf) => {
+        if (!leaf.contactCone) return;
+        expand(leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
+      });
+
+      payload.twigs.forEach((twig) => {
+        expandSegments(twig.segments as any[]);
+        expand(twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
+        expand(twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
+      });
+
+      payload.sticks.forEach((stick) => {
+        expandSegments(stick.segments as any[]);
+        expand(stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
+        expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
+      });
+
+      payload.supportBraces.forEach((supportBrace) => {
+        expandSegments(supportBrace.segments as any[]);
+      });
+
+      return hasAny ? { minX, maxX, minY, maxY } : null;
+    };
+
+    type PlacementOffsets = {
+      minXOffset: number;
+      maxXOffset: number;
+      minYOffset: number;
+      maxYOffset: number;
+      width: number;
+      depth: number;
+    };
+
+    const buildPlacementOffsets = (
+      center: { x: number; y: number },
+      meshSize: THREE.Vector3,
+      transform: ModelTransform,
+      supportPayload: SupportClipboardPayload | null | undefined,
+    ): PlacementOffsets => {
+      const meshFootprint = footprintFor(meshSize, transform);
+      const meshRect: Rect2D = {
+        minX: center.x - (meshFootprint.width * 0.5),
+        maxX: center.x + (meshFootprint.width * 0.5),
+        minY: center.y - (meshFootprint.depth * 0.5),
+        maxY: center.y + (meshFootprint.depth * 0.5),
+      };
+
+      const supportRect = supportRectForPayload(supportPayload);
+      const combinedRect = supportRect
+        ? {
+            minX: Math.min(meshRect.minX, supportRect.minX),
+            maxX: Math.max(meshRect.maxX, supportRect.maxX),
+            minY: Math.min(meshRect.minY, supportRect.minY),
+            maxY: Math.max(meshRect.maxY, supportRect.maxY),
+          }
+        : meshRect;
+
+      return {
+        minXOffset: combinedRect.minX - center.x,
+        maxXOffset: combinedRect.maxX - center.x,
+        minYOffset: combinedRect.minY - center.y,
+        maxYOffset: combinedRect.maxY - center.y,
+        width: Math.max(2, combinedRect.maxX - combinedRect.minX),
+        depth: Math.max(2, combinedRect.maxY - combinedRect.minY),
+      };
+    };
+
+    const entryPlacementOffsets = entries.map((entry) => buildPlacementOffsets(
+      { x: entry.transform.position.x, y: entry.transform.position.y },
+      entry.geometry.size,
+      entry.transform,
+      entry.supportClipboard,
+    ));
+
+    const maxWidth = Math.max(...entryPlacementOffsets.map((entry) => entry.width));
+    const maxDepth = Math.max(...entryPlacementOffsets.map((entry) => entry.depth));
     const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
     const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
 
     const blockedRects: Rect2D[] = models
       .filter((model) => model.visible)
       .map((model) => {
-        const { width, depth } = footprintFor(model.geometry.size, model.transform);
+        const supportPayload = captureModelSupportsToClipboard(model.id);
+        const placement = buildPlacementOffsets(
+          { x: model.transform.position.x, y: model.transform.position.y },
+          model.geometry.size,
+          model.transform,
+          supportPayload,
+        );
         return {
-          minX: model.transform.position.x - (width * 0.5),
-          maxX: model.transform.position.x + (width * 0.5),
-          minY: model.transform.position.y - (depth * 0.5),
-          maxY: model.transform.position.y + (depth * 0.5),
+          minX: model.transform.position.x + placement.minXOffset,
+          maxX: model.transform.position.x + placement.maxXOffset,
+          minY: model.transform.position.y + placement.minYOffset,
+          maxY: model.transform.position.y + placement.maxYOffset,
         };
       });
 
@@ -1598,14 +2009,14 @@ export function useSceneCollectionManager() {
 
     candidateCenters.sort((a, b) => a.distSq - b.distSq);
 
-    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry) => {
-      const { width, depth } = footprintFor(entry.geometry.size, entry.transform);
+    const assignedCenters: Array<{ x: number; y: number }> = entries.map((entry, entryIndex) => {
+      const placement = entryPlacementOffsets[entryIndex];
 
       const makeRectAt = (x: number, y: number): Rect2D => ({
-        minX: x - (width * 0.5),
-        maxX: x + (width * 0.5),
-        minY: y - (depth * 0.5),
-        maxY: y + (depth * 0.5),
+        minX: x + placement.minXOffset,
+        maxX: x + placement.maxXOffset,
+        minY: y + placement.minYOffset,
+        maxY: y + placement.maxYOffset,
       });
 
       // Pass 1: exhaust all valid in-plate positions first.
@@ -1637,10 +2048,10 @@ export function useSceneCollectionManager() {
       const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
       const fallbackY = centerY;
       blockedRects.push({
-        minX: fallbackX - (width * 0.5),
-        maxX: fallbackX + (width * 0.5),
-        minY: fallbackY - (depth * 0.5),
-        maxY: fallbackY + (depth * 0.5),
+        minX: fallbackX + placement.minXOffset,
+        maxX: fallbackX + placement.maxXOffset,
+        minY: fallbackY + placement.minYOffset,
+        maxY: fallbackY + placement.maxYOffset,
       });
       return { x: fallbackX, y: fallbackY };
     });
@@ -1673,11 +2084,23 @@ export function useSceneCollectionManager() {
 
     const nextModels = [...models, ...pastedModels];
     setModels(nextModels);
+
+    pastedModels.forEach((pastedModel, index) => {
+      const sourceEntry = entries[index];
+      if (!sourceEntry) return;
+      pasteModelSupportsFromClipboard(
+        sourceEntry.supportClipboard,
+        pastedModel.id,
+        sourceEntry.transform,
+        pastedModel.transform,
+      );
+    });
+
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds(createdIds);
 
-      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds);
+      const after = captureSceneSnapshot(nextModels, createdIds[0], createdIds, { includeSupportState: true });
       pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? 'Paste Model' : `Paste ${createdIds.length} Models`);
     }
 
@@ -1689,8 +2112,9 @@ export function useSceneCollectionManager() {
 
     const source = models.find((m) => m.id === sourceId);
     if (!source) return [] as string[];
+    const supportClipboard = captureModelSupportsToClipboard(sourceId);
 
-    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds);
+    const before = captureSceneSnapshot(models, activeModelId, selectedModelIds, { includeSupportState: true });
 
     const resolvedGroupId = source.groupId ?? `group-${generateId()}`;
     const resolvedGroupName = source.groupName ?? source.name;
@@ -1743,12 +2167,31 @@ export function useSceneCollectionManager() {
     const nextModels = [...withSourceGroup, ...newModels];
     setModels(nextModels);
 
+    const originalSourceTransform = {
+      position: source.transform.position.clone(),
+      rotation: source.transform.rotation.clone(),
+      scale: source.transform.scale.clone(),
+    };
+
+    if (sourceTransform && !transformsEqual(source.transform, sourceTransform)) {
+      transformSupportsForModel(sourceId, source.transform, sourceTransform);
+    }
+
+    newModels.forEach((model) => {
+      pasteModelSupportsFromClipboard(
+        supportClipboard,
+        model.id,
+        originalSourceTransform,
+        model.transform,
+      );
+    });
+
     if (createdIds.length > 0) {
       setActiveModelId(createdIds[0]);
       setSelectedModelIds([sourceId, ...createdIds]);
 
       const nextSelected = [sourceId, ...createdIds];
-      const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected);
+      const after = captureSceneSnapshot(nextModels, createdIds[0], nextSelected, { includeSupportState: true });
       pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? `Duplicate Model ${source.name}` : `Duplicate ${createdIds.length} Models`);
     }
 
@@ -1779,7 +2222,7 @@ export function useSceneCollectionManager() {
         },
       });
       if (result && result.geometry) {
-        const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId } = result;
+        const { geometry: rawGeom, transform: importedTransform, modelId: importedModelId, supportData } = result;
 
         // Process geometry (bounds, center, normals, BVH)
         const processed = await processGeometry(rawGeom, { center: false });
@@ -1813,6 +2256,17 @@ export function useSceneCollectionManager() {
         setModels(prev => [...prev, model]);
         setActiveModelId(model.id);
         setSelectedModelIds([model.id]);
+
+        if (supportData) {
+          if (typeof window !== 'undefined') {
+            requestAnimationFrame(() => {
+              loadFromLychee(supportData);
+            });
+          } else {
+            loadFromLychee(supportData);
+          }
+        }
+
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
       } else {
         const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
@@ -1890,6 +2344,11 @@ export function useSceneCollectionManager() {
 
       console.log('[SceneCollection] Converting Lychee file...');
       const converted = LysConverter.convert(json, getSettings());
+
+      const targetModelId = activeModelIdRef.current ?? modelsRef.current[0]?.id ?? null;
+      if (targetModelId) {
+        LysConverter.reassignModelId(converted, targetModelId);
+      }
 
       console.log('[SceneCollection] Loading into Store...');
       loadFromLychee(converted);
@@ -2022,22 +2481,15 @@ export function useSceneCollectionManager() {
       }
     }
 
+    const removed: THREE.BufferGeometry[] = [];
     for (const geometry of previous) {
       if (next.has(geometry)) continue;
-      try {
-        disposeGeometryBVH(geometry);
-      } catch {
-        // ignore disposal failures
-      }
-      try {
-        geometry.dispose();
-      } catch {
-        // ignore disposal failures
-      }
+      removed.push(geometry);
     }
+    deferDisposeGeometries(removed);
 
     trackedGeometriesRef.current = next;
-  }, [modelClipboard, models]);
+  }, [deferDisposeGeometries, modelClipboard, models]);
 
   // Sync model geometries into the auto-brace mesh store so clearance checks can access them.
   useEffect(() => {
@@ -2160,6 +2612,7 @@ export function useSceneCollectionManager() {
     selectGroup,
     deleteModels,
     deleteModel,
+    deleteSupportsForModels,
     copyModel,
     copySelectedModels,
     cutModel,

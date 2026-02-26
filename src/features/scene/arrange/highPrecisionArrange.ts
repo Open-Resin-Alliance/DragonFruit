@@ -43,6 +43,8 @@ export type ArrangeModel = {
   geometry: {
     center: THREE.Vector3;
     geometry: THREE.BufferGeometry;
+    supportLocalPoints?: THREE.Vector3[];
+    supportHullKey?: string;
   };
 };
 
@@ -132,6 +134,7 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
 
     const key = [
       model.geometry.geometry.uuid,
+      model.geometry.supportHullKey ?? 'no_support_hull',
       quant(t.rotation.x),
       quant(t.rotation.y),
       quant(rotationZ),
@@ -177,6 +180,14 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
     for (let d = 0; d < nE; d++) {
       if (Number.isFinite(eXArr[d]) && Number.isFinite(eYArr[d])) {
         points2d.push(new THREE.Vector2(eXArr[d], eYArr[d]));
+      }
+    }
+
+    const supportLocalPoints = model.geometry.supportLocalPoints;
+    if (supportLocalPoints && supportLocalPoints.length > 0) {
+      for (const localPoint of supportLocalPoints) {
+        tmp.copy(localPoint).applyMatrix4(matrix);
+        points2d.push(new THREE.Vector2(tmp.x, tmp.y));
       }
     }
 

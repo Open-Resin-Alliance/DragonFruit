@@ -14,6 +14,7 @@ interface ShaftRendererProps {
     color?: string;
     emissive?: string;
     emissiveIntensity?: number;
+    selectedColor?: string;
     transparent?: boolean;
     opacity?: number;
     raycast?: any;
@@ -22,6 +23,7 @@ interface ShaftRendererProps {
     isParentSelected?: boolean;
     onClick?: (e: any) => void;
     onPointerMove?: (e: any) => void;
+    radialSegments?: number;
 }
 
 export function ShaftRenderer({ 
@@ -41,13 +43,22 @@ export function ShaftRenderer({
     isSelected,
     isParentSelected,
     onClick,
-    onPointerMove
+    onPointerMove,
+    radialSegments = 16,
 }: ShaftRendererProps) {
     const radiusStart = (diameterStart ?? diameter) / 2;
     const radiusEnd = (diameterEnd ?? diameter) / 2;
+    const PICK_RADIUS_MULTIPLIER = 1.9;
+    const MIN_PICK_RADIUS_MM = 0.45;
+    const selectedVisualScale = isSelected ? 1.03 : 1;
+    const visualRadiusStart = radiusStart * selectedVisualScale;
+    const visualRadiusEnd = radiusEnd * selectedVisualScale;
+    const pickRadiusStart = Math.max(visualRadiusStart * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
+    const pickRadiusEnd = Math.max(visualRadiusEnd * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const groupRef = useRef<THREE.Group>(null);
 
     const { altActive: braceAltActive } = useBracePlacementState();
+    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
     
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
@@ -56,7 +67,7 @@ export function ShaftRenderer({
     // Register with picking system
     // Always register so branch placement can detect shaft hovers/clicks
     useEffect(() => {
-        if (!groupRef.current || !enablePicking) {
+        if (!groupRef.current || !enablePicking || !enableSegmentInteraction) {
             if (pickIdRef.current !== null) {
                 unregister(pickIdRef.current);
                 pickIdRef.current = null;
@@ -79,10 +90,10 @@ export function ShaftRenderer({
                 pickIdRef.current = null;
             }
         };
-    }, [register, unregister, id, enablePicking]);
+    }, [register, unregister, id, enablePicking, enableSegmentInteraction]);
 
     // Determine Hover State
-    const isPickingHovered = hit.category === 'segment' && hit.objectId === id;
+    const isPickingHovered = enableSegmentInteraction && hit.category === 'segment' && hit.objectId === id;
     const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
 
     // Vector math
@@ -112,17 +123,22 @@ export function ShaftRenderer({
             }
         }
 
-        // Emit global event for branch placement
-        window.dispatchEvent(new CustomEvent('shaft-click', {
-            detail: {
-                segmentId: id,
-                point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
-                intersection: e
-            }
-        }));
+        if (altDown || ctrlDown || isParentSelected) {
+            // Emit global event for branch placement and editable-segment clicks only.
+            window.dispatchEvent(new CustomEvent('shaft-click', {
+                detail: {
+                    segmentId: id,
+                    point: e.point ? { x: e.point.x, y: e.point.y, z: e.point.z } : null,
+                    intersection: e
+                }
+            }));
+        }
 
         // Ctrl is reserved for Support Brace placement and should not re-select segments.
         if (ctrlDown) return;
+
+        // When not in an editable context, let parent support handlers own the click.
+        if (!isParentSelected && !altDown) return;
 
         if (isParentSelected && onClick) {
             e.stopPropagation();
@@ -137,12 +153,14 @@ export function ShaftRenderer({
         }
     };
 
-    const finalColor = isSelected ? '#ffffff' : color; // White when selected, otherwise inherited (Cyan/Orange)
+    const finalColor = isSelected ? '#ffffff' : color;
     const finalEmissive = isSelected ? '#444444' : (isHovered ? '#ffffff' : emissive);
     const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.3 : emissiveIntensity);
     
     // Handle pointer move for branch placement preview
     const handlePointerMove = (e: any) => {
+        if (!enableSegmentInteraction) return;
+
         // Emit global event for branch placement preview
         window.dispatchEvent(new CustomEvent('shaft-hover', {
             detail: {
@@ -159,6 +177,8 @@ export function ShaftRenderer({
 
     // Handle pointer leaving shaft - clear branch preview
     const handlePointerOut = () => {
+        if (!enableSegmentInteraction) return;
+
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
         }));
@@ -171,11 +191,17 @@ export function ShaftRenderer({
             quaternion={quaternion} 
             scale={[1, length, 1]}
             onClick={handleClick}
-            onPointerMove={handlePointerMove}
-            onPointerOut={handlePointerOut}
+            onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
+            onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
         >
+            {enableSegmentInteraction && (
+                <mesh raycast={raycast}>
+                    <cylinderGeometry args={[pickRadiusEnd, pickRadiusStart, 1, Math.max(8, radialSegments)]} />
+                    <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+                </mesh>
+            )}
             <mesh raycast={raycast}>
-                <cylinderGeometry args={[radiusEnd, radiusStart, 1, 32]} />
+                <cylinderGeometry args={[visualRadiusEnd, visualRadiusStart, 1, radialSegments]} />
                 <meshStandardMaterial 
                     color={finalColor} 
                     emissive={finalEmissive} 
@@ -183,6 +209,9 @@ export function ShaftRenderer({
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
+                    polygonOffset={!!isSelected}
+                    polygonOffsetFactor={isSelected ? -2 : 0}
+                    polygonOffsetUnits={isSelected ? -2 : 0}
                 />
             </mesh>
         </group>

@@ -74,6 +74,7 @@ const DEFAULT_PANEL_HEIGHT = 150;
 const PANEL_WIDTH_OVERRIDES: Record<string, number> = {
   'visual-settings': 72,
   'prepare-smoothing-settings': 340,
+  'transform-debug-overlay': 420,
 };
 const PANEL_SCALE_EXEMPT_IDS = new Set<string>(['support-settings']);
 const LOCKED_PANEL_IDS = new Set<string>(['visual-settings']);

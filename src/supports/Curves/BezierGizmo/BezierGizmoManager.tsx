@@ -2,6 +2,8 @@ import React, { useSyncExternalStore, useCallback, useMemo, useState, useRef } f
 import * as THREE from 'three';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, updateBrace, getTrunkById, getBranchById } from '../../state';
 import { Trunk, Branch, Twig, Stick, Brace, Segment, BezierSegment, Joint } from '../../types';
+import { updateSupportBrace, useSupportBraceStoreState } from '../../SupportTypes/SupportBrace/supportBraceStore';
+import type { SupportBrace as SupportBraceEntity } from '../../SupportTypes/SupportBrace/types';
 import { BezierHandle } from './BezierHandle';
 import { calculateControlPoint } from './utils';
 import { useCurveInteractionState, curveInteractionStore } from '../../Curves/curveInteractionState';
@@ -16,6 +18,7 @@ interface HandleContext {
     twig?: Twig;
     stick?: Stick;
     brace?: Brace;
+    supportBrace?: SupportBraceEntity;
     joint: Joint;
     incomingSegment?: Segment; // Segment ending at this joint (from below)
     incomingIndex: number;
@@ -26,6 +29,7 @@ interface HandleContext {
 
 export function BezierGizmoManager() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
+    const supportBraceState = useSupportBraceStoreState();
     const selectedId = state.selectedId;
     useCurveInteractionState();
     const initialTrunkRef = useRef<Trunk | null>(null);
@@ -33,6 +37,7 @@ export function BezierGizmoManager() {
     const initialTwigRef = useRef<Twig | null>(null);
     const initialStickRef = useRef<Stick | null>(null);
     const initialBraceRef = useRef<Brace | null>(null);
+    const initialSupportBraceRef = useRef<SupportBraceEntity | null>(null);
 
     // Helper to find all relevant handle contexts based on selection
     const findGizmoContexts = useCallback((): HandleContext[] => {
@@ -471,8 +476,100 @@ export function BezierGizmoManager() {
             }
         }
 
+        // Also check support braces.
+        const supportBraces = Object.values(supportBraceState.supportBraces);
+        for (const supportBrace of supportBraces) {
+            const segments = supportBrace.segments;
+            const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
+
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+
+                if (seg.topJoint?.id === selectedId) {
+                    contexts.push({
+                        id: `support-brace-joint-${seg.topJoint.id}-incoming`,
+                        supportBrace,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming'
+                    });
+                    contexts.push({
+                        id: `support-brace-joint-${seg.topJoint.id}-outgoing`,
+                        supportBrace,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'outgoing'
+                    });
+                }
+
+                if (seg.bottomJoint?.id === selectedId && i === 0) {
+                    contexts.push({
+                        id: `support-brace-joint-${seg.bottomJoint.id}-outgoing`,
+                        supportBrace,
+                        joint: seg.bottomJoint,
+                        incomingSegment: undefined,
+                        incomingIndex: -1,
+                        outgoingSegment: seg,
+                        outgoingIndex: i,
+                        activeHandle: 'outgoing'
+                    });
+                }
+
+                if (seg.id === selectedId && seg.type === 'bezier') {
+                    if (seg.bottomJoint) {
+                        contexts.push({
+                            id: `support-brace-seg-${seg.id}-bottom`,
+                            supportBrace,
+                            joint: seg.bottomJoint,
+                            incomingSegment: segments[i - 1],
+                            incomingIndex: i - 1,
+                            outgoingSegment: seg,
+                            outgoingIndex: i,
+                            activeHandle: 'outgoing'
+                        });
+                    }
+
+                    if (seg.topJoint) {
+                        contexts.push({
+                            id: `support-brace-seg-${seg.id}-top`,
+                            supportBrace,
+                            joint: seg.topJoint,
+                            incomingSegment: seg,
+                            incomingIndex: i,
+                            outgoingSegment: segments[i + 1],
+                            outgoingIndex: i + 1,
+                            activeHandle: 'incoming'
+                        });
+                    } else if (hostKnot) {
+                        const syntheticJoint: Joint = {
+                            id: hostKnot.id,
+                            pos: hostKnot.pos,
+                            diameter: hostKnot.diameter ?? seg.diameter,
+                        };
+
+                        contexts.push({
+                            id: `support-brace-seg-${seg.id}-top-host`,
+                            supportBrace,
+                            joint: syntheticJoint,
+                            incomingSegment: seg,
+                            incomingIndex: i,
+                            outgoingSegment: undefined,
+                            outgoingIndex: i + 1,
+                            activeHandle: 'incoming'
+                        });
+                    }
+                }
+            }
+        }
+
         return contexts;
-    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, state.braces, state.knots]);
+    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, state.braces, state.knots, supportBraceState.supportBraces, supportBraceState.knots]);
 
     const contexts = findGizmoContexts();
     if (contexts.length === 0) return null;
@@ -493,6 +590,8 @@ export function BezierGizmoManager() {
             initialStickRef.current = JSON.parse(JSON.stringify(ctx.stick));
         } else if (ctx.brace) {
             initialBraceRef.current = JSON.parse(JSON.stringify(ctx.brace));
+        } else if (ctx.supportBrace) {
+            initialSupportBraceRef.current = JSON.parse(JSON.stringify(ctx.supportBrace));
         }
     };
 
@@ -520,10 +619,11 @@ export function BezierGizmoManager() {
         initialTwigRef.current = null;
         initialStickRef.current = null;
         initialBraceRef.current = null;
+        initialSupportBraceRef.current = null;
     };
 
     const handleDrag = (ctx: HandleContext, newPos: THREE.Vector3) => {
-        const { trunk, branch, twig, stick, brace, joint, incomingIndex, outgoingIndex, activeHandle } = ctx;
+        const { trunk, branch, twig, stick, brace, supportBrace, joint, incomingIndex, outgoingIndex, activeHandle } = ctx;
         const jointPos = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
 
         if (brace) {
@@ -553,7 +653,7 @@ export function BezierGizmoManager() {
         }
 
         // Get the parent (trunk/branch/twig/stick) and its segments
-        const parent = trunk || branch || twig || stick;
+        const parent = trunk || branch || twig || stick || supportBrace;
         if (!parent) return;
 
         // Clone to mutate
@@ -623,6 +723,8 @@ export function BezierGizmoManager() {
             updateTwig(newParent as Twig);
         } else if (stick) {
             updateStick(newParent as Stick);
+        } else if (supportBrace) {
+            updateSupportBrace(newParent as SupportBraceEntity);
         }
     };
 

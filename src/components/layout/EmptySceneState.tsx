@@ -265,6 +265,17 @@ export function EmptySceneState({
                   {recentOpenedFiles.slice().reverse().slice(0, 10).map((entry) => {
                     const sizeLabel = formatBytes(entry.sizeBytes);
                     const isBusy = reopeningEntryId === entry.id;
+                    const kindChipStyle = entry.kind === 'scene'
+                      ? {
+                          color: 'color-mix(in srgb, #fb923c, white 10%)',
+                          background: 'color-mix(in srgb, #fb923c, var(--surface-0) 88%)',
+                          border: '1px solid color-mix(in srgb, #fb923c, var(--border-subtle) 46%)',
+                        }
+                      : {
+                          color: 'color-mix(in srgb, #a78bfa, white 14%)',
+                          background: 'color-mix(in srgb, #a78bfa, var(--surface-0) 88%)',
+                          border: '1px solid color-mix(in srgb, #a78bfa, var(--border-subtle) 46%)',
+                        };
 
                     return (
                       <button
@@ -284,10 +295,7 @@ export function EmptySceneState({
                         <span className="min-w-0 inline-flex items-center gap-1.5">
                           <span
                             className="inline-flex items-center rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
-                            style={{
-                              background: 'color-mix(in srgb, var(--surface-2), transparent 6%)',
-                              border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 24%)',
-                            }}
+                            style={kindChipStyle}
                           >
                             {entry.kind === 'scene' ? 'Scene' : 'Mesh'}
                           </span>

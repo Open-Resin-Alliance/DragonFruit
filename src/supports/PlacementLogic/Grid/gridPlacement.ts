@@ -7,6 +7,7 @@ import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { calculateKnotPositionOnSegmentFromT } from '../../SupportPrimitives/Knot/knotUtils';
 import { checkShaftCollision } from '../CollisionUtils';
 import * as THREE from 'three';
+import { generateUuid } from '../../../utils/uuid';
 
 function applyGridSnapToCandidate(
     candidate: TrunkBuildResult,
@@ -219,7 +220,7 @@ function selectHighestValidAttachment(args: {
             if (!satisfiesMinAngleFromHorizontal(tipPos, pos, minAngleDeg)) continue;
 
             const knot: Knot = {
-                id: crypto.randomUUID(),
+                id: generateUuid(),
                 parentShaftId: segment.id,
                 t,
                 pos,

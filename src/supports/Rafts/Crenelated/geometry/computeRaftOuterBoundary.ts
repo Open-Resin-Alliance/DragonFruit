@@ -47,8 +47,9 @@ function offsetPolygonOutward(polygon: THREE.Vector2[], distance: number): THREE
     const edge2 = new THREE.Vector2().subVectors(next, curr).normalize();
 
     // Perpendicular normals (outward for CCW polygon)
-    const normal1 = new THREE.Vector2(-edge1.y, edge1.x);
-    const normal2 = new THREE.Vector2(-edge2.y, edge2.x);
+    // For a CCW polygon, outward is the right-hand normal: (dy, -dx)
+    const normal1 = new THREE.Vector2(edge1.y, -edge1.x);
+    const normal2 = new THREE.Vector2(edge2.y, -edge2.x);
 
     // Average normal at vertex
     const avgNormal = new THREE.Vector2()

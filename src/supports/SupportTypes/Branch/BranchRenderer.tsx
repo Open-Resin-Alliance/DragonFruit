@@ -3,9 +3,10 @@ import * as THREE from 'three';
 import { Branch, Knot } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { setSelectedId } from '../../state';
@@ -20,9 +21,15 @@ interface BranchRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  deferStraightShaftsToSceneBatch?: boolean;
+  deferInteractionToSceneBatch?: boolean;
+  deferContactConesToSceneBatch?: boolean;
+  baseColor?: string;
+  hoverColor?: string;
+  selectedColor?: string;
 }
 
-export function BranchRenderer({ 
+export const BranchRenderer = React.memo(function BranchRenderer({ 
   branch, 
   parentKnot, 
   isSelected, 
@@ -31,23 +38,43 @@ export function BranchRenderer({
   showKnots,
   isHovered: propHovered, 
   suppressHover,
-  isInteractable = true 
+  isInteractable = true,
+  deferStraightShaftsToSceneBatch = false,
+  deferInteractionToSceneBatch = false,
+  deferContactConesToSceneBatch = false,
+  baseColor = '#ff8800',
+  hoverColor,
+  selectedColor = '#80fffd',
 }: BranchRendererProps) {
+  const highDetailPrimitiveSegments = 24;
+  const lowDetailPrimitiveSegments = 8;
+  const useLowDetailPrimitives = !isSelected && !propHovered;
+
   // Use universal highlight hook (matches TrunkRenderer pattern)
   const { pickRef, visuals } = useHighlight({
     id: branch.id,
     category: 'support',
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
     isSelected,
     suppressHover,
     externalHover: propHovered,
-    baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-    selectedColor: '#80fffd'
+    baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+    selectedColor,
+    hoverColor,
   });
 
   // Handle Click
   const handleClick = (e: any) => {
     handleSupportClick(e, branch.id, !!isInteractable);
   };
+
+  const handlePointerMove = React.useCallback(() => {
+    emitSupportModelPointerHover(branch.modelId ?? null);
+  }, [branch.modelId]);
+
+  const handlePointerOut = React.useCallback(() => {
+    emitSupportModelPointerHover(null);
+  }, []);
 
   // Start point is the Knot position
   const startPos = parentKnot.pos 
@@ -57,6 +84,7 @@ export function BranchRenderer({
   let currentStart = startPos.clone();
 
   const shafts: React.ReactNode[] = [];
+  const batchedStraightShafts: InstancedShaft[] = [];
   const joints: React.ReactNode[] = [];
 
   branch.segments.forEach((seg, index) => {
@@ -80,10 +108,17 @@ export function BranchRenderer({
     const isSegSelected = selectedId === seg.id;
 
     // Add Shaft (straight or bezier)
-    if (seg.type === 'bezier') {
-      // Bezier segments appear Magenta when parent selected, otherwise standard color
-      const bezierColor = isSelected ? '#ff00ff' : visuals.color;
+    const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier';
 
+    if (canBatchShaft) {
+      batchedStraightShafts.push({
+        id: seg.id,
+        start: startPosVec,
+        end: endPosVec,
+        diameter: seg.diameter,
+      });
+    } else if (seg.type === 'bezier') {
+      const bezierColor = isSelected ? '#ff00ff' : visuals.color;
       shafts.push(
         <BezierRenderer
           key={`shaft-${seg.id}`}
@@ -97,12 +132,13 @@ export function BranchRenderer({
           color={bezierColor}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
         />
       );
-    } else {
+    } else if (!deferStraightShaftsToSceneBatch || isSelected) {
       shafts.push(
         <ShaftRenderer
           key={`shaft-${seg.id}`}
@@ -113,6 +149,7 @@ export function BranchRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -121,7 +158,7 @@ export function BranchRenderer({
     }
 
     // Add Joint (if present)
-    if (seg.topJoint) {
+    if (isSelected && seg.topJoint) {
       joints.push(
         <JointRenderer
           key={`joint-${seg.topJoint.id}`}
@@ -133,6 +170,7 @@ export function BranchRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
         />
@@ -142,7 +180,7 @@ export function BranchRenderer({
 
   // --- Render Contact Cone (if present) ---
   let coneRender = null;
-  if (branch.contactCone) {
+  if (branch.contactCone && !deferContactConesToSceneBatch) {
     coneRender = (
       <ContactConeRenderer
         pos={branch.contactCone.pos}
@@ -153,6 +191,8 @@ export function BranchRenderer({
         color={visuals.color}
         emissive={visuals.emissive}
         emissiveIntensity={visuals.emissiveIntensity}
+        radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+        sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
         socketJointId={branch.contactCone.socketJointId}
         isInteractable={isInteractable}
         isParentSelected={isSelected}
@@ -161,9 +201,19 @@ export function BranchRenderer({
   }
 
   return (
-    <group onClick={handleClick}>
+    <group
+      onClick={handleClick}
+      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+    >
       {/* Branch Picking Group - Contains Shafts, Cone */}
       <group ref={pickRef as any}>
+        <InstancedShaftGroup
+          shafts={batchedStraightShafts}
+          color={visuals.color}
+          emissive={visuals.emissive}
+          emissiveIntensity={visuals.emissiveIntensity}
+        />
         {shafts}
         {coneRender}
       </group>
@@ -175,6 +225,7 @@ export function BranchRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
         />
@@ -184,4 +235,6 @@ export function BranchRenderer({
       {joints}
     </group>
   );
-}
+});
+
+BranchRenderer.displayName = 'BranchRenderer';

@@ -15,6 +15,8 @@ interface ContactDiskRendererProps {
     color?: string;
     transparent?: boolean;
     opacity?: number;
+    radialSegments?: number;
+    sphereSegments?: number;
     raycast?: any;
 }
 
@@ -29,6 +31,8 @@ export function ContactDiskRenderer({
     color = '#ff8800',
     transparent = false,
     opacity = 1,
+    radialSegments = 24,
+    sphereSegments = 24,
     raycast
 }: ContactDiskRendererProps) {
     
@@ -65,7 +69,7 @@ export function ContactDiskRenderer({
                   - increasing height by penetration
                   - shifting the cylinder down by penetration/2
                 */}
-                <cylinderGeometry args={[radius, radius, thickness + effectivePenetration, 32]} />
+                <cylinderGeometry args={[radius, radius, thickness + effectivePenetration, radialSegments]} />
                 <meshStandardMaterial
                     color={color}
                     transparent={transparent}
@@ -79,7 +83,7 @@ export function ContactDiskRenderer({
 
             {/* Round Tip: stays exactly where it was (cone side alignment) */}
             <mesh position={[0, thickness / 2, 0]} raycast={raycast}>
-                <sphereGeometry args={[radius, 32, 32]} />
+                <sphereGeometry args={[radius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                 <meshStandardMaterial
                     color={color}
                     transparent={transparent}

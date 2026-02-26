@@ -2,7 +2,7 @@
 
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent, useThree, useFrame } from '@react-three/fiber';
+import { ThreeEvent, useThree } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis as AxisType } from '../types';
@@ -18,7 +18,7 @@ interface GizmoMoveProps {
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   handleScale?: number; // New prop for scaling handles
-  onDragStart: () => void;
+  onDragStart: () => boolean | void;
   onDrag: (delta: THREE.Vector3) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
@@ -44,9 +44,6 @@ export function GizmoMove({
   onPointerLeave,
 }: GizmoMoveProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [shouldFlipX, setShouldFlipX] = useState(false);
-  const [shouldFlipY, setShouldFlipY] = useState(false);
-  const [shouldFlipZ, setShouldFlipZ] = useState(false);
   const dragPlaneRef = useRef<THREE.Plane | null>(null);
   const lastPointRef = useRef<THREE.Vector3 | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
@@ -87,26 +84,9 @@ export function GizmoMove({
   // Get colors for this axis
   const axisColors = axis === 'x' ? GIZMO_COLORS.xAxis : axis === 'y' ? GIZMO_COLORS.yAxis : GIZMO_COLORS.zAxis;
 
-  // Update axis flip states every frame based on camera position relative to gizmo
-  useFrame(() => {
-    // X axis flips when camera crosses X axis (camera.x vs gizmo.x)
-    if (axis === 'x') {
-      const cameraRelativeX = camera.position.x - gizmoPosition.x;
-      setShouldFlipX(cameraRelativeX > 0);
-    }
-    
-    // Y axis flips when camera crosses Y axis (camera.y vs gizmo.y)
-    if (axis === 'y') {
-      const cameraRelativeY = camera.position.y - gizmoPosition.y;
-      setShouldFlipY(cameraRelativeY > 0);
-    }
-    
-    // Z axis flips when camera crosses horizontal plane (camera.z vs gizmo.z)
-    if (axis === 'z') {
-      const cameraRelativeZ = camera.position.z - gizmoPosition.z;
-      setShouldFlipZ(cameraRelativeZ > 0);
-    }
-  });
+  const shouldFlipX = axis === 'x' && (camera.position.x - gizmoPosition.x > 0);
+  const shouldFlipY = axis === 'y' && (camera.position.y - gizmoPosition.y > 0);
+  const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
 
   // Rotation for each axis with camera-relative flipping
   const rotation: [number, number, number] =
@@ -131,9 +111,13 @@ export function GizmoMove({
     const initialPoint = getWorldPointFromMouse(e.clientX, e.clientY);
     if (!initialPoint) return;
     
+    const allowed = onDragStart();
+    if (allowed === false) {
+      return;
+    }
+
     setIsDragging(true);
     lastPointRef.current = initialPoint;
-    onDragStart();
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {

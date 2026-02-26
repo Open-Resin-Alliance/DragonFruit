@@ -3,10 +3,11 @@ import * as THREE from 'three';
 import { ContactDisk, Twig } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
+import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk/ContactDiskRenderer';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 
@@ -18,9 +19,14 @@ interface TwigRendererProps {
   isHovered?: boolean;
   suppressHover?: boolean;
   isInteractable?: boolean;
+  deferStraightShaftsToSceneBatch?: boolean;
+  deferInteractionToSceneBatch?: boolean;
+  baseColor?: string;
+  hoverColor?: string;
+  selectedColor?: string;
 }
 
-export function TwigRenderer({
+export const TwigRenderer = React.memo(function TwigRenderer({
   twig,
   isSelected,
   selectedId,
@@ -28,22 +34,42 @@ export function TwigRenderer({
   isHovered: propHovered,
   suppressHover,
   isInteractable = true,
+  deferStraightShaftsToSceneBatch = false,
+  deferInteractionToSceneBatch = false,
+  baseColor = '#ff8800',
+  hoverColor,
+  selectedColor = '#80fffd',
 }: TwigRendererProps) {
+  const highDetailPrimitiveSegments = 24;
+  const lowDetailPrimitiveSegments = 8;
+  const useLowDetailPrimitives = !isSelected && !propHovered;
+
   const { pickRef, visuals } = useHighlight({
     id: twig.id,
     category: 'support',
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
     isSelected,
     suppressHover,
     externalHover: propHovered,
-    baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-    selectedColor: '#80fffd',
+    baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+    selectedColor,
+    hoverColor,
   });
 
   const handleClick = (e: unknown) => {
     handleSupportClick(e, twig.id, !!isInteractable);
   };
 
+  const handlePointerMove = React.useCallback(() => {
+    emitSupportModelPointerHover(twig.modelId ?? null);
+  }, [twig.modelId]);
+
+  const handlePointerOut = React.useCallback(() => {
+    emitSupportModelPointerHover(null);
+  }, []);
+
   const shafts: React.ReactNode[] = [];
+  const batchedStraightShafts: InstancedShaft[] = [];
 
   const joints = useMemo(() => {
     const map = new Map<string, { id: string; pos: { x: number; y: number; z: number }; diameter: number }>();
@@ -90,7 +116,16 @@ export function TwigRenderer({
 
     const isSegSelected = selectedId === seg.id;
 
-    if (seg.type === 'bezier') {
+    const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && seg.type !== 'bezier' && Math.abs(diameterStart - diameterEnd) < 1e-6;
+
+    if (canBatchShaft) {
+      batchedStraightShafts.push({
+        id: seg.id,
+        start: startPosVec,
+        end: endPosVec,
+        diameter: seg.diameter,
+      });
+    } else if (seg.type === 'bezier') {
       const bezierColor = isSelected ? '#ff00ff' : visuals.color;
       shafts.push(
         <BezierRenderer
@@ -105,12 +140,13 @@ export function TwigRenderer({
           color={bezierColor}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
         />
       );
-    } else {
+    } else if (!deferStraightShaftsToSceneBatch || isSelected) {
       shafts.push(
         <ShaftRenderer
           key={`shaft-${seg.id}`}
@@ -123,6 +159,7 @@ export function TwigRenderer({
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
           onClick={() => setSelectedId(seg.id)}
@@ -139,6 +176,8 @@ export function TwigRenderer({
       profile={twig.contactDiskA.profile}
       contactDiameterMm={twig.contactDiskA.contactDiameterMm}
       overrideThickness={twig.contactDiskA.diskLengthOverride}
+      radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+      sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       color={visuals.color}
     />
   );
@@ -151,29 +190,44 @@ export function TwigRenderer({
       profile={twig.contactDiskB.profile}
       contactDiameterMm={twig.contactDiskB.contactDiameterMm}
       overrideThickness={twig.contactDiskB.diskLengthOverride}
+      radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+      sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       color={visuals.color}
     />
   );
 
   return (
-    <group onClick={handleClick}>
+    <group
+      onClick={handleClick}
+      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
+      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
+    >
       <group ref={pickRef as React.Ref<THREE.Group>}>
+        <InstancedShaftGroup
+          shafts={batchedStraightShafts}
+          color={visuals.color}
+          emissive={visuals.emissive}
+          emissiveIntensity={visuals.emissiveIntensity}
+        />
         {shafts}
         {diskA}
         {diskB}
       </group>
 
-      {joints.map((joint) => (
+      {isSelected && joints.map((joint) => (
         <JointRenderer
           key={`joint-${joint.id}`}
           joint={joint}
           color={visuals.color}
           emissive={visuals.emissive}
           emissiveIntensity={visuals.emissiveIntensity}
+          selectedColor={visuals.selectedColor}
           isInteractable={isInteractable}
           isParentSelected={isSelected}
         />
       ))}
     </group>
   );
-}
+});
+
+TwigRenderer.displayName = 'TwigRenderer';

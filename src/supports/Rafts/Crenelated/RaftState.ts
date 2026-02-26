@@ -3,6 +3,18 @@ import { DEFAULT_RAFT_SETTINGS } from './RaftDefaults';
 
 let currentRaftSettings: RaftSettings = { ...DEFAULT_RAFT_SETTINGS };
 
+const FOOTPRINT_BORDER_MARGIN_MAX_MM = 0.05;
+
+function normalizeRaftSettings(settings: RaftSettings): RaftSettings {
+  return {
+    ...settings,
+    footprintBorderMargin: Math.min(
+      FOOTPRINT_BORDER_MARGIN_MAX_MM,
+      Math.max(0, settings.footprintBorderMargin ?? DEFAULT_RAFT_SETTINGS.footprintBorderMargin),
+    ),
+  };
+}
+
 type RaftStoreListener = () => void;
 const listeners = new Set<RaftStoreListener>();
 
@@ -22,18 +34,20 @@ export function getRaftSettings(): RaftSettings {
 
 export function setRaftSettings(settings: RaftSettings): void {
   const next = { ...DEFAULT_RAFT_SETTINGS, ...settings };
+  const normalized = normalizeRaftSettings(next);
   currentRaftSettings = {
-    ...next,
-    wallEnabled: next.bottomMode === 'off' ? false : next.wallEnabled,
+    ...normalized,
+    wallEnabled: normalized.bottomMode === 'off' ? false : normalized.wallEnabled,
   };
   notify();
 }
 
 export function updateRaftSettings(partial: Partial<RaftSettings>): void {
   const next = { ...DEFAULT_RAFT_SETTINGS, ...currentRaftSettings, ...partial };
+  const normalized = normalizeRaftSettings(next);
   currentRaftSettings = {
-    ...next,
-    wallEnabled: next.bottomMode === 'off' ? false : next.wallEnabled,
+    ...normalized,
+    wallEnabled: normalized.bottomMode === 'off' ? false : normalized.wallEnabled,
   };
   notify();
 }

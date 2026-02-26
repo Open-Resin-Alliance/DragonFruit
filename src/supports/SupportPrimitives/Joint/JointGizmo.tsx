@@ -1,6 +1,6 @@
-import React, { useSyncExternalStore, useCallback, useRef } from 'react';
+import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
-import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById } from '../../state';
+import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, getTwigById, getStickById } from '../../state';
 import { moveJoint } from './jointUtils';
 import * as THREE from 'three';
 import { pushHistory } from '@/history/historyStore';
@@ -18,9 +18,30 @@ export function JointGizmo() {
     const initialTrunkRef = useRef<Trunk | null>(null);
     const initialBranchRef = useRef<Branch | null>(null);
     const dragPosRef = useRef<THREE.Vector3 | null>(null);
+    const selectedJointParentRef = useRef<{ selectedId: string; kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'supportBrace'; supportId: string } | null>(null);
     const { isActive: isCurveMode } = useCurveInteractionState();
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
+
+    const setJointGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
+        const w = window as any;
+        w.__jointGizmoDragging = isDragging;
+        w.__jointGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
+
+        window.dispatchEvent(new CustomEvent('joint-gizmo-interaction-lock', {
+            detail: {
+                active: isDragging,
+                guardUntil: w.__jointGizmoGuardUntil,
+            },
+        }));
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (typeof window === 'undefined') return;
+            setJointGizmoInteractionFlags(false, 0);
+        };
+    }, [setJointGizmoInteractionFlags]);
 
      const updateSegmentsJointPos = useCallback((segments: any[], jointId: string, pos: { x: number; y: number; z: number }) => {
          return segments.map(seg => {
@@ -89,15 +110,62 @@ export function JointGizmo() {
     // Helper to find joint and parent
     const findJointAndParent = useCallback((): { joint: Joint, trunk?: Trunk, branch?: Branch, twig?: Twig, stick?: Stick, supportBrace?: SupportBrace } | null => {
         if (!selectedId) return null;
+
+        const findJointInSegments = (segments: Array<{ topJoint?: Joint; bottomJoint?: Joint }>) => {
+            for (const seg of segments) {
+                if (seg.topJoint?.id === selectedId) return seg.topJoint;
+                if (seg.bottomJoint?.id === selectedId) return seg.bottomJoint;
+            }
+            return null;
+        };
+
+        const cached = selectedJointParentRef.current;
+        if (cached && cached.selectedId === selectedId) {
+            if (cached.kind === 'trunk') {
+                const trunk = getTrunkById(cached.supportId);
+                if (trunk) {
+                    const joint = findJointInSegments(trunk.segments as any[]);
+                    if (joint) return { joint, trunk };
+                }
+            } else if (cached.kind === 'branch') {
+                const branch = getBranchById(cached.supportId);
+                if (branch) {
+                    const joint = findJointInSegments(branch.segments as any[]);
+                    if (joint) return { joint, branch };
+                }
+            } else if (cached.kind === 'twig') {
+                const twig = getTwigById(cached.supportId);
+                if (twig) {
+                    const joint = findJointInSegments(twig.segments as any[]);
+                    if (joint) return { joint, twig };
+                }
+            } else if (cached.kind === 'stick') {
+                const stick = getStickById(cached.supportId);
+                if (stick) {
+                    const joint = findJointInSegments(stick.segments as any[]);
+                    if (joint) return { joint, stick };
+                }
+            } else {
+                const supportBrace = supportBraceState.supportBraces[cached.supportId];
+                if (supportBrace) {
+                    const joint = findJointInSegments(supportBrace.segments as any[]);
+                    if (joint) return { joint, supportBrace };
+                }
+            }
+
+            selectedJointParentRef.current = null;
+        }
         
         // Search trunks first
         const trunks = Object.values(state.trunks);
         for (const trunk of trunks) {
             for (const seg of trunk.segments) {
                 if (seg.topJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'trunk', supportId: trunk.id };
                     return { joint: seg.topJoint, trunk };
                 }
                 if (seg.bottomJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'trunk', supportId: trunk.id };
                     return { joint: seg.bottomJoint, trunk };
                 }
             }
@@ -108,9 +176,11 @@ export function JointGizmo() {
         for (const branch of branches) {
             for (const seg of branch.segments) {
                 if (seg.topJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'branch', supportId: branch.id };
                     return { joint: seg.topJoint, branch };
                 }
                 if (seg.bottomJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'branch', supportId: branch.id };
                     return { joint: seg.bottomJoint, branch };
                 }
             }
@@ -121,9 +191,11 @@ export function JointGizmo() {
         for (const twig of twigs) {
             for (const seg of twig.segments) {
                 if (seg.topJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'twig', supportId: twig.id };
                     return { joint: seg.topJoint, twig };
                 }
                 if (seg.bottomJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'twig', supportId: twig.id };
                     return { joint: seg.bottomJoint, twig };
                 }
             }
@@ -134,9 +206,11 @@ export function JointGizmo() {
         for (const stick of sticks) {
             for (const seg of stick.segments) {
                 if (seg.topJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'stick', supportId: stick.id };
                     return { joint: seg.topJoint, stick };
                 }
                 if (seg.bottomJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'stick', supportId: stick.id };
                     return { joint: seg.bottomJoint, stick };
                 }
             }
@@ -147,13 +221,17 @@ export function JointGizmo() {
         for (const supportBrace of supportBraces) {
             for (const seg of supportBrace.segments) {
                 if (seg.topJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'supportBrace', supportId: supportBrace.id };
                     return { joint: seg.topJoint, supportBrace };
                 }
                 if (seg.bottomJoint?.id === selectedId) {
+                    selectedJointParentRef.current = { selectedId, kind: 'supportBrace', supportId: supportBrace.id };
                     return { joint: seg.bottomJoint, supportBrace };
                 }
             }
         }
+
+        selectedJointParentRef.current = null;
         
         return null;
     }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, supportBraceState.supportBraces]);
@@ -163,6 +241,7 @@ export function JointGizmo() {
     const { joint, trunk, branch, twig, stick, supportBrace } = result;
 
     const handleMoveStart = () => {
+        setJointGizmoInteractionFlags(true);
         if (joint) {
             dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
         }
@@ -242,6 +321,7 @@ export function JointGizmo() {
     };
 
     const handleMoveEnd = () => {
+        setJointGizmoInteractionFlags(false);
         // Prevent the canvas click handler from deselecting the joint
         window.__gizmoDragEndedThisFrame = true;
         dragPosRef.current = null;

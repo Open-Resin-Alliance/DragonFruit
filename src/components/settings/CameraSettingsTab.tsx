@@ -3,12 +3,15 @@
 import React from 'react';
 import { Camera as CameraIcon } from 'lucide-react';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
+import type { CameraFeelPreset } from '@/components/settings/cameraFeelPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighlightDropdown';
 
 interface CameraSettingsTabProps {
   cameraProjectionMode: CameraProjectionMode;
   onCameraProjectionModeChange: (mode: CameraProjectionMode) => void;
+  cameraFeelPreset: CameraFeelPreset;
+  onCameraFeelPresetChange: (preset: CameraFeelPreset) => void;
   selectionHighlightMode: SelectionHighlightMode;
   onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
 }
@@ -16,6 +19,8 @@ interface CameraSettingsTabProps {
 export function CameraSettingsTab({
   cameraProjectionMode,
   onCameraProjectionModeChange,
+  cameraFeelPreset,
+  onCameraFeelPresetChange,
   selectionHighlightMode,
   onSelectionHighlightModeChange,
 }: CameraSettingsTabProps) {
@@ -95,6 +100,50 @@ export function CameraSettingsTab({
               >
                 Perspective
               </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Camera feel
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Controls smoothing and movement acceleration while orbiting, panning, and zooming.
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {([
+                { key: 'raw', label: 'Raw' },
+                { key: 'precise', label: 'Precise' },
+                { key: 'balanced', label: 'Balanced' },
+                { key: 'fast', label: 'Fast' },
+              ] as Array<{ key: CameraFeelPreset; label: string }>).map((option) => {
+                const active = cameraFeelPreset === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => onCameraFeelPresetChange(option.key)}
+                    className="h-10 min-w-[104px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                    style={active
+                      ? {
+                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                          color: 'var(--accent-contrast)',
+                        }
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                          color: 'var(--text-muted)',
+                        }}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

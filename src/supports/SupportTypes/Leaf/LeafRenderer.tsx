@@ -1,7 +1,7 @@
 import React from 'react';
 import { Leaf, Knot } from '../../types';
 import { ContactConeRenderer } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick } from '../../interaction/clickHandlers';
+import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 
@@ -14,9 +14,13 @@ interface LeafRendererProps {
     isHovered?: boolean;
     suppressHover?: boolean;
     isInteractable?: boolean;
+    deferContactConesToSceneBatch?: boolean;
+    baseColor?: string;
+    hoverColor?: string;
+    selectedColor?: string;
 }
 
-export function LeafRenderer({
+export const LeafRenderer = React.memo(function LeafRenderer({
     leaf,
     parentKnot,
     isSelected,
@@ -25,15 +29,25 @@ export function LeafRenderer({
     isHovered: propHovered,
     suppressHover,
     isInteractable = true,
+    deferContactConesToSceneBatch = false,
+    baseColor = '#ff8800',
+    hoverColor,
+    selectedColor = '#80fffd',
 }: LeafRendererProps) {
+    const highDetailPrimitiveSegments = 24;
+    const lowDetailPrimitiveSegments = 8;
+    const useLowDetailPrimitives = !isSelected && !propHovered;
+
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
         category: 'support',
+        enabled: !!isInteractable && !suppressHover,
         isSelected,
         suppressHover,
         externalHover: propHovered,
-        baseColor: dimNonSelected && !isSelected ? '#666666' : '#ff8800',
-        selectedColor: '#80fffd',
+        baseColor: dimNonSelected && !isSelected ? '#666666' : baseColor,
+        selectedColor,
+        hoverColor,
     });
 
     const handleClick = (e: any) => {
@@ -57,10 +71,18 @@ export function LeafRenderer({
         handleSupportClick(e, leaf.id, !!isInteractable);
     };
 
+    const handlePointerMove = React.useCallback(() => {
+        emitSupportModelPointerHover(leaf.modelId ?? null);
+    }, [leaf.modelId]);
+
+    const handlePointerOut = React.useCallback(() => {
+        emitSupportModelPointerHover(null);
+    }, []);
+
     return (
-        <group onClick={handleClick}>
+        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
             <group ref={pickRef as any}>
-                {leaf.contactCone && (
+                {leaf.contactCone && !deferContactConesToSceneBatch && (
                     <ContactConeRenderer
                         pos={leaf.contactCone.pos}
                         normal={leaf.contactCone.normal}
@@ -70,6 +92,8 @@ export function LeafRenderer({
                         color={visuals.color}
                         emissive={visuals.emissive}
                         emissiveIntensity={visuals.emissiveIntensity}
+                        radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                        sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                         isInteractable={isInteractable}
                         isParentSelected={!!isSelected}
                     />
@@ -82,10 +106,13 @@ export function LeafRenderer({
                     color={visuals.color}
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
                     isInteractable={isInteractable}
                     isParentSelected={!!isSelected}
                 />
             )}
         </group>
     );
-}
+});
+
+LeafRenderer.displayName = 'LeafRenderer';

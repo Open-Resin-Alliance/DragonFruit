@@ -17,6 +17,8 @@ export type SerializedArrangeModel = {
     center: SerializedVector3;
     uuid: string;
     positions: Float32Array;
+    supportLocalPoints?: Float32Array;
+    supportHullKey?: string;
   };
 };
 

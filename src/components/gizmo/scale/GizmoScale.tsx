@@ -2,8 +2,7 @@
 
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
-import { Line } from '@react-three/drei';
+import { ThreeEvent, useThree } from '@react-three/fiber';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import type { GizmoAxis } from '../types';
 import { usePicking } from '@/components/picking';
@@ -16,110 +15,11 @@ interface GizmoScaleProps {
   isDimmed?: boolean;
   isHidden?: boolean;
   gizmoPosition: THREE.Vector3;
-  onDragStart: (isUniform: boolean) => void;
+  onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
-}
-
-/**
- * Cube with only front-facing edges visible
- */
-function CubeWithFrontEdges({
-  position,
-  size,
-  color,
-  opacity,
-  edgeOpacity,
-  camera,
-  gizmoPosition
-}: {
-  position: [number, number, number];
-  size: number;
-  color: string;
-  opacity: number;
-  edgeOpacity: number;
-  camera: THREE.Camera;
-  gizmoPosition: THREE.Vector3;
-}) {
-  const [visibleEdges, setVisibleEdges] = useState<[THREE.Vector3, THREE.Vector3][]>([]);
-  
-  // Calculate darker edge color (70% darker for more contrast)
-  const edgeColor = useMemo(() => {
-    const threeColor = new THREE.Color(color);
-    threeColor.multiplyScalar(0.3); // Make 70% darker
-    return '#' + threeColor.getHexString();
-  }, [color]);
-  
-  // Calculate which edges are camera-facing
-  useFrame(() => {
-    const cubePos = new THREE.Vector3(...position).add(gizmoPosition);
-    const cameraDir = new THREE.Vector3().subVectors(camera.position, cubePos).normalize();
-    
-    const half = size / 2;
-    const edges: [THREE.Vector3, THREE.Vector3][] = [];
-    
-    // Define all 12 edges of the cube with their face normals
-    const cubeEdges = [
-      // Front face (Z+) edges
-      { start: [-half, -half, half], end: [half, -half, half], normal: [0, 0, 1] },
-      { start: [half, -half, half], end: [half, half, half], normal: [0, 0, 1] },
-      { start: [half, half, half], end: [-half, half, half], normal: [0, 0, 1] },
-      { start: [-half, half, half], end: [-half, -half, half], normal: [0, 0, 1] },
-      // Back face (Z-) edges
-      { start: [-half, -half, -half], end: [half, -half, -half], normal: [0, 0, -1] },
-      { start: [half, -half, -half], end: [half, half, -half], normal: [0, 0, -1] },
-      { start: [half, half, -half], end: [-half, half, -half], normal: [0, 0, -1] },
-      { start: [-half, half, -half], end: [-half, -half, -half], normal: [0, 0, -1] },
-      // Connecting edges
-      { start: [-half, -half, -half], end: [-half, -half, half], normal: [-1, 0, 0] },
-      { start: [half, -half, -half], end: [half, -half, half], normal: [1, 0, 0] },
-      { start: [half, half, -half], end: [half, half, half], normal: [1, 0, 0] },
-      { start: [-half, half, -half], end: [-half, half, half], normal: [-1, 0, 0] },
-    ];
-    
-    // Only include edges whose face normal points toward camera
-    const visible = cubeEdges
-      .filter(edge => {
-        const normal = new THREE.Vector3(...edge.normal as [number, number, number]);
-        return normal.dot(cameraDir) > 0;
-      })
-      .map(edge => [
-        new THREE.Vector3(...edge.start as [number, number, number]),
-        new THREE.Vector3(...edge.end as [number, number, number])
-      ] as [THREE.Vector3, THREE.Vector3]);
-    
-    setVisibleEdges(visible);
-  });
-  
-  return (
-    <group position={position}>
-      {/* Solid cube */}
-      <mesh>
-        <boxGeometry args={[size, size, size]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={opacity}
-          depthTest={false}
-        />
-      </mesh>
-      
-      {/* Only visible edges */}
-      {visibleEdges.map((edge, i) => (
-        <Line
-          key={i}
-          points={edge}
-          color={edgeColor}
-          lineWidth={1}
-          transparent
-          opacity={edgeOpacity}
-          depthTest={false}
-        />
-      ))}
-    </group>
-  );
 }
 
 /**
@@ -171,9 +71,6 @@ export function GizmoScale({
 }: GizmoScaleProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUniformScale, setIsUniformScale] = useState(false);
-  const [shouldFlipX, setShouldFlipX] = useState(false);
-  const [shouldFlipY, setShouldFlipY] = useState(false);
-  const [shouldFlipZ, setShouldFlipZ] = useState(false);
   const startDistance = useRef<number>(0);
   const rafId = useRef<number | null>(null);
   const { camera, gl } = useThree();
@@ -213,26 +110,9 @@ export function GizmoScale({
   // Get colors for this axis
   const axisColors = axis === 'x' ? GIZMO_COLORS.xAxis : axis === 'y' ? GIZMO_COLORS.yAxis : GIZMO_COLORS.zAxis;
 
-  // Update axis flip states every frame based on camera position relative to gizmo
-  useFrame(() => {
-    // X axis flips when camera crosses X axis
-    if (axis === 'x') {
-      const cameraRelativeX = camera.position.x - gizmoPosition.x;
-      setShouldFlipX(cameraRelativeX > 0);
-    }
-    
-    // Y axis flips when camera crosses Y axis
-    if (axis === 'y') {
-      const cameraRelativeY = camera.position.y - gizmoPosition.y;
-      setShouldFlipY(cameraRelativeY > 0);
-    }
-    
-    // Z axis flips when camera crosses Z axis
-    if (axis === 'z') {
-      const cameraRelativeZ = camera.position.z - gizmoPosition.z;
-      setShouldFlipZ(cameraRelativeZ > 0);
-    }
-  });
+  const shouldFlipX = axis === 'x' && (camera.position.x - gizmoPosition.x > 0);
+  const shouldFlipY = axis === 'y' && (camera.position.y - gizmoPosition.y > 0);
+  const shouldFlipZ = axis === 'z' && (camera.position.z - gizmoPosition.z > 0);
 
   // Create gradient hexagon geometry
   const hexGeometry = useMemo(
@@ -259,16 +139,10 @@ export function GizmoScale({
   const rotation: [number, number, number] =
     axis === 'x' ? [0, 0, Math.PI / 2] : axis === 'y' ? [0, 0, 0] : [Math.PI / 2, 0, 0];
 
-  // Connection line position (halfway between center and hexagon)
-  const linePosition: [number, number, number] =
-    axis === 'x'
-      ? [GIZMO_SIZES.scaleLineLength / 2, 0, 0]
-      : axis === 'y'
-      ? [0, GIZMO_SIZES.scaleLineLength / 2, 0]
-      : [0, 0, GIZMO_SIZES.scaleLineLength / 2];
-
-  const lineRotation: [number, number, number] =
-    axis === 'x' ? [0, 0, Math.PI / 2] : axis === 'z' ? [Math.PI / 2, 0, 0] : [0, 0, 0];
+  const cubeEdgeGeometry = useMemo(() => {
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    return new THREE.EdgesGeometry(box);
+  }, []);
 
   const handlePointerEnter = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -311,8 +185,11 @@ export function GizmoScale({
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
     startDistance.current = distance;
     
+    const allowed = onDragStart(isUniform);
+    if (allowed === false) {
+      return;
+    }
     setIsDragging(true);
-    onDragStart(isUniform);
   };
 
   const getScaleFactor = useCallback((clientX: number, clientY: number, gizmoCenterX: number, gizmoCenterY: number): number => {
@@ -397,6 +274,11 @@ export function GizmoScale({
       : effectiveHovered
         ? GIZMO_COLORS.hover
         : axisColors.end;
+  const edgeColor = useMemo(() => {
+    const threeColor = new THREE.Color(handleColor);
+    threeColor.multiplyScalar(0.3);
+    return '#' + threeColor.getHexString();
+  }, [handleColor]);
 
   // Emissive intensity based on state (uses effectiveHovered for GPU picking support)
   const emissiveIntensity = isActive
@@ -444,16 +326,27 @@ export function GizmoScale({
         />
       </group> */}
 
-      {/* Cube handle with camera-facing edges only */}
-      <CubeWithFrontEdges 
-        position={position}
-        size={GIZMO_SIZES.scaleHexagonRadius * highlightScale}
-        color={handleColor}
-        opacity={opacity}
-        edgeOpacity={opacity}
-        camera={camera}
-        gizmoPosition={gizmoPosition}
-      />
+      {/* Cube handle */}
+      <group position={position}>
+        <mesh scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
+          <boxGeometry args={[1, 1, 1]} />
+          <meshBasicMaterial
+            color={handleColor}
+            transparent
+            opacity={opacity}
+            depthTest={false}
+          />
+        </mesh>
+        <lineSegments scale={GIZMO_SIZES.scaleHexagonRadius * highlightScale}>
+          <primitive object={cubeEdgeGeometry} attach="geometry" />
+          <lineBasicMaterial
+            color={edgeColor}
+            transparent
+            opacity={opacity}
+            depthTest={false}
+          />
+        </lineSegments>
+      </group>
 
       {/* Point light at hexagon to cast colored light on model */}
       {!isDimmed && (

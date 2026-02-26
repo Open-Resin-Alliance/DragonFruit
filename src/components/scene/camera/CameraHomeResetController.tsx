@@ -17,6 +17,7 @@ type OrbitLikeControls = {
   enableRotate: boolean;
   enablePan: boolean;
   enableZoom: boolean;
+  enableDamping?: boolean;
   update: () => void;
 };
 
@@ -42,6 +43,7 @@ export function CameraHomeResetController({
   const { camera, controls } = useThree();
 
   const animatingRef = React.useRef(false);
+  const rafRef = React.useRef<number | null>(null);
   const activeRunIdRef = React.useRef<number>(0);
   const completedRunIdRef = React.useRef<number>(0);
 
@@ -70,6 +72,10 @@ export function CameraHomeResetController({
     }
 
     animatingRef.current = true;
+    const prevEnableDamping = controls.enableDamping;
+    if (typeof prevEnableDamping === 'boolean') {
+      controls.enableDamping = false;
+    }
     const duration = 650;
     let startTime: number | null = null;
 
@@ -79,7 +85,7 @@ export function CameraHomeResetController({
 
       const elapsed = now - startTime;
       const t = Math.min(elapsed / duration, 1);
-      const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const eased = THREE.MathUtils.smootherstep(t, 0, 1);
 
       camera.position.lerpVectors(startPos, endPos, eased);
       controls.target.lerpVectors(startTarget, endTarget, eased);
@@ -93,20 +99,35 @@ export function CameraHomeResetController({
       controls.update();
 
       if (t < 1) {
-        requestAnimationFrame(animate);
+        rafRef.current = requestAnimationFrame(animate);
       } else {
         animatingRef.current = false;
+        rafRef.current = null;
         activeRunIdRef.current = 0;
         completedRunIdRef.current = runId;
+        if (typeof prevEnableDamping === 'boolean') {
+          controls.enableDamping = prevEnableDamping;
+        }
+
+        camera.position.copy(endPos);
+        controls.target.copy(endTarget);
+        controls.update();
 
         onComplete?.(runId);
       }
     };
 
-    requestAnimationFrame(animate);
+    rafRef.current = requestAnimationFrame(animate);
 
     return () => {
       animatingRef.current = false;
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (typeof prevEnableDamping === 'boolean') {
+        controls.enableDamping = prevEnableDamping;
+      }
       if (activeRunIdRef.current === runId && completedRunIdRef.current !== runId) {
         activeRunIdRef.current = 0;
       }

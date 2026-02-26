@@ -270,7 +270,7 @@ export function RaftSettingsCard({
                         const val = e.target.value.trim();
                         if (val === '') { e.target.value = settings.footprintBorderMargin.toFixed(2); return; }
                         const num = parseFloat(val);
-                        if (!isNaN(num) && num >= 0.5 && num <= 10.0) {
+                        if (!isNaN(num) && num >= 0.0 && num <= 0.05) {
                           updateSetting('footprintBorderMargin', Number(num.toFixed(2)) as any);
                         } else {
                           e.target.value = settings.footprintBorderMargin.toFixed(2);
@@ -284,9 +284,9 @@ export function RaftSettingsCard({
                 </label>
                 <input
                   type="range"
-                  min="0.5"
-                  max="10.0"
-                  step="0.5"
+                  min="0"
+                  max="0.05"
+                  step="0.01"
                   value={settings.footprintBorderMargin}
                   onChange={(e) => { if (!isEditingBorderMarginRef.current) updateSetting('footprintBorderMargin', parseFloat(e.target.value)); }}
                   className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"

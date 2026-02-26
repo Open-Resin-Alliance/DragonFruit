@@ -14,13 +14,10 @@ import { LysConverter } from './LysConverter';
 import { loadFromLychee } from '@/supports/state';
 import { loadStlGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { getSettings } from '@/supports/Settings';
+import { generateUuid } from '@/utils/uuid';
 
 function generateImportId(): string {
-  const maybeCrypto = (globalThis as any)?.crypto;
-  if (maybeCrypto && typeof maybeCrypto.randomUUID === 'function') {
-    return maybeCrypto.randomUUID();
-  }
-  return `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return generateUuid();
 }
 
 // ---------------------------------------------------------------------------

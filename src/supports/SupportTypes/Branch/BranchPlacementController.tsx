@@ -31,10 +31,15 @@ import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
+import { generateUuid } from '@/utils/uuid';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
+    const isHoveringSupportTarget = supportState.hoveredCategory === 'support'
+        || supportState.hoveredCategory === 'segment'
+        || supportState.hoveredCategory === 'joint'
+        || supportState.hoveredCategory === 'knot';
 
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);
     const meshKindRef = useRef<'twig' | 'stick' | null>(null);
@@ -286,6 +291,11 @@ export function BranchPlacementController() {
     // Continuous update loop - show preview when mouse is over something valid
     useFrame(() => {
         if (altActive && stage === 'idle') {
+            if (isHoveringSupportTarget) {
+                branchPlacementStore.setHoverPosition(null);
+                return;
+            }
+
             raycaster.setFromCamera(pointer, camera);
             const modelMeshes = modelMeshesRef.current;
             if (modelMeshes.length > 0) {
@@ -374,7 +384,7 @@ export function BranchPlacementController() {
                 }
             }
 
-            if (meshHit) {
+            if (meshHit && !isHoveringSupportTarget) {
                 const bPos: Vec3 = { x: meshHit.point.x, y: meshHit.point.y, z: meshHit.point.z };
                 const bNormal = calculateSmoothedNormal(meshHit);
                 const bModelId = meshHit.object.userData?.modelId || 'unknown';
@@ -503,7 +513,7 @@ export function BranchPlacementController() {
             const hostDiameterMm = snapTarget.hostDiameterMm ?? fallbackHostDiameterMm;
             if (snapTarget.t === undefined) return;
 
-            const knotId = crypto.randomUUID();
+            const knotId = generateUuid();
             const segmentId = snapTarget.targetId;
 
             const parentKnot: Knot = {
