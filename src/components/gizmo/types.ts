@@ -85,15 +85,15 @@ export interface GizmoConfig {
   axisLock?: GizmoAxis | null;
   
   // Callbacks
-  onMoveStart?: () => void;
+  onMoveStart?: () => boolean | void;
   onMove?: (delta: THREE.Vector3, axis?: GizmoAxis) => void;
   onMoveEnd?: () => void;
   
-  onRotateStart?: () => void;
+  onRotateStart?: (axis: GizmoAxis) => boolean | void;
   onRotate?: (axis: GizmoAxis, angle: number) => void;
   onRotateEnd?: () => void;
   
-  onScaleStart?: () => void;
+  onScaleStart?: (axis: GizmoAxis, isUniform: boolean) => boolean | void;
   onScale?: (axis: GizmoAxis | 'uniform', factor: number) => void;
   onScaleEnd?: () => void;
   

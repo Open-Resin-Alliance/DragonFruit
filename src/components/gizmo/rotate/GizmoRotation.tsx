@@ -18,7 +18,7 @@ interface GizmoRotationProps {
   suppressAxisAnimations?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
-  onDragStart: () => void;
+  onDragStart: () => boolean | void;
   onDrag: (angle: number) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
@@ -198,8 +198,11 @@ export function GizmoRotation({
     // Calculate initial mouse angle
     lastMouseAngle.current = getMouseAngle(e.clientX, e.clientY);
     
+    const allowed = onDragStart();
+    if (allowed === false) {
+      return;
+    }
     setIsDragging(true);
-    onDragStart();
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {

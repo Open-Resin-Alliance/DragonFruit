@@ -18,7 +18,7 @@ interface GizmoMoveProps {
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   handleScale?: number; // New prop for scaling handles
-  onDragStart: () => void;
+  onDragStart: () => boolean | void;
   onDrag: (delta: THREE.Vector3) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
@@ -111,9 +111,13 @@ export function GizmoMove({
     const initialPoint = getWorldPointFromMouse(e.clientX, e.clientY);
     if (!initialPoint) return;
     
+    const allowed = onDragStart();
+    if (allowed === false) {
+      return;
+    }
+
     setIsDragging(true);
     lastPointRef.current = initialPoint;
-    onDragStart();
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {

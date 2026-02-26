@@ -128,7 +128,29 @@ export function TransformGizmo({
     }
   };
 
-  const handleDragStart = (part: string, isUniform?: boolean) => {
+  const handleDragStart = (part: string, isUniform?: boolean): boolean => {
+    const axisFromPart = (part.endsWith('-x') ? 'x' : part.endsWith('-y') ? 'y' : 'z') as GizmoAxis;
+
+    if (part === 'center' && onMoveStart) {
+      const allowed = onMoveStart();
+      if (allowed === false) return false;
+    }
+
+    if (part.startsWith('axis-') && onMoveStart) {
+      const allowed = onMoveStart();
+      if (allowed === false) return false;
+    }
+
+    if (part.startsWith('ring-') && onRotateStart) {
+      const allowed = onRotateStart(axisFromPart);
+      if (allowed === false) return false;
+    }
+
+    if (part.startsWith('scale-') && onScaleStart) {
+      const allowed = onScaleStart(axisFromPart, Boolean(isUniform));
+      if (allowed === false) return false;
+    }
+
     setActivePart(part);
     setHoveredPart(null);
     
@@ -139,11 +161,8 @@ export function TransformGizmo({
     
     // Notify parent that dragging started (to disable OrbitControls)
     if (onDragStateChange) onDragStateChange(true);
-    
-    if (part === 'center' && onMoveStart) onMoveStart();
-    if (part.startsWith('axis-') && onMoveStart) onMoveStart();
-    if (part.startsWith('ring-') && onRotateStart) onRotateStart();
-    if (part.startsWith('scale-') && onScaleStart) onScaleStart();
+
+    return true;
   };
 
   const handleDragEnd = () => {

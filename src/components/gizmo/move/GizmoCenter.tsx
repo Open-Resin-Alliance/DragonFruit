@@ -14,7 +14,7 @@ interface GizmoCenterProps {
   isHidden?: boolean;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
-  onDragStart: () => void;
+  onDragStart: () => boolean | void;
   onDrag: (delta: THREE.Vector3) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
@@ -91,9 +91,13 @@ export function GizmoCenter({
     const initialPoint = getWorldPointFromMouse(e.clientX, e.clientY);
     if (!initialPoint) return;
     
+    const allowed = onDragStart();
+    if (allowed === false) {
+      return;
+    }
+
     setIsDragging(true);
     lastPointRef.current = initialPoint;
-    onDragStart();
   };
 
   const getWorldPointFromMouse = useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {

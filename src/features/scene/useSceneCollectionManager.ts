@@ -1565,6 +1565,57 @@ export function useSceneCollectionManager() {
     void deleteModels([id]);
   }, [deleteModels]);
 
+  const deleteSupportsForModels = useCallback((idsInput: string[], description?: string) => {
+    const ids = new Set(idsInput);
+    if (ids.size === 0) return 0;
+
+    const currentModels = modelsRef.current;
+    const existingModelIds = currentModels
+      .filter((model) => ids.has(model.id))
+      .map((model) => model.id);
+    if (existingModelIds.length === 0) return 0;
+
+    const supportStateBefore = getSnapshot();
+    const supportBraceStateBefore = getSupportBraceSnapshot();
+
+    const hasSupportsForModel = (modelId: string) => {
+      const supportIds = getSupportsForModel(supportStateBefore, modelId);
+      const hasMainSupports = supportIds.roots.length > 0
+        || supportIds.trunks.length > 0
+        || supportIds.branches.length > 0
+        || supportIds.braces.length > 0
+        || supportIds.leaves.length > 0
+        || supportIds.twigs.length > 0
+        || supportIds.sticks.length > 0;
+
+      if (hasMainSupports) return true;
+
+      return Object.values(supportBraceStateBefore.supportBraces)
+        .some((supportBrace) => supportBrace.modelId === modelId);
+    };
+
+    const targetIds = existingModelIds.filter((modelId) => hasSupportsForModel(modelId));
+    if (targetIds.length === 0) return 0;
+
+    const currentActiveModelId = activeModelIdRef.current;
+    const currentSelectedModelIds = selectedModelIdsRef.current;
+    const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });
+
+    let totalRemovedSupports = 0;
+    const supportState = getSnapshot();
+    targetIds.forEach((modelId) => {
+      totalRemovedSupports += deleteSupportsForModel(supportState, modelId);
+    });
+
+    const after = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds, { includeSupportState: true });
+    const defaultDescription = targetIds.length === 1
+      ? `Delete Supports for Model ${currentModels.find((m) => m.id === targetIds[0])?.name ?? targetIds[0]}`
+      : `Delete Supports for ${targetIds.length} Models`;
+
+    pushSceneSnapshotHistory(before, after, description ?? defaultDescription);
+    return totalRemovedSupports;
+  }, [pushSceneSnapshotHistory]);
+
   const copyModel = useCallback((id: string) => {
     const source = models.find((m) => m.id === id);
     if (!source) return false;
@@ -2540,6 +2591,7 @@ export function useSceneCollectionManager() {
     selectGroup,
     deleteModels,
     deleteModel,
+    deleteSupportsForModels,
     copyModel,
     copySelectedModels,
     cutModel,

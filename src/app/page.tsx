@@ -35,6 +35,7 @@ import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/Editor
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
+import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -99,6 +100,7 @@ import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelat
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
+import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -362,6 +364,13 @@ export default function Home() {
     scale: THREE.Vector3;
   } | null>(null);
   const [supportRenderRefreshNonce, setSupportRenderRefreshNonce] = React.useState(0);
+  const [gizmoResetNonce, setGizmoResetNonce] = React.useState(0);
+  const [pendingDestructiveTransform, setPendingDestructiveTransform] = React.useState<{
+    modelId: string;
+    modelName: string;
+    supportCount: number;
+    operationLabel: string;
+  } | null>(null);
   const dragDepthRef = React.useRef(0);
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
@@ -667,6 +676,59 @@ export default function Home() {
       hoveredIdForVisual: supportRendererDebug?.hoveredIdForVisual ?? null,
     };
   }, [bracePlacementSnapshot, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, supportStateSnapshot.hoveredCategory, supportStateSnapshot.hoveredId, transformDebugTick]);
+
+  const getSupportPrimitiveCountForModel = React.useCallback((modelId: string | null | undefined) => {
+    if (!modelId) return 0;
+
+    const supportIds = getSupportsForModel(supportStateSnapshot, modelId);
+    const supportBraceCount = Object.values(supportBraceStateSnapshot.supportBraces)
+      .filter((supportBrace) => supportBrace.modelId === modelId)
+      .length;
+
+    return supportIds.roots.length
+      + supportIds.trunks.length
+      + supportIds.branches.length
+      + supportIds.braces.length
+      + supportIds.leaves.length
+      + supportIds.twigs.length
+      + supportIds.sticks.length
+      + supportBraceCount;
+  }, [supportBraceStateSnapshot.supportBraces, supportStateSnapshot]);
+
+  const requestDestructiveTransformSupportDeletion = React.useCallback((operationLabel: string) => {
+    if (scene.mode !== 'prepare') return true;
+    if (!scene.activeModelId) return true;
+    if (pendingDestructiveTransform) return false;
+
+    const supportCount = getSupportPrimitiveCountForModel(scene.activeModelId);
+    if (supportCount <= 0) return true;
+
+    setPendingDestructiveTransform({
+      modelId: scene.activeModelId,
+      modelName: (scene.activeModel?.name ?? scene.activeModelId).trim(),
+      supportCount,
+      operationLabel,
+    });
+    return false;
+  }, [getSupportPrimitiveCountForModel, pendingDestructiveTransform, scene]);
+
+  const handleConfirmDestructiveTransform = React.useCallback(() => {
+    const pending = pendingDestructiveTransform;
+    if (!pending) return;
+
+    scene.deleteSupportsForModels(
+      [pending.modelId],
+      `Delete Supports Before ${pending.operationLabel} ${pending.modelName}`,
+    );
+
+    setSupportRenderRefreshNonce((value) => value + 1);
+    setGizmoResetNonce((value) => value + 1);
+    setPendingDestructiveTransform(null);
+  }, [pendingDestructiveTransform, scene]);
+
+  const handleCancelDestructiveTransform = React.useCallback(() => {
+    setPendingDestructiveTransform(null);
+  }, []);
 
   React.useEffect(() => {
     if (arrangePrecisionMode !== 'high_precision') return;
@@ -3117,7 +3179,10 @@ export default function Home() {
     skipNextTransformEndCommitRef.current = false;
   }, [isFiniteTransform, scene, transformMgr.transformHook]);
 
-  const handleTransformStart = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
+  const handleTransformStart = React.useCallback((
+    operation: 'move' | 'rotate' | 'scale',
+    details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
+  ) => {
     if (typeof window !== 'undefined' && supportDragResetRafRef.current !== null) {
       window.cancelAnimationFrame(supportDragResetRafRef.current);
       supportDragResetRafRef.current = null;
@@ -3125,6 +3190,16 @@ export default function Home() {
     if (typeof window !== 'undefined' && supportDragResetSecondRafRef.current !== null) {
       window.cancelAnimationFrame(supportDragResetSecondRafRef.current);
       supportDragResetSecondRafRef.current = null;
+    }
+
+    if (operation === 'rotate') {
+      const proceed = requestDestructiveTransformSupportDeletion('Rotate XYZ');
+      if (!proceed) return false;
+    }
+
+    if (operation === 'scale') {
+      const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
+      if (!proceed) return false;
     }
 
     if (!scene.activeModelId || !scene.activeModel) return;
@@ -3147,7 +3222,8 @@ export default function Home() {
     }
 
     transformMgr.setIsTransforming(true);
-  }, [scene.activeModel, scene.activeModelId, transformMgr]);
+    return true;
+  }, [requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, transformMgr]);
 
   React.useEffect(() => {
     return () => {
@@ -3771,11 +3847,37 @@ export default function Home() {
                 onCenter={transformMgr.transformHook.centerXY}
                 onPlatform={transformMgr.transformHook.setPlatformZ}
                 rotation={transformMgr.transform.rotation}
-                onRotationChange={transformMgr.transformHook.setRotation}
+                onRotationChange={(x, y, z) => {
+                  const current = transformMgr.transform.rotation;
+                  const EPS = 1e-6;
+                  const hasDestructiveRotate = Math.abs(x - current.x) > EPS
+                    || Math.abs(y - current.y) > EPS
+                    || Math.abs(z - current.z) > EPS;
+
+                  if (hasDestructiveRotate) {
+                    const proceed = requestDestructiveTransformSupportDeletion('Rotate XYZ');
+                    if (!proceed) return;
+                  }
+
+                  transformMgr.transformHook.setRotation(x, y, z);
+                }}
                 onResetRotation={transformMgr.transformHook.resetRotation}
                 onRotationComplete={handleRotationComplete}
                 scale={transformMgr.transform.scale}
-                onScaleChange={transformMgr.transformHook.setScale}
+                onScaleChange={(x, y, z) => {
+                  const current = transformMgr.transform.scale;
+                  const EPS = 1e-6;
+                  const hasDestructiveScale = Math.abs(x - current.x) > EPS
+                    || Math.abs(y - current.y) > EPS
+                    || Math.abs(z - current.z) > EPS;
+
+                  if (hasDestructiveScale) {
+                    const proceed = requestDestructiveTransformSupportDeletion('Scale XYZ');
+                    if (!proceed) return;
+                  }
+
+                  transformMgr.transformHook.setScale(x, y, z);
+                }}
                 onResetScale={transformMgr.transformHook.resetScale}
                 modelBBox={scene.geom.bbox}
                 autoLift={transformMgr.autoLift}
@@ -4346,6 +4448,7 @@ export default function Home() {
                 : duplicateSourcePreviewTransform
             }
             supportRenderRefreshNonce={supportRenderRefreshNonce}
+            gizmoResetNonce={gizmoResetNonce}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
@@ -4463,6 +4566,15 @@ export default function Home() {
         isOpen={supportsInfoModelId !== null}
         onClose={() => setSupportsInfoModelId(null)}
         model={scene.models.find((m) => m.id === supportsInfoModelId) ?? null}
+      />
+
+      <DestructiveTransformModal
+        isOpen={pendingDestructiveTransform !== null}
+        modelName={pendingDestructiveTransform?.modelName ?? null}
+        supportCount={pendingDestructiveTransform?.supportCount ?? 0}
+        operationLabel={pendingDestructiveTransform?.operationLabel ?? 'Transform'}
+        onCancel={handleCancelDestructiveTransform}
+        onConfirm={handleConfirmDestructiveTransform}
       />
 
       {showArrangeBlockingOverlay && (

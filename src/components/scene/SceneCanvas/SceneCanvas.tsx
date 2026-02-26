@@ -803,6 +803,7 @@ export function SceneCanvas({
   showClassification,
   view3dSettings,
   supportRenderRefreshNonce = 0,
+  gizmoResetNonce = 0,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -843,7 +844,10 @@ export function SceneCanvas({
   transformMode?: TransformMode;
   transform?: ModelTransform;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
-  onTransformStart?: (operation: 'move' | 'rotate' | 'scale') => void;
+  onTransformStart?: (
+    operation: 'move' | 'rotate' | 'scale',
+    details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
+  ) => boolean | void;
   onGizmoTransformCommit?: (payload: {
     modelId: string;
     operation: 'move' | 'rotate' | 'scale';
@@ -928,6 +932,7 @@ export function SceneCanvas({
   showClassification?: boolean;
   view3dSettings?: View3DSettings;
   supportRenderRefreshNonce?: number;
+  gizmoResetNonce?: number;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -4470,6 +4475,7 @@ export function SceneCanvas({
               {/* Gizmo attached to active model */}
               {mode === 'prepare' && transformMode === 'transform' && activeModelId && (
                 <UnifiedGizmo
+                  key={`main-gizmo-${gizmoResetNonce}`}
                   meshRef={(isMultiGizmoSelection ? multiGizmoAnchorRef : activeGroupRef) as React.RefObject<THREE.Group | THREE.Mesh | null>}
                   followMeshRef
                   position={[
@@ -4508,10 +4514,11 @@ export function SceneCanvas({
                       }
                     }
                   }}
-                  onMoveStart={() => {
+                    onMoveStart={() => {
                     stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
-                    onTransformStart?.('move');
+                      const shouldProceed = onTransformStart?.('move');
+                      if (shouldProceed === false) return false;
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
                       const idsForCage = isMultiGizmoSelection
@@ -4562,6 +4569,7 @@ export function SceneCanvas({
                         setGizmoGroupStartSnapshot(null);
                       }
                     }
+                      return true;
                   }}
                   onMoveEnd={() => {
                     markGizmoDragEnded();
@@ -4665,10 +4673,11 @@ export function SceneCanvas({
                       }
                     }
                   }}
-                  onRotateStart={() => {
+                  onRotateStart={(axis) => {
                     stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
-                    onTransformStart?.('rotate');
+                    const shouldProceed = onTransformStart?.('rotate', { axis });
+                    if (shouldProceed === false) return false;
                     clearDragCornerCageBaseData();
                     setGizmoGroupStartSnapshot(null);
                     if (activeModelId && activeModel) {
@@ -4688,6 +4697,7 @@ export function SceneCanvas({
                         },
                       };
                     }
+                    return true;
                   }}
                   onRotateEnd={() => {
                     markGizmoDragEnded();
@@ -4722,10 +4732,12 @@ export function SceneCanvas({
                       scheduleSupportDragGroupReset();
                     }
                   }}
-                  onScaleStart={() => {
+                  onScaleStart={(axis, isUniform) => {
                     stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
-                    onTransformStart?.('scale');
+                    const startAxis = isUniform ? 'uniform' : axis;
+                    const shouldProceed = onTransformStart?.('scale', { axis: startAxis, isUniform });
+                    if (shouldProceed === false) return false;
                     if (activeGroupRef.current) {
                       initialScaleRef.current.copy(activeGroupRef.current.scale);
                     }
@@ -4779,6 +4791,7 @@ export function SceneCanvas({
                         setGizmoGroupStartSnapshot(null);
                       }
                     }
+                    return true;
                   }}
                   onScale={(axis, factor) => {
                     if (activeGroupRef.current) {

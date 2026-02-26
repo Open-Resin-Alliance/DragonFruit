@@ -15,7 +15,7 @@ interface GizmoScaleProps {
   isDimmed?: boolean;
   isHidden?: boolean;
   gizmoPosition: THREE.Vector3;
-  onDragStart: (isUniform: boolean) => void;
+  onDragStart: (isUniform: boolean) => boolean | void;
   onDrag: (factor: number, isUniform: boolean) => void;
   onDragEnd: () => void;
   onPointerEnter: () => void;
@@ -185,8 +185,11 @@ export function GizmoScale({
     const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
     startDistance.current = distance;
     
+    const allowed = onDragStart(isUniform);
+    if (allowed === false) {
+      return;
+    }
     setIsDragging(true);
-    onDragStart(isUniform);
   };
 
   const getScaleFactor = useCallback((clientX: number, clientY: number, gizmoCenterX: number, gizmoCenterY: number): number => {
