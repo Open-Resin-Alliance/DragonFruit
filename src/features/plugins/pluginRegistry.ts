@@ -43,6 +43,12 @@ function sanitizeNumber(value: unknown, fallback: number, min: number, max: numb
   return Math.min(max, Math.max(min, n));
 }
 
+function sanitizeOptionalPositiveNumber(value: unknown): number | undefined {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
+}
+
 function sanitizeOutputFormat(value: unknown): PrinterPreset['display']['outputFormat'] {
   return value === '.nanodlp' || value === '.goo' || value === '.lumen'
     ? value
@@ -61,6 +67,48 @@ function sanitizeImageAssetPath(value: unknown): string | undefined {
   return undefined;
 }
 
+function sanitizePlatformBadge(input: unknown): PrinterPreset['platformBadge'] {
+  const value = (input ?? {}) as Record<string, unknown>;
+  const text = boundedString(value.text, 48);
+  if (!text) return undefined;
+  const color = boundedString(value.color, 24);
+  return {
+    text,
+    color: color || undefined,
+  };
+}
+
+function sanitizePixelSize(input: unknown): PrinterPreset['pixelSize'] {
+  const value = (input ?? {}) as Record<string, unknown>;
+  const x = sanitizeOptionalPositiveNumber(value.x);
+  const y = sanitizeOptionalPositiveNumber(value.y);
+  if (x == null || y == null) return undefined;
+  return { x, y };
+}
+
+function sanitizeBitDepth(input: unknown): PrinterPreset['bitDepth'] {
+  const value = (input ?? {}) as Record<string, unknown>;
+  const bits = sanitizeOptionalPositiveNumber(value.bits);
+  if (bits == null) return undefined;
+  const description = boundedString(value.description, 240);
+  return {
+    bits: Math.round(bits),
+    description: description || undefined,
+  };
+}
+
+function resolveBuildDimensionMm(
+  explicitValue: unknown,
+  resolutionPx: number,
+  pixelSizeUm: number | undefined,
+  fallbackMm: number,
+): number {
+  const explicit = sanitizeOptionalPositiveNumber(explicitValue);
+  if (explicit != null) return explicit;
+  if (pixelSizeUm != null) return (resolutionPx * pixelSizeUm) / 1000;
+  return fallbackMm;
+}
+
 function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
   const value = (input ?? {}) as Record<string, unknown>;
 
@@ -69,20 +117,27 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
   const name = boundedString(value.name, 120);
   if (!presetId || !manufacturer || !name) return null;
 
+  const resolutionX = Math.round(sanitizeNumber((value as any).display?.resolutionX, 2560, 1, 200000));
+  const resolutionY = Math.round(sanitizeNumber((value as any).display?.resolutionY, 1620, 1, 200000));
+  const pixelSize = sanitizePixelSize((value as any).pixelSize);
+
   return {
     presetId,
     manufacturer,
     name,
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
     networkSupport: value.networkSupport === 'nanodlp' ? 'nanodlp' : undefined,
+    platformBadge: sanitizePlatformBadge((value as any).platformBadge),
+    pixelSize,
+    bitDepth: sanitizeBitDepth((value as any).bitDepth),
     buildVolumeMm: {
-      width: sanitizeNumber((value as any).buildVolumeMm?.width, 143, 1, 10000),
-      depth: sanitizeNumber((value as any).buildVolumeMm?.depth, 89, 1, 10000),
+      width: resolveBuildDimensionMm((value as any).buildVolumeMm?.width, resolutionX, pixelSize?.x, 143),
+      depth: resolveBuildDimensionMm((value as any).buildVolumeMm?.depth, resolutionY, pixelSize?.y, 89),
       height: sanitizeNumber((value as any).buildVolumeMm?.height, 175, 1, 10000),
     },
     display: {
-      resolutionX: Math.round(sanitizeNumber((value as any).display?.resolutionX, 2560, 1, 200000)),
-      resolutionY: Math.round(sanitizeNumber((value as any).display?.resolutionY, 1620, 1, 200000)),
+      resolutionX,
+      resolutionY,
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
     },
   };

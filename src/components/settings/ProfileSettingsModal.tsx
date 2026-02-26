@@ -1294,6 +1294,18 @@ export function ProfileSettingsModal({
                   const isGenericPrinter = (printer.manufacturer ?? '').toLowerCase() === 'generic'
                     || printer.name.toLowerCase().includes('generic');
                   const isNetworkConnected = printer.networkConnection?.connected === true;
+                  const platformBadge = printer.platformBadge?.text?.trim()
+                    ? printer.platformBadge
+                    : undefined;
+                  const cardBadgeText = printer.isCustom
+                    ? 'CUSTOM'
+                    : platformBadge?.text;
+                  const bitDepthBits = Number.isFinite(Number(printer.bitDepth?.bits))
+                    ? Math.round(Number(printer.bitDepth?.bits))
+                    : null;
+                  const bitDepthLabel = Number.isFinite(Number(printer.bitDepth?.bits))
+                    ? `${Math.round(Number(printer.bitDepth?.bits))} Bit`
+                    : null;
                   const cardWidth = isEditingPrinter ? 'w-[198px]' : 'w-[236px]';
                   const imageHeight = isEditingPrinter ? 'h-[124px]' : 'h-[148px]';
 
@@ -1314,31 +1326,6 @@ export function ProfileSettingsModal({
                           }}
                     >
                       <div className={`${imageHeight} rounded-lg border overflow-hidden flex items-center justify-center p-2 relative`} style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
-                        {isNetworkConnected && (
-                          <span
-                            className="absolute top-1 left-1 inline-flex h-5 w-5 items-center justify-center rounded-full border"
-                            title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
-                            style={{
-                              borderColor: 'color-mix(in srgb, #22c55e, white 10%)',
-                              background: 'color-mix(in srgb, #22c55e, #0f172a 38%)',
-                              color: '#dcfce7',
-                            }}
-                          >
-                            <Wifi className="w-3 h-3" />
-                          </span>
-                        )}
-                        {printer.isCustom && (
-                          <span
-                            className="absolute top-1 right-1 text-[9px] font-bold px-1.5 py-0.5 rounded"
-                            style={{
-                              background: '#dc2626',
-                              color: '#ffffff',
-                              letterSpacing: '0.04em',
-                            }}
-                          >
-                            CUSTOM
-                          </span>
-                        )}
                         {printer.imageDataUrl ? (
                           <AutoTrimmedImage src={printer.imageDataUrl} alt={printer.name} className="h-full w-full object-contain" />
                         ) : (
@@ -1356,9 +1343,63 @@ export function ProfileSettingsModal({
                             )}
                           </div>
                         )}
+                        {isNetworkConnected && (
+                          <span
+                            className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border"
+                            title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
+                            style={{
+                              borderColor: 'color-mix(in srgb, #22c55e, white 10%)',
+                              background: 'color-mix(in srgb, #22c55e, #0f172a 38%)',
+                              color: '#dcfce7',
+                            }}
+                          >
+                            <Wifi className="w-3 h-3" />
+                          </span>
+                        )}
+                        {cardBadgeText && (
+                          <span
+                            className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
+                            style={printer.isCustom
+                              ? {
+                                  background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
+                                  color: '#ffffff',
+                                  letterSpacing: '0.04em',
+                                }
+                              : {
+                                  background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, black 18%))`,
+                                  color: '#ffffff',
+                                  letterSpacing: '0.04em',
+                                }}
+                          >
+                            <span className="relative top-[0.5px]">{cardBadgeText}</span>
+                          </span>
+                        )}
                       </div>
-                      <div className="mt-2.5 text-[12px] leading-snug font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                        {printer.name}
+                      <div className="mt-2.5 flex items-center gap-1.5">
+                        <div className="text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
+                          {printer.name}
+                        </div>
+                        {bitDepthLabel && (
+                          <span
+                            className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
+                            style={{
+                              borderColor: bitDepthBits === 8
+                                ? 'color-mix(in srgb, #22c55e, white 22%)'
+                                : bitDepthBits === 3
+                                  ? 'color-mix(in srgb, #ef4444, white 18%)'
+                                  : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                              color: '#f8fafc',
+                              background: bitDepthBits === 8
+                                ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
+                                : bitDepthBits === 3
+                                  ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                                  : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+                            }}
+                            title={printer.bitDepth?.description || `${bitDepthLabel} display`}
+                          >
+                            <span className="relative top-[0.5px]">{bitDepthLabel}</span>
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
                         {printer.manufacturer || 'Generic'}
@@ -1956,6 +1997,15 @@ export function ProfileSettingsModal({
                       const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
                       const isGenericPreset = preset.manufacturer.toLowerCase() === 'generic'
                         || preset.name.toLowerCase().includes('generic');
+                      const platformBadge = preset.platformBadge?.text?.trim()
+                        ? preset.platformBadge
+                        : undefined;
+                      const bitDepthBits = Number.isFinite(Number(preset.bitDepth?.bits))
+                        ? Math.round(Number(preset.bitDepth?.bits))
+                        : null;
+                      const bitDepthLabel = Number.isFinite(Number(preset.bitDepth?.bits))
+                        ? `${Math.round(Number(preset.bitDepth?.bits))} Bit`
+                        : null;
 
                       return (
                         <button
@@ -1973,7 +2023,7 @@ export function ProfileSettingsModal({
                               : 'var(--surface-1)',
                           }}
                         >
-                          <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
+                          <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
                             {preset.imageAssetPath ? (
                               <AutoTrimmedImage src={preset.imageAssetPath} alt={preset.name} className="h-full w-full object-contain" />
                             ) : (
@@ -1981,14 +2031,49 @@ export function ProfileSettingsModal({
                                 ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
                                 : <ImagePlus className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
                             )}
+                            {platformBadge && (
+                              <span
+                                className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
+                                style={{
+                                  background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, black 18%))`,
+                                  color: '#ffffff',
+                                  letterSpacing: '0.04em',
+                                }}
+                              >
+                                <span className="relative top-[0.5px]">{platformBadge.text}</span>
+                              </span>
+                            )}
+                            {bitDepthLabel && (
+                              <span
+                                className="pointer-events-none absolute bottom-1 right-1 z-10 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
+                                style={{
+                                  borderColor: bitDepthBits === 8
+                                    ? 'color-mix(in srgb, #22c55e, white 22%)'
+                                    : bitDepthBits === 3
+                                      ? 'color-mix(in srgb, #ef4444, white 18%)'
+                                      : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                                  color: '#f8fafc',
+                                  background: bitDepthBits === 8
+                                    ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
+                                    : bitDepthBits === 3
+                                      ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                                      : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+                                }}
+                                title={preset.bitDepth?.description || `${bitDepthLabel} display`}
+                              >
+                                {bitDepthLabel}
+                              </span>
+                            )}
                           </div>
                           <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
                             <span className="truncate">{preset.name}</span>
-                            {isAlreadyAdded && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
-                                Added
-                              </span>
-                            )}
+                            <span className="shrink-0 inline-flex items-center gap-1">
+                              {isAlreadyAdded && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
+                                  Added
+                                </span>
+                              )}
+                            </span>
                           </div>
                           <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                             {preset.manufacturer}
