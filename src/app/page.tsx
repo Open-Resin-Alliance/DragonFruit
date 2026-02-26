@@ -939,6 +939,31 @@ export default function Home() {
     return printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null;
   }, [printingLayerPreviewUrls, printingSelectedLayer]);
 
+  const printingPreviewTargetResolution = React.useMemo(() => {
+    const printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
+    const printerHeight = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionY ?? 0));
+    const pixelSizeX = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.x ?? 1));
+    const pixelSizeY = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.y ?? 1));
+    const isNanodlpArtifact = (printingArtifact?.outputName ?? '').toLowerCase().endsWith('.nanodlp');
+
+    if (!isNanodlpArtifact || printerWidth <= 0 || printerHeight <= 0) {
+      return null;
+    }
+
+    return {
+      widthPx: printerWidth,
+      heightPx: printerHeight,
+      viewportWidth: printerWidth * pixelSizeX,
+      viewportHeight: printerHeight * pixelSizeY,
+    };
+  }, [
+    activePrinterProfile?.display?.resolutionX,
+    activePrinterProfile?.display?.resolutionY,
+    activePrinterProfile?.pixelSize?.x,
+    activePrinterProfile?.pixelSize?.y,
+    printingArtifact?.outputName,
+  ]);
+
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
 
   const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
@@ -5474,11 +5499,32 @@ export default function Home() {
                 style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
               >
                 {selectedPrintingLayerPreviewUrl ? (
-                  <img
-                    src={selectedPrintingLayerPreviewUrl}
-                    alt={`Layer ${printingSelectedLayer} preview`}
-                    className="block h-full w-full rounded object-contain"
-                  />
+                  printingPreviewTargetResolution ? (
+                    <svg
+                      viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
+                      preserveAspectRatio="xMidYMid meet"
+                      className="block w-full h-full max-w-full max-h-full rounded"
+                      role="img"
+                      aria-label={`Layer ${printingSelectedLayer} preview`}
+                    >
+                      <image
+                        href={selectedPrintingLayerPreviewUrl}
+                        x={0}
+                        y={0}
+                        width={printingPreviewTargetResolution.viewportWidth}
+                        height={printingPreviewTargetResolution.viewportHeight}
+                        preserveAspectRatio="none"
+                        style={{ imageRendering: 'pixelated' }}
+                      />
+                    </svg>
+                  ) : (
+                    <img
+                      src={selectedPrintingLayerPreviewUrl}
+                      alt={`Layer ${printingSelectedLayer} preview`}
+                      className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                  )
                 ) : (
                   <div
                     className="h-full w-full rounded border border-dashed flex items-center justify-center text-xs"
