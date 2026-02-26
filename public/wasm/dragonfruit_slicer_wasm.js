@@ -100,6 +100,105 @@ export function encode_slice_job(job_json) {
     return v2;
 }
 
+/**
+ * @param {string} job_json
+ * @returns {Uint8Array}
+ */
+export function slice_solid_and_encode_job(job_json) {
+    const ptr0 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.slice_solid_and_encode_job(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+let cachedFloat32ArrayMemory0 = null;
+
+function getFloat32ArrayMemory0() {
+    if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
+        cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
+    }
+    return cachedFloat32ArrayMemory0;
+}
+
+function passArrayF32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getFloat32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+/**
+ * @param {string} output_format
+ * @param {number} source_width_px
+ * @param {number} source_height_px
+ * @param {number} width_px
+ * @param {number} height_px
+ * @param {string} x_packing_mode
+ * @param {number} build_width_mm
+ * @param {number} build_depth_mm
+ * @param {number} layer_height_mm
+ * @param {number} total_layers
+ * @param {Float32Array} triangles_xyz
+ * @param {string} metadata_json
+ * @returns {Uint8Array}
+ */
+export function slice_solid_and_encode_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json) {
+    const ptr0 = passStringToWasm0(output_format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(x_packing_mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.slice_solid_and_encode_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr2, len2, ptr3, len3);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v5;
+}
+
+/**
+ * @param {string} output_format
+ * @param {number} source_width_px
+ * @param {number} source_height_px
+ * @param {number} width_px
+ * @param {number} height_px
+ * @param {string} x_packing_mode
+ * @param {number} build_width_mm
+ * @param {number} build_depth_mm
+ * @param {number} layer_height_mm
+ * @param {number} total_layers
+ * @param {Float32Array} triangles_xyz
+ * @param {string} metadata_json
+ * @param {number} start_layer
+ * @param {number} layer_count
+ * @returns {Uint8Array}
+ */
+export function slice_solid_layers_chunk_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json, start_layer, layer_count) {
+    const ptr0 = passStringToWasm0(output_format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(x_packing_mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.slice_solid_layers_chunk_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr2, len2, ptr3, len3, start_layer, layer_count);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v5;
+}
+
 async function __wbg_load(module, imports) {
     if (typeof Response === 'function' && module instanceof Response) {
         if (typeof WebAssembly.instantiateStreaming === 'function') {
@@ -159,6 +258,7 @@ function __wbg_init_memory(imports, memory) {
 function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     __wbg_init.__wbindgen_wasm_module = module;
+    cachedFloat32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
 
 

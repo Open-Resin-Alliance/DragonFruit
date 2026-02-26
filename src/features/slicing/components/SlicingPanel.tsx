@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Cpu, Gauge, Layers3, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
@@ -9,13 +9,14 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
-import { runSliceExportOrchestrator } from '@/features/slicing/sliceExportOrchestrator';
+import { runSliceExportOrchestrator, type SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { isSlicerWasmAvailable } from '@/features/slicing/wasm/slicerWasmBridge';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 
 interface SlicingPanelProps {
   models: LoadedModel[];
   activeModel: LoadedModel | null;
+  captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
 }
 
 type LifetimeTelemetry = {
@@ -26,6 +27,8 @@ type LifetimeTelemetry = {
   lastRasterMs: number | null;
   lastBackend: 'wasm-nanodlp' | 'js-raster-zip' | null;
 };
+
+type SliceBenchmarkSnapshot = SliceExportResult['benchmark'];
 
 function normalizeExportBaseName(rawName: string | null | undefined): string {
   const trimmed = (rawName ?? '').trim();
@@ -42,15 +45,30 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
-export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
+function formatLayerRate(layersPerSecond: number | null): string {
+  if (layersPerSecond == null || !Number.isFinite(layersPerSecond)) return '—';
+  if (layersPerSecond >= 100) return `${Math.round(layersPerSecond)} layers/s`;
+  return `${layersPerSecond.toFixed(1)} layers/s`;
+}
+
+export function SlicingPanel({ models, activeModel, captureSceneThumbnailPng }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isSlicingZip, setIsSlicingZip] = useState(false);
   const [sliceStatus, setSliceStatus] = useState('Idle');
   const [wasmStatus, setWasmStatus] = useState<'n/a' | 'checking' | 'available' | 'missing'>('n/a');
   const [currentPhase, setCurrentPhase] = useState('Idle');
+  const [progressDone, setProgressDone] = useState(0);
+  const [progressTotal, setProgressTotal] = useState(1);
   const [currentElapsedMs, setCurrentElapsedMs] = useState(0);
   const [currentRasterMs, setCurrentRasterMs] = useState(0);
+  const [showSlicingModal, setShowSlicingModal] = useState(false);
+  const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed'>('running');
+  const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
+  const [previewTotalLayers, setPreviewTotalLayers] = useState(0);
+  const [previewSelectedLayer, setPreviewSelectedLayer] = useState(1);
+  const [lastBenchmark, setLastBenchmark] = useState<SliceBenchmarkSnapshot | null>(null);
+  const [lastWasmError, setLastWasmError] = useState<string | null>(null);
   const [lifetimeTelemetry, setLifetimeTelemetry] = useState<LifetimeTelemetry>({
     runCount: 0,
     totalElapsedMs: 0,
@@ -73,10 +91,53 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
     });
   }, [activeMaterialProfile, activePrinterProfile]);
 
+  const pipelineContainerBackendLabel = useMemo(() => {
+    if (!selectedFormat) return '—';
+    if (selectedFormat.outputFormat !== '.nanodlp') return 'JS prototype ZIP writer';
+    if (wasmStatus === 'available') return 'WASM NanoDLP container encoder';
+    if (wasmStatus === 'checking') return 'Checking WASM availability…';
+    return 'JS fallback ZIP writer';
+  }, [selectedFormat, wasmStatus]);
+
+  const pipelineRasterizerLabel = useMemo(() => {
+    if (!selectedFormat) return '—';
+    if (selectedFormat.outputFormat === '.nanodlp' && wasmStatus === 'available') {
+      return 'WASM solid cross-section slicer';
+    }
+    return 'JS Canvas triangle rasterizer';
+  }, [selectedFormat, wasmStatus]);
+
+  const backendNote = useMemo(() => {
+    if (lifetimeTelemetry.lastBackend === 'wasm-nanodlp') {
+      return 'NanoDLP slicing + container packaging are running in WASM.';
+    }
+    return 'Fallback ZIP uses JS solid cross-section slicing (not shell projection).';
+  }, [lifetimeTelemetry.lastBackend]);
+
+  const progressPercent = useMemo(() => {
+    const total = Math.max(1, progressTotal);
+    return Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
+  }, [progressDone, progressTotal]);
+
   useEffect(() => {
     if (!activeModel) return;
     setFilename(normalizeExportBaseName(activeModel.name));
   }, [activeModel]);
+
+  const clearLayerPreviewUrls = useCallback(() => {
+    setLayerPreviewUrls((previous) => {
+      for (const url of previous) {
+        if (url) URL.revokeObjectURL(url);
+      }
+      return [];
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearLayerPreviewUrls();
+    };
+  }, [clearLayerPreviewUrls]);
 
   useEffect(() => {
     if (!isSlicingZip) {
@@ -137,22 +198,41 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
     setIsSlicingZip(true);
     setCurrentPhase('Preparing slicer…');
     setSliceStatus('Preparing slicer…');
+    setProgressDone(0);
+    setProgressTotal(1);
     setCurrentElapsedMs(0);
     setCurrentRasterMs(0);
+    setShowSlicingModal(true);
+    setSlicingModalStage('running');
+    clearLayerPreviewUrls();
+    setPreviewTotalLayers(0);
+    setPreviewSelectedLayer(1);
 
     const runStartMs = performance.now();
     let rasterStartedMs: number | null = null;
     let rasterAccumulatedMs = 0;
+    let exportThumbnailPng: Uint8Array | null = null;
 
     try {
+      if (captureSceneThumbnailPng) {
+        try {
+          exportThumbnailPng = await captureSceneThumbnailPng();
+        } catch (thumbnailError) {
+          console.warn('[Slicing] Scene thumbnail capture failed, continuing with layer preview fallback.', thumbnailError);
+        }
+      }
+
       const result = await runSliceExportOrchestrator({
         models: visibleModels,
         printerProfile: activePrinterProfile,
         materialProfile: activeMaterialProfile,
         filenameBase: filename || activePrinterProfile.name || 'slice_export',
+        exportThumbnailPng,
         onProgress: (done, total, phase) => {
           setCurrentPhase(phase);
           setSliceStatus(`${phase} ${done}/${total}`);
+          setProgressDone(done);
+          setProgressTotal(Math.max(1, total));
 
           const phaseLower = phase.toLowerCase();
           const nowMs = performance.now();
@@ -169,6 +249,29 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
             setCurrentRasterMs(rasterAccumulatedMs);
           }
         },
+        onLayerPreview: (layerIndex, totalLayers, pngBytes) => {
+          const previewBuffer = Uint8Array.from(pngBytes).buffer;
+          const blob = new Blob([previewBuffer], { type: 'image/png' });
+          const nextUrl = URL.createObjectURL(blob);
+          setLayerPreviewUrls((previous) => {
+            const next = previous.slice();
+            const requiredLength = Math.max(totalLayers, layerIndex + 1);
+            if (next.length < requiredLength) {
+              next.length = requiredLength;
+            }
+            const prevUrl = next[layerIndex];
+            if (prevUrl) URL.revokeObjectURL(prevUrl);
+            next[layerIndex] = nextUrl;
+            return next;
+          });
+          setPreviewTotalLayers(totalLayers);
+          setPreviewSelectedLayer((previousLayer) => {
+            if (!Number.isFinite(previousLayer) || previousLayer <= 0) {
+              return Math.max(1, Math.min(totalLayers, layerIndex + 1));
+            }
+            return Math.max(1, Math.min(totalLayers, previousLayer));
+          });
+        },
       });
 
       const runEndMs = performance.now();
@@ -177,14 +280,22 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
       }
 
       const elapsedMs = runEndMs - runStartMs;
-      setCurrentElapsedMs(elapsedMs);
-      setCurrentRasterMs(rasterAccumulatedMs);
+      const benchmarkTotalMs = result.benchmark.totalElapsedMs;
+      const benchmarkCoreMs = result.benchmark.coreSlicingMs;
+      setCurrentElapsedMs(benchmarkTotalMs);
+      setCurrentRasterMs(benchmarkCoreMs ?? rasterAccumulatedMs);
+      setLastBenchmark(result.benchmark);
+      setLastWasmError(result.wasmError);
+
+      const effectiveElapsedMs = benchmarkTotalMs || elapsedMs;
+      const effectiveCoreMs = benchmarkCoreMs ?? rasterAccumulatedMs;
+
       setLifetimeTelemetry((prev) => ({
         runCount: prev.runCount + 1,
-        totalElapsedMs: prev.totalElapsedMs + elapsedMs,
-        totalRasterMs: prev.totalRasterMs + rasterAccumulatedMs,
-        lastElapsedMs: elapsedMs,
-        lastRasterMs: rasterAccumulatedMs,
+        totalElapsedMs: prev.totalElapsedMs + effectiveElapsedMs,
+        totalRasterMs: prev.totalRasterMs + effectiveCoreMs,
+        lastElapsedMs: effectiveElapsedMs,
+        lastRasterMs: effectiveCoreMs,
         lastBackend: result.backend,
       }));
 
@@ -192,21 +303,35 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
         setSliceStatus('Generated .nanodlp via WASM encoder.');
       } else if (result.outputFormat === '.nanodlp') {
         setSliceStatus(result.wasmAvailable
-          ? 'WASM failed, used fallback ZIP prototype.'
-          : 'WASM not found, used fallback ZIP prototype.');
+          ? `WASM failed (${result.wasmError ?? 'unknown error'}), used fallback solid ZIP.`
+          : 'WASM not found, used fallback solid ZIP.');
       } else {
         setSliceStatus('Slice ZIP generated.');
       }
+      setSlicingModalStage('finished');
     } catch (error) {
       console.error('Slice ZIP export failed:', error);
       const message = error instanceof Error ? error.message : 'Unknown slicing error.';
       setCurrentPhase('Failed');
       setSliceStatus(`Failed: ${message}`);
+      setSlicingModalStage('failed');
       alert(`Slice ZIP export failed: ${message}`);
     } finally {
       setIsSlicingZip(false);
     }
   };
+
+  const selectedLayerPreviewUrl = useMemo(() => {
+    if (previewSelectedLayer < 1) return null;
+    return layerPreviewUrls[previewSelectedLayer - 1] ?? null;
+  }, [layerPreviewUrls, previewSelectedLayer]);
+
+  const handleCloseSlicingModal = useCallback(() => {
+    setShowSlicingModal(false);
+    clearLayerPreviewUrls();
+    setPreviewTotalLayers(0);
+    setPreviewSelectedLayer(1);
+  }, [clearLayerPreviewUrls]);
 
   if (models.length === 0) {
     return (
@@ -331,6 +456,15 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Backend: {lifetimeTelemetry.lastBackend ?? '—'}
             </div>
+            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Rasterizer: {pipelineRasterizerLabel}
+            </div>
+            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Container: {pipelineContainerBackendLabel}
+            </div>
+            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Last throughput: {formatLayerRate(lastBenchmark?.layersPerSecond ?? null)}
+            </div>
 
             <div className="mt-1.5 grid grid-cols-2 gap-1.5">
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -354,6 +488,25 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
               Runs: {lifetimeTelemetry.runCount} • Total: {formatDuration(lifetimeTelemetry.totalElapsedMs)} • Raster total: {formatDuration(lifetimeTelemetry.totalRasterMs)}
             </div>
+
+            <div className="mt-1.5 rounded border px-1.5 py-1 space-y-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Last Benchmark</div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Layers: {lastBenchmark?.totalLayers ?? '—'}
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Mesh prep: {formatDuration(lastBenchmark?.meshPrepMs ?? null)}
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Core slicing: {formatDuration(lastBenchmark?.coreSlicingMs ?? null)}
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                End-to-end: {formatDuration(lastBenchmark?.totalElapsedMs ?? null)}
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Throughput: {formatLayerRate(lastBenchmark?.layersPerSecond ?? null)}
+              </div>
+            </div>
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -363,6 +516,14 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
             </div>
             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Phase: {currentPhase}</div>
             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{sliceStatus}</div>
+            {lastWasmError && (
+              <div className="text-[11px]" style={{ color: 'var(--status-warning, #f59e0b)' }}>
+                Last WASM error: {lastWasmError}
+              </div>
+            )}
+            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Note: {backendNote}
+            </div>
           </div>
 
           <Button
@@ -374,6 +535,70 @@ export function SlicingPanel({ models, activeModel }: SlicingPanelProps) {
             <Cpu className="w-4 h-4" />
             {isSlicingZip ? 'Slicing…' : 'Run Slicing Job'}
           </Button>
+        </div>
+      )}
+
+      {showSlicingModal && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center" style={{ background: 'rgba(0, 0, 0, 0.45)' }}>
+          <div className="w-[360px] rounded-lg border p-4 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              {slicingModalStage === 'running'
+                ? 'Slicing in background…'
+                : slicingModalStage === 'finished'
+                  ? 'Slicing complete'
+                  : 'Slicing failed'}
+            </div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{currentPhase}</div>
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{sliceStatus}</div>
+
+            {slicingModalStage === 'finished' && previewTotalLayers > 0 && (
+              <div className="rounded border p-2 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Layer preview · {previewSelectedLayer}/{previewTotalLayers}
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={Math.max(1, previewTotalLayers)}
+                  step={1}
+                  value={Math.max(1, Math.min(previewTotalLayers || 1, previewSelectedLayer))}
+                  onChange={(event) => setPreviewSelectedLayer(Number(event.target.value))}
+                  className="w-full"
+                />
+                {selectedLayerPreviewUrl ? (
+                  <img
+                    src={selectedLayerPreviewUrl}
+                    alt={`Layer ${previewSelectedLayer} preview`}
+                    className="w-full h-36 rounded object-contain"
+                  />
+                ) : (
+                  <div className="h-36 rounded border border-dashed flex items-center justify-center text-[11px]" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)' }}>
+                    Preview for this layer is not available.
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="h-2 rounded overflow-hidden" style={{ background: 'var(--surface-2)' }}>
+              <div
+                className="h-full transition-all duration-150"
+                style={{ width: `${progressPercent}%`, background: 'var(--accent)' }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              <span>{progressDone}/{Math.max(1, progressTotal)}</span>
+              <span>{progressPercent}%</span>
+            </div>
+            <div className="pt-1 flex justify-end">
+              <Button
+                variant="secondary"
+                className="!h-8 text-xs"
+                disabled={slicingModalStage === 'running'}
+                onClick={handleCloseSlicingModal}
+              >
+                {slicingModalStage === 'running' ? 'Running…' : 'Close'}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </Card>

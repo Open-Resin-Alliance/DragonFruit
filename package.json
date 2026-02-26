@@ -20,6 +20,7 @@
     "@react-three/postprocessing": "^3.0.4",
     "@types/uuid": "^10.0.0",
     "clipper-lib": "^6.4.2",
+    "fflate": "^0.8.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "next": "^16.0.7",

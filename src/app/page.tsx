@@ -173,6 +173,7 @@ export default function Home() {
   const supportsRef = React.useRef<THREE.Group | null>(null);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
+  const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
@@ -277,6 +278,16 @@ export default function Home() {
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
+    const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
+      exportThumbnailCaptureRef.current = capture;
+    }, []);
+
+    const captureExportThumbnailPng = React.useCallback(async () => {
+      const capture = exportThumbnailCaptureRef.current;
+      if (!capture) return null;
+      return capture();
+    }, []);
+
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
   const [supportsInfoModelId, setSupportsInfoModelId] = React.useState<string | null>(null);
   const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
@@ -4485,6 +4496,7 @@ export default function Home() {
               key="export-slicing"
               models={scene.models}
               activeModel={scene.activeModel}
+              captureSceneThumbnailPng={captureExportThumbnailPng}
             />
           </>
 
@@ -4868,6 +4880,7 @@ export default function Home() {
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
+            onRegisterExportThumbnailCapture={handleRegisterExportThumbnailCapture}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
