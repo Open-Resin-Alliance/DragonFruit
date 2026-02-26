@@ -206,6 +206,7 @@ export default function Home() {
   const pendingTransformHistoryRef = React.useRef<{ modelId: string; before: ModelTransform; description?: string } | null>(null);
   const transformHistoryCommitRequestedRef = React.useRef(false);
   const pendingHistoryTransformResyncRef = React.useRef(false);
+  const suppressNextTransformPersistenceRef = React.useRef(false);
   const skipNextTransformEndCommitRef = React.useRef(false);
   const transformEndFlushedRef = React.useRef(false);
   const pendingRotateGizmoCommitRef = React.useRef<{
@@ -1039,6 +1040,7 @@ export default function Home() {
     const t = scene.activeModel.transform;
     if (!isFiniteTransform(t)) return;
 
+    suppressNextTransformPersistenceRef.current = true;
     transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
     transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
     transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
@@ -1323,6 +1325,7 @@ export default function Home() {
         });
 
         scene.updateModelTransform(scene.activeModelId, fallback);
+        suppressNextTransformPersistenceRef.current = true;
         transformMgr.transformHook.setPosition(fallback.position.x, fallback.position.y, fallback.position.z);
         transformMgr.transformHook.setRotation(fallback.rotation.x, fallback.rotation.y, fallback.rotation.z);
         transformMgr.transformHook.setScale(fallback.scale.x, fallback.scale.y, fallback.scale.z);
@@ -1356,6 +1359,7 @@ export default function Home() {
       const scaleChanged = currentT.scale.distanceToSquared(t.scale) > EPSILON;
 
       if (posChanged || rotChanged || scaleChanged) {
+        suppressNextTransformPersistenceRef.current = true;
         transformMgr.transformHook.setPosition(t.position.x, t.position.y, t.position.z);
         transformMgr.transformHook.setRotation(t.rotation.x, t.rotation.y, t.rotation.z);
         transformMgr.transformHook.setScale(t.scale.x, t.scale.y, t.scale.z);
@@ -1365,6 +1369,13 @@ export default function Home() {
       setDisplayActiveModelId(scene.activeModelId);
     } else {
       setDisplayActiveModelId(null);
+      pendingTransformHistoryRef.current = null;
+      transformHistoryCommitRequestedRef.current = false;
+      pendingRotateGizmoCommitRef.current = null;
+      suppressNextTransformPersistenceRef.current = true;
+      transformMgr.transformHook.setPosition(0, 0, 0);
+      transformMgr.transformHook.setRotation(0, 0, 0);
+      transformMgr.transformHook.setScale(1, 1, 1);
     }
   }, [displayActiveModelId, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
 
@@ -1382,6 +1393,11 @@ export default function Home() {
     // (scene.activeModel) hasn't committed yet while modelsRef is still stale.
     if (transformEndFlushedRef.current) {
       transformEndFlushedRef.current = false;
+      return;
+    }
+
+    if (suppressNextTransformPersistenceRef.current) {
+      suppressNextTransformPersistenceRef.current = false;
       return;
     }
 
@@ -3192,8 +3208,8 @@ export default function Home() {
       supportDragResetSecondRafRef.current = null;
     }
 
-    if (operation === 'rotate') {
-      const proceed = requestDestructiveTransformSupportDeletion('Rotate XYZ');
+    if (operation === 'rotate' && (details?.axis === 'x' || details?.axis === 'y')) {
+      const proceed = requestDestructiveTransformSupportDeletion('Rotate X/Y');
       if (!proceed) return false;
     }
 
@@ -3851,11 +3867,10 @@ export default function Home() {
                   const current = transformMgr.transform.rotation;
                   const EPS = 1e-6;
                   const hasDestructiveRotate = Math.abs(x - current.x) > EPS
-                    || Math.abs(y - current.y) > EPS
-                    || Math.abs(z - current.z) > EPS;
+                    || Math.abs(y - current.y) > EPS;
 
                   if (hasDestructiveRotate) {
-                    const proceed = requestDestructiveTransformSupportDeletion('Rotate XYZ');
+                    const proceed = requestDestructiveTransformSupportDeletion('Rotate X/Y');
                     if (!proceed) return;
                   }
 
