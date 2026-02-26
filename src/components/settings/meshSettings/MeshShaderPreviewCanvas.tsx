@@ -82,6 +82,11 @@ function BuiltinPreviewMesh({
   toonSteps,
   materialRoughness,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
+  hoverTintStrength,
+  selectedTintStrength,
 }: {
   shape: 'cube' | 'sphere' | 'knot';
   meshColor: string;
@@ -91,6 +96,11 @@ function BuiltinPreviewMesh({
   toonSteps: number;
   materialRoughness: number;
   xrayOpacity: number;
+  heatmapBlend: number;
+  heatmapContrast: number;
+  heatmapColors?: string[];
+  hoverTintStrength: number;
+  selectedTintStrength: number;
 }) {
   const geom = React.useMemo(() => {
     let g: THREE.BufferGeometry;
@@ -130,6 +140,11 @@ function BuiltinPreviewMesh({
             materialRoughness={materialRoughness}
             clippingPlanes={[]}
             xrayOpacity={xrayOpacity}
+            heatmapBlend={heatmapBlend}
+            heatmapContrast={heatmapContrast}
+            heatmapColors={heatmapColors}
+            hoverTintStrength={hoverTintStrength}
+            selectedTintStrength={selectedTintStrength}
           />
         </mesh>
         <mesh geometry={geom} renderOrder={1}>
@@ -148,6 +163,9 @@ function BuiltinPreviewMesh({
           materialRoughness={materialRoughness}
           clippingPlanes={[]}
           xrayOpacity={xrayOpacity}
+          heatmapBlend={heatmapBlend}
+          heatmapContrast={heatmapContrast}
+          heatmapColors={heatmapColors}
         />
       </mesh>
     )
@@ -163,6 +181,11 @@ function StlPreviewMesh({
   toonSteps,
   materialRoughness,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
+  hoverTintStrength,
+  selectedTintStrength,
 }: {
   url: string;
   meshColor: string;
@@ -172,6 +195,11 @@ function StlPreviewMesh({
   toonSteps: number;
   materialRoughness: number;
   xrayOpacity: number;
+  heatmapBlend: number;
+  heatmapContrast: number;
+  heatmapColors?: string[];
+  hoverTintStrength: number;
+  selectedTintStrength: number;
 }) {
   const baseGeom = useLoader(STLLoader, url);
   const geom = React.useMemo(() => {
@@ -201,6 +229,11 @@ function StlPreviewMesh({
             materialRoughness={materialRoughness}
             clippingPlanes={[]}
             xrayOpacity={xrayOpacity}
+            heatmapBlend={heatmapBlend}
+            heatmapContrast={heatmapContrast}
+            heatmapColors={heatmapColors}
+            hoverTintStrength={hoverTintStrength}
+            selectedTintStrength={selectedTintStrength}
           />
         </mesh>
         <mesh geometry={geom} renderOrder={1}>
@@ -219,6 +252,9 @@ function StlPreviewMesh({
           materialRoughness={materialRoughness}
           clippingPlanes={[]}
           xrayOpacity={xrayOpacity}
+          heatmapBlend={heatmapBlend}
+          heatmapContrast={heatmapContrast}
+          heatmapColors={heatmapColors}
         />
       </mesh>
     )
@@ -236,6 +272,11 @@ function PreviewContent({
   ambientIntensity,
   directionalIntensity,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
+  hoverTintStrength,
+  selectedTintStrength,
 }: {
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
@@ -247,6 +288,11 @@ function PreviewContent({
   ambientIntensity: number;
   directionalIntensity: number;
   xrayOpacity: number;
+  heatmapBlend: number;
+  heatmapContrast: number;
+  heatmapColors?: string[];
+  hoverTintStrength: number;
+  selectedTintStrength: number;
 }) {
   const isStl = previewModel.startsWith('stl:');
   const stlUrl = isStl ? previewModel.slice('stl:'.length) : null;
@@ -274,6 +320,11 @@ function PreviewContent({
             toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             xrayOpacity={xrayOpacity}
+            heatmapBlend={heatmapBlend}
+            heatmapContrast={heatmapContrast}
+            heatmapColors={heatmapColors}
+            hoverTintStrength={hoverTintStrength}
+            selectedTintStrength={selectedTintStrength}
           />
         ) : (
           <BuiltinPreviewMesh
@@ -285,6 +336,11 @@ function PreviewContent({
             toonSteps={toonSteps}
             materialRoughness={materialRoughness}
             xrayOpacity={xrayOpacity}
+            heatmapBlend={heatmapBlend}
+            heatmapContrast={heatmapContrast}
+            heatmapColors={heatmapColors}
+            hoverTintStrength={hoverTintStrength}
+            selectedTintStrength={selectedTintStrength}
           />
         )}
       </group>
@@ -303,6 +359,11 @@ export function MeshShaderPreviewCanvas({
   ambientIntensity,
   directionalIntensity,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
+  hoverTintStrength,
+  selectedTintStrength,
 }: {
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
@@ -314,6 +375,11 @@ export function MeshShaderPreviewCanvas({
   ambientIntensity: number;
   directionalIntensity: number;
   xrayOpacity: number;
+  heatmapBlend: number;
+  heatmapContrast: number;
+  heatmapColors?: string[];
+  hoverTintStrength: number;
+  selectedTintStrength: number;
 }) {
   const cameraDistance = previewModel === 'knot' ? 8.2 : 5.6;
 
@@ -346,6 +412,11 @@ export function MeshShaderPreviewCanvas({
           ambientIntensity={ambientIntensity}
           directionalIntensity={directionalIntensity}
           xrayOpacity={xrayOpacity}
+          heatmapBlend={heatmapBlend}
+          heatmapContrast={heatmapContrast}
+          heatmapColors={heatmapColors}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
         />
       </Canvas>
     </div>

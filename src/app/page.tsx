@@ -482,23 +482,23 @@ export default function Home() {
       })
     )
       ? {
-          position: pendingTransform.pos.clone(),
-          rotation: pendingTransform.rot.clone(),
-          scale: pendingTransform.scl.clone(),
-        }
+        position: pendingTransform.pos.clone(),
+        rotation: pendingTransform.rot.clone(),
+        scale: pendingTransform.scl.clone(),
+      }
       : (
         scene.activeModelId === pending.modelId && isFiniteTransform(transformMgr.transform)
       )
         ? {
-            position: transformMgr.transform.position.clone(),
-            rotation: transformMgr.transform.rotation.clone(),
-            scale: transformMgr.transform.scale.clone(),
-          }
+          position: transformMgr.transform.position.clone(),
+          rotation: transformMgr.transform.rotation.clone(),
+          scale: transformMgr.transform.scale.clone(),
+        }
         : {
-            position: targetModel.transform.position.clone(),
-            rotation: targetModel.transform.rotation.clone(),
-            scale: targetModel.transform.scale.clone(),
-          };
+          position: targetModel.transform.position.clone(),
+          rotation: targetModel.transform.rotation.clone(),
+          scale: targetModel.transform.scale.clone(),
+        };
 
     scene.commitModelTransformHistory(pending.modelId, pending.before, afterTransform, pending.description);
     pendingTransformHistoryRef.current = null;
@@ -2614,10 +2614,10 @@ export default function Home() {
         duplicatePreviewTransforms,
         duplicateSourcePreviewTransform
           ? {
-              position: duplicateSourcePreviewTransform.position.clone(),
-              rotation: duplicateSourcePreviewTransform.rotation.clone(),
-              scale: duplicateSourcePreviewTransform.scale.clone(),
-            }
+            position: duplicateSourcePreviewTransform.position.clone(),
+            rotation: duplicateSourcePreviewTransform.rotation.clone(),
+            scale: duplicateSourcePreviewTransform.scale.clone(),
+          }
           : null,
       );
       setDuplicateTotalCopies(1);
@@ -2744,6 +2744,10 @@ export default function Home() {
         onMaterialRoughnessChange={scene.setMaterialRoughness}
         xrayOpacity={scene.xrayOpacity}
         onXrayOpacityChange={scene.setXrayOpacity}
+        heatmapBlend={scene.heatmapBlend}
+        onHeatmapBlendChange={scene.setHeatmapBlend}
+        heatmapContrast={scene.heatmapContrast}
+        onHeatmapContrastChange={scene.setHeatmapContrast}
         hoverTintStrength={scene.hoverTintStrength}
         onHoverTintStrengthChange={scene.setHoverTintStrength}
         selectedTintStrength={scene.selectedTintStrength}
@@ -2759,6 +2763,8 @@ export default function Home() {
         hasModels={scene.models.length > 0}
         viewTypeOverride={sessionShaderOverride}
         onViewTypeOverrideChange={setSessionShaderOverride}
+        heatmapColors={scene.heatmapColors}
+        onHeatmapColorChange={scene.onHeatmapColorChange}
       />
 
       <FloatingPanelStack>
@@ -3156,6 +3162,8 @@ export default function Home() {
             flatUseVertexColors={scene.flatUseVertexColors}
             toonSteps={scene.toonSteps}
             xrayOpacity={scene.xrayOpacity}
+            heatmapContrast={scene.heatmapContrast}
+            heatmapColors={scene.heatmapColors}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
             onCameraChange={handleCameraChange}
