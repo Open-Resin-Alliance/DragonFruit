@@ -38,6 +38,12 @@ type MeshSettingsTabProps = {
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
   onSelectedTintStrengthChange: (value: number) => void;
+  heatmapBlend: number;
+  onHeatmapBlendChange: (value: number) => void;
+  heatmapContrast: number;
+  onHeatmapContrastChange: (value: number) => void;
+  heatmapColors: string[];
+  onHeatmapColorChange: (index: number, color: string) => void;
 };
 
 export function MeshSettingsTab({
@@ -63,9 +69,16 @@ export function MeshSettingsTab({
   onHoverTintStrengthChange,
   selectedTintStrength,
   onSelectedTintStrengthChange,
+  heatmapBlend,
+  onHeatmapBlendChange,
+  heatmapContrast,
+  onHeatmapContrastChange,
+  heatmapColors,
+  onHeatmapColorChange,
 }: MeshSettingsTabProps) {
   const [previewModel, setPreviewModel] = React.useState<string>('knot');
   const [stlPreviewModels, setStlPreviewModels] = React.useState<PreviewModelConfig[]>([]);
+  const [activeColorIndex, setActiveColorIndex] = React.useState<number>(0);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -158,6 +171,11 @@ export function MeshSettingsTab({
               ambientIntensity={ambientIntensity}
               directionalIntensity={directionalIntensity}
               xrayOpacity={xrayOpacity}
+              heatmapBlend={heatmapBlend}
+              heatmapContrast={heatmapContrast}
+              heatmapColors={heatmapColors}
+              hoverTintStrength={0.5}
+              selectedTintStrength={0.75}
             />
           </div>
 
@@ -166,11 +184,16 @@ export function MeshSettingsTab({
             style={{ aspectRatio: '1 / 1' }}
           >
             <div className="flex items-center gap-2">
-              <label className="text-xs font-medium whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>Mesh Color</label>
+              <label className="text-xs font-medium whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                {activeColorIndex === 0 ? 'Mesh Color' : 'Heatmap Color'}
+              </label>
               <Input
                 type="text"
-                value={meshColor}
-                onChange={(e) => onMeshColorChange(e.target.value)}
+                value={activeColorIndex === 0 ? meshColor : heatmapColors[activeColorIndex - 1]}
+                onChange={(e) => {
+                  if (activeColorIndex === 0) onMeshColorChange(e.target.value);
+                  else onHeatmapColorChange(activeColorIndex - 1, e.target.value);
+                }}
                 className="flex-1 !h-8"
                 placeholder="#a3a3a3"
               />
@@ -178,11 +201,37 @@ export function MeshSettingsTab({
 
             <div className="flex-1 min-h-0 rounded-md overflow-hidden bg-neutral-800/40 p-1">
               <HexColorPicker
-                color={meshColor}
-                onChange={onMeshColorChange}
+                color={activeColorIndex === 0 ? meshColor : heatmapColors[activeColorIndex - 1]}
+                onChange={(c) => {
+                  if (activeColorIndex === 0) onMeshColorChange(c);
+                  else onHeatmapColorChange(activeColorIndex - 1, c);
+                }}
                 style={{ width: '100%', height: '100%' }}
               />
             </div>
+
+            {shaderType === 'overhang_heatmap' && (
+              <div className="flex gap-1.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveColorIndex(0)}
+                  className={`w-6 h-6 rounded border ${activeColorIndex === 0 ? 'border-white' : 'border-neutral-600'}`}
+                  style={{ backgroundColor: meshColor }}
+                  title="Mesh Color"
+                />
+                <div className="w-[1px] bg-neutral-700 mx-1" />
+                {heatmapColors.map((color, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setActiveColorIndex(idx + 1)}
+                    className={`flex-1 h-6 rounded border ${activeColorIndex === idx + 1 ? 'border-white' : 'border-neutral-600'}`}
+                    style={{ backgroundColor: color }}
+                    title={`Heatmap Color ${idx + 1}`}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -309,6 +358,41 @@ export function MeshSettingsTab({
                 className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
               />
             </div>
+          )}
+
+          {shaderType === 'overhang_heatmap' && (
+            <>
+              <div className="space-y-0.5">
+                <label className="text-xs text-neutral-400 flex justify-between">
+                  <span>Heatmap Blend</span>
+                  <span className="text-neutral-300">{heatmapBlend.toFixed(2)}</span>
+                </label>
+                <input
+                  type="range"
+                  min="0.0"
+                  max="1.0"
+                  step="0.01"
+                  value={heatmapBlend}
+                  onChange={(e) => onHeatmapBlendChange(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+              </div>
+              <div className="space-y-0.5">
+                <label className="text-xs text-neutral-400 flex justify-between">
+                  <span>Heatmap Contrast</span>
+                  <span className="text-neutral-300">{heatmapContrast.toFixed(2)}</span>
+                </label>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="3.0"
+                  step="0.05"
+                  value={heatmapContrast}
+                  onChange={(e) => onHeatmapContrastChange(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+              </div>
+            </>
           )}
 
           <div className="space-y-0.5">

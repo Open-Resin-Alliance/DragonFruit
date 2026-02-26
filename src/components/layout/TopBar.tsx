@@ -46,6 +46,10 @@ interface TopBarProps {
   onMaterialRoughnessChange: (value: number) => void;
   xrayOpacity: number;
   onXrayOpacityChange: (value: number) => void;
+  heatmapBlend: number;
+  onHeatmapBlendChange: (value: number) => void;
+  heatmapContrast: number;
+  onHeatmapContrastChange: (value: number) => void;
   hoverTintStrength: number;
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
@@ -62,6 +66,8 @@ interface TopBarProps {
   hasModels: boolean;
   viewTypeOverride: MeshShaderType | null;
   onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
+  heatmapColors: string[];
+  onHeatmapColorChange: (index: number, color: string) => void;
 }
 
 export function TopBar({
@@ -83,6 +89,10 @@ export function TopBar({
   onMaterialRoughnessChange,
   xrayOpacity,
   onXrayOpacityChange,
+  heatmapBlend,
+  onHeatmapBlendChange,
+  heatmapContrast,
+  onHeatmapContrastChange,
   hoverTintStrength,
   onHoverTintStrengthChange,
   selectedTintStrength,
@@ -98,6 +108,8 @@ export function TopBar({
   hasModels,
   viewTypeOverride,
   onViewTypeOverrideChange,
+  heatmapColors,
+  onHeatmapColorChange,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -208,35 +220,35 @@ export function TopBar({
     hint: string;
     locked: boolean;
   }> = [
-    {
-      mode: 'prepare',
-      label: 'Prepare',
-      step: 1,
-      hint: 'Arrange model and transforms',
-      locked: false,
-    },
-    {
-      mode: 'analysis',
-      label: 'Analysis',
-      step: 2,
-      hint: 'Inspect islands and diagnostics',
-      locked: !hasModels,
-    },
-    {
-      mode: 'support',
-      label: 'Support',
-      step: 3,
-      hint: 'Build and tune supports',
-      locked: !hasModels,
-    },
-    {
-      mode: 'export',
-      label: 'Export',
-      step: 4,
-      hint: 'Finalize and export output',
-      locked: !hasModels,
-    },
-  ];
+      {
+        mode: 'prepare',
+        label: 'Prepare',
+        step: 1,
+        hint: 'Arrange model and transforms',
+        locked: false,
+      },
+      {
+        mode: 'analysis',
+        label: 'Analysis',
+        step: 2,
+        hint: 'Inspect islands and diagnostics',
+        locked: !hasModels,
+      },
+      {
+        mode: 'support',
+        label: 'Support',
+        step: 3,
+        hint: 'Build and tune supports',
+        locked: !hasModels,
+      },
+      {
+        mode: 'export',
+        label: 'Export',
+        step: 4,
+        hint: 'Finalize and export output',
+        locked: !hasModels,
+      },
+    ];
 
   return (
     <div className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative">
@@ -269,20 +281,19 @@ export function TopBar({
                     onModeChange(item.mode);
                   }}
                   disabled={locked}
-                  className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${
-                    active
-                      ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
-                      : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
-                  } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''}`}
+                  className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${active
+                    ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
+                    : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
+                    } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''}`}
                   style={active
                     ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)',
-                      }
+                      borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)',
+                    }
                     : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'color-mix(in srgb, var(--surface-1), transparent 4%)',
-                      }
+                      borderColor: 'var(--border-subtle)',
+                      background: 'color-mix(in srgb, var(--surface-1), transparent 4%)',
+                    }
                   }
                   title={locked ? 'Load a model in Prepare to unlock this stage' : item.hint}
                 >
@@ -290,13 +301,13 @@ export function TopBar({
                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
                     style={active
                       ? {
-                          color: 'var(--accent-contrast)',
-                          background: 'color-mix(in srgb, var(--accent), white 10%)',
-                        }
+                        color: 'var(--accent-contrast)',
+                        background: 'color-mix(in srgb, var(--accent), white 10%)',
+                      }
                       : {
-                          color: 'var(--text-muted)',
-                          background: 'var(--surface-2)',
-                        }
+                        color: 'var(--text-muted)',
+                        background: 'var(--surface-2)',
+                      }
                     }
                   >
                     {item.step}
@@ -391,6 +402,10 @@ export function TopBar({
         onMaterialRoughnessChange={onMaterialRoughnessChange}
         xrayOpacity={xrayOpacity}
         onXrayOpacityChange={onXrayOpacityChange}
+        heatmapBlend={heatmapBlend}
+        onHeatmapBlendChange={onHeatmapBlendChange}
+        heatmapContrast={heatmapContrast}
+        onHeatmapContrastChange={onHeatmapContrastChange}
         hoverTintStrength={hoverTintStrength}
         onHoverTintStrengthChange={onHoverTintStrengthChange}
         selectedTintStrength={selectedTintStrength}
@@ -401,6 +416,8 @@ export function TopBar({
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
         onView3dSettingsChange={onView3dSettingsChange}
+        heatmapColors={heatmapColors}
+        onHeatmapColorChange={onHeatmapColorChange}
       />
 
       <ProfileSettingsModal

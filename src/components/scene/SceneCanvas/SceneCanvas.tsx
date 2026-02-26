@@ -492,7 +492,7 @@ function CameraModeEntryFramingController({
 
     const halfDiagonal = 0.5 * Math.hypot(plateWidthMm, plateDepthMm) * padding;
     const distance = Math.max(90, halfDiagonal / Math.sin(minFov * 0.5));
-  const viewDir = new THREE.Vector3(0, -0.52, 1).normalize(); // front-facing top-side birds-eye
+    const viewDir = new THREE.Vector3(0, -0.52, 1).normalize(); // front-facing top-side birds-eye
     const endTarget = target.clone().add(new THREE.Vector3(0, -plateDepthMm * 0.055, 0));
     const endPos = endTarget.clone().addScaledVector(viewDir, distance);
 
@@ -729,6 +729,9 @@ export function SceneCanvas({
   flatUseVertexColors,
   toonSteps,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
   disableRaycast,
   hideCrossSectionCap,
   onCameraChange,
@@ -820,6 +823,9 @@ export function SceneCanvas({
   flatUseVertexColors?: boolean;
   toonSteps?: number;
   xrayOpacity?: number;
+  heatmapBlend?: number;
+  heatmapContrast?: number;
+  heatmapColors?: string[];
   disableRaycast?: boolean;
   hideCrossSectionCap?: boolean;
   onCameraChange?: () => void;
@@ -2402,8 +2408,8 @@ export function SceneCanvas({
       return duplicatePreviewTransforms;
     }
 
-    const EPSILON = 1e-5;
     const source = duplicateActivePreviewTransform;
+    const EPSILON = 1e-5;
 
     return duplicatePreviewTransforms.filter((candidate) => {
       const posMatch = candidate.position.distanceToSquared(source.position) <= EPSILON;
@@ -3201,9 +3207,9 @@ export function SceneCanvas({
 
     setMarqueeSelection((prev) => (prev
       ? {
-          ...prev,
-          current: { x: clamped.x, y: clamped.y },
-        }
+        ...prev,
+        current: { x: clamped.x, y: clamped.y },
+      }
       : prev));
 
     e.preventDefault();
@@ -3990,6 +3996,9 @@ export function SceneCanvas({
                       flatUseVertexColors={flatUseVertexColors}
                       toonSteps={toonSteps}
                       xrayOpacity={xrayOpacity}
+                      heatmapBlend={heatmapBlend}
+                      heatmapContrast={heatmapContrast}
+                      heatmapColors={heatmapColors ?? []}
                       transform={animatedTransform}
                       mode={mode}
                       transformMode={transformMode}
@@ -4100,25 +4109,24 @@ export function SceneCanvas({
                       position={previewTransform.position}
                       quaternion={quaternionFromGlobalEuler(previewTransform.rotation)}
                       scale={previewTransform.scale}
-                      raycast={() => null}
                     >
                       <mesh
                         geometry={duplicatePreviewModel.geometry.geometry}
                         position={duplicatePreviewMeshOffset}
-                        raycast={() => null}
-                        renderOrder={2}
+                      raycast={() => null}
+                      renderOrder={2}
                       >
-                        <meshStandardMaterial
-                          color={duplicatePreviewModel.color ?? '#a3a3a3'}
-                          transparent
-                          opacity={0.22}
-                          roughness={0.5}
-                          metalness={0.02}
-                          depthWrite={false}
-                        />
-                      </mesh>
-                    </group>
-                  ))
+                      <meshStandardMaterial
+                        color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                        transparent
+                        opacity={0.22}
+                        roughness={0.5}
+                        metalness={0.02}
+                        depthWrite={false}
+                      />
+                    </mesh>
+                  </group>
+                ))
                 : null}
 
               {duplicatePreviewModel
@@ -4163,21 +4171,56 @@ export function SceneCanvas({
                 && duplicatePreviewMeshOffset
                 && duplicateActivePreviewTransform
                 ? (
+                  <group
+                    key="duplicate-source-preview"
+                    position={duplicateActivePreviewTransform.position}
+                    quaternion={quaternionFromGlobalEuler(duplicateActivePreviewTransform.rotation)}
+                    scale={duplicateActivePreviewTransform.scale}
+                    raycast={() => null}
+                  >
+                    <mesh
+                      geometry={duplicatePreviewModel.geometry.geometry}
+                      position={duplicatePreviewMeshOffset}
+                      raycast={() => null}
+                      renderOrder={2}
+                    >
+                      <meshStandardMaterial
+                        color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                        transparent
+                        opacity={0.22}
+                        roughness={0.5}
+                        metalness={0.02}
+                        depthWrite={false}
+                      />
+                    </mesh>
+                  </group>
+                )
+                : null}
+
+              {arrangeArrayPreviewItems && arrangeArrayPreviewItems.length > 0
+                ? arrangeArrayPreviewItems.map((item) => {
+                  const offset = new THREE.Vector3(
+                    -item.model.geometry.center.x,
+                    -item.model.geometry.center.y,
+                    -item.model.geometry.center.z,
+                  );
+
+                  return (
                     <group
-                      key="duplicate-source-preview"
-                      position={duplicateActivePreviewTransform.position}
-                      quaternion={quaternionFromGlobalEuler(duplicateActivePreviewTransform.rotation)}
-                      scale={duplicateActivePreviewTransform.scale}
+                      key={`arrange-array-preview-${item.model.id}`}
+                      position={item.transform.position}
+                      quaternion={quaternionFromGlobalEuler(item.transform.rotation)}
+                      scale={item.transform.scale}
                       raycast={() => null}
                     >
                       <mesh
-                        geometry={duplicatePreviewModel.geometry.geometry}
-                        position={duplicatePreviewMeshOffset}
+                        geometry={item.model.geometry.geometry}
+                        position={offset}
                         raycast={() => null}
                         renderOrder={2}
                       >
                         <meshStandardMaterial
-                          color={duplicatePreviewModel.color ?? '#a3a3a3'}
+                          color={item.model.color ?? '#a3a3a3'}
                           transparent
                           opacity={0.22}
                           roughness={0.5}
@@ -4186,7 +4229,8 @@ export function SceneCanvas({
                         />
                       </mesh>
                     </group>
-                  )
+                  );
+                })
                 : null}
 
               {duplicatePreviewModel
@@ -4224,42 +4268,6 @@ export function SceneCanvas({
                       />
                     </group>
                   )
-                : null}
-
-              {arrangeArrayPreviewItems && arrangeArrayPreviewItems.length > 0
-                ? arrangeArrayPreviewItems.map((item) => {
-                    const offset = new THREE.Vector3(
-                      -item.model.geometry.center.x,
-                      -item.model.geometry.center.y,
-                      -item.model.geometry.center.z,
-                    );
-
-                    return (
-                      <group
-                        key={`arrange-array-preview-${item.model.id}`}
-                        position={item.transform.position}
-                        quaternion={quaternionFromGlobalEuler(item.transform.rotation)}
-                        scale={item.transform.scale}
-                        raycast={() => null}
-                      >
-                        <mesh
-                          geometry={item.model.geometry.geometry}
-                          position={offset}
-                          raycast={() => null}
-                          renderOrder={2}
-                        >
-                          <meshStandardMaterial
-                            color={item.model.color ?? '#a3a3a3'}
-                            transparent
-                            opacity={0.22}
-                            roughness={0.5}
-                            metalness={0.02}
-                            depthWrite={false}
-                          />
-                        </mesh>
-                      </group>
-                    );
-                  })
                 : null}
 
               {arrangeSupportPreviewDeltas.length > 0
@@ -4300,22 +4308,22 @@ export function SceneCanvas({
 
               {activeBuildVolumeSettings.showModelBoundingBoxes
                 ? modelBoundingBoxDebugData.map((entry) => (
-                    <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={8} raycast={() => null}>
-                      <bufferGeometry>
-                        <bufferAttribute
-                          attach="attributes-position"
-                          args={[entry.positions, 3]}
-                        />
-                      </bufferGeometry>
-                      <lineBasicMaterial
-                        color={entry.color}
-                        transparent
-                        opacity={0.9}
-                        depthWrite={false}
-                        depthTest={false}
+                  <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={8} raycast={() => null}>
+                    <bufferGeometry>
+                      <bufferAttribute
+                        attach="attributes-position"
+                        args={[entry.positions, 3]}
                       />
-                    </lineSegments>
-                  ))
+                    </bufferGeometry>
+                    <lineBasicMaterial
+                      color={entry.color}
+                      transparent
+                      opacity={0.9}
+                      depthWrite={false}
+                      depthTest={false}
+                    />
+                  </lineSegments>
+                ))
                 : null}
 
               {dragCornerCageModelIds.length > 0

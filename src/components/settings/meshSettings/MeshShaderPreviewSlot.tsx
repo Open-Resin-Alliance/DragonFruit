@@ -15,6 +15,11 @@ export function MeshShaderPreviewSlot({
   ambientIntensity,
   directionalIntensity,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
+  hoverTintStrength,
+  selectedTintStrength,
 }: {
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
@@ -26,6 +31,11 @@ export function MeshShaderPreviewSlot({
   ambientIntensity: number;
   directionalIntensity: number;
   xrayOpacity: number;
+  heatmapBlend: number;
+  heatmapContrast: number;
+  heatmapColors?: string[];
+  hoverTintStrength: number;
+  selectedTintStrength: number;
 }) {
   return (
     <div className="w-full h-full relative bg-neutral-900/50 rounded-lg overflow-hidden border border-neutral-700/50">
@@ -40,6 +50,11 @@ export function MeshShaderPreviewSlot({
         ambientIntensity={ambientIntensity}
         directionalIntensity={directionalIntensity}
         xrayOpacity={xrayOpacity}
+        heatmapBlend={heatmapBlend}
+        heatmapContrast={heatmapContrast}
+        heatmapColors={heatmapColors}
+        hoverTintStrength={hoverTintStrength}
+        selectedTintStrength={selectedTintStrength}
       />
     </div>
   );

@@ -10,7 +10,7 @@ import { BackupsSettingsTab } from '@/components/settings/BackupsSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
-import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X , Camera, Grid3x3, ArchiveRestore } from 'lucide-react';
+import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   applyThemeCustomColors,
@@ -102,7 +102,13 @@ type SettingsModalProps = {
   materialRoughness: number;
   onMaterialRoughnessChange: (value: number) => void;
   xrayOpacity: number;
+  heatmapBlend: number;
+  heatmapContrast: number;
   onXrayOpacityChange: (value: number) => void;
+  onHeatmapBlendChange: (value: number) => void;
+  onHeatmapContrastChange: (value: number) => void;
+  heatmapColors: string[];
+  onHeatmapColorChange: (index: number, color: string) => void;
   hoverTintStrength: number;
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
@@ -138,7 +144,13 @@ export function SettingsModal({
   materialRoughness,
   onMaterialRoughnessChange,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
   onXrayOpacityChange,
+  onHeatmapBlendChange,
+  onHeatmapContrastChange,
+  heatmapColors,
+  onHeatmapColorChange,
   hoverTintStrength,
   onHoverTintStrengthChange,
   selectedTintStrength,
@@ -161,6 +173,9 @@ export function SettingsModal({
   const [draftDirectionalIntensity, setDraftDirectionalIntensity] = useState(directionalIntensity);
   const [draftMaterialRoughness, setDraftMaterialRoughness] = useState(materialRoughness);
   const [draftXrayOpacity, setDraftXrayOpacity] = useState(xrayOpacity);
+  const [draftHeatmapBlend, setDraftHeatmapBlend] = useState(heatmapBlend);
+  const [draftHeatmapContrast, setDraftHeatmapContrast] = useState(heatmapContrast);
+  const [draftHeatmapColors, setDraftHeatmapColors] = useState(heatmapColors);
   const [draftHoverTintStrength, setDraftHoverTintStrength] = useState(hoverTintStrength);
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
   const [draftSelectionHighlightMode, setDraftSelectionHighlightMode] = useState(selectionHighlightMode);
@@ -186,6 +201,9 @@ export function SettingsModal({
     setDraftDirectionalIntensity(directionalIntensity);
     setDraftMaterialRoughness(materialRoughness);
     setDraftXrayOpacity(xrayOpacity);
+    setDraftHeatmapBlend(heatmapBlend);
+    setDraftHeatmapContrast(heatmapContrast);
+    setDraftHeatmapColors(heatmapColors);
     setDraftHoverTintStrength(hoverTintStrength);
     setDraftSelectedTintStrength(selectedTintStrength);
     setDraftSelectionHighlightMode(selectionHighlightMode);
@@ -215,6 +233,9 @@ export function SettingsModal({
     view3dSettings,
     shaderType,
     xrayOpacity,
+    heatmapBlend,
+    heatmapContrast,
+    heatmapColors,
   ]);
 
   const handleThemeColorChange = React.useCallback((key: keyof ThemeCustomColors, value: string) => {
@@ -222,6 +243,14 @@ export function SettingsModal({
       ...prev,
       [key]: value,
     }));
+  }, []);
+
+  const handleDraftHeatmapColorChange = React.useCallback((index: number, color: string) => {
+    setDraftHeatmapColors((prev) => {
+      const copy = [...prev];
+      copy[index] = color;
+      return copy;
+    });
   }, []);
 
   const handleResetThemeColors = React.useCallback(() => {
@@ -244,6 +273,8 @@ export function SettingsModal({
     setDraftDirectionalIntensity(DEFAULT_DIRECTIONAL_INTENSITY);
     setDraftMaterialRoughness(DEFAULT_MATERIAL_ROUGHNESS);
     setDraftXrayOpacity(DEFAULT_XRAY_OPACITY);
+    setDraftHeatmapBlend(0.85);
+    setDraftHeatmapContrast(1.0);
     setDraftHoverTintStrength(DEFAULT_HOVER_TINT_STRENGTH);
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
     setDraftSelectionHighlightMode('tint');
@@ -270,6 +301,9 @@ export function SettingsModal({
     onDirectionalIntensityChange(draftDirectionalIntensity);
     onMaterialRoughnessChange(draftMaterialRoughness);
     onXrayOpacityChange(draftXrayOpacity);
+    onHeatmapBlendChange(draftHeatmapBlend);
+    onHeatmapContrastChange(draftHeatmapContrast);
+    draftHeatmapColors.forEach((color, i) => onHeatmapColorChange(i, color));
     onHoverTintStrengthChange(draftHoverTintStrength);
     onSelectedTintStrengthChange(draftSelectedTintStrength);
     onSelectionHighlightModeChange(draftSelectionHighlightMode);
@@ -321,6 +355,9 @@ export function SettingsModal({
     draftWorkspaceSelectionHighlightDefaults,
     draftView3dSettings,
     draftXrayOpacity,
+    draftHeatmapBlend,
+    draftHeatmapContrast,
+    draftHeatmapColors,
     onAmbientIntensityChange,
     onClose,
     onDirectionalIntensityChange,
@@ -336,6 +373,9 @@ export function SettingsModal({
     onShaderTypeChange,
     onToonStepsChange,
     onXrayOpacityChange,
+    onHeatmapBlendChange,
+    onHeatmapContrastChange,
+    onHeatmapColorChange,
   ]);
 
   const handleResetFloatingLayout = React.useCallback(() => {
@@ -519,14 +559,14 @@ export function SettingsModal({
                       className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
                       style={active
                         ? {
-                            borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
-                            background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
-                            boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
-                          }
+                          borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
+                          background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
+                          boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
+                        }
                         : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                          }}
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                        }}
                     >
                       <div className="flex items-start gap-2.5">
                         <span
@@ -558,53 +598,53 @@ export function SettingsModal({
 
               <div className="mt-auto space-y-1.5 pt-3">
                 {sidebarBottomTabs.map((tab) => {
-                const meta = tabMeta[tab];
-                const Icon = meta.icon;
-                const active = activeTab === tab;
-                const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
+                  const meta = tabMeta[tab];
+                  const Icon = meta.icon;
+                  const active = activeTab === tab;
+                  const tabColor = meta.tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
 
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveTab(tab)}
-                    className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
-                    style={active
-                      ? {
+                  return (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveTab(tab)}
+                      className="w-full rounded-lg border px-3 py-2.5 text-left transition-all duration-150"
+                      style={active
+                        ? {
                           borderColor: `color-mix(in srgb, ${tabColor}, var(--border-subtle) 35%)`,
                           background: `color-mix(in srgb, ${tabColor}, var(--surface-0) 84%)`,
                           boxShadow: `0 0 0 1px color-mix(in srgb, ${tabColor}, transparent 76%) inset`,
                         }
-                      : {
+                        : {
                           borderColor: 'var(--border-subtle)',
                           background: 'var(--surface-1)',
                         }}
-                  >
-                    <div className="flex items-start gap-2.5">
-                      <span
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
-                        style={{
-                          borderColor: active
-                            ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
-                            : 'var(--border-subtle)',
-                          background: active
-                            ? `color-mix(in srgb, ${tabColor}, var(--surface-1) 82%)`
-                            : 'var(--surface-2)',
-                        }}
-                      >
-                        <Icon className="h-3.5 w-3.5" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
-                          {meta.label}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <span
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md border"
+                          style={{
+                            borderColor: active
+                              ? `color-mix(in srgb, ${tabColor}, var(--border-subtle) 30%)`
+                              : 'var(--border-subtle)',
+                            background: active
+                              ? `color-mix(in srgb, ${tabColor}, var(--surface-1) 82%)`
+                              : 'var(--surface-2)',
+                          }}
+                        >
+                          <Icon className="h-3.5 w-3.5" style={{ color: active ? tabColor : 'var(--text-muted)' }} />
                         </span>
-                        <span className="block text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                          {meta.description}
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-semibold" style={{ color: active ? 'var(--text-strong)' : 'var(--text-strong)' }}>
+                            {meta.label}
+                          </span>
+                          <span className="block text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
+                            {meta.description}
+                          </span>
                         </span>
-                      </span>
-                    </div>
-                  </button>
-                );
+                      </div>
+                    </button>
+                  );
                 })}
               </div>
             </div>
@@ -650,41 +690,47 @@ export function SettingsModal({
                 />
               )}
               {activeTab === 'mesh' && (
-              <MeshSettingsTab
-                shaderType={draftShaderType}
-                onShaderTypeChange={setDraftShaderType}
-                matcapVariant={draftMatcapVariant}
-                onMatcapVariantChange={setDraftMatcapVariant}
-                flatUseVertexColors={draftFlatUseVertexColors}
-                onFlatUseVertexColorsChange={setDraftFlatUseVertexColors}
-                toonSteps={draftToonSteps}
-                onToonStepsChange={setDraftToonSteps}
-                meshColor={draftMeshColor}
-                onMeshColorChange={setDraftMeshColor}
-                ambientIntensity={draftAmbientIntensity}
-                onAmbientIntensityChange={setDraftAmbientIntensity}
-                directionalIntensity={draftDirectionalIntensity}
-                onDirectionalIntensityChange={setDraftDirectionalIntensity}
-                materialRoughness={draftMaterialRoughness}
-                onMaterialRoughnessChange={setDraftMaterialRoughness}
-                xrayOpacity={draftXrayOpacity}
-                onXrayOpacityChange={setDraftXrayOpacity}
-                hoverTintStrength={draftHoverTintStrength}
-                onHoverTintStrengthChange={setDraftHoverTintStrength}
-                selectedTintStrength={draftSelectedTintStrength}
-                onSelectedTintStrengthChange={setDraftSelectedTintStrength}
-              />
+                <MeshSettingsTab
+                  shaderType={draftShaderType}
+                  onShaderTypeChange={setDraftShaderType}
+                  matcapVariant={draftMatcapVariant}
+                  onMatcapVariantChange={setDraftMatcapVariant}
+                  flatUseVertexColors={draftFlatUseVertexColors}
+                  onFlatUseVertexColorsChange={setDraftFlatUseVertexColors}
+                  toonSteps={draftToonSteps}
+                  onToonStepsChange={setDraftToonSteps}
+                  meshColor={draftMeshColor}
+                  onMeshColorChange={setDraftMeshColor}
+                  ambientIntensity={draftAmbientIntensity}
+                  onAmbientIntensityChange={setDraftAmbientIntensity}
+                  directionalIntensity={draftDirectionalIntensity}
+                  onDirectionalIntensityChange={setDraftDirectionalIntensity}
+                  materialRoughness={draftMaterialRoughness}
+                  onMaterialRoughnessChange={setDraftMaterialRoughness}
+                  xrayOpacity={draftXrayOpacity}
+                  heatmapBlend={draftHeatmapBlend}
+                  heatmapContrast={draftHeatmapContrast}
+                  onXrayOpacityChange={setDraftXrayOpacity}
+                  onHeatmapBlendChange={setDraftHeatmapBlend}
+                  onHeatmapContrastChange={setDraftHeatmapContrast}
+                  heatmapColors={draftHeatmapColors}
+                  onHeatmapColorChange={handleDraftHeatmapColorChange}
+                  hoverTintStrength={draftHoverTintStrength}
+                  onHoverTintStrengthChange={setDraftHoverTintStrength}
+                  selectedTintStrength={draftSelectedTintStrength}
+                  onSelectedTintStrengthChange={setDraftSelectedTintStrength}
+                />
               )}
               {activeTab === 'ui' && (
-              <UISettingsTab
-                themePreset={draftThemePreset}
-                onThemePresetChange={setDraftThemePreset}
-                themePreference={draftThemePreference}
-                onThemePreferenceChange={setDraftThemePreference}
-                themeColors={draftThemeColors}
-                onThemeColorChange={handleThemeColorChange}
-                onResetThemeColors={handleResetThemeColors}
-              />
+                <UISettingsTab
+                  themePreset={draftThemePreset}
+                  onThemePresetChange={setDraftThemePreset}
+                  themePreference={draftThemePreference}
+                  onThemePreferenceChange={setDraftThemePreference}
+                  themeColors={draftThemeColors}
+                  onThemeColorChange={handleThemeColorChange}
+                  onResetThemeColors={handleResetThemeColors}
+                />
               )}
               {activeTab === 'hotkeys' && <HotkeysSettingsTab />}
               {activeTab === 'spacemouse' && (

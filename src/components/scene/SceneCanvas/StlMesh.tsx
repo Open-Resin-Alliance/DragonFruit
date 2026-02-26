@@ -34,6 +34,9 @@ export function StlMesh({
   flatUseVertexColors,
   toonSteps,
   xrayOpacity,
+  heatmapBlend,
+  heatmapContrast,
+  heatmapColors,
   transform,
   mode,
   transformMode,
@@ -82,6 +85,9 @@ export function StlMesh({
   flatUseVertexColors?: boolean;
   toonSteps?: number;
   xrayOpacity?: number;
+  heatmapBlend?: number;
+  heatmapContrast?: number;
+  heatmapColors?: string[];
   transform?: ModelTransform | null;
   mode?: SupportMode;
   transformMode?: TransformMode;
@@ -207,7 +213,7 @@ export function StlMesh({
       if (disableRaycast) {
         // Disable raycasting during camera movement (no-op function)
         console.log('[Raycast] DISABLED - performance mode active');
-        mesh.raycast = () => {};
+        mesh.raycast = () => { };
       } else {
         // Restore normal raycasting behavior
         console.log('[Raycast] ENABLED - normal interaction mode');
@@ -461,9 +467,9 @@ export function StlMesh({
             } else {
               const normal = e.face?.normal
                 ? e.face.normal
-                    .clone()
-                    .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld))
-                    .normalize()
+                  .clone()
+                  .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld))
+                  .normalize()
                 : null;
               updateMeshSmoothingStroke(e.point.clone(), normal);
 
@@ -560,9 +566,9 @@ export function StlMesh({
           if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel && e.button === 0) {
             const normal = e.face?.normal
               ? e.face.normal
-                  .clone()
-                  .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld))
-                  .normalize()
+                .clone()
+                .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(e.object.matrixWorld))
+                .normalize()
               : null;
             beginMeshSmoothingStroke(e.point.clone(), normal);
 
@@ -620,6 +626,8 @@ export function StlMesh({
             materialRoughness={materialRoughness}
             clippingPlanes={planes}
             xrayOpacity={xrayOpacity}
+            heatmapContrast={heatmapContrast}
+            heatmapColors={heatmapColors}
           />
         )}
       </mesh>

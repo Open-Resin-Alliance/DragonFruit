@@ -45,6 +45,9 @@ type PersistedMeshAppearance = {
   materialRoughness: number;
   wireframeThicknessPx: number;
   xrayOpacity: number;
+  heatmapBlend: number;
+  heatmapContrast: number;
+  heatmapColors: string[];
   meshColor: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
@@ -58,6 +61,9 @@ const DEFAULT_DIRECTIONAL_INTENSITY = 0.8;
 const DEFAULT_MATERIAL_ROUGHNESS = 0.65;
 const DEFAULT_WIREFRAME_THICKNESS_PX = 1.5;
 const DEFAULT_XRAY_OPACITY = 0.25;
+const DEFAULT_HEATMAP_BLEND = 0.85;
+const DEFAULT_HEATMAP_CONTRAST = 1.0;
+export const DEFAULT_HEATMAP_COLORS = ['#E55959', '#E5A559', '#D9D959', '#73D973', '#666666'];
 const DEFAULT_SHADER_TYPE: MeshShaderType = 'soft_clay';
 const DEFAULT_MATCAP_VARIANT: MatcapVariant = 'neutral';
 const DEFAULT_FLAT_USE_VERTEX_COLORS = true;
@@ -237,6 +243,9 @@ function readMeshAppearanceFromLocalStorage(): PersistedMeshAppearance | null {
       materialRoughness: clampNumber(parsed.materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
       wireframeThicknessPx: clampNumber(parsed.wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(parsed.xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
+      heatmapBlend: clampNumber(parsed.heatmapBlend, 0, 1, DEFAULT_HEATMAP_BLEND),
+      heatmapContrast: clampNumber(parsed.heatmapContrast, 0.1, 5, DEFAULT_HEATMAP_CONTRAST),
+      heatmapColors: Array.isArray(parsed.heatmapColors) && parsed.heatmapColors.length === 5 ? parsed.heatmapColors : DEFAULT_HEATMAP_COLORS,
       meshColor: clampHexColor(parsed.meshColor, DEFAULT_MESH_COLOR),
       hoverTintStrength: clampNumber(parsed.hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
       selectedTintStrength: clampNumber(parsed.selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
@@ -703,12 +712,14 @@ export function useSceneCollectionManager() {
   // Shader-specific settings (Global)
   const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
   const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
+  const [heatmapBlend, setHeatmapBlend] = useState<number>(DEFAULT_HEATMAP_BLEND);
+  const [heatmapContrast, setHeatmapContrast] = useState<number>(DEFAULT_HEATMAP_CONTRAST);
 
-  // Mesh shader selection (Global)
   const [shaderType, setShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
   const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(DEFAULT_MATCAP_VARIANT);
   const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(DEFAULT_FLAT_USE_VERTEX_COLORS);
   const [toonSteps, setToonSteps] = useState<number>(DEFAULT_TOON_STEPS);
+  const [heatmapColors, setHeatmapColors] = useState<string[]>(DEFAULT_HEATMAP_COLORS);
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
   const [hoverTintStrength, setHoverTintStrength] = useState<number>(DEFAULT_HOVER_TINT_STRENGTH);
   const [selectedTintStrength, setSelectedTintStrength] = useState<number>(DEFAULT_SELECTED_TINT_STRENGTH);
@@ -749,6 +760,9 @@ export function useSceneCollectionManager() {
       setMaterialRoughness(persistedAppearance.materialRoughness);
       setWireframeThicknessPx(persistedAppearance.wireframeThicknessPx);
       setXrayOpacity(persistedAppearance.xrayOpacity);
+      setHeatmapBlend(persistedAppearance.heatmapBlend ?? DEFAULT_HEATMAP_BLEND);
+      setHeatmapContrast(persistedAppearance.heatmapContrast ?? DEFAULT_HEATMAP_CONTRAST);
+      setHeatmapColors(persistedAppearance.heatmapColors ?? DEFAULT_HEATMAP_COLORS);
       setPreferredMeshColor(persistedAppearance.meshColor);
       setHoverTintStrength(persistedAppearance.hoverTintStrength);
       setSelectedTintStrength(persistedAppearance.selectedTintStrength);
@@ -787,11 +801,14 @@ export function useSceneCollectionManager() {
       materialRoughness: clampNumber(materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
       wireframeThicknessPx: clampNumber(wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
       xrayOpacity: clampNumber(xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
+      heatmapBlend: clampNumber(heatmapBlend, 0, 1, DEFAULT_HEATMAP_BLEND),
+      heatmapContrast: clampNumber(heatmapContrast, 0.1, 5, DEFAULT_HEATMAP_CONTRAST),
+      heatmapColors: heatmapColors,
       meshColor: prev?.meshColor ?? DEFAULT_MESH_COLOR,
       hoverTintStrength: clampNumber(hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
       selectedTintStrength: clampNumber(selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
     });
-  }, [ambientIntensity, directionalIntensity, flatUseVertexColors, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity]);
+  }, [ambientIntensity, directionalIntensity, flatUseVertexColors, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity, heatmapBlend, heatmapContrast, heatmapColors]);
 
   // Global application mode
   const [mode, setMode] = useState<SupportMode>('prepare');
@@ -1154,72 +1171,72 @@ export function useSceneCollectionManager() {
           console.log(`[SceneCollection] Loading ${file.name}...`);
           const geom = await loadStlGeometry(url);
 
-        // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
-        const color = preferredMeshColor;
+          // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
+          const color = preferredMeshColor;
 
-        // Calculate initial transform with auto-lift
-        // By default, loaded geometry is centered at 0,0,0 but bottom might be < 0 or > 0 depending on normalization.
-        // loadStlGeometry normalizes: center X/Z at 0, set bottom Y (mapped to Z here?) to 0?
-        // Wait, loadStlGeometry: geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
-        // This puts the bottom at Y=0.
-        // When rendered, we use Y-up or Z-up? SceneCanvas uses Z-up logic in some places, but Three.js is Y-up.
-        // StlMesh rotates geometry? No.
-        // Let's assume standard orientation: we want bottom at Z=0 (platform) or Z=liftDistance.
-        // Since loadStlGeometry normalizes bottom to Y=0, and we usually rotate meshes -90X or similar...
-        // Actually, `loadStlGeometry` normalizes it such that "bottom" is at Y=0.
-        // In `SceneCanvas` / `StlMesh`, we render it directly.
-        // If the model is oriented Z-up (common for 3D printing), `loadStlGeometry` might have put it on its side if it used Y for height.
-        // Let's check `loadStlGeometry` normalization: `geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);`
-        // This zeroes the Y minimum.
+          // Calculate initial transform with auto-lift
+          // By default, loaded geometry is centered at 0,0,0 but bottom might be < 0 or > 0 depending on normalization.
+          // loadStlGeometry normalizes: center X/Z at 0, set bottom Y (mapped to Z here?) to 0?
+          // Wait, loadStlGeometry: geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);
+          // This puts the bottom at Y=0.
+          // When rendered, we use Y-up or Z-up? SceneCanvas uses Z-up logic in some places, but Three.js is Y-up.
+          // StlMesh rotates geometry? No.
+          // Let's assume standard orientation: we want bottom at Z=0 (platform) or Z=liftDistance.
+          // Since loadStlGeometry normalizes bottom to Y=0, and we usually rotate meshes -90X or similar...
+          // Actually, `loadStlGeometry` normalizes it such that "bottom" is at Y=0.
+          // In `SceneCanvas` / `StlMesh`, we render it directly.
+          // If the model is oriented Z-up (common for 3D printing), `loadStlGeometry` might have put it on its side if it used Y for height.
+          // Let's check `loadStlGeometry` normalization: `geometry.translate(-preCenter.x, -preBBox.min.y, -preCenter.z);`
+          // This zeroes the Y minimum.
 
-        // The `computeLowestZ` util takes a matrix.
-        // Default transform is identity.
-        // If we assume the model is upright after load (or we don't rotate it yet), the lowest point is 0.
+          // The `computeLowestZ` util takes a matrix.
+          // Default transform is identity.
+          // If we assume the model is upright after load (or we don't rotate it yet), the lowest point is 0.
 
-        // However, `useTransformManager` uses `computeLowestZ` to find the world Z bottom.
-        // If we want to lift it, we set Z position.
+          // However, `useTransformManager` uses `computeLowestZ` to find the world Z bottom.
+          // If we want to lift it, we set Z position.
 
-        // Let's calculate the default Z position.
-        // If the geometry is already normalized to sit at 0, then:
-        // platformZ = 0.
-        // liftZ = liftDistance.
+          // Let's calculate the default Z position.
+          // If the geometry is already normalized to sit at 0, then:
+          // platformZ = 0.
+          // liftZ = liftDistance.
 
-        // But wait, `StlMesh` applies `centerOffset` to the geometry: 
-        // `position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}`
-        // `centerOffset` is `bbox.getCenter()`.
-        // So the mesh is centered at (0,0,0) inside the group.
-        // The group is at `transform.position`.
-        // So if we want the bottom of the mesh to be at `targetZ`, we need to know the distance from center to bottom.
-        // halfHeight = (max.z - min.z) / 2.
-        // targetGroupZ = targetZ + halfHeight.
+          // But wait, `StlMesh` applies `centerOffset` to the geometry: 
+          // `position={new THREE.Vector3(-centerOffset.x, -centerOffset.y, -centerOffset.z)}`
+          // `centerOffset` is `bbox.getCenter()`.
+          // So the mesh is centered at (0,0,0) inside the group.
+          // The group is at `transform.position`.
+          // So if we want the bottom of the mesh to be at `targetZ`, we need to know the distance from center to bottom.
+          // halfHeight = (max.z - min.z) / 2.
+          // targetGroupZ = targetZ + halfHeight.
 
-        // Wait, `useTransformManager` uses `computeLowestZ`.
-        // Let's stick to the logic that `useTransformManager` uses, but applied initially.
-        // Actually, `useTransformManager` logic:
-        // `const heightOffset = center.z - bbox.min.z;`
-        // `const finalZ = autoLift ? heightOffset + liftDistance : heightOffset;`
+          // Wait, `useTransformManager` uses `computeLowestZ`.
+          // Let's stick to the logic that `useTransformManager` uses, but applied initially.
+          // Actually, `useTransformManager` logic:
+          // `const heightOffset = center.z - bbox.min.z;`
+          // `const finalZ = autoLift ? heightOffset + liftDistance : heightOffset;`
 
-        // So we replicate that logic.
-        const bbox = geom.bbox;
-        const center = geom.center;
-        const heightOffset = center.z - bbox.min.z;
-        const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
+          // So we replicate that logic.
+          const bbox = geom.bbox;
+          const center = geom.center;
+          const heightOffset = center.z - bbox.min.z;
+          const initialZ = autoLift ? heightOffset + liftDistance : heightOffset;
 
-        const model: LoadedModel = {
-          id: generateId(),
-          name: file.name,
-          fileUrl: url,
-          fileSizeBytes: file.size,
-          geometry: geom,
-          transform: {
-            position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
-            rotation: new THREE.Euler(0, 0, 0),
-            scale: new THREE.Vector3(1, 1, 1)
-          },
-          visible: true,
-          color,
-          polygonCount: geom.geometry.getAttribute('position').count / 3
-        };
+          const model: LoadedModel = {
+            id: generateId(),
+            name: file.name,
+            fileUrl: url,
+            fileSizeBytes: file.size,
+            geometry: geom,
+            transform: {
+              position: new THREE.Vector3(defaultImportCenterXY.x, defaultImportCenterXY.y, initialZ),
+              rotation: new THREE.Euler(0, 0, 0),
+              scale: new THREE.Vector3(1, 1, 1)
+            },
+            visible: true,
+            color,
+            polygonCount: geom.geometry.getAttribute('position').count / 3
+          };
 
           newModels.push(model);
         } catch (err) {
@@ -2139,10 +2156,10 @@ export function useSceneCollectionManager() {
         groupName: resolvedGroupName,
         transform: sourceTransform
           ? {
-              position: sourceTransform.position.clone(),
-              rotation: sourceTransform.rotation.clone(),
-              scale: sourceTransform.scale.clone(),
-            }
+            position: sourceTransform.position.clone(),
+            rotation: sourceTransform.rotation.clone(),
+            scale: sourceTransform.scale.clone(),
+          }
           : model.transform,
       };
     });
@@ -2431,6 +2448,9 @@ export function useSceneCollectionManager() {
       materialRoughness: prev?.materialRoughness ?? materialRoughness,
       wireframeThicknessPx: prev?.wireframeThicknessPx ?? wireframeThicknessPx,
       xrayOpacity: prev?.xrayOpacity ?? xrayOpacity,
+      heatmapBlend: prev?.heatmapBlend ?? heatmapBlend,
+      heatmapContrast: prev?.heatmapContrast ?? heatmapContrast,
+      heatmapColors: prev?.heatmapColors ?? heatmapColors,
       meshColor: normalizedColor,
       hoverTintStrength: prev?.hoverTintStrength ?? hoverTintStrength,
       selectedTintStrength: prev?.selectedTintStrength ?? selectedTintStrength,
@@ -2613,6 +2633,10 @@ export function useSceneCollectionManager() {
     setWireframeThicknessPx,
     xrayOpacity,
     setXrayOpacity,
+    heatmapBlend,
+    setHeatmapBlend,
+    heatmapContrast,
+    setHeatmapContrast,
     shaderType,
     setShaderType,
     matcapVariant,
@@ -2629,6 +2653,15 @@ export function useSceneCollectionManager() {
     setMode,
     selectionHighlightMode,
     setSelectionHighlightMode,
+    heatmapColors,
+    setHeatmapColors,
+    onHeatmapColorChange: useCallback((index: number, color: string) => {
+      setHeatmapColors(prev => {
+        const next = [...prev];
+        next[index] = color;
+        return next;
+      });
+    }, []),
 
     // Legacy/Other
     handleLoadLychee,

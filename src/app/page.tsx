@@ -4010,10 +4010,10 @@ export default function Home() {
         duplicatePreviewTransforms,
         duplicateSourcePreviewTransform
           ? {
-              position: duplicateSourcePreviewTransform.position.clone(),
-              rotation: duplicateSourcePreviewTransform.rotation.clone(),
-              scale: duplicateSourcePreviewTransform.scale.clone(),
-            }
+            position: duplicateSourcePreviewTransform.position.clone(),
+            rotation: duplicateSourcePreviewTransform.rotation.clone(),
+            scale: duplicateSourcePreviewTransform.scale.clone(),
+          }
           : null,
       );
 
@@ -4154,6 +4154,10 @@ export default function Home() {
         onMaterialRoughnessChange={scene.setMaterialRoughness}
         xrayOpacity={scene.xrayOpacity}
         onXrayOpacityChange={scene.setXrayOpacity}
+        heatmapBlend={scene.heatmapBlend}
+        onHeatmapBlendChange={scene.setHeatmapBlend}
+        heatmapContrast={scene.heatmapContrast}
+        onHeatmapContrastChange={scene.setHeatmapContrast}
         hoverTintStrength={scene.hoverTintStrength}
         onHoverTintStrengthChange={scene.setHoverTintStrength}
         selectedTintStrength={scene.selectedTintStrength}
@@ -4169,6 +4173,8 @@ export default function Home() {
         hasModels={scene.models.length > 0}
         viewTypeOverride={sessionShaderOverride}
         onViewTypeOverrideChange={setSessionShaderOverride}
+        heatmapColors={scene.heatmapColors}
+        onHeatmapColorChange={scene.onHeatmapColorChange}
       />
 
       <FloatingPanelStack>
@@ -4782,6 +4788,8 @@ export default function Home() {
             flatUseVertexColors={scene.flatUseVertexColors}
             toonSteps={scene.toonSteps}
             xrayOpacity={scene.xrayOpacity}
+            heatmapContrast={scene.heatmapContrast}
+            heatmapColors={scene.heatmapColors}
             disableRaycast={transformMgr.isTransforming}
             hideCrossSectionCap={false}
             onCameraChange={handleCameraChange}
