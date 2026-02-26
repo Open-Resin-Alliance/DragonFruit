@@ -42,6 +42,11 @@ type LifetimeTelemetry = {
 };
 
 type SliceBenchmarkSnapshot = SliceExportResult['benchmark'];
+type NanoDlpMaterial = {
+  id: string;
+  name: string;
+  locked?: boolean;
+};
 
 function normalizeExportBaseName(rawName: string | null | undefined): string {
   const trimmed = (rawName ?? '').trim();
@@ -68,6 +73,18 @@ function formatProgressLayerLabel(done: number, total: number): string {
   const totalSafe = Math.max(1, Math.round(total));
   const doneSafe = Math.max(0, Math.min(totalSafe, Math.round(done)));
   return `${doneSafe}/${totalSafe}`;
+}
+
+function formatClockFromSeconds(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
 }
 
 function formatElapsedClock(ms: number): string {
@@ -104,6 +121,10 @@ export function SlicingPanel({
   const [showSlicingModal, setShowSlicingModal] = useState(false);
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
+  const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x'>('2x');
+  const [aaOnSupports, setAaOnSupports] = useState(false);
+  const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
+  const [isLoadingNanodlpMaterial, setIsLoadingNanodlpMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
   const [previewTotalLayers, setPreviewTotalLayers] = useState(0);
   const [previewSelectedLayer, setPreviewSelectedLayer] = useState(1);
@@ -131,6 +152,14 @@ export function SlicingPanel({
       materialProfile: activeMaterialProfile,
     });
   }, [activeMaterialProfile, activePrinterProfile]);
+
+  const selectedNanodlpMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
+  const isNanodlpConnected = activePrinterProfile?.networkSupport === 'nanodlp'
+    && activePrinterProfile.networkConnection?.connected === true;
+  const nanodlpHost = (activePrinterProfile?.networkConnection?.ipAddress
+    || activePrinterProfile?.network?.ipAddress
+    || '').trim();
+  const nanodlpPort = activePrinterProfile?.networkConnection?.port || 80;
 
   const pipelineContainerBackendLabel = useMemo(() => {
     if (!selectedFormat) return '—';
@@ -161,6 +190,85 @@ export function SlicingPanel({
   }, [progressDone, progressTotal]);
 
   const slicingElapsedLabel = useMemo(() => formatElapsedClock(currentElapsedMs), [currentElapsedMs]);
+
+  const visibleModels = useMemo(() => models.filter((model) => model.visible), [models]);
+
+  const estimatedVolumeLabel = useMemo(() => {
+    if (visibleModels.length === 0) return '—';
+
+    let totalMm3 = 0;
+    for (const model of visibleModels) {
+      const bbox = model.geometry.bbox;
+      const sizeX = Math.max(0, bbox.max.x - bbox.min.x);
+      const sizeY = Math.max(0, bbox.max.y - bbox.min.y);
+      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
+      const sx = Math.abs(model.transform.scale.x || 1);
+      const sy = Math.abs(model.transform.scale.y || 1);
+      const sz = Math.abs(model.transform.scale.z || 1);
+      totalMm3 += (sizeX * sx) * (sizeY * sy) * (sizeZ * sz);
+    }
+
+    const ml = totalMm3 / 1000;
+    return `${ml.toFixed(2)} mL`;
+  }, [visibleModels]);
+
+  const estimatedLayerCount = useMemo(() => {
+    if (!activeMaterialProfile || visibleModels.length === 0) return 0;
+
+    const layerHeightMm = Math.max(0.001, activeMaterialProfile.layerHeightMm || 0.05);
+    let maxModelHeightMm = 0;
+
+    for (const model of visibleModels) {
+      const bbox = model.geometry.bbox;
+      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
+      const sz = Math.abs(model.transform.scale.z || 1);
+      maxModelHeightMm = Math.max(maxModelHeightMm, sizeZ * sz);
+    }
+
+    return Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
+  }, [activeMaterialProfile, visibleModels]);
+
+  const estimatedPrintTimeLabel = useMemo(() => {
+    if (!activeMaterialProfile || estimatedLayerCount <= 0) return '—';
+
+    const totalLayers = estimatedLayerCount;
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    return formatClockFromSeconds(totalSec);
+  }, [activeMaterialProfile, estimatedLayerCount]);
+
+  const resolvedMaterialLabel = useMemo(() => {
+    if (isNanodlpConnected && selectedNanodlpMaterialId) {
+      if (isLoadingNanodlpMaterial) return 'Loading NanoDLP material…';
+      if (nanodlpSelectedMaterialName) return `${nanodlpSelectedMaterialName} (NanoDLP)`;
+      const fromConnection = activePrinterProfile?.networkConnection?.selectedMaterialName?.trim();
+      if (fromConnection) return `${fromConnection} (NanoDLP)`;
+      return `${selectedNanodlpMaterialId} (NanoDLP ID)`;
+    }
+
+    return activeMaterialProfile?.name ?? 'No material selected';
+  }, [
+    activeMaterialProfile?.name,
+    activePrinterProfile?.networkConnection?.selectedMaterialName,
+    isLoadingNanodlpMaterial,
+    isNanodlpConnected,
+    nanodlpSelectedMaterialName,
+    selectedNanodlpMaterialId,
+  ]);
 
   useEffect(() => {
     if (!showSlicingModal) {
@@ -247,6 +355,66 @@ export function SlicingPanel({
       cancelled = true;
     };
   }, [activeOutputFormat]);
+
+  useEffect(() => {
+    if (!isNanodlpConnected || !nanodlpHost || !selectedNanodlpMaterialId) {
+      setNanodlpSelectedMaterialName(null);
+      setIsLoadingNanodlpMaterial(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingNanodlpMaterial(true);
+
+    void (async () => {
+      try {
+        const response = await fetch('/api/network/plugin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pluginId: 'athena',
+            operation: 'nanodlp/materials',
+            ipAddress: nanodlpHost,
+            port: nanodlpPort,
+          }),
+        });
+
+        const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+        const listRaw = Array.isArray((payload as { materials?: unknown }).materials)
+          ? (payload as { materials: unknown[] }).materials
+          : [];
+
+        const materials: NanoDlpMaterial[] = listRaw
+          .map((item) => {
+            const value = item as Partial<NanoDlpMaterial>;
+            if (typeof value?.id !== 'string' || typeof value?.name !== 'string') return null;
+            return {
+              id: value.id,
+              name: value.name,
+              locked: value.locked === true,
+            };
+          })
+          .filter((item): item is NanoDlpMaterial => item !== null);
+
+        const selected = materials.find((material) => material.id === selectedNanodlpMaterialId) ?? null;
+        if (!cancelled) {
+          setNanodlpSelectedMaterialName(selected?.name ?? null);
+        }
+      } catch {
+        if (!cancelled) {
+          setNanodlpSelectedMaterialName(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingNanodlpMaterial(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isNanodlpConnected, nanodlpHost, nanodlpPort, selectedNanodlpMaterialId]);
 
   const handleSliceZipExport = async () => {
     if (!activePrinterProfile) {
@@ -529,89 +697,122 @@ export function SlicingPanel({
             </div>
 
             <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Visible models: {models.filter((model) => model.visible).length}
+              Visible models: {visibleModels.length}
             </div>
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
               <Gauge className="w-3.5 h-3.5" />
-              <span>Lifetime Preview</span>
+              <span>Print Profile</span>
             </div>
 
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Format: {selectedFormat?.displayName ?? 'No format selected'}
+            <div className="grid grid-cols-2 gap-1.5">
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Printer</div>
+                <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
+                  {activePrinterProfile?.name ?? 'No printer selected'}
+                </div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Material</div>
+                <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
+                  {resolvedMaterialLabel}
+                </div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Output</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
+                </div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {activeMaterialProfile ? `${activeMaterialProfile.layerHeightMm.toFixed(3)} mm` : '—'}
+                </div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Est. Volume</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Est. Print Time</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Est. Layers</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>WASM</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {wasmStatus === 'available'
+                    ? 'Available'
+                    : wasmStatus === 'checking'
+                      ? 'Checking…'
+                      : wasmStatus === 'missing'
+                        ? 'Fallback'
+                        : 'N/A'}
+                </div>
+              </div>
             </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Output: {selectedFormat?.outputFormat ?? '—'}
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Printer: {activePrinterProfile?.name ?? 'No printer'}
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Material: {activeMaterialProfile?.name ?? 'No material'}
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              WASM: {wasmStatus === 'available'
-                ? 'Available'
-                : wasmStatus === 'checking'
-                  ? 'Checking…'
-                  : wasmStatus === 'missing'
-                    ? 'Missing (fallback active)'
-                    : 'Not required'}
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Backend: {lifetimeTelemetry.lastBackend ?? '—'}
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Rasterizer: {pipelineRasterizerLabel}
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Container: {pipelineContainerBackendLabel}
-            </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Last throughput: {formatLayerRate(lastBenchmark?.layersPerSecond ?? null)}
+          </div>
+
+          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+              <Cpu className="w-3.5 h-3.5" />
+              <span>Quality Settings</span>
             </div>
 
-            <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Current</div>
-                <div className="text-[11px]" style={{ color: 'var(--text-strong)' }}>{formatDuration(currentElapsedMs)}</div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Raster</div>
-                <div className="text-[11px]" style={{ color: 'var(--text-strong)' }}>{formatDuration(currentRasterMs)}</div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Last Job</div>
-                <div className="text-[11px]" style={{ color: 'var(--text-strong)' }}>{formatDuration(lifetimeTelemetry.lastElapsedMs)}</div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Last Raster</div>
-                <div className="text-[11px]" style={{ color: 'var(--text-strong)' }}>{formatDuration(lifetimeTelemetry.lastRasterMs)}</div>
+            <div className="space-y-1">
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
+              <div className="grid grid-cols-4 gap-1">
+                {(['Off', '2x', '4x', '8x'] as const).map((level) => {
+                  const active = antiAliasingLevel === level;
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      className="rounded border px-1.5 py-1 text-[11px] font-medium transition-colors"
+                      style={active
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                            color: 'var(--text-strong)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-0)',
+                            color: 'var(--text-muted)',
+                          }}
+                      onClick={() => setAntiAliasingLevel(level)}
+                    >
+                      {level}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Runs: {lifetimeTelemetry.runCount} • Total: {formatDuration(lifetimeTelemetry.totalElapsedMs)} • Raster total: {formatDuration(lifetimeTelemetry.totalRasterMs)}
-            </div>
-
-            <div className="mt-1.5 rounded border px-1.5 py-1 space-y-0.5" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Last Benchmark</div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Layers: {lastBenchmark?.totalLayers ?? '—'}
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Mesh prep: {formatDuration(lastBenchmark?.meshPrepMs ?? null)}
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Core slicing: {formatDuration(lastBenchmark?.coreSlicingMs ?? null)}
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                End-to-end: {formatDuration(lastBenchmark?.totalElapsedMs ?? null)}
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Throughput: {formatLayerRate(lastBenchmark?.layersPerSecond ?? null)}
+            <div className="mt-1 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>AA on Supports</div>
+                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Apply anti-aliasing to generated supports</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={aaOnSupports}
+                  onClick={() => setAaOnSupports((prev) => !prev)}
+                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                  style={{ background: aaOnSupports ? 'var(--accent)' : 'var(--surface-2)' }}
+                >
+                  <span
+                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${aaOnSupports ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
               </div>
             </div>
           </div>
@@ -619,18 +820,72 @@ export function SlicingPanel({
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
               <Timer className="w-3.5 h-3.5" />
-              <span>Live Telemetry</span>
+              <span>Live Status</span>
             </div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Phase: {currentPhase}</div>
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{sliceStatus}</div>
+
+            <div className="flex items-center justify-between gap-2 rounded border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>State</div>
+              <div
+                className="rounded px-2 py-0.5 text-[10px] font-semibold"
+                style={{
+                  background: isSlicingZip
+                    ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
+                    : sliceStatus.toLowerCase().includes('failed')
+                      ? 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)'
+                      : sliceStatus.toLowerCase().includes('cancel')
+                        ? 'color-mix(in srgb, #f59e0b, var(--surface-1) 78%)'
+                        : 'color-mix(in srgb, #22c55e, var(--surface-1) 82%)',
+                  color: 'var(--text-strong)',
+                }}
+              >
+                {isSlicingZip
+                  ? 'Slicing'
+                  : sliceStatus.toLowerCase().includes('failed')
+                    ? 'Failed'
+                    : sliceStatus.toLowerCase().includes('cancel')
+                      ? 'Cancelled'
+                      : 'Idle / Ready'}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Phase</div>
+                <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Progress</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{slicingElapsedLabel}</div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Layers</div>
+                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{formatProgressLayerLabel(progressDone, progressTotal)}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Rasterizer</div>
+                <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineRasterizerLabel}</div>
+              </div>
+              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Container</div>
+                <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineContainerBackendLabel}</div>
+              </div>
+            </div>
+
+            <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
+              {sliceStatus}
+            </div>
             {lastWasmError && (
-              <div className="text-[11px]" style={{ color: 'var(--status-warning, #f59e0b)' }}>
-                Last WASM error: {lastWasmError}
+              <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)', color: 'var(--status-warning, #f59e0b)', background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)' }}>
+                Last WASM warning: {lastWasmError}
               </div>
             )}
-            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Note: {backendNote}
-            </div>
           </div>
 
           <Button

@@ -288,15 +288,15 @@
     {
       "id": "export",
       "matchPanelIds": ["export-main", "export-slicing"],
-      "order": ["export-main", "export-slicing", "visual-settings"],
+      "order": ["export-main", "visual-settings", "export-slicing"],
       "anchors": {
-        "export-slicing": {
+        "visual-settings": {
           "to": "export-main",
           "side": "right-edge"
         },
-        "visual-settings": {
-          "to": "export-slicing",
-          "side": "right-edge"
+        "export-slicing": {
+          "to": "visual-settings",
+          "side": "left"
         }
       }
     },
