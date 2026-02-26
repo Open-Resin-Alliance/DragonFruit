@@ -668,6 +668,111 @@ async function handleNanoDlpMaterialsEdit(payload: unknown): Promise<HandlerResu
   }
 }
 
+async function handleNanoDlpJobImport(payload: unknown): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+  const zipBase64 = typeof (payload as any)?.zipBase64 === 'string' ? (payload as any).zipBase64.trim() : '';
+  if (!zipBase64) {
+    return { status: 400, body: { ok: false, error: 'zipBase64 payload is required' } };
+  }
+
+  const pathRaw = typeof (payload as any)?.path === 'string' ? (payload as any).path.trim() : '';
+  const path = pathRaw || 'dragonfruit_job';
+  const profileId = typeof (payload as any)?.profileId === 'string' ? (payload as any).profileId.trim() : '';
+  if (!profileId) {
+    return { status: 400, body: { ok: false, error: 'profileId is required for NanoDLP import' } };
+  }
+
+  const host = parsedHost.host.toLowerCase();
+  const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host.startsWith('127.');
+  const usbFilePath = typeof (payload as any)?.usbFilePath === 'string' ? (payload as any).usbFilePath.trim() : '';
+
+  try {
+    const zipBytes = Buffer.from(zipBase64, 'base64');
+    if (!zipBytes || zipBytes.length === 0) {
+      return { status: 400, body: { ok: false, error: 'Decoded job payload is empty' } };
+    }
+
+    const form = new FormData();
+    form.set('Path', path);
+    form.set('ProfileID', profileId);
+
+    if (isLocalhost && usbFilePath) {
+      form.set('USBFile', usbFilePath);
+    } else {
+      form.set('ZipFile', new Blob([zipBytes], { type: 'application/octet-stream' }), `${path}.nanodlp`);
+    }
+
+    const response = await fetch(`${buildNanoDlpBaseUrl(parsedHost.host, port)}/plate/add`, {
+      method: 'POST',
+      body: form,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    const responseText = await response.text().catch(() => '');
+    const location = response.headers.get('location') ?? '';
+    const locationPlateMatch = /\/(\d+)(?:\D*$)?/.exec(location);
+    const bodyPlateMatch = /(plate[_\s-]?id|\bplate\b)\D{0,12}(\d{1,10})/i.exec(responseText);
+    const plateId = Number(locationPlateMatch?.[1] ?? bodyPlateMatch?.[2] ?? '');
+    const responseJson = (() => {
+      if (!responseText) return null;
+      try {
+        return JSON.parse(responseText) as unknown;
+      } catch {
+        return null;
+      }
+    })();
+
+    if (!(response.ok || response.status === 302)) {
+      return {
+        status: 502,
+        body: {
+          ok: false,
+          ipAddress: parsedHost.host,
+          port,
+          status: response.status,
+          error: `HTTP ${response.status}`,
+          response: responseJson ?? responseText,
+        },
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        ipAddress: parsedHost.host,
+        port,
+        path,
+        plateId: Number.isFinite(plateId) && plateId > 0 ? plateId : null,
+        status: response.status,
+        location,
+        response: responseJson ?? responseText,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to upload print job to NanoDLP';
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        ipAddress: parsedHost.host,
+        port,
+        error: message,
+      },
+    };
+  }
+}
+
 export async function handleAthenaNetworkOperation(operationPath: string[], payload: unknown): Promise<HandlerResult> {
   // Athena currently exposes NanoDLP operations under `nanodlp/*`.
   if (operationPath.length === 0 || operationPath[0] !== 'nanodlp') {
@@ -682,6 +787,7 @@ export async function handleAthenaNetworkOperation(operationPath: string[], payl
   if (op === 'discover') return handleNanoDlpDiscover(payload);
   if (op === 'materials') return handleNanoDlpMaterials(payload);
   if (op === 'materials/edit') return handleNanoDlpMaterialsEdit(payload);
+  if (op === 'job/import') return handleNanoDlpJobImport(payload);
 
   return { status: 404, body: { error: 'Unknown Athena NanoDLP operation' } };
 }
