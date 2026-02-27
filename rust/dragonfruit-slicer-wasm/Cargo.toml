@@ -17,6 +17,8 @@ zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 time = "=0.3.36"
 time-core = "=0.1.2"
 png = "0.17"
+crc32fast = "1.4"
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 
 [profile.release]
 lto = true

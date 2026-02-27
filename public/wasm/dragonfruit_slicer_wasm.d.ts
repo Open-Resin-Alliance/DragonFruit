@@ -1,9 +1,9 @@
 /* tslint:disable */
 /* eslint-disable */
+export function slice_solid_layers_chunk_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string, start_layer: number, layer_count: number): Uint8Array;
+export function slice_solid_and_encode_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string): Uint8Array;
 export function encode_slice_job(job_json: string): Uint8Array;
 export function slice_solid_and_encode_job(job_json: string): Uint8Array;
-export function slice_solid_and_encode_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string): Uint8Array;
-export function slice_solid_layers_chunk_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string, start_layer: number, layer_count: number): Uint8Array;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 

@@ -1,3 +1,5 @@
+use crate::bvh::BVHNode;
+use crate::fast_png::encode_binary_mask_with_level;
 use crate::job::{SliceJob, SolidSliceJob};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -6,19 +8,19 @@ use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 #[derive(Debug, Clone, Copy)]
-struct Vec3 {
-    x: f32,
-    y: f32,
-    z: f32,
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Tri {
-    a: Vec3,
-    b: Vec3,
-    c: Vec3,
-    z_min: f32,
-    z_max: f32,
+pub struct Tri {
+    pub a: Vec3,
+    pub b: Vec3,
+    pub c: Vec3,
+    pub z_min: f32,
+    pub z_max: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -211,6 +213,27 @@ fn build_layer_triangle_buckets(
     buckets
 }
 
+/// Query triangles that intersect a Z-plane using BVH acceleration
+fn query_layer_triangles_bvh(
+    bvh: &BVHNode,
+    triangles: &[Tri],
+    layer_index: u32,
+    layer_height_mm: f32,
+) -> Vec<usize> {
+    let z_mm = ((layer_index as f32) + 0.5) * layer_height_mm;
+    let mut indices = Vec::new();
+    bvh.query_z_plane(z_mm, &mut indices);
+
+    // Filter to only triangles that actually intersect this Z height
+    // (BVH gives candidates, need final check)
+    indices.retain(|&idx| {
+        let tri = &triangles[idx];
+        tri.z_min <= z_mm && tri.z_max >= z_mm
+    });
+
+    indices
+}
+
 fn build_layer_segments(
     triangles: &[Tri],
     triangle_indices: &[usize],
@@ -329,22 +352,48 @@ fn build_row_segment_buckets(height_px: u32, segments: &[Segment]) -> Vec<Vec<us
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 #[inline(always)]
 fn fill_row_span_white(mask_row: &mut [u8], x_start: usize, x_end_inclusive: usize) {
-    use core::arch::wasm32::{i8x16_splat, v128, v128_store};
+    use core::arch::wasm32::{u8x16_splat, v128, v128_store};
 
     let span_len = x_end_inclusive + 1 - x_start;
-    let mut offset = 0usize;
+
+    // Early return for tiny spans
+    if span_len < 4 {
+        for i in x_start..=x_end_inclusive {
+            mask_row[i] = 255;
+        }
+        return;
+    }
+
     let base_ptr = unsafe { mask_row.as_mut_ptr().add(x_start) };
-    let white = i8x16_splat(-1);
+
+    // Align pointer to 16-byte boundary for better SIMD performance
+    let align_offset = (16 - (base_ptr as usize % 16)) % 16;
+    let align_count = align_offset.min(span_len);
+
+    // Fill unaligned portion
+    unsafe {
+        for i in 0..align_count {
+            *base_ptr.add(i) = 255;
+        }
+    }
+
+    // Fill aligned portion using SIMD
+    let remaining = span_len - align_count;
+    let simd_chunks = remaining / 16;
+    let simd_bytes = simd_chunks * 16;
+
+    let white = u8x16_splat(255);
 
     unsafe {
-        while offset + 16 <= span_len {
+        for chunk in 0..simd_chunks {
+            let offset = align_count + chunk * 16;
             v128_store(base_ptr.add(offset) as *mut v128, white);
-            offset += 16;
         }
 
-        while offset < span_len {
-            *base_ptr.add(offset) = 255;
-            offset += 1;
+        // Fill remainder
+        let remainder_start = align_count + simd_bytes;
+        for i in 0..(span_len - align_count - simd_bytes) {
+            *base_ptr.add(remainder_start + i) = 255;
         }
     }
 }
@@ -380,7 +429,21 @@ fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment])
             continue;
         }
 
-        intersections.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Use insertion sort for small arrays (typical case), comparison sort for larger
+        if intersections.len() <= 32 {
+            for i in 1..intersections.len() {
+                let key = intersections[i];
+                let mut j = i;
+                while j > 0 && intersections[j - 1].0 > key.0 {
+                    intersections[j] = intersections[j - 1];
+                    j -= 1;
+                }
+                intersections[j] = key;
+            }
+        } else {
+            intersections
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
 
         let row_start = y * width;
         let mut winding = 0i32;
@@ -422,24 +485,10 @@ fn encode_grayscale_png(
     height_px: u32,
     pixels: &[u8],
 ) -> Result<Vec<u8>, SolidSlicerError> {
-    let mut out = Vec::new();
-
-    {
-        let mut encoder = png::Encoder::new(&mut out, width_px, height_px);
-        encoder.set_color(png::ColorType::Grayscale);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Best);
-        encoder.set_filter(png::FilterType::Paeth);
-        let mut writer = encoder
-            .write_header()
-            .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()))?;
-
-        writer
-            .write_image_data(pixels)
-            .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()))?;
-    }
-
-    Ok(out)
+    // Use fast PNG encoder optimized for binary masks
+    // Compression level 6 provides good balance between speed and size
+    encode_binary_mask_with_level(width_px, height_px, pixels, 6)
+        .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()))
 }
 
 fn pack_mask_to_nanodlp_png(
@@ -858,6 +907,84 @@ fn render_layer_png(
     )
 }
 
+/// BVH-accelerated version of render_layer_png for large models
+fn render_layer_png_bvh(
+    job: &SolidSliceJob,
+    triangles: &[Tri],
+    bvh: &BVHNode,
+    packing_mode: PackingMode,
+    mirror_x: bool,
+    mirror_y: bool,
+    min_x_mm: f32,
+    min_y_mm: f32,
+    layer_index: u32,
+    empty_layer_png: &mut Option<Vec<u8>>,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
+
+    // Query BVH for candidate triangles
+    let triangle_indices =
+        query_layer_triangles_bvh(bvh, triangles, layer_index, job.layer_height_mm);
+
+    if triangle_indices.is_empty() {
+        if empty_layer_png.is_none() {
+            let empty_mask =
+                vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+            *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                &empty_mask,
+                job.source_width_px,
+                job.source_height_px,
+                job.width_px,
+                job.height_px,
+                packing_mode,
+            )?);
+        }
+
+        return Ok(empty_layer_png.clone().unwrap_or_default());
+    }
+
+    let segments = build_layer_segments(
+        triangles,
+        &triangle_indices,
+        z_mm,
+        mirror_x,
+        mirror_y,
+        min_x_mm,
+        min_y_mm,
+        job.build_width_mm,
+        job.build_depth_mm,
+        job.source_width_px,
+        job.source_height_px,
+    );
+
+    if segments.is_empty() {
+        if empty_layer_png.is_none() {
+            let empty_mask =
+                vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+            *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                &empty_mask,
+                job.source_width_px,
+                job.source_height_px,
+                job.width_px,
+                job.height_px,
+                packing_mode,
+            )?);
+        }
+
+        return Ok(empty_layer_png.clone().unwrap_or_default());
+    }
+
+    let mask = rasterize_segments_solid(job.source_width_px, job.source_height_px, &segments);
+    pack_mask_to_nanodlp_png(
+        &mask,
+        job.source_width_px,
+        job.source_height_px,
+        job.width_px,
+        job.height_px,
+        packing_mode,
+    )
+}
+
 pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, SolidSlicerError> {
     if job.output_format != ".nanodlp" {
         return Err(SolidSlicerError::UnsupportedOutput(
@@ -874,25 +1001,55 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
     let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
-    let layer_buckets =
-        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm);
+
+    // Use BVH acceleration for large models (>10K triangles)
+    const BVH_THRESHOLD: usize = 10_000;
+    let use_bvh = triangles.len() > BVH_THRESHOLD;
+
+    let bvh = if use_bvh {
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        Some(BVHNode::build(&triangles, indices, 16)) // Max 16 triangles per leaf
+    } else {
+        None
+    };
+
+    let layer_buckets = if use_bvh {
+        Vec::new() // Don't pre-build buckets when using BVH
+    } else {
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm)
+    };
 
     let mut layer_pngs: Vec<Vec<u8>> = Vec::with_capacity(job.total_layers as usize);
     let mut empty_layer_png: Option<Vec<u8>> = None;
 
     for layer_index in 0..job.total_layers {
-        let png = render_layer_png(
-            job,
-            &triangles,
-            &layer_buckets,
-            packing_mode,
-            mirror_x,
-            mirror_y,
-            min_x_mm,
-            min_y_mm,
-            layer_index,
-            &mut empty_layer_png,
-        )?;
+        let png = if use_bvh {
+            render_layer_png_bvh(
+                job,
+                &triangles,
+                bvh.as_ref().unwrap(),
+                packing_mode,
+                mirror_x,
+                mirror_y,
+                min_x_mm,
+                min_y_mm,
+                layer_index,
+                &mut empty_layer_png,
+            )?
+        } else {
+            render_layer_png(
+                job,
+                &triangles,
+                &layer_buckets,
+                packing_mode,
+                mirror_x,
+                mirror_y,
+                min_x_mm,
+                min_y_mm,
+                layer_index,
+                &mut empty_layer_png,
+            )?
+        };
         layer_pngs.push(png);
     }
 
@@ -930,8 +1087,23 @@ pub fn slice_solid_chunk_payload(
     let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
-    let layer_buckets =
-        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm);
+
+    // Use BVH acceleration for large models (>10K triangles)
+    const BVH_THRESHOLD: usize = 10_000;
+    let use_bvh = triangles.len() > BVH_THRESHOLD;
+
+    let bvh = if use_bvh {
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        Some(BVHNode::build(&triangles, indices, 16))
+    } else {
+        None
+    };
+
+    let layer_buckets = if use_bvh {
+        Vec::new()
+    } else {
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm)
+    };
     let mut empty_layer_png: Option<Vec<u8>> = None;
 
     let mut out = Vec::<u8>::new();
@@ -940,18 +1112,33 @@ pub fn slice_solid_chunk_payload(
 
     let end_layer = start_layer + layer_count;
     for layer_index in start_layer..end_layer {
-        let png = render_layer_png(
-            job,
-            &triangles,
-            &layer_buckets,
-            packing_mode,
-            mirror_x,
-            mirror_y,
-            min_x_mm,
-            min_y_mm,
-            layer_index,
-            &mut empty_layer_png,
-        )?;
+        let png = if use_bvh {
+            render_layer_png_bvh(
+                job,
+                &triangles,
+                bvh.as_ref().unwrap(),
+                packing_mode,
+                mirror_x,
+                mirror_y,
+                min_x_mm,
+                min_y_mm,
+                layer_index,
+                &mut empty_layer_png,
+            )?
+        } else {
+            render_layer_png(
+                job,
+                &triangles,
+                &layer_buckets,
+                packing_mode,
+                mirror_x,
+                mirror_y,
+                min_x_mm,
+                min_y_mm,
+                layer_index,
+                &mut empty_layer_png,
+            )?
+        };
 
         let png_len = png.len() as u32;
         out.extend_from_slice(&layer_index.to_le_bytes());
@@ -979,8 +1166,23 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
     let triangles = parse_triangles(&job.triangles_xyz)?;
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
-    let layer_buckets =
-        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm);
+
+    // Use BVH acceleration for large models (>10K triangles)
+    const BVH_THRESHOLD: usize = 10_000;
+    let use_bvh = triangles.len() > BVH_THRESHOLD;
+
+    let bvh = if use_bvh {
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        Some(BVHNode::build(&triangles, indices, 16))
+    } else {
+        None
+    };
+
+    let layer_buckets = if use_bvh {
+        Vec::new()
+    } else {
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm)
+    };
     let mut empty_layer_png: Option<Vec<u8>> = None;
     let mut first_layer_png: Option<Vec<u8>> = None;
     let mut preview_layer_png: Option<Vec<u8>> = None;
@@ -1024,7 +1226,17 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
 
         for layer_index in 0..job.total_layers {
             let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
-            let triangle_indices = &layer_buckets[layer_index as usize];
+
+            let triangle_indices = if use_bvh {
+                query_layer_triangles_bvh(
+                    bvh.as_ref().unwrap(),
+                    &triangles,
+                    layer_index,
+                    job.layer_height_mm,
+                )
+            } else {
+                layer_buckets[layer_index as usize].clone()
+            };
 
             let layer_png = if triangle_indices.is_empty() {
                 if empty_layer_png.is_none() {
@@ -1043,7 +1255,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
             } else {
                 let segments = build_layer_segments(
                     &triangles,
-                    triangle_indices,
+                    &triangle_indices,
                     z_mm,
                     mirror_x,
                     mirror_y,

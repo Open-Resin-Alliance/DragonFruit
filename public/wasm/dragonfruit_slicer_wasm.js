@@ -74,48 +74,6 @@ function passStringToWasm0(arg, malloc, realloc) {
     return ptr;
 }
 
-function takeFromExternrefTable0(idx) {
-    const value = wasm.__wbindgen_export_0.get(idx);
-    wasm.__externref_table_dealloc(idx);
-    return value;
-}
-
-function getArrayU8FromWasm0(ptr, len) {
-    ptr = ptr >>> 0;
-    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
-}
-/**
- * @param {string} job_json
- * @returns {Uint8Array}
- */
-export function encode_slice_job(job_json) {
-    const ptr0 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.encode_slice_job(ptr0, len0);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * @param {string} job_json
- * @returns {Uint8Array}
- */
-export function slice_solid_and_encode_job(job_json) {
-    const ptr0 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.slice_solid_and_encode_job(ptr0, len0);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
 let cachedFloat32ArrayMemory0 = null;
 
 function getFloat32ArrayMemory0() {
@@ -131,6 +89,52 @@ function passArrayF32ToWasm0(arg, malloc) {
     WASM_VECTOR_LEN = arg.length;
     return ptr;
 }
+
+function takeFromExternrefTable0(idx) {
+    const value = wasm.__wbindgen_export_0.get(idx);
+    wasm.__externref_table_dealloc(idx);
+    return value;
+}
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+/**
+ * @param {string} output_format
+ * @param {number} source_width_px
+ * @param {number} source_height_px
+ * @param {number} width_px
+ * @param {number} height_px
+ * @param {string} x_packing_mode
+ * @param {number} build_width_mm
+ * @param {number} build_depth_mm
+ * @param {number} layer_height_mm
+ * @param {number} total_layers
+ * @param {Float32Array} triangles_xyz
+ * @param {string} metadata_json
+ * @param {number} start_layer
+ * @param {number} layer_count
+ * @returns {Uint8Array}
+ */
+export function slice_solid_layers_chunk_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json, start_layer, layer_count) {
+    const ptr0 = passStringToWasm0(output_format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(x_packing_mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ret = wasm.slice_solid_layers_chunk_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr2, len2, ptr3, len3, start_layer, layer_count);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v5;
+}
+
 /**
  * @param {string} output_format
  * @param {number} source_width_px
@@ -165,38 +169,35 @@ export function slice_solid_and_encode_raw(output_format, source_width_px, sourc
 }
 
 /**
- * @param {string} output_format
- * @param {number} source_width_px
- * @param {number} source_height_px
- * @param {number} width_px
- * @param {number} height_px
- * @param {string} x_packing_mode
- * @param {number} build_width_mm
- * @param {number} build_depth_mm
- * @param {number} layer_height_mm
- * @param {number} total_layers
- * @param {Float32Array} triangles_xyz
- * @param {string} metadata_json
- * @param {number} start_layer
- * @param {number} layer_count
+ * @param {string} job_json
  * @returns {Uint8Array}
  */
-export function slice_solid_layers_chunk_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json, start_layer, layer_count) {
-    const ptr0 = passStringToWasm0(output_format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+export function encode_slice_job(job_json) {
+    const ptr0 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(x_packing_mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len3 = WASM_VECTOR_LEN;
-    const ret = wasm.slice_solid_layers_chunk_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr2, len2, ptr3, len3, start_layer, layer_count);
+    const ret = wasm.encode_slice_job(ptr0, len0);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v5;
+    return v2;
+}
+
+/**
+ * @param {string} job_json
+ * @returns {Uint8Array}
+ */
+export function slice_solid_and_encode_job(job_json) {
+    const ptr0 = passStringToWasm0(job_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.slice_solid_and_encode_job(ptr0, len0);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
 }
 
 async function __wbg_load(module, imports) {

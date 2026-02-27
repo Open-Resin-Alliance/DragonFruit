@@ -60,6 +60,8 @@ dependencies = [
 name = "dragonfruit-slicer-wasm"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "flate2",
  "png",
  "serde",
  "serde_json",

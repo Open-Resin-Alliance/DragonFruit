@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+pub mod bvh;
+pub mod fast_png;
 pub mod formats;
 pub mod job;
 pub mod solid_slicer;
