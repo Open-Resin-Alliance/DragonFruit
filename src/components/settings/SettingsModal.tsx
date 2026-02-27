@@ -416,8 +416,8 @@ export function SettingsModal({
       tone: 'primary',
     },
     performance: {
-      label: 'Performance',
-      description: 'Slicing backend and throughput tuning',
+      label: 'Slicing',
+      description: 'PNG compression, spatial acceleration, and backend tuning',
       icon: MonitorCog,
       tone: 'primary',
     },

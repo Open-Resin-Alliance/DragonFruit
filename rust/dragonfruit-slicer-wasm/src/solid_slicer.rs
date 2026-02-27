@@ -1,5 +1,4 @@
 use crate::bvh::BVHNode;
-use crate::fast_png::encode_binary_mask_with_level;
 use crate::job::{SliceJob, SolidSliceJob};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -485,9 +484,25 @@ fn encode_grayscale_png(
     height_px: u32,
     pixels: &[u8],
 ) -> Result<Vec<u8>, SolidSlicerError> {
-    // Use fast PNG encoder optimized for binary masks
-    // Compression level 6 provides good balance between speed and size
-    encode_binary_mask_with_level(width_px, height_px, pixels, 6)
+    encode_grayscale_png_with_strategy(
+        width_px,
+        height_px,
+        pixels,
+        crate::fast_png::CompressionStrategy::Balanced,
+    )
+}
+
+fn encode_grayscale_png_with_strategy(
+    width_px: u32,
+    height_px: u32,
+    pixels: &[u8],
+    strategy: crate::fast_png::CompressionStrategy,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    // Use fast PNG encoder optimized for binary masks with specified strategy
+    use crate::fast_png::FastPngEncoder;
+    let config = crate::fast_png::FastPngConfig::from_strategy(strategy);
+    FastPngEncoder::new(width_px, height_px, config)
+        .and_then(|encoder| encoder.encode(pixels))
         .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()))
 }
 

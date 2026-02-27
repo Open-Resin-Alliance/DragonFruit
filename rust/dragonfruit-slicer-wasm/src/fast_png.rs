@@ -34,18 +34,57 @@ pub enum FilterStrategy {
     BinaryRLE,
 }
 
+/// Compression strategy: user-friendly interface for speed vs size tradeoffs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionStrategy {
+    /// Maximum speed, larger files (compression level 0)
+    Fastest,
+    /// Default: balanced speed and size (compression level 6)
+    Balanced,
+    /// Maximum compression, slower encoding (compression level 9)
+    Smallest,
+    /// Optimal compression with advanced filtering (compression 9 + Paeth filter)
+    Optimal,
+}
+
+impl CompressionStrategy {
+    /// Convert strategy to (filter_strategy, compression_level)
+    pub fn config(&self) -> (FilterStrategy, u8) {
+        match self {
+            CompressionStrategy::Fastest => (FilterStrategy::BinaryRLE, 0),
+            CompressionStrategy::Balanced => (FilterStrategy::BinaryRLE, 6),
+            CompressionStrategy::Smallest => (FilterStrategy::BinaryRLE, 9),
+            CompressionStrategy::Optimal => (FilterStrategy::Paeth, 9),
+        }
+    }
+}
+
+impl Default for CompressionStrategy {
+    fn default() -> Self {
+        CompressionStrategy::Balanced
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FastPngConfig {
     pub filter: FilterStrategy,
     pub compression_level: u8, // 0-9, where 9 is best compression
 }
 
+impl FastPngConfig {
+    /// Create config from compression strategy
+    pub fn from_strategy(strategy: CompressionStrategy) -> Self {
+        let (filter, level) = strategy.config();
+        Self {
+            filter,
+            compression_level: level,
+        }
+    }
+}
+
 impl Default for FastPngConfig {
     fn default() -> Self {
-        Self {
-            filter: FilterStrategy::BinaryRLE,
-            compression_level: 6, // Balanced default
-        }
+        Self::from_strategy(CompressionStrategy::default())
     }
 }
 
@@ -294,6 +333,18 @@ pub fn encode_binary_mask(width: u32, height: u32, pixels: &[u8]) -> Result<Vec<
     encoder.encode(pixels)
 }
 
+/// Encode with compression strategy
+pub fn encode_binary_mask_with_strategy(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    strategy: CompressionStrategy,
+) -> Result<Vec<u8>, FastPngError> {
+    let config = FastPngConfig::from_strategy(strategy);
+    let encoder = FastPngEncoder::new(width, height, config)?;
+    encoder.encode(pixels)
+}
+
 /// Encode with custom compression level (0-9)
 pub fn encode_binary_mask_with_level(
     width: u32,
@@ -355,5 +406,59 @@ mod tests {
         let pixels = vec![0; 10]; // Wrong length
         let result = encoder.encode(&pixels);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compression_strategies() {
+        let width = 16;
+        let height = 16;
+        let pixels = vec![255; 256]; // All white
+
+        // Test all strategies
+        let fastest =
+            encode_binary_mask_with_strategy(width, height, &pixels, CompressionStrategy::Fastest);
+        let balanced =
+            encode_binary_mask_with_strategy(width, height, &pixels, CompressionStrategy::Balanced);
+        let smallest =
+            encode_binary_mask_with_strategy(width, height, &pixels, CompressionStrategy::Smallest);
+        let max_quality = encode_binary_mask_with_strategy(
+            width,
+            height,
+            &pixels,
+            CompressionStrategy::MaxQuality,
+        );
+
+        assert!(fastest.is_ok());
+        assert!(balanced.is_ok());
+        assert!(smallest.is_ok());
+        assert!(max_quality.is_ok());
+
+        let fastest_size = fastest.unwrap().len();
+        let balanced_size = balanced.unwrap().len();
+        let smallest_size = smallest.unwrap().len();
+        let max_quality_size = max_quality.unwrap().len();
+
+        // Verify compression tradeoff: faster is usually larger
+        println!(
+            "Compression sizes: fastest={}, balanced={}, smallest={}, max_quality={}",
+            fastest_size, balanced_size, smallest_size, max_quality_size
+        );
+
+        // Smallest should be smaller or equal to balanced
+        assert!(smallest_size <= balanced_size || smallest_size == balanced_size);
+    }
+
+    #[test]
+    fn test_strategy_config() {
+        let fastest = CompressionStrategy::Fastest.config();
+        let balanced = CompressionStrategy::Balanced.config();
+        let smallest = CompressionStrategy::Smallest.config();
+        let optimal = CompressionStrategy::Optimal.config();
+
+        assert_eq!(fastest.1, 0); // Level 0 for fastest
+        assert_eq!(balanced.1, 6); // Level 6 for balanced
+        assert_eq!(smallest.1, 9); // Level 9 for smallest
+        assert_eq!(optimal.1, 9); // Level 9 for optimal
+        assert_eq!(optimal.0, FilterStrategy::Paeth); // Paeth for optimal compression
     }
 }

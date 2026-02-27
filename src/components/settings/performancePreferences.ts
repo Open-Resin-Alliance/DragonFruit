@@ -1,15 +1,12 @@
 export type SlicingComputeBackendPreference = 'auto' | 'cpu' | 'webgpu';
 export type SlicingCpuProfile = 'balanced' | 'max';
-export type SlicingProgressGranularity = 'balanced' | 'granular';
-export type SlicingDebugForceBackend = 'none' | 'cpu' | 'webgpu';
+export type PngCompressionStrategy = 'fastest' | 'balanced' | 'smallest' | 'optimal';
 
 export type SlicingPerformanceSettings = {
   computeBackend: SlicingComputeBackendPreference;
   cpuProfile: SlicingCpuProfile;
-  progressGranularity: SlicingProgressGranularity;
-  debugMode: boolean;
-  debugForceBackend: SlicingDebugForceBackend;
-  benchmarkingMode: boolean;
+  pngCompressionStrategy: PngCompressionStrategy;
+  bvhAccelerationEnabled: boolean;
 };
 
 export type WebGpuSupportDetails = {
@@ -23,10 +20,8 @@ const SLICING_PERFORMANCE_SETTINGS_EVENT = 'app-slicing-performance-settings-cha
 export const DEFAULT_SLICING_PERFORMANCE_SETTINGS: SlicingPerformanceSettings = {
   computeBackend: 'auto',
   cpuProfile: 'max',
-  progressGranularity: 'granular',
-  debugMode: false,
-  debugForceBackend: 'none',
-  benchmarkingMode: false,
+  pngCompressionStrategy: 'balanced',
+  bvhAccelerationEnabled: true,
 };
 
 export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerformanceSettings {
@@ -42,24 +37,20 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
   const cpuProfile: SlicingCpuProfile =
     candidate.cpuProfile === 'balanced' ? 'balanced' : 'max';
 
-  const progressGranularity: SlicingProgressGranularity =
-    candidate.progressGranularity === 'balanced' ? 'balanced' : 'granular';
+  const pngCompressionStrategy: PngCompressionStrategy =
+    candidate.pngCompressionStrategy === 'fastest' ||
+    candidate.pngCompressionStrategy === 'smallest' ||
+    candidate.pngCompressionStrategy === 'optimal'
+      ? candidate.pngCompressionStrategy
+      : 'balanced';
 
-  const debugForceBackend: SlicingDebugForceBackend =
-    candidate.debugForceBackend === 'cpu' || candidate.debugForceBackend === 'webgpu'
-      ? candidate.debugForceBackend
-      : 'none';
-
-  const debugMode = candidate.debugMode === true;
-  const benchmarkingMode = candidate.benchmarkingMode === true;
+  const bvhAccelerationEnabled = candidate.bvhAccelerationEnabled !== false;
 
   return {
     computeBackend,
     cpuProfile,
-    progressGranularity,
-    debugMode,
-    debugForceBackend,
-    benchmarkingMode,
+    pngCompressionStrategy,
+    bvhAccelerationEnabled,
   };
 }
 
