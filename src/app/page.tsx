@@ -326,6 +326,8 @@ export default function Home() {
   const printingPreviewPanRef = React.useRef({ x: 0, y: 0 });
   const printingPreviewPanPendingRef = React.useRef({ x: 0, y: 0 });
   const printingPreviewPanRafRef = React.useRef<number | null>(null);
+  const previousSceneModeRef = React.useRef<typeof scene.mode>(scene.mode);
+  const preservedNonPrintingLayerIndexRef = React.useRef<number | null>(null);
   const printingPreviewDragRef = React.useRef<{
     pointerId: number;
     startClientX: number;
@@ -2735,6 +2737,26 @@ export default function Home() {
     hasGeometry: scene.models.length > 0,
     zRange: sceneZRange
   });
+
+  React.useEffect(() => {
+    const previousMode = previousSceneModeRef.current;
+    const currentMode = scene.mode;
+
+    if (previousMode !== 'printing' && currentMode === 'printing') {
+      // Save the general (prepare/support) layer position before printing takes control.
+      preservedNonPrintingLayerIndexRef.current = slicing.layerIndex;
+    } else if (previousMode === 'printing' && currentMode !== 'printing') {
+      // Restore general slider state so printing scrub position does not leak across modes.
+      const preserved = preservedNonPrintingLayerIndexRef.current;
+      if (preserved != null) {
+        const clamped = Math.max(0, Math.min(Math.max(0, slicing.numLayers), Math.round(preserved)));
+        slicing.setLayerIndex(clamped);
+      }
+      preservedNonPrintingLayerIndexRef.current = null;
+    }
+
+    previousSceneModeRef.current = currentMode;
+  }, [scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
 
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
