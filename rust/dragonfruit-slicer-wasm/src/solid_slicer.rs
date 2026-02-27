@@ -20,6 +20,8 @@ pub struct Tri {
     pub c: Vec3,
     pub z_min: f32,
     pub z_max: f32,
+    pub dir_x: f32,
+    pub dir_y: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,12 +113,27 @@ fn parse_triangles(flat: &[f32]) -> Result<Vec<Tri>, SolidSlicerError> {
         let z_min = a.z.min(b.z).min(c.z);
         let z_max = a.z.max(b.z).max(c.z);
 
+        // Direction of tri-plane and z-plane intersection line: n × +Z = (ny, -nx, 0)
+        // This is invariant across layers, so precompute once per triangle.
+        let ux = b.x - a.x;
+        let uy = b.y - a.y;
+        let uz = b.z - a.z;
+        let vx = c.x - a.x;
+        let vy = c.y - a.y;
+        let vz = c.z - a.z;
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        let dir_x = ny;
+        let dir_y = -nx;
+
         out.push(Tri {
             a,
             b,
             c,
             z_min,
             z_max,
+            dir_x,
+            dir_y,
         });
 
         i += 9;
@@ -250,18 +267,8 @@ fn build_layer_segments(
 
     for tri_index in triangle_indices {
         let tri = triangles[*tri_index];
-
-        let ux = tri.b.x - tri.a.x;
-        let uy = tri.b.y - tri.a.y;
-        let uz = tri.b.z - tri.a.z;
-        let vx = tri.c.x - tri.a.x;
-        let vy = tri.c.y - tri.a.y;
-        let vz = tri.c.z - tri.a.z;
-        let nx = uy * vz - uz * vy;
-        let ny = uz * vx - ux * vz;
-        // Direction of tri-plane and z-plane intersection line: n × +Z = (ny, -nx, 0)
-        let dir_x = ny;
-        let dir_y = -nx;
+        let dir_x = tri.dir_x;
+        let dir_y = tri.dir_y;
 
         let mut points = [(0.0f32, 0.0f32); 3];
         let mut point_count = 0usize;
@@ -1240,80 +1247,32 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
 
         for layer_index in 0..job.total_layers {
-            let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
-
-            let triangle_indices = if use_bvh {
-                query_layer_triangles_bvh(
+            let layer_png = if use_bvh {
+                render_layer_png_bvh(
+                    job,
+                    &triangles,
                     bvh.as_ref().unwrap(),
-                    &triangles,
-                    layer_index,
-                    job.layer_height_mm,
-                )
-            } else {
-                layer_buckets[layer_index as usize].clone()
-            };
-
-            let layer_png = if triangle_indices.is_empty() {
-                if empty_layer_png.is_none() {
-                    let empty_mask =
-                        vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
-                    empty_layer_png = Some(pack_mask_to_nanodlp_png(
-                        &empty_mask,
-                        job.source_width_px,
-                        job.source_height_px,
-                        job.width_px,
-                        job.height_px,
-                        packing_mode,
-                    )?);
-                }
-                empty_layer_png.clone().unwrap_or_default()
-            } else {
-                let segments = build_layer_segments(
-                    &triangles,
-                    &triangle_indices,
-                    z_mm,
+                    packing_mode,
                     mirror_x,
                     mirror_y,
                     min_x_mm,
                     min_y_mm,
-                    job.build_width_mm,
-                    job.build_depth_mm,
-                    job.source_width_px,
-                    job.source_height_px,
-                );
-
-                if segments.is_empty() {
-                    if empty_layer_png.is_none() {
-                        let empty_mask = vec![
-                            0u8;
-                            (job.source_width_px as usize)
-                                * (job.source_height_px as usize)
-                        ];
-                        empty_layer_png = Some(pack_mask_to_nanodlp_png(
-                            &empty_mask,
-                            job.source_width_px,
-                            job.source_height_px,
-                            job.width_px,
-                            job.height_px,
-                            packing_mode,
-                        )?);
-                    }
-                    empty_layer_png.clone().unwrap_or_default()
-                } else {
-                    let mask = rasterize_segments_solid(
-                        job.source_width_px,
-                        job.source_height_px,
-                        &segments,
-                    );
-                    pack_mask_to_nanodlp_png(
-                        &mask,
-                        job.source_width_px,
-                        job.source_height_px,
-                        job.width_px,
-                        job.height_px,
-                        packing_mode,
-                    )?
-                }
+                    layer_index,
+                    &mut empty_layer_png,
+                )?
+            } else {
+                render_layer_png(
+                    job,
+                    &triangles,
+                    &layer_buckets,
+                    packing_mode,
+                    mirror_x,
+                    mirror_y,
+                    min_x_mm,
+                    min_y_mm,
+                    layer_index,
+                    &mut empty_layer_png,
+                )?
             };
 
             let name = format!("{}.png", layer_index + 1);
