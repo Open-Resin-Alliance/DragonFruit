@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Cpu, Gauge, Sparkles } from 'lucide-react';
+import { Cpu, Gauge, Sparkles, Bug, Zap, Activity } from 'lucide-react';
 import type { SlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 
 interface PerformanceSettingsTabProps {
@@ -22,96 +22,74 @@ export function PerformanceSettingsTab({
   }, [onChange, settings]);
 
   return (
-    <div className="space-y-3">
-      <section
-        className="rounded-lg border p-3"
-        style={{
-          background: 'var(--surface-1)',
-          borderColor: 'var(--border-subtle)',
-        }}
-      >
-        <div className="flex items-start gap-2">
-          <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+    <div className="space-y-4">
+      {/* Compute Backend */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Cpu className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            Compute Backend
+          </span>
+        </div>
+        <div
+          className="rounded-lg border p-3"
+          style={{
+            background: 'var(--surface-1)',
+            borderColor: 'var(--border-subtle)',
+          }}
+        >
+          <div className="flex items-center gap-2">
+            {([
+              { key: 'auto', label: 'Auto' },
+              { key: 'cpu', label: 'CPU' },
+              { key: 'webgpu', label: 'WebGPU' },
+            ] as const).map((option) => {
+              const active = settings.computeBackend === option.key;
+              const disabled = option.key === 'webgpu' && !webGpuSupported;
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => !disabled && patch({ computeBackend: option.key })}
+                  disabled={disabled}
+                  className="flex-1 h-11 rounded-md border px-3 text-xs font-semibold uppercase tracking-wide transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={active
+                    ? {
+                        borderColor: 'var(--accent)',
+                        background: 'color-mix(in srgb, var(--accent), transparent 88%)',
+                        color: 'var(--accent)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-0)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* CPU Profile & Progress */}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Gauge className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+            <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              CPU Profile
+            </span>
+          </div>
+          <div
+            className="rounded-lg border p-3"
             style={{
+              background: 'var(--surface-1)',
               borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
             }}
           >
-            <Cpu className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-          </span>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Slicing Performance
-            </h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Tune compute backend choice, CPU saturation profile, and progress feedback responsiveness.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Compute backend
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                WebGPU is experimental; unsupported environments auto-fallback to CPU/WASM workers.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {([
-                { key: 'auto', label: 'Auto' },
-                { key: 'cpu', label: 'CPU' },
-                { key: 'webgpu', label: 'WebGPU' },
-              ] as const).map((option) => {
-                const active = settings.computeBackend === option.key;
-                const disabled = option.key === 'webgpu' && !webGpuSupported;
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => !disabled && patch({ computeBackend: option.key })}
-                    disabled={disabled}
-                    className="h-10 min-w-[100px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
-                    style={active
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="mt-2 text-[11px]" style={{ color: webGpuSupported ? '#86efac' : 'var(--text-muted)' }}>
-            WebGPU availability: {webGpuSupported ? 'Detected' : 'Not detected'}
-          </div>
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            {webGpuStatusText}
-          </div>
-        </div>
-
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                CPU profile
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Max uses nearly all logical cores; Balanced leaves more headroom for UI multitasking.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-col gap-2">
               {([
                 { key: 'balanced', label: 'Balanced', icon: Gauge },
                 { key: 'max', label: 'Max', icon: Sparkles },
@@ -123,16 +101,16 @@ export function PerformanceSettingsTab({
                     key={option.key}
                     type="button"
                     onClick={() => patch({ cpuProfile: option.key })}
-                    className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors inline-flex items-center justify-center gap-1.5"
+                    className="h-10 rounded-md border px-3 text-xs font-semibold uppercase tracking-wide transition-all inline-flex items-center justify-center gap-2"
                     style={active
                       ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
+                          borderColor: 'var(--accent)',
+                          background: 'color-mix(in srgb, var(--accent), transparent 88%)',
+                          color: 'var(--accent)',
                         }
                       : {
                           borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
+                          background: 'var(--surface-0)',
                           color: 'var(--text-muted)',
                         }}
                   >
@@ -145,17 +123,21 @@ export function PerformanceSettingsTab({
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Progress feedback
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Granular injects smooth in-flight estimates; Balanced reduces event churn slightly.
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Activity className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+            <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Progress
+            </span>
+          </div>
+          <div
+            className="rounded-lg border p-3"
+            style={{
+              background: 'var(--surface-1)',
+              borderColor: 'var(--border-subtle)',
+            }}
+          >
+            <div className="flex flex-col gap-2">
               {([
                 { key: 'balanced', label: 'Balanced' },
                 { key: 'granular', label: 'Granular' },
@@ -166,16 +148,16 @@ export function PerformanceSettingsTab({
                     key={option.key}
                     type="button"
                     onClick={() => patch({ progressGranularity: option.key })}
-                    className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                    className="h-10 rounded-md border px-3 text-xs font-semibold uppercase tracking-wide transition-all"
                     style={active
                       ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
+                          borderColor: 'var(--accent)',
+                          background: 'color-mix(in srgb, var(--accent), transparent 88%)',
+                          color: 'var(--accent)',
                         }
                       : {
                           borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
+                          background: 'var(--surface-0)',
                           color: 'var(--text-muted)',
                         }}
                   >
@@ -186,7 +168,113 @@ export function PerformanceSettingsTab({
             </div>
           </div>
         </div>
-      </section>
+      </div>
+
+      {/* Debug & Benchmarking */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Bug className="h-4 w-4" style={{ color: '#ff9e64' }} />
+          <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            Debug & Benchmarking
+          </span>
+        </div>
+        <div
+          className="rounded-lg border p-3"
+          style={{
+            background: 'var(--surface-1)',
+            borderColor: 'var(--border-subtle)',
+          }}
+        >
+          {/* Debug Mode */}
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>
+                Debug Mode
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Record timing metrics and enable force-backend control
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => patch({ debugMode: !settings.debugMode })}
+              className="h-9 w-20 rounded-md border text-xs font-semibold uppercase tracking-wide transition-all"
+              style={{
+                borderColor: settings.debugMode ? '#ff9e64' : 'var(--border-subtle)',
+                background: settings.debugMode ? 'color-mix(in srgb, #ff9e64, transparent 88%)' : 'var(--surface-0)',
+                color: settings.debugMode ? '#ff9e64' : 'var(--text-muted)',
+              }}
+            >
+              {settings.debugMode ? 'On' : 'Off'}
+            </button>
+          </div>
+
+          {/* Force Backend (conditional) */}
+          {settings.debugMode && (
+            <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>
+                Force Backend
+              </div>
+              <div className="flex gap-2">
+                {([
+                  { key: 'none', label: 'Auto' },
+                  { key: 'cpu', label: 'CPU' },
+                  { key: 'webgpu', label: 'GPU' },
+                ] as const).map((option) => {
+                  const active = settings.debugForceBackend === option.key;
+                  const disabled = option.key === 'webgpu' && !webGpuSupported;
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => !disabled && patch({ debugForceBackend: option.key })}
+                      disabled={disabled}
+                      className="flex-1 h-9 rounded-md border text-xs font-semibold uppercase tracking-wide transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={active
+                        ? {
+                            borderColor: '#ff9e64',
+                            background: 'color-mix(in srgb, #ff9e64, transparent 88%)',
+                            color: '#ff9e64',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-0)',
+                            color: 'var(--text-muted)',
+                          }}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Benchmarking Mode */}
+          <div className={`flex items-center justify-between ${settings.debugMode ? 'mt-3 pt-3 border-t' : 'mt-3 pt-3 border-t'}`} style={{ borderColor: 'var(--border-subtle)' }}>
+            <div>
+              <div className="text-sm font-medium" style={{ color: 'var(--text-strong)' }}>
+                Benchmarking
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Show detailed performance metrics modal during slicing
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => patch({ benchmarkingMode: !settings.benchmarkingMode })}
+              className="h-9 w-20 rounded-md border text-xs font-semibold uppercase tracking-wide transition-all"
+              style={{
+                borderColor: settings.benchmarkingMode ? '#ff9e64' : 'var(--border-subtle)',
+                background: settings.benchmarkingMode ? 'color-mix(in srgb, #ff9e64, transparent 88%)' : 'var(--surface-0)',
+                color: settings.benchmarkingMode ? '#ff9e64' : 'var(--text-muted)',
+              }}
+            >
+              {settings.benchmarkingMode ? 'On' : 'Off'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

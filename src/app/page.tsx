@@ -26,6 +26,7 @@ import {
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
+import { PrintingLayerScrubPreview } from '@/components/controls/PrintingLayerScrubPreview';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
@@ -94,7 +95,7 @@ import {
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
-import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
+import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import {
   getSupportBraceSnapshot,
@@ -305,6 +306,7 @@ export default function Home() {
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
   const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
+  const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
@@ -332,6 +334,7 @@ export default function Home() {
     originY: number;
   } | null>(null);
   const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
+  const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
   const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
@@ -943,6 +946,9 @@ export default function Home() {
       if (printingPreviewPanRafRef.current !== null) {
         window.cancelAnimationFrame(printingPreviewPanRafRef.current);
       }
+      if (printingDisplayedLayerRafRef.current !== null) {
+        window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
+      }
       if (printingPreviewSettleTimeoutRef.current !== null) {
         window.clearTimeout(printingPreviewSettleTimeoutRef.current);
       }
@@ -1024,9 +1030,9 @@ export default function Home() {
   }, [scene]);
 
   const selectedPrintingLayerPreviewUrl = React.useMemo(() => {
-    if (printingSelectedLayer < 1) return null;
-    return printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null;
-  }, [printingLayerPreviewUrls, printingSelectedLayer]);
+    if (printingDisplayedLayer < 1) return null;
+    return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
+  }, [printingLayerPreviewUrls, printingDisplayedLayer]);
 
   const handlePrintingPreviewWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     if (!selectedPrintingLayerPreviewUrl) return;
@@ -1212,6 +1218,7 @@ export default function Home() {
       setIsPrintingPreviewPanning(false);
       lastPrintingLayerSyncPerfRef.current = 0;
       printingPreviewDragRef.current = null;
+      setPrintingDisplayedLayer(1);
       if (printingPreviewSettleTimeoutRef.current !== null) {
         window.clearTimeout(printingPreviewSettleTimeoutRef.current);
         printingPreviewSettleTimeoutRef.current = null;
@@ -1235,6 +1242,47 @@ export default function Home() {
     schedulePrintingPreviewSettle();
   }, [scene.mode, schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
 
+  // Refs to batch displayed layer updates and avoid expensive re-renders during scrubbing
+  const printingDisplayedLayerTargetRef = React.useRef(1);
+  const printingSelectedLayerHasUrlRef = React.useRef(false);
+  const printingDisplayedLayerRafRef = React.useRef<number | null>(null);
+
+  // Track if selected layer has a URL available (without depending on whole array)
+  React.useEffect(() => {
+    printingSelectedLayerHasUrlRef.current = Boolean(printingLayerPreviewUrls[printingSelectedLayer - 1]);
+  }, [printingSelectedLayer, printingLayerPreviewUrls]);
+
+  // Sync displayed layer: show fallback during scrub, then switch to selected once settled
+  React.useEffect(() => {
+    if (isPrintingLayerScrubbing) {
+      // During scrubbing: prefer selected layer if available, else keep current
+      const nextTarget = printingSelectedLayerHasUrlRef.current ? printingSelectedLayer : printingDisplayedLayerTargetRef.current;
+      
+      if (printingDisplayedLayerTargetRef.current !== nextTarget) {
+        printingDisplayedLayerTargetRef.current = nextTarget;
+        
+        // Batch updates to avoid excessive re-renders during rapid scrubbing
+        if (printingDisplayedLayerRafRef.current !== null) {
+          window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
+        }
+        printingDisplayedLayerRafRef.current = window.requestAnimationFrame(() => {
+          printingDisplayedLayerRafRef.current = null;
+          setPrintingDisplayedLayer(nextTarget);
+        });
+      }
+    } else if (isPrintingPreviewSettled) {
+      // Once settled and not scrubbing: switch to selected layer immediately
+      if (printingDisplayedLayerRafRef.current !== null) {
+        window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
+        printingDisplayedLayerRafRef.current = null;
+      }
+      if (printingDisplayedLayerTargetRef.current !== printingSelectedLayer) {
+        printingDisplayedLayerTargetRef.current = printingSelectedLayer;
+        setPrintingDisplayedLayer(printingSelectedLayer);
+      }
+    }
+  }, [isPrintingLayerScrubbing, isPrintingPreviewSettled, printingSelectedLayer]);
+
   React.useEffect(() => {
     setIsPrintingSettledCanvasReady(false);
   }, [selectedPrintingLayerPreviewUrl]);
@@ -1253,6 +1301,10 @@ export default function Home() {
     setPrintingUploadDisplayProgress(0);
     setPrintingDeviceProcessingStartedAtMs(null);
     setPrintingDeviceProcessingElapsedSec(0);
+  }, []);
+
+  const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
+    setPrintingSlicingBenchmark(benchmark);
   }, []);
 
   const printingOutputSizeLabel = React.useMemo(() => {
@@ -1642,8 +1694,13 @@ export default function Home() {
       setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
     }
     setIsPrintingLayerScrubbing(false);
+    // Immediately show the proper PNG for the selected layer when released
+    setPrintingDisplayedLayer((previous) => {
+      const targetLayer = pending ?? previous;
+      return Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), targetLayer));
+    });
     schedulePrintingPreviewSettle();
-  }, [schedulePrintingPreviewSettle]);
+  }, [schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
 
   const handleSceneLayerScrubStart = React.useCallback(() => {
     setIsSceneLayerScrubbing(true);
@@ -5396,6 +5453,7 @@ export default function Home() {
               onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
               onSlicingFinished={handleSlicingFinishedForPrinting}
               onSliceArtifactReady={handleSliceArtifactReady}
+              onBenchmarkComplete={handleSlicingBenchmarkComplete}
             />
           </>
 
@@ -5492,7 +5550,7 @@ export default function Home() {
           >
             <div className="mb-2 flex items-center justify-between">
               <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-                {scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
+                {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
               </div>
               <button
                 type="button"
@@ -5504,7 +5562,18 @@ export default function Home() {
               </button>
             </div>
 
-            {scene.mode === 'support' ? (
+            {scene.mode === 'printing' ? (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Total layers</div><div>{printingPreviewTotalLayers}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Selected layer</div><div>{printingSelectedLayer}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Displayed layer</div><div>{printingDisplayedLayer}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Is scrubbing</div><div>{isPrintingLayerScrubbing ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Send progress</div><div>{(printingSendProgress * 100).toFixed(1)}%</div>
+                <div style={{ color: 'var(--text-muted)' }}>Send busy</div><div>{printingSendBusy ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Stage text</div><div className="truncate" title={printingSendStageText ?? 'none'}>{printingSendStageText ?? 'none'}</div>
+              </div>
+            ) : scene.mode === 'support' ? (
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
@@ -5519,6 +5588,46 @@ export default function Home() {
                 <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
                 <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
+              </div>
+            )}
+
+            {scene.mode === 'printing' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Preview State
+                </div>
+                <div>Preview URLs loaded: {printingLayerPreviewUrls.filter(u => u !== null).length} / {printingPreviewTotalLayers}</div>
+                <div>Selected URL exists: {(printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null) ? 'true' : 'false'}</div>
+                <div>Displayed URL exists: {(printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null) ? 'true' : 'false'}</div>
+                <div>Artifact ready: {printingArtifact ? 'true' : 'false'}</div>
+                <div>Artifact name: {printingArtifact?.outputName ?? 'none'}</div>
+                <div>Upload dialog open: {printingUploadDialogOpen ? 'true' : 'false'}</div>
+                <div>Upload stage: {printingUploadDialogStage}</div>
+                <div>Display progress: {(printingUploadDisplayProgress * 100).toFixed(1)}%</div>
+                <div>Ready plate ID: {printingReadyPlateId ?? 'none'}</div>
+                <div>Print now busy: {printingPrintNowBusy ? 'true' : 'false'}</div>
+                <div>Status text: {printingSendStatusText ?? 'none'}</div>
+
+                {printingSlicingBenchmark && (
+                  <>
+                    <div className="mt-2 mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                      Slicing Metrics
+                    </div>
+                    <div>Total time: {printingSlicingBenchmark.totalElapsedMs.toFixed(0)} ms</div>
+                    {printingSlicingBenchmark.meshPrepMs !== null && (
+                      <div>Mesh prep: {printingSlicingBenchmark.meshPrepMs.toFixed(0)} ms</div>
+                    )}
+                    {printingSlicingBenchmark.coreSlicingMs !== null && (
+                      <div>Core slicing: {printingSlicingBenchmark.coreSlicingMs.toFixed(0)} ms</div>
+                    )}
+                    {printingSlicingBenchmark.totalLayers !== null && (
+                      <div>Total layers: {printingSlicingBenchmark.totalLayers}</div>
+                    )}
+                    {printingSlicingBenchmark.layersPerSecond !== null && (
+                      <div>Layers/sec: {printingSlicingBenchmark.layersPerSecond.toFixed(1)}</div>
+                    )}
+                  </>
+                )}
               </div>
             )}
 
@@ -5560,7 +5669,7 @@ export default function Home() {
               </div>
             )}
 
-            {scene.mode !== 'support' && (
+            {scene.mode !== 'support' && scene.mode !== 'printing' && (
               <>
                 <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -5598,7 +5707,7 @@ export default function Home() {
               <div>SupportBraces: {transformDebugStats.supportCounts.supportBraces} / {activeSupportEntityCounts.supportBraces}</div>
             </div>
 
-            {scene.mode !== 'support' && (
+            {scene.mode !== 'support' && scene.mode !== 'printing' && (
               <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Transform Timeline
@@ -5621,7 +5730,7 @@ export default function Home() {
               </div>
             )}
 
-            {scene.mode !== 'support' && (
+            {scene.mode !== 'support' && scene.mode !== 'printing' && (
               <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Transform History Commit
@@ -5920,7 +6029,20 @@ export default function Home() {
                 onPointerUp={handlePrintingPreviewPointerEnd}
                 onPointerCancel={handlePrintingPreviewPointerEnd}
               >
-                {selectedPrintingLayerPreviewUrl ? (
+                {isPrintingLayerScrubbing ? (
+                  // While scrubbing: render a vector cross-section instead of decoding PNGs.
+                  // This avoids image-decode memory churn and gives instant visual feedback
+                  // via the same loop data used by the 3-D cross-section cap.
+                  <PrintingLayerScrubPreview
+                    models={scene.models}
+                    clipZ={slicing.clipUpper}
+                    buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
+                    buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
+                    mirrorX={activePrinterProfile?.display?.mirrorX === true}
+                    mirrorY={activePrinterProfile?.display?.mirrorY === true}
+                    className="block w-full h-full rounded"
+                  />
+                ) : selectedPrintingLayerPreviewUrl ? (
                   printingPreviewTargetResolution ? (
                     <svg
                       viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
@@ -5938,10 +6060,10 @@ export default function Home() {
                     >
                       <image
                         href={selectedPrintingLayerPreviewUrl}
-                        x={(printingPreviewTargetResolution.viewportWidth * (1 - printingPreviewScrubQualityScale)) * 0.5}
-                        y={(printingPreviewTargetResolution.viewportHeight * (1 - printingPreviewScrubQualityScale)) * 0.5}
-                        width={printingPreviewTargetResolution.viewportWidth * printingPreviewScrubQualityScale}
-                        height={printingPreviewTargetResolution.viewportHeight * printingPreviewScrubQualityScale}
+                        x={0}
+                        y={0}
+                        width={printingPreviewTargetResolution.viewportWidth}
+                        height={printingPreviewTargetResolution.viewportHeight}
                         preserveAspectRatio="none"
                         style={{ imageRendering: 'pixelated' }}
                       />
@@ -5950,13 +6072,9 @@ export default function Home() {
                     <img
                       src={selectedPrintingLayerPreviewUrl}
                       alt={`Layer ${printingSelectedLayer} preview`}
-                      className={isPrintingPreviewLowResActive
-                        ? 'block rounded max-w-none max-h-none w-auto h-auto object-contain'
-                        : 'block rounded max-w-full max-h-full w-auto h-auto object-contain'}
+                      className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
                       style={{
                         imageRendering: 'pixelated',
-                        width: isPrintingPreviewLowResActive ? `${printingPreviewScrubQualityScale * 100}%` : undefined,
-                        height: isPrintingPreviewLowResActive ? `${printingPreviewScrubQualityScale * 100}%` : undefined,
                         transform: printingPreviewVisualTransform,
                         transformOrigin: 'center center',
                         willChange: 'transform',

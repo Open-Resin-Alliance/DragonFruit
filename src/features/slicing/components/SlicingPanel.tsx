@@ -30,6 +30,7 @@ interface SlicingPanelProps {
     totalLayers: number;
   }) => void;
   onSliceArtifactReady?: (artifact: SliceExportArtifact) => void;
+  onBenchmarkComplete?: (benchmark: SliceBenchmarkSnapshot) => void;
 }
 
 type LifetimeTelemetry = {
@@ -107,6 +108,7 @@ export function SlicingPanel({
   onLayerPreviewGenerated,
   onSlicingFinished,
   onSliceArtifactReady,
+  onBenchmarkComplete,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
@@ -564,6 +566,9 @@ export function SlicingPanel({
       slicingSucceeded = true;
       if (result.artifact) {
         onSliceArtifactReady?.(result.artifact);
+      }
+      if (result.benchmark) {
+        onBenchmarkComplete?.(result.benchmark);
       }
     } catch (error) {
       if ((error as { name?: string } | null)?.name === 'AbortError') {

@@ -1,11 +1,15 @@
 export type SlicingComputeBackendPreference = 'auto' | 'cpu' | 'webgpu';
 export type SlicingCpuProfile = 'balanced' | 'max';
 export type SlicingProgressGranularity = 'balanced' | 'granular';
+export type SlicingDebugForceBackend = 'none' | 'cpu' | 'webgpu';
 
 export type SlicingPerformanceSettings = {
   computeBackend: SlicingComputeBackendPreference;
   cpuProfile: SlicingCpuProfile;
   progressGranularity: SlicingProgressGranularity;
+  debugMode: boolean;
+  debugForceBackend: SlicingDebugForceBackend;
+  benchmarkingMode: boolean;
 };
 
 export type WebGpuSupportDetails = {
@@ -20,6 +24,9 @@ export const DEFAULT_SLICING_PERFORMANCE_SETTINGS: SlicingPerformanceSettings = 
   computeBackend: 'auto',
   cpuProfile: 'max',
   progressGranularity: 'granular',
+  debugMode: false,
+  debugForceBackend: 'none',
+  benchmarkingMode: false,
 };
 
 export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerformanceSettings {
@@ -38,10 +45,21 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
   const progressGranularity: SlicingProgressGranularity =
     candidate.progressGranularity === 'balanced' ? 'balanced' : 'granular';
 
+  const debugForceBackend: SlicingDebugForceBackend =
+    candidate.debugForceBackend === 'cpu' || candidate.debugForceBackend === 'webgpu'
+      ? candidate.debugForceBackend
+      : 'none';
+
+  const debugMode = candidate.debugMode === true;
+  const benchmarkingMode = candidate.benchmarkingMode === true;
+
   return {
     computeBackend,
     cpuProfile,
     progressGranularity,
+    debugMode,
+    debugForceBackend,
+    benchmarkingMode,
   };
 }
 

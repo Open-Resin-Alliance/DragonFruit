@@ -482,6 +482,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     let averageChunkElapsedMs = 200;
     let maxReportedDone = 0;
     let hasCommittedLayer = false;
+    let hasReceivedFirstProgress = false;
     let lastEmitMs = 0;
 
     const zipBuilder = new ZipDeflateBlobBuilder(3);
@@ -503,7 +504,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
       // Keep progress monotonic, but avoid sudden teleports when many contiguous layers
       // flush at once after out-of-order chunk completions.
       const nowMs = performance.now();
-      const dtMs = lastEmitMs > 0 ? Math.max(16, nowMs - lastEmitMs) : 120;
+      const dtMs = lastEmitMs > 0 ? Math.max(16, nowMs - lastEmitMs) : 33;
       lastEmitMs = nowMs;
 
       if (bounded >= totalLayers) {
@@ -512,7 +513,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
         return;
       }
 
-      const maxLayersPerSec = hasCommittedLayer ? 420 : 220;
+      const maxLayersPerSec = hasCommittedLayer ? 2400 : 1200;
       const maxStep = Math.max(1, Math.round((maxLayersPerSec * dtMs) / 1000));
       const nextTarget = Math.max(maxReportedDone, bounded);
 
@@ -656,6 +657,11 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     const emitEstimatedProgress = () => {
       if (rejected || finalizing || totalLayers <= 0) return;
 
+      if (!hasReceivedFirstProgress) {
+        emitProgress(0, 'Preparing workers…');
+        return;
+      }
+
       if (!hasCommittedLayer) {
         emitProgress(0, 'Processing slices…');
         return;
@@ -683,7 +689,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     if (typeof window !== 'undefined') {
       heartbeatTimer = window.setInterval(
         emitEstimatedProgress,
-        isGranularProgress ? 110 : 190,
+        isGranularProgress ? 50 : 120,
       );
     }
 
@@ -725,6 +731,9 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
         },
       });
     };
+
+    // Show initial "Preparing..." status immediately
+    options.onProgress?.(0, totalLayers, 'Preparing workers…');
 
     for (let i = 0; i < workerCount; i += 1) {
       const worker = new Worker(new URL('./workers/slicingWorker.ts', import.meta.url), { type: 'module' });
@@ -773,6 +782,10 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
             const decodedLayers = decodeChunkPayload(message.payload.chunkPayload);
             for (const entry of decodedLayers) {
               pendingLayers.set(entry.layerIndex, entry.pngBytes);
+            }
+
+            if (!hasReceivedFirstProgress) {
+              hasReceivedFirstProgress = true;
             }
 
             flushReadyLayers();
