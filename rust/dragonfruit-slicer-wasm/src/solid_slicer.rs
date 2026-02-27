@@ -86,6 +86,25 @@ fn parse_packing_mode(mode: &str) -> Result<PackingMode, SolidSlicerError> {
     }
 }
 
+fn parse_png_compression_strategy(strategy: &str) -> crate::fast_png::CompressionStrategy {
+    match strategy {
+        "fastest" => crate::fast_png::CompressionStrategy::Fastest,
+        "smallest" => crate::fast_png::CompressionStrategy::Smallest,
+        "optimal" => crate::fast_png::CompressionStrategy::Optimal,
+        _ => crate::fast_png::CompressionStrategy::Balanced,
+    }
+}
+
+fn should_use_bvh(triangle_count: usize, bvh_acceleration_enabled: bool) -> bool {
+    if !bvh_acceleration_enabled {
+        return false;
+    }
+
+    // Use BVH acceleration for large models (>10K triangles)
+    const BVH_THRESHOLD: usize = 10_000;
+    triangle_count > BVH_THRESHOLD
+}
+
 fn parse_triangles(flat: &[f32]) -> Result<Vec<Tri>, SolidSlicerError> {
     if flat.len() % 9 != 0 {
         return Err(SolidSlicerError::InvalidTriangleBuffer(flat.len()));
@@ -486,19 +505,6 @@ fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment])
     mask
 }
 
-fn encode_grayscale_png(
-    width_px: u32,
-    height_px: u32,
-    pixels: &[u8],
-) -> Result<Vec<u8>, SolidSlicerError> {
-    encode_grayscale_png_with_strategy(
-        width_px,
-        height_px,
-        pixels,
-        crate::fast_png::CompressionStrategy::Balanced,
-    )
-}
-
 fn encode_grayscale_png_with_strategy(
     width_px: u32,
     height_px: u32,
@@ -520,6 +526,7 @@ fn pack_mask_to_nanodlp_png(
     output_width_px: u32,
     output_height_px: u32,
     packing_mode: PackingMode,
+    png_strategy: crate::fast_png::CompressionStrategy,
 ) -> Result<Vec<u8>, SolidSlicerError> {
     if source_height_px != output_height_px {
         return Err(SolidSlicerError::InvalidDimensions {
@@ -540,7 +547,12 @@ fn pack_mask_to_nanodlp_png(
                     height: output_height_px,
                 });
             }
-            encode_grayscale_png(output_width_px, output_height_px, source_mask)
+            encode_grayscale_png_with_strategy(
+                output_width_px,
+                output_height_px,
+                source_mask,
+                png_strategy,
+            )
         }
         PackingMode::Rgb8Div3 => {
             let mut packed = vec![0u8; out_w * out_h];
@@ -573,7 +585,12 @@ fn pack_mask_to_nanodlp_png(
                 }
             }
 
-            encode_grayscale_png(output_width_px, output_height_px, &packed)
+            encode_grayscale_png_with_strategy(
+                output_width_px,
+                output_height_px,
+                &packed,
+                png_strategy,
+            )
         }
         PackingMode::Gray3Div2 => {
             let mut packed = vec![0u8; out_w * out_h];
@@ -601,7 +618,12 @@ fn pack_mask_to_nanodlp_png(
                 }
             }
 
-            encode_grayscale_png(output_width_px, output_height_px, &packed)
+            encode_grayscale_png_with_strategy(
+                output_width_px,
+                output_height_px,
+                &packed,
+                png_strategy,
+            )
         }
     }
 }
@@ -860,6 +882,7 @@ fn render_layer_png(
     triangles: &[Tri],
     layer_buckets: &[Vec<usize>],
     packing_mode: PackingMode,
+    png_strategy: crate::fast_png::CompressionStrategy,
     mirror_x: bool,
     mirror_y: bool,
     min_x_mm: f32,
@@ -881,6 +904,7 @@ fn render_layer_png(
                 job.width_px,
                 job.height_px,
                 packing_mode,
+                png_strategy,
             )?);
         }
 
@@ -912,6 +936,7 @@ fn render_layer_png(
                 job.width_px,
                 job.height_px,
                 packing_mode,
+                png_strategy,
             )?);
         }
 
@@ -926,6 +951,7 @@ fn render_layer_png(
         job.width_px,
         job.height_px,
         packing_mode,
+        png_strategy,
     )
 }
 
@@ -935,6 +961,7 @@ fn render_layer_png_bvh(
     triangles: &[Tri],
     bvh: &BVHNode,
     packing_mode: PackingMode,
+    png_strategy: crate::fast_png::CompressionStrategy,
     mirror_x: bool,
     mirror_y: bool,
     min_x_mm: f32,
@@ -959,6 +986,7 @@ fn render_layer_png_bvh(
                 job.width_px,
                 job.height_px,
                 packing_mode,
+                png_strategy,
             )?);
         }
 
@@ -990,6 +1018,7 @@ fn render_layer_png_bvh(
                 job.width_px,
                 job.height_px,
                 packing_mode,
+                png_strategy,
             )?);
         }
 
@@ -1004,6 +1033,7 @@ fn render_layer_png_bvh(
         job.width_px,
         job.height_px,
         packing_mode,
+        png_strategy,
     )
 }
 
@@ -1017,6 +1047,7 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
     validate_solid_job(job)?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let triangles = parse_triangles(&job.triangles_xyz)?;
     let source_metadata: Value = serde_json::from_str(&job.metadata_json)
         .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
@@ -1024,9 +1055,7 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
 
-    // Use BVH acceleration for large models (>10K triangles)
-    const BVH_THRESHOLD: usize = 10_000;
-    let use_bvh = triangles.len() > BVH_THRESHOLD;
+    let use_bvh = should_use_bvh(triangles.len(), job.bvh_acceleration_enabled);
 
     let bvh = if use_bvh {
         let indices: Vec<usize> = (0..triangles.len()).collect();
@@ -1051,6 +1080,7 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
                 &triangles,
                 bvh.as_ref().unwrap(),
                 packing_mode,
+                png_strategy,
                 mirror_x,
                 mirror_y,
                 min_x_mm,
@@ -1064,6 +1094,7 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
                 &triangles,
                 &layer_buckets,
                 packing_mode,
+                png_strategy,
                 mirror_x,
                 mirror_y,
                 min_x_mm,
@@ -1103,6 +1134,7 @@ pub fn slice_solid_chunk_payload(
     }
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let triangles = parse_triangles(&job.triangles_xyz)?;
     let source_metadata: Value = serde_json::from_str(&job.metadata_json)
         .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
@@ -1110,9 +1142,7 @@ pub fn slice_solid_chunk_payload(
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
 
-    // Use BVH acceleration for large models (>10K triangles)
-    const BVH_THRESHOLD: usize = 10_000;
-    let use_bvh = triangles.len() > BVH_THRESHOLD;
+    let use_bvh = should_use_bvh(triangles.len(), job.bvh_acceleration_enabled);
 
     let bvh = if use_bvh {
         let indices: Vec<usize> = (0..triangles.len()).collect();
@@ -1140,6 +1170,7 @@ pub fn slice_solid_chunk_payload(
                 &triangles,
                 bvh.as_ref().unwrap(),
                 packing_mode,
+                png_strategy,
                 mirror_x,
                 mirror_y,
                 min_x_mm,
@@ -1153,6 +1184,7 @@ pub fn slice_solid_chunk_payload(
                 &triangles,
                 &layer_buckets,
                 packing_mode,
+                png_strategy,
                 mirror_x,
                 mirror_y,
                 min_x_mm,
@@ -1184,14 +1216,13 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
     let options_json = json_pretty_bytes(&build_options_json(job))?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let triangles = parse_triangles(&job.triangles_xyz)?;
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
 
-    // Use BVH acceleration for large models (>10K triangles)
-    const BVH_THRESHOLD: usize = 10_000;
-    let use_bvh = triangles.len() > BVH_THRESHOLD;
+    let use_bvh = should_use_bvh(triangles.len(), job.bvh_acceleration_enabled);
 
     let bvh = if use_bvh {
         let indices: Vec<usize> = (0..triangles.len()).collect();
@@ -1212,36 +1243,37 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
     let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
     {
         let mut zip = ZipWriter::new(&mut cursor);
-        let options = FileOptions::default()
+        let metadata_options = FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(7));
+        let png_options = FileOptions::default().compression_method(CompressionMethod::Stored);
 
-        zip.start_file("meta.json", options)
+        zip.start_file("meta.json", metadata_options)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
         zip.write_all(&meta_json)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
 
-        zip.start_file("slicer.json", options)
+        zip.start_file("slicer.json", metadata_options)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
         zip.write_all(&slicer_json)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
 
-        zip.start_file("plate.json", options)
+        zip.start_file("plate.json", metadata_options)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
         zip.write_all(&plate_json)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
 
-        zip.start_file("profile.json", options)
+        zip.start_file("profile.json", metadata_options)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
         zip.write_all(&profile_json)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
 
-        zip.start_file("options.json", options)
+        zip.start_file("options.json", metadata_options)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
         zip.write_all(&options_json)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
 
-        zip.start_file("info.json", options)
+        zip.start_file("info.json", metadata_options)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
         zip.write_all(b"[]")
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
@@ -1253,6 +1285,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
                     &triangles,
                     bvh.as_ref().unwrap(),
                     packing_mode,
+                    png_strategy,
                     mirror_x,
                     mirror_y,
                     min_x_mm,
@@ -1266,6 +1299,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
                     &triangles,
                     &layer_buckets,
                     packing_mode,
+                    png_strategy,
                     mirror_x,
                     mirror_y,
                     min_x_mm,
@@ -1276,7 +1310,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
             };
 
             let name = format!("{}.png", layer_index + 1);
-            zip.start_file(name, options)
+            zip.start_file(name, png_options)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
             zip.write_all(&layer_png)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
@@ -1292,12 +1326,12 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
         }
 
         if let Some(preview_png) = preview_layer_png.or(first_layer_png) {
-            zip.start_file("3d.png", options)
+            zip.start_file("3d.png", png_options)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
             zip.write_all(&preview_png)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
 
-            zip.start_file("3d.png.meta", options)
+            zip.start_file("3d.png.meta", metadata_options)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
             zip.write_all(b"{}")
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;

@@ -17,6 +17,8 @@ export type WasmSolidSliceJobEnvelope = {
   widthPx: number;
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
+  pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
+  bvhAccelerationEnabled: boolean;
   buildWidthMm: number;
   buildDepthMm: number;
   layerHeightMm: number;
@@ -35,6 +37,8 @@ type DragonfruitSlicerWasmModule = {
     widthPx: number,
     heightPx: number,
     xPackingMode: string,
+    pngCompressionStrategy: string,
+    bvhAccelerationEnabled: boolean,
     buildWidthMm: number,
     buildDepthMm: number,
     layerHeightMm: number,
@@ -49,6 +53,8 @@ type DragonfruitSlicerWasmModule = {
     widthPx: number,
     heightPx: number,
     xPackingMode: string,
+    pngCompressionStrategy: string,
+    bvhAccelerationEnabled: boolean,
     buildWidthMm: number,
     buildDepthMm: number,
     layerHeightMm: number,
@@ -137,6 +143,8 @@ export async function sliceSolidAndEncodeWithSlicerWasm(
       job.widthPx,
       job.heightPx,
       job.xPackingMode,
+      job.pngCompressionStrategy,
+      job.bvhAccelerationEnabled,
       job.buildWidthMm,
       job.buildDepthMm,
       job.layerHeightMm,
@@ -153,6 +161,8 @@ export async function sliceSolidAndEncodeWithSlicerWasm(
     width_px: job.widthPx,
     height_px: job.heightPx,
     x_packing_mode: job.xPackingMode,
+    png_compression_strategy: job.pngCompressionStrategy,
+    bvh_acceleration_enabled: job.bvhAccelerationEnabled,
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,
     layer_height_mm: job.layerHeightMm,
@@ -183,6 +193,8 @@ export async function sliceSolidLayersChunkWithSlicerWasm(
     job.widthPx,
     job.heightPx,
     job.xPackingMode,
+    job.pngCompressionStrategy,
+    job.bvhAccelerationEnabled,
     job.buildWidthMm,
     job.buildDepthMm,
     job.layerHeightMm,

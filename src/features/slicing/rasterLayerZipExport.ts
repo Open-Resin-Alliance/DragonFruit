@@ -83,6 +83,8 @@ export type SolidSliceMeshForWasm = {
   widthPx: number;
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
+  pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
+  bvhAccelerationEnabled: boolean;
   buildWidthMm: number;
   buildDepthMm: number;
   layerHeightMm: number;
@@ -1591,6 +1593,7 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
   }
 
   const settings = resolveEffectiveSettings(options);
+  const perfSettings = getSavedSlicingPerformanceSettings();
   const worldTriangles = buildWorldTriangles(visibleModels);
   if (worldTriangles.length === 0) {
     throw new Error('Unable to prepare world-space triangles from visible models.');
@@ -1678,6 +1681,8 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
     widthPx: settings.widthPx,
     heightPx: settings.heightPx,
     xPackingMode: settings.xPackingMode,
+    pngCompressionStrategy: perfSettings.pngCompressionStrategy,
+    bvhAccelerationEnabled: perfSettings.bvhAccelerationEnabled,
     buildWidthMm: Math.max(1, options.printerProfile.buildVolumeMm.width),
     buildDepthMm: Math.max(1, options.printerProfile.buildVolumeMm.depth),
     layerHeightMm: settings.layerHeightMm,

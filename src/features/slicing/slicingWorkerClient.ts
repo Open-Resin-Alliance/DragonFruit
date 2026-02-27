@@ -1,5 +1,5 @@
 import type { WasmSolidSliceJobEnvelope } from './wasm/slicerWasmBridge';
-import { Zip, ZipDeflate, strToU8 } from 'fflate';
+import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from 'fflate';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 
 type SliceInWorkerOptions = {
@@ -235,6 +235,17 @@ class ZipDeflateBlobBuilder {
     entry.push(payload, true);
   }
 
+  addStoredFile(name: string, data: Uint8Array | string): void {
+    if (this.finalized) {
+      throw new Error('Cannot add files after ZIP finalization.');
+    }
+
+    const payload = typeof data === 'string' ? strToU8(data) : data;
+    const entry = new ZipPassThrough(name);
+    this.zipper.add(entry);
+    entry.push(payload, true);
+  }
+
   finalize(): Promise<Blob> {
     if (this.finalized) {
       throw new Error('ZIP has already been finalized.');
@@ -447,7 +458,8 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
     const defaultWorkers = Math.max(1, rawConcurrency - reserveThreads);
     const targetWorkers = options.maxWorkers ?? defaultWorkers;
 
-    const isGranularProgress = perfSettings.progressGranularity === 'granular';
+    // Granularity setting was removed; derive cadence from CPU profile.
+    const isGranularProgress = perfSettings.cpuProfile === 'balanced';
     const adaptiveChunkSize = Math.max(
       isGranularProgress ? 2 : 4,
       Math.min(isGranularProgress ? 12 : 24, Math.ceil(totalLayers / Math.max(1, Math.ceil(targetWorkers * 1.25)))),
@@ -598,7 +610,7 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
           : null;
         const previewPng = providedPreview ?? previewLayerPng ?? firstLayerPng;
         if (previewPng) {
-          zipBuilder.addFile('3d.png', previewPng);
+          zipBuilder.addStoredFile('3d.png', previewPng);
           zipBuilder.addFile('3d.png.meta', '{}');
         }
 
@@ -644,7 +656,8 @@ export async function sliceSolidNanodlpInWorker(options: SliceInWorkerOptions): 
 
         options.onLayerPreview?.(nextLayerToWrite, totalLayers, Uint8Array.from(png));
 
-        zipBuilder.addFile(`${nextLayerToWrite + 1}.png`, png);
+        // PNG payload is already compressed; storing avoids expensive re-deflate.
+        zipBuilder.addStoredFile(`${nextLayerToWrite + 1}.png`, png);
         nextLayerToWrite += 1;
       }
 
