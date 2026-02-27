@@ -31,6 +31,9 @@ interface SlicingPanelProps {
   }) => void;
   onSliceArtifactReady?: (artifact: SliceExportArtifact) => void;
   onBenchmarkComplete?: (benchmark: SliceBenchmarkSnapshot) => void;
+  onSliceTriggerRef?: React.MutableRefObject<(() => void) | null>;
+  shouldAutoSlice?: boolean;
+  skipThumbnailCapture?: boolean;
 }
 
 type LifetimeTelemetry = {
@@ -109,6 +112,9 @@ export function SlicingPanel({
   onSlicingFinished,
   onSliceArtifactReady,
   onBenchmarkComplete,
+  onSliceTriggerRef,
+  shouldAutoSlice,
+  skipThumbnailCapture,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
@@ -459,7 +465,7 @@ export function SlicingPanel({
     let completedTotalLayersFromResult = 0;
 
     try {
-      if (captureSceneThumbnailPng) {
+      if (captureSceneThumbnailPng && !skipThumbnailCapture) {
         try {
           exportThumbnailPng = await captureSceneThumbnailPng();
         } catch (thumbnailError) {
@@ -600,6 +606,24 @@ export function SlicingPanel({
     setSliceStatus('Cancelling slicing job…');
     slicingAbortControllerRef.current?.abort();
   }, [isSlicingZip]);
+
+  // Populate the slice trigger ref so parent can call slice from outside
+  useEffect(() => {
+    if (onSliceTriggerRef) {
+      onSliceTriggerRef.current = handleSliceZipExport;
+    }
+  }, [handleSliceZipExport, onSliceTriggerRef]);
+
+  // Auto-trigger slice when shouldAutoSlice becomes true
+  useEffect(() => {
+    if (shouldAutoSlice) {
+      // Use setTimeout to ensure DOM is ready and state is settled
+      const timeoutId = setTimeout(() => {
+        handleSliceZipExport();
+      }, 50);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [shouldAutoSlice, handleSliceZipExport]);
 
   const selectedLayerPreviewUrl = useMemo(() => {
     if (previewSelectedLayer < 1) return null;

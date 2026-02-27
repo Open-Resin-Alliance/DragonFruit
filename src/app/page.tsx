@@ -40,6 +40,7 @@ import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
+import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -77,6 +78,7 @@ import {
   getHistoryDebugEvents,
   getRedoCount,
   getUndoCount,
+  pushHistory,
   redo,
   subscribeHistory,
   subscribeHistoryDebug,
@@ -329,6 +331,10 @@ export default function Home() {
   const printingPreviewPanRafRef = React.useRef<number | null>(null);
   const previousSceneModeRef = React.useRef<typeof scene.mode>(scene.mode);
   const preservedNonPrintingLayerIndexRef = React.useRef<number | null>(null);
+  const lastSliceHistoryEventIdRef = React.useRef<number | null>(null);
+  const triggerSliceExportRef = React.useRef<(() => void) | null>(null);
+  const modeBeforePrintingRef = React.useRef<typeof scene.mode>('prepare');
+  const shouldReturnToPrintingAfterSliceRef = React.useRef(false);
   const printingPreviewDragRef = React.useRef<{
     pointerId: number;
     startClientX: number;
@@ -338,6 +344,9 @@ export default function Home() {
   } | null>(null);
   const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
+  const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
+  const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
+  const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
   const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
@@ -1322,6 +1331,14 @@ export default function Home() {
 
   const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
     setPrintingArtifact(artifact);
+    setPrintingArtifactIsInvalid(false);
+    setShowPrintingResliceModal(false);
+    // Push a "Sliced Scene" marker to history so we can detect changes after this point
+    pushHistory({
+      type: 'SCENE_SLICED',
+      description: 'Scene sliced for printing',
+      payload: {},
+    });
     setPrintingSendStatusText(null);
     setPrintingSendProgress(0);
     setPrintingSendStageText(null);
@@ -1343,6 +1360,12 @@ export default function Home() {
     if (printingPreviewSettleTimeoutRef.current !== null) {
       window.clearTimeout(printingPreviewSettleTimeoutRef.current);
       printingPreviewSettleTimeoutRef.current = null;
+    }
+    // If we re-sliced from printing mode, return there now
+    if (shouldReturnToPrintingAfterSliceRef.current) {
+      shouldReturnToPrintingAfterSliceRef.current = false;
+      setShouldAutoSliceOnExportEntry(false);
+      scene.setMode('printing');
     }
   }, []);
 
@@ -2749,6 +2772,8 @@ export default function Home() {
     const currentMode = scene.mode;
 
     if (previousMode !== 'printing' && currentMode === 'printing') {
+      // Save the mode we were in before entering printing (for Back button to return to)
+      modeBeforePrintingRef.current = previousMode;
       // Save the general (prepare/support) layer position before printing takes control.
       preservedNonPrintingLayerIndexRef.current = slicing.layerIndex;
     } else if (previousMode === 'printing' && currentMode !== 'printing') {
@@ -2763,6 +2788,88 @@ export default function Home() {
 
     previousSceneModeRef.current = currentMode;
   }, [scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
+
+  // Invalidate printing artifact if scene changed (detected via history events after the slice marker)
+  React.useEffect(() => {
+    if (!printingArtifact) return; // Nothing to invalidate
+    
+    const historyEvents = getHistoryDebugEvents();
+    if (historyEvents.length === 0) return;
+    
+    // Find the most recent "SCENE_SLICED" marker
+    let sliceMarkerIndex = -1;
+    for (let i = historyEvents.length - 1; i >= 0; i--) {
+      if (historyEvents[i].actionType === 'SCENE_SLICED') {
+        sliceMarkerIndex = i;
+        break;
+      }
+    }
+    
+    if (sliceMarkerIndex >= 0) {
+      // Check if there are any OTHER events (non-undo/redo) after the slice marker
+      const eventsAfterSlice = historyEvents.slice(sliceMarkerIndex + 1);
+      const hasModifications = eventsAfterSlice.some(
+        (e) => e.kind === 'push' && e.actionType !== 'SCENE_SLICED'
+      );
+      
+      if (hasModifications) {
+        setPrintingArtifactIsInvalid(true);
+      }
+    }
+  }, [printingArtifact]);
+
+  // Re-check invalidation when history changes
+  React.useEffect(() => {
+    const checkInvalidation = () => {
+      if (!printingArtifact || printingArtifactIsInvalid) return; // Already invalid or no artifact
+      
+      const historyEvents = getHistoryDebugEvents();
+      if (historyEvents.length === 0) return;
+      
+      // Find the most recent "SCENE_SLICED" marker
+      let sliceMarkerIndex = -1;
+      for (let i = historyEvents.length - 1; i >= 0; i--) {
+        if (historyEvents[i].actionType === 'SCENE_SLICED') {
+          sliceMarkerIndex = i;
+          break;
+        }
+      }
+      
+      if (sliceMarkerIndex >= 0) {
+        // Check if there are any OTHER events (non-undo/redo) after the slice marker
+        const eventsAfterSlice = historyEvents.slice(sliceMarkerIndex + 1);
+        const hasModifications = eventsAfterSlice.some(
+          (e) => e.kind === 'push' && e.actionType !== 'SCENE_SLICED'
+        );
+        
+        if (hasModifications) {
+          setPrintingArtifactIsInvalid(true);
+        }
+      }
+    };
+
+    const unsubscribe = subscribeHistoryDebug(checkInvalidation);
+    return () => {
+      void unsubscribe();
+    };
+  }, [printingArtifact, printingArtifactIsInvalid]);
+
+  // Lock printing workspace when no models exist
+  React.useEffect(() => {
+    if (scene.models.length === 0 && scene.mode === 'printing') {
+      // Reset to prepare mode if we delete the last model while in printing
+      scene.setMode('prepare');
+      setPrintingArtifact(null);
+      setPrintingArtifactIsInvalid(false);
+    }
+  }, [scene.models.length, scene.mode, scene, printingArtifact]);
+
+  // Show re-slice modal when entering printing with invalid artifact
+  React.useEffect(() => {
+    if (scene.mode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
+      setShowPrintingResliceModal(true);
+    }
+  }, [scene.mode, printingArtifactIsInvalid, printingArtifact]);
 
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
@@ -4025,6 +4132,9 @@ export default function Home() {
   }, [allowPrepareWithoutPrinter, hasActivePrinterProfile]);
 
   React.useEffect(() => {
+    // Skip camera changes during automatic re-slice flow to prevent flickering
+    if (shouldReturnToPrintingAfterSliceRef.current) return;
+    
     const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
     const currentProjectionMode = getSavedCameraProjectionSettings().mode;
 
@@ -4034,6 +4144,9 @@ export default function Home() {
   }, [scene.mode]);
 
   React.useEffect(() => {
+    // Skip selection highlight changes during automatic re-slice flow to prevent flickering
+    if (shouldReturnToPrintingAfterSliceRef.current) return;
+    
     const workspaceSelectionHighlightMode = getSavedWorkspaceCameraSettings().selectionHighlightDefaults[scene.mode];
     if (workspaceSelectionHighlightMode !== scene.selectionHighlightMode) {
       scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
@@ -5516,6 +5629,9 @@ export default function Home() {
               onSlicingFinished={handleSlicingFinishedForPrinting}
               onSliceArtifactReady={handleSliceArtifactReady}
               onBenchmarkComplete={handleSlicingBenchmarkComplete}
+              onSliceTriggerRef={triggerSliceExportRef}
+              shouldAutoSlice={shouldAutoSliceOnExportEntry}
+              skipThumbnailCapture={shouldReturnToPrintingAfterSliceRef.current}
             />
           </>
 
@@ -6252,6 +6368,20 @@ export default function Home() {
         operationLabel={pendingDestructiveTransform?.operationLabel ?? 'Transform'}
         onCancel={handleCancelDestructiveTransform}
         onConfirm={handleConfirmDestructiveTransform}
+      />
+
+      <PrintingResliceModal
+        isOpen={showPrintingResliceModal}
+        onCancel={() => {
+          setShowPrintingResliceModal(false);
+          scene.setMode(modeBeforePrintingRef.current);
+        }}
+        onResliceNow={() => {
+          setShowPrintingResliceModal(false);
+          shouldReturnToPrintingAfterSliceRef.current = true;
+          setShouldAutoSliceOnExportEntry(true);
+          scene.setMode('export');
+        }}
       />
 
       {printingUploadDialogOpen && (
