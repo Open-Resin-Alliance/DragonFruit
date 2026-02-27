@@ -308,6 +308,7 @@ export default function Home() {
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
   const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
+  const [isPrintingPngLoaded, setIsPrintingPngLoaded] = React.useState(false);
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
   const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
@@ -1038,8 +1039,13 @@ export default function Home() {
 
   // Show scrub preview while actively scrubbing OR if the target PNG isn't loaded yet (avoids flash)
   const shouldShowScrubPreview = React.useMemo(() => {
-    return isPrintingLayerScrubbing || !selectedPrintingLayerPreviewUrl;
-  }, [isPrintingLayerScrubbing, selectedPrintingLayerPreviewUrl]);
+    return isPrintingLayerScrubbing || !selectedPrintingLayerPreviewUrl || !isPrintingPngLoaded;
+  }, [isPrintingLayerScrubbing, selectedPrintingLayerPreviewUrl, isPrintingPngLoaded]);
+
+  React.useEffect(() => {
+    // Reset load state whenever we change the displayed layer's preview URL.
+    setIsPrintingPngLoaded(false);
+  }, [selectedPrintingLayerPreviewUrl]);
 
   const handlePrintingPreviewWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     if (printingPreviewTotalLayers <= 0) return;
@@ -6137,6 +6143,7 @@ export default function Home() {
                       }}
                       role="img"
                       aria-label={`Layer ${printingSelectedLayer} preview`}
+                      onLoad={() => setIsPrintingPngLoaded(true)}
                     >
                       <image
                         href={selectedPrintingLayerPreviewUrl}
@@ -6159,6 +6166,7 @@ export default function Home() {
                         transformOrigin: 'center center',
                         willChange: 'transform',
                       }}
+                      onLoad={() => setIsPrintingPngLoaded(true)}
                     />
                   )
                 ) : (
