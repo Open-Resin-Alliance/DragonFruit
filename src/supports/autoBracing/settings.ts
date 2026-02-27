@@ -41,7 +41,7 @@ export const AUTO_BRACING_CONSTRAINTS = {
 
 export const DEBUG_SECTION_COLORS: Record<string, string> = {
     initial: '#00ff00', // Green
-    repeating: '#add8e6', // Light Blue
+    repeating: '#00e5ff', // Light Blue
 };
 
 export const AUTO_BRACING_HARD_RULES = {
