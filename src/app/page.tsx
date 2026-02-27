@@ -1034,8 +1034,13 @@ export default function Home() {
     return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
   }, [printingLayerPreviewUrls, printingDisplayedLayer]);
 
+  // Show scrub preview while actively scrubbing OR if the target PNG isn't loaded yet (avoids flash)
+  const shouldShowScrubPreview = React.useMemo(() => {
+    return isPrintingLayerScrubbing || !selectedPrintingLayerPreviewUrl;
+  }, [isPrintingLayerScrubbing, selectedPrintingLayerPreviewUrl]);
+
   const handlePrintingPreviewWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    if (!selectedPrintingLayerPreviewUrl) return;
+    if (printingPreviewTotalLayers <= 0) return;
     event.preventDefault();
     schedulePrintingPreviewSettle();
 
@@ -1066,10 +1071,10 @@ export default function Home() {
 
     setPrintingPreviewZoom(nextZoom);
     queuePrintingPreviewPan(nextPan);
-  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
+  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
 
   const handlePrintingPreviewPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!selectedPrintingLayerPreviewUrl) return;
+    if (printingPreviewTotalLayers <= 0) return;
     if (printingPreviewZoomRef.current <= 1.0001) return;
     if (event.button !== 0) return;
 
@@ -1085,7 +1090,7 @@ export default function Home() {
     };
     setIsPrintingPreviewPanning(true);
     schedulePrintingPreviewSettle();
-  }, [schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
+  }, [schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
 
   const handlePrintingPreviewPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = printingPreviewDragRef.current;
@@ -1162,8 +1167,10 @@ export default function Home() {
   }), [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
 
   const isPrintingPreviewLowResActive = React.useMemo(() => {
-    return isPrintingLayerScrubbing && printingPreviewZoom <= 1.0001;
-  }, [isPrintingLayerScrubbing, printingPreviewZoom]);
+    // Only use low-res PNG upscale path when scrubbing with PNG preview.
+    // When the fake cross-section preview is active, this would double-scale it.
+    return isPrintingLayerScrubbing && !shouldShowScrubPreview && printingPreviewZoom <= 1.0001;
+  }, [isPrintingLayerScrubbing, printingPreviewZoom, shouldShowScrubPreview]);
 
   const printingPreviewScrubQualityScale = React.useMemo(() => {
     if (!isPrintingPreviewLowResActive) return 1;
@@ -1223,6 +1230,22 @@ export default function Home() {
         window.clearTimeout(printingPreviewSettleTimeoutRef.current);
         printingPreviewSettleTimeoutRef.current = null;
       }
+    }
+  }, [queuePrintingPreviewPan, scene.mode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    // Reset transform state on entering printing so scrub/PNG views stay in sync.
+    setIsPrintingSettledCanvasReady(false);
+    printingPreviewSettledRef.current = false;
+    setIsPrintingPreviewSettled(false);
+    setPrintingPreviewZoom(1);
+    queuePrintingPreviewPan({ x: 0, y: 0 });
+    setIsPrintingPreviewPanning(false);
+    printingPreviewDragRef.current = null;
+    if (printingPreviewSettleTimeoutRef.current !== null) {
+      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+      printingPreviewSettleTimeoutRef.current = null;
     }
   }, [queuePrintingPreviewPan, scene.mode]);
 
@@ -1301,6 +1324,18 @@ export default function Home() {
     setPrintingUploadDisplayProgress(0);
     setPrintingDeviceProcessingStartedAtMs(null);
     setPrintingDeviceProcessingElapsedSec(0);
+    // Re-slice can swap preview sources; reset transform to avoid stale zoom/pan desync.
+    setIsPrintingSettledCanvasReady(false);
+    printingPreviewSettledRef.current = false;
+    setIsPrintingPreviewSettled(false);
+    setPrintingPreviewZoom(1);
+    queuePrintingPreviewPan({ x: 0, y: 0 });
+    setIsPrintingPreviewPanning(false);
+    printingPreviewDragRef.current = null;
+    if (printingPreviewSettleTimeoutRef.current !== null) {
+      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+      printingPreviewSettleTimeoutRef.current = null;
+    }
   }, []);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
@@ -1713,11 +1748,10 @@ export default function Home() {
   const usePrintingSettledHiResCanvas = React.useMemo(() => {
     return Boolean(
       selectedPrintingLayerPreviewUrl
-      && isPrintingPreviewSettled
       && printingPreviewZoom > 1.0001
       && !isPrintingLayerScrubbing,
     );
-  }, [isPrintingLayerScrubbing, isPrintingPreviewSettled, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
+  }, [isPrintingLayerScrubbing, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
 
   React.useEffect(() => {
     if (!usePrintingSettledHiResCanvas) return;
@@ -5569,6 +5603,7 @@ export default function Home() {
                 <div style={{ color: 'var(--text-muted)' }}>Selected layer</div><div>{printingSelectedLayer}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Displayed layer</div><div>{printingDisplayedLayer}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Is scrubbing</div><div>{isPrintingLayerScrubbing ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Show scrub preview</div><div>{shouldShowScrubPreview ? 'true' : 'false'}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Send progress</div><div>{(printingSendProgress * 100).toFixed(1)}%</div>
                 <div style={{ color: 'var(--text-muted)' }}>Send busy</div><div>{printingSendBusy ? 'true' : 'false'}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Stage text</div><div className="truncate" title={printingSendStageText ?? 'none'}>{printingSendStageText ?? 'none'}</div>
@@ -6029,32 +6064,55 @@ export default function Home() {
                 onPointerUp={handlePrintingPreviewPointerEnd}
                 onPointerCancel={handlePrintingPreviewPointerEnd}
               >
-                {isPrintingLayerScrubbing ? (
+                {shouldShowScrubPreview ? (
                   // While scrubbing: render a vector cross-section instead of decoding PNGs.
                   // This avoids image-decode memory churn and gives instant visual feedback
                   // via the same loop data used by the 3-D cross-section cap.
-                  <PrintingLayerScrubPreview
-                    models={scene.models}
-                    clipZ={slicing.clipUpper}
-                    buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
-                    buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
-                    mirrorX={activePrinterProfile?.display?.mirrorX === true}
-                    mirrorY={activePrinterProfile?.display?.mirrorY === true}
-                    className="block w-full h-full rounded"
-                  />
+                  // Wrap in aspect-ratio container to match PNG preview sizing behavior.
+                  (() => {
+                    const aspectW = printingPreviewTargetResolution
+                      ? printingPreviewTargetResolution.viewportWidth
+                      : activePrinterProfile?.buildVolumeMm?.width ?? 143;
+                    const aspectH = printingPreviewTargetResolution
+                      ? printingPreviewTargetResolution.viewportHeight
+                      : activePrinterProfile?.buildVolumeMm?.depth ?? 89;
+                    const aspectRatio = aspectW / aspectH;
+                    return (
+                      <div
+                        className="block rounded"
+                        style={{ 
+                          aspectRatio: aspectRatio.toString(),
+                          width: '100%',
+                          maxWidth: '100%',
+                          maxHeight: '100%',
+                          transform: printingPreviewVisualTransform || 'none',
+                          transformOrigin: 'center center',
+                          willChange: 'transform',
+                        }}
+                      >
+                        <PrintingLayerScrubPreview
+                          models={scene.models}
+                          clipZ={printingSelectedLayer * slicing.layerHeightMm}
+                          buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
+                          buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
+                          mirrorX={activePrinterProfile?.display?.mirrorX === true}
+                          mirrorY={activePrinterProfile?.display?.mirrorY === true}
+                          className="block w-full h-full rounded"
+                        />
+                      </div>
+                    );
+                  })()
                 ) : selectedPrintingLayerPreviewUrl ? (
                   printingPreviewTargetResolution ? (
                     <svg
                       viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
                       preserveAspectRatio="xMidYMid meet"
                       className="block w-full h-full max-w-full max-h-full rounded"
-                      style={printingPreviewVisualTransform
-                        ? {
-                            transform: printingPreviewVisualTransform,
-                            transformOrigin: 'center center',
-                            willChange: 'transform',
-                          }
-                        : undefined}
+                      style={{
+                        transform: printingPreviewVisualTransform || 'none',
+                        transformOrigin: 'center center',
+                        willChange: 'transform',
+                      }}
                       role="img"
                       aria-label={`Layer ${printingSelectedLayer} preview`}
                     >
@@ -6075,7 +6133,7 @@ export default function Home() {
                       className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
                       style={{
                         imageRendering: 'pixelated',
-                        transform: printingPreviewVisualTransform,
+                        transform: printingPreviewVisualTransform || 'none',
                         transformOrigin: 'center center',
                         willChange: 'transform',
                       }}
