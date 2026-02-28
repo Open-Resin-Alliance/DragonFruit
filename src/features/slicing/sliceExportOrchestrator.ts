@@ -17,6 +17,8 @@ export type SliceExportOrchestratorOptions = {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   filenameBase: string;
+  antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x';
+  aaOnSupports?: boolean;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
   abortSignal?: AbortSignal;
@@ -176,6 +178,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
           xPackingMode: solidMesh.xPackingMode,
           pngCompressionStrategy: solidMesh.pngCompressionStrategy,
           bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
+          antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
+          aaOnSupports: options.aaOnSupports ?? false,
+          modelTriangleCount: solidMesh.modelTriangleCount,
           buildWidthMm: solidMesh.buildWidthMm,
           buildDepthMm: solidMesh.buildDepthMm,
           layerHeightMm: solidMesh.layerHeightMm,

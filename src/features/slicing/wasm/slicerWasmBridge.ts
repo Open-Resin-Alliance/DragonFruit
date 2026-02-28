@@ -19,6 +19,9 @@ export type WasmSolidSliceJobEnvelope = {
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
+  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x';
+  aaOnSupports: boolean;
+  modelTriangleCount: number;
   buildWidthMm: number;
   buildDepthMm: number;
   layerHeightMm: number;
@@ -39,6 +42,9 @@ type DragonfruitSlicerWasmModule = {
     xPackingMode: string,
     pngCompressionStrategy: string,
     bvhAccelerationEnabled: boolean,
+    antiAliasingLevel: 'Off' | '2x' | '4x' | '8x',
+    aaOnSupports: boolean,
+    modelTriangleCount: number,
     buildWidthMm: number,
     buildDepthMm: number,
     layerHeightMm: number,
@@ -55,6 +61,9 @@ type DragonfruitSlicerWasmModule = {
     xPackingMode: string,
     pngCompressionStrategy: string,
     bvhAccelerationEnabled: boolean,
+    antiAliasingLevel: 'Off' | '2x' | '4x' | '8x',
+    aaOnSupports: boolean,
+    modelTriangleCount: number,
     buildWidthMm: number,
     buildDepthMm: number,
     layerHeightMm: number,
@@ -145,6 +154,9 @@ export async function sliceSolidAndEncodeWithSlicerWasm(
       job.xPackingMode,
       job.pngCompressionStrategy,
       job.bvhAccelerationEnabled,
+      job.antiAliasingLevel,
+      job.aaOnSupports,
+      job.modelTriangleCount,
       job.buildWidthMm,
       job.buildDepthMm,
       job.layerHeightMm,
@@ -163,6 +175,9 @@ export async function sliceSolidAndEncodeWithSlicerWasm(
     x_packing_mode: job.xPackingMode,
     png_compression_strategy: job.pngCompressionStrategy,
     bvh_acceleration_enabled: job.bvhAccelerationEnabled,
+    anti_aliasing_level: job.antiAliasingLevel,
+    aa_on_supports: job.aaOnSupports,
+    model_triangle_count: job.modelTriangleCount,
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,
     layer_height_mm: job.layerHeightMm,
@@ -195,6 +210,9 @@ export async function sliceSolidLayersChunkWithSlicerWasm(
     job.xPackingMode,
     job.pngCompressionStrategy,
     job.bvhAccelerationEnabled,
+    job.antiAliasingLevel,
+    job.aaOnSupports,
+    job.modelTriangleCount,
     job.buildWidthMm,
     job.buildDepthMm,
     job.layerHeightMm,

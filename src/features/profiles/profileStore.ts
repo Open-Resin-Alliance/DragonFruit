@@ -55,6 +55,7 @@ export type PrinterPreset = {
   manufacturer: string;
   name: string;
   imageAssetPath?: string;
+  antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
@@ -78,6 +79,7 @@ export type PrinterProfile = {
   name: string;
   manufacturer?: string;
   imageDataUrl?: string;
+  antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
@@ -193,6 +195,11 @@ const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
   ipAddress: '',
 };
 
+function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  return undefined;
+}
+
 function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddress = ''): PrinterNetworkConnectionState {
   return {
     mode,
@@ -285,6 +292,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   name: preset.name,
   manufacturer: preset.manufacturer,
   imageDataUrl: preset.imageAssetPath,
+  antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
   networkSupport: normalizeNetworkSupport(preset.networkSupport),
   platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
   pixelSize: sanitizePixelSize((preset as any).pixelSize),
@@ -409,6 +417,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           name: profile.name,
           manufacturer: typeof profile.manufacturer === 'string' ? profile.manufacturer : undefined,
           imageDataUrl: typeof profile.imageDataUrl === 'string' ? profile.imageDataUrl : undefined,
+          antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
+            ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
           networkSupport: resolveNetworkSupport(profile),
           platformBadge: sanitizePlatformBadge((profile as any).platformBadge) ?? sanitizePlatformBadge((matchedPreset as any)?.platformBadge),
           pixelSize: sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize),
@@ -705,6 +715,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     name: partial?.name?.trim() || `Printer ${state.printerProfiles.length + 1}`,
     manufacturer: partial?.manufacturer?.trim() || 'Generic',
     imageDataUrl: partial?.imageDataUrl,
+    antiAliasing: normalizeAntiAliasingSupport(partial?.antiAliasing),
     networkSupport,
     platformBadge: sanitizePlatformBadge(partial?.platformBadge),
     pixelSize: sanitizePixelSize(partial?.pixelSize),
@@ -762,6 +773,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     name: preset.name,
     manufacturer: preset.manufacturer,
     imageDataUrl: preset.imageAssetPath,
+    antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
     networkSupport: normalizeNetworkSupport(preset.networkSupport),
     platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
@@ -835,6 +847,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       ...updates,
       name: updates.name !== undefined ? updates.name : profile.name,
       manufacturer: updates.manufacturer !== undefined ? updates.manufacturer : profile.manufacturer,
+      antiAliasing: updates.antiAliasing !== undefined
+        ? normalizeAntiAliasingSupport(updates.antiAliasing)
+        : profile.antiAliasing,
       networkSupport: updates.networkSupport !== undefined
         ? normalizeNetworkSupport(updates.networkSupport)
         : profile.networkSupport,

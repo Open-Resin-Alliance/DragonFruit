@@ -8,6 +8,7 @@
     "pixelSize": { "x": 19, "y": 24 },
     "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
     "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp"
   },
@@ -20,6 +21,7 @@
     "pixelSize": { "x": 19, "y": 24 },
     "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
     "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp"
   },
@@ -32,6 +34,7 @@
     "pixelSize": { "x": 19, "y": 24 },
     "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
     "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp"
   },
@@ -44,6 +47,7 @@
     "pixelSize": { "x": 14, "y": 19 },
     "bitDepth": { "bits": 3, "description": "3-bit color depth, suboptimal for grayscale" },
     "display": { "resolutionX": 15136, "resolutionY": 6230, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "antiAliasing": false,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp"
   },
@@ -56,6 +60,7 @@
     "pixelSize": { "x": 14, "y": 19 },
     "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
     "display": { "resolutionX": 15120, "resolutionY": 6230, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp"
   },
@@ -68,6 +73,7 @@
     "pixelSize": { "x": 14, "y": 19 },
     "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
     "display": { "resolutionX": 15120, "resolutionY": 6230, "outputFormat": ".lumen", "mirrorX": true , "mirrorY": false },
+    "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "odyssey"
   }

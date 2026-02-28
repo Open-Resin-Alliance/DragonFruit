@@ -109,6 +109,9 @@ function getArrayU8FromWasm0(ptr, len) {
  * @param {string} x_packing_mode
  * @param {string} png_compression_strategy
  * @param {boolean} bvh_acceleration_enabled
+ * @param {string} anti_aliasing_level
+ * @param {boolean} aa_on_supports
+ * @param {number} model_triangle_count
  * @param {number} build_width_mm
  * @param {number} build_depth_mm
  * @param {number} layer_height_mm
@@ -119,24 +122,26 @@ function getArrayU8FromWasm0(ptr, len) {
  * @param {number} layer_count
  * @returns {Uint8Array}
  */
-export function slice_solid_layers_chunk_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, png_compression_strategy, bvh_acceleration_enabled, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json, start_layer, layer_count) {
+export function slice_solid_layers_chunk_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, png_compression_strategy, bvh_acceleration_enabled, anti_aliasing_level, aa_on_supports, model_triangle_count, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json, start_layer, layer_count) {
     const ptr0 = passStringToWasm0(output_format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passStringToWasm0(x_packing_mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
     const ptr2 = passStringToWasm0(png_compression_strategy, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
+    const ptr3 = passStringToWasm0(anti_aliasing_level, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr4 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
     const len4 = WASM_VECTOR_LEN;
-    const ret = wasm.slice_solid_layers_chunk_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, ptr2, len2, bvh_acceleration_enabled, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr3, len3, ptr4, len4, start_layer, layer_count);
+    const ptr5 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.slice_solid_layers_chunk_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, ptr2, len2, bvh_acceleration_enabled, ptr3, len3, aa_on_supports, model_triangle_count, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr4, len4, ptr5, len5, start_layer, layer_count);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v6 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    var v7 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v6;
+    return v7;
 }
 
 /**
@@ -148,6 +153,9 @@ export function slice_solid_layers_chunk_raw(output_format, source_width_px, sou
  * @param {string} x_packing_mode
  * @param {string} png_compression_strategy
  * @param {boolean} bvh_acceleration_enabled
+ * @param {string} anti_aliasing_level
+ * @param {boolean} aa_on_supports
+ * @param {number} model_triangle_count
  * @param {number} build_width_mm
  * @param {number} build_depth_mm
  * @param {number} layer_height_mm
@@ -156,24 +164,26 @@ export function slice_solid_layers_chunk_raw(output_format, source_width_px, sou
  * @param {string} metadata_json
  * @returns {Uint8Array}
  */
-export function slice_solid_and_encode_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, png_compression_strategy, bvh_acceleration_enabled, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json) {
+export function slice_solid_and_encode_raw(output_format, source_width_px, source_height_px, width_px, height_px, x_packing_mode, png_compression_strategy, bvh_acceleration_enabled, anti_aliasing_level, aa_on_supports, model_triangle_count, build_width_mm, build_depth_mm, layer_height_mm, total_layers, triangles_xyz, metadata_json) {
     const ptr0 = passStringToWasm0(output_format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passStringToWasm0(x_packing_mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
     const ptr2 = passStringToWasm0(png_compression_strategy, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
+    const ptr3 = passStringToWasm0(anti_aliasing_level, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr4 = passArrayF32ToWasm0(triangles_xyz, wasm.__wbindgen_malloc);
     const len4 = WASM_VECTOR_LEN;
-    const ret = wasm.slice_solid_and_encode_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, ptr2, len2, bvh_acceleration_enabled, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr3, len3, ptr4, len4);
+    const ptr5 = passStringToWasm0(metadata_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.slice_solid_and_encode_raw(ptr0, len0, source_width_px, source_height_px, width_px, height_px, ptr1, len1, ptr2, len2, bvh_acceleration_enabled, ptr3, len3, aa_on_supports, model_triangle_count, build_width_mm, build_depth_mm, layer_height_mm, total_layers, ptr4, len4, ptr5, len5);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v6 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    var v7 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v6;
+    return v7;
 }
 
 /**

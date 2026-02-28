@@ -165,6 +165,7 @@ export function SlicingPanel({
   }, [activeMaterialProfile, activePrinterProfile]);
 
   const selectedNanodlpMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
+  const antiAliasingAvailable = activePrinterProfile?.antiAliasing === true;
   const isNanodlpConnected = activePrinterProfile?.networkSupport === 'nanodlp'
     && activePrinterProfile.networkConnection?.connected === true;
   const nanodlpHost = (activePrinterProfile?.networkConnection?.ipAddress
@@ -266,6 +267,9 @@ export function SlicingPanel({
     return formatClockFromSeconds(totalSec);
   }, [activeMaterialProfile, estimatedLayerCount]);
 
+  const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
+  const effectiveAaOnSupports = antiAliasingAvailable ? aaOnSupports : false;
+
   const resolvedMaterialLabel = useMemo(() => {
     if (isNanodlpConnected && selectedNanodlpMaterialId) {
       if (isLoadingNanodlpMaterial) return 'Loading NanoDLP material…';
@@ -315,6 +319,12 @@ export function SlicingPanel({
     if (!activeModel) return;
     setFilename(normalizeExportBaseName(activeModel.name));
   }, [activeModel]);
+
+  useEffect(() => {
+    if (antiAliasingAvailable) return;
+    setAntiAliasingLevel('Off');
+    setAaOnSupports(false);
+  }, [antiAliasingAvailable]);
 
   const clearLayerPreviewUrls = useCallback(() => {
     setLayerPreviewUrls((previous) => {
@@ -485,6 +495,8 @@ export function SlicingPanel({
         printerProfile: activePrinterProfile,
         materialProfile: activeMaterialProfile,
         filenameBase: filename || activePrinterProfile.name || 'slice_export',
+        antiAliasingLevel: effectiveAntiAliasingLevel,
+        aaOnSupports: effectiveAaOnSupports,
         outputMode: 'return',
         exportThumbnailPng,
         abortSignal: abortController.signal,
@@ -810,18 +822,27 @@ export function SlicingPanel({
                     <button
                       key={level}
                       type="button"
+                      disabled={!antiAliasingAvailable}
                       className="rounded border px-1.5 py-1 text-[11px] font-medium transition-colors"
-                      style={active
+                      style={!antiAliasingAvailable
                         ? {
-                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                            color: 'var(--text-strong)',
-                          }
-                        : {
                             borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-0)',
-                            color: 'var(--text-muted)',
-                          }}
+                            background: 'color-mix(in srgb, var(--surface-0), black 8%)',
+                            color: 'color-mix(in srgb, var(--text-muted), black 18%)',
+                            cursor: 'not-allowed',
+                            opacity: 0.68,
+                          }
+                        : active
+                          ? {
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                              color: 'var(--text-strong)',
+                            }
+                          : {
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-0)',
+                              color: 'var(--text-muted)',
+                            }}
                       onClick={() => setAntiAliasingLevel(level)}
                     >
                       {level}
@@ -829,6 +850,11 @@ export function SlicingPanel({
                   );
                 })}
               </div>
+              {!antiAliasingAvailable && (
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  Unavailable for the active printer profile.
+                </div>
+              )}
             </div>
 
             <div className="mt-1 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
@@ -841,9 +867,16 @@ export function SlicingPanel({
                   type="button"
                   role="switch"
                   aria-checked={aaOnSupports}
+                  disabled={!antiAliasingAvailable}
                   onClick={() => setAaOnSupports((prev) => !prev)}
                   className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                  style={{ background: aaOnSupports ? 'var(--accent)' : 'var(--surface-2)' }}
+                  style={{
+                    background: antiAliasingAvailable
+                      ? (aaOnSupports ? 'var(--accent)' : 'var(--surface-2)')
+                      : 'color-mix(in srgb, var(--surface-2), black 10%)',
+                    opacity: antiAliasingAvailable ? 1 : 0.6,
+                    cursor: antiAliasingAvailable ? 'pointer' : 'not-allowed',
+                  }}
                 >
                   <span
                     className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${aaOnSupports ? 'translate-x-4' : 'translate-x-0'}`}

@@ -1657,6 +1657,12 @@ export function ProfileSettingsModal({
                       checked={selectedPrinter.display.mirrorY === true}
                       onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
                     />
+
+                    <LabeledToggleInput
+                      label="Anti-Aliasing"
+                      checked={selectedPrinter.antiAliasing === true}
+                      onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { antiAliasing: checked })}
+                    />
                   </div>
                 </div>
               ) : null}

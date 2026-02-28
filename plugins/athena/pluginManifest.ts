@@ -151,6 +151,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
       manufacturer: String((preset as any).manufacturer),
       name: String((preset as any).name),
       imageAssetPath: (preset as any).imageAssetPath,
+      antiAliasing: typeof (preset as any).antiAliasing === 'boolean' ? (preset as any).antiAliasing : undefined,
       platformBadge: (preset as any).platformBadge,
       pixelSize: (preset as any).pixelSize,
       bitDepth: (preset as any).bitDepth,

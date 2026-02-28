@@ -77,6 +77,48 @@ enum PackingMode {
     Gray3Div2,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AntiAliasingLevel {
+    Off,
+    X2,
+    X4,
+    X8,
+}
+
+fn parse_anti_aliasing_level(level: &str) -> AntiAliasingLevel {
+    match level {
+        "2x" => AntiAliasingLevel::X2,
+        "4x" => AntiAliasingLevel::X4,
+        "8x" => AntiAliasingLevel::X8,
+        _ => AntiAliasingLevel::Off,
+    }
+}
+
+fn quantize_coverage_to_level(coverage: f32, aa_level: AntiAliasingLevel) -> u8 {
+    let c = coverage.clamp(0.0, 1.0);
+    match aa_level {
+        AntiAliasingLevel::Off => {
+            if c > 0.0 {
+                255
+            } else {
+                0
+            }
+        }
+        AntiAliasingLevel::X2 => {
+            let q = (c * 2.0).round() / 2.0;
+            (q * 255.0).round() as u8
+        }
+        AntiAliasingLevel::X4 => {
+            let q = (c * 4.0).round() / 4.0;
+            (q * 255.0).round() as u8
+        }
+        AntiAliasingLevel::X8 => {
+            let q = (c * 8.0).round() / 8.0;
+            (q * 255.0).round() as u8
+        }
+    }
+}
+
 fn parse_packing_mode(mode: &str) -> Result<PackingMode, SolidSlicerError> {
     match mode {
         "none" => Ok(PackingMode::None),
@@ -429,7 +471,12 @@ fn fill_row_span_white(mask_row: &mut [u8], x_start: usize, x_end_inclusive: usi
     mask_row[x_start..=x_end_inclusive].fill(255);
 }
 
-fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment]) -> Vec<u8> {
+fn rasterize_segments_solid(
+    width_px: u32,
+    height_px: u32,
+    segments: &[Segment],
+    aa_level: AntiAliasingLevel,
+) -> Vec<u8> {
     let width = width_px as usize;
     let height = height_px as usize;
     let mut mask = vec![0u8; width * height];
@@ -492,12 +539,56 @@ fn rasterize_segments_solid(width_px: u32, height_px: u32, segments: &[Segment])
                 continue;
             }
 
-            let x_start = x0.min(x1).ceil().max(0.0) as i32;
-            let x_end = x0.max(x1).floor().min((width.saturating_sub(1)) as f32) as i32;
+            let a = x0.min(x1).max(0.0);
+            let b = x0.max(x1).min(width as f32);
+            if b <= a {
+                continue;
+            }
 
-            if x_end >= x_start {
-                let row = &mut mask[row_start..row_start + width];
-                fill_row_span_white(row, x_start as usize, x_end as usize);
+            let start_px = a.floor() as i32;
+            let end_px = (b - 1e-6).floor() as i32;
+            if end_px < 0 || start_px >= width as i32 {
+                continue;
+            }
+
+            let clamped_start = start_px.clamp(0, (width as i32) - 1) as usize;
+            let clamped_end = end_px.clamp(0, (width as i32) - 1) as usize;
+            let row = &mut mask[row_start..row_start + width];
+
+            if aa_level == AntiAliasingLevel::Off {
+                fill_row_span_white(row, clamped_start, clamped_end);
+                continue;
+            }
+
+            if clamped_start == clamped_end {
+                let px_left = clamped_start as f32;
+                let px_right = px_left + 1.0;
+                let coverage = (b.min(px_right) - a.max(px_left)).max(0.0);
+                let value = quantize_coverage_to_level(coverage, aa_level);
+                if value > row[clamped_start] {
+                    row[clamped_start] = value;
+                }
+                continue;
+            }
+
+            let left_px_left = clamped_start as f32;
+            let left_px_right = left_px_left + 1.0;
+            let left_coverage = (b.min(left_px_right) - a.max(left_px_left)).max(0.0);
+            let left_value = quantize_coverage_to_level(left_coverage, aa_level);
+            if left_value > row[clamped_start] {
+                row[clamped_start] = left_value;
+            }
+
+            let right_px_left = clamped_end as f32;
+            let right_px_right = right_px_left + 1.0;
+            let right_coverage = (b.min(right_px_right) - a.max(right_px_left)).max(0.0);
+            let right_value = quantize_coverage_to_level(right_coverage, aa_level);
+            if right_value > row[clamped_end] {
+                row[clamped_end] = right_value;
+            }
+
+            if clamped_end > clamped_start + 1 {
+                fill_row_span_white(row, clamped_start + 1, clamped_end - 1);
             }
         }
     }
@@ -517,6 +608,58 @@ fn encode_grayscale_png_with_strategy(
     FastPngEncoder::new(width_px, height_px, config)
         .and_then(|encoder| encoder.encode(pixels))
         .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()))
+}
+
+fn merge_mask_max(dst: &mut [u8], src: &[u8]) {
+    for (d, s) in dst.iter_mut().zip(src.iter()) {
+        if *s > *d {
+            *d = *s;
+        }
+    }
+}
+
+fn rasterize_mask_for_triangle_indices(
+    triangles: &[Tri],
+    triangle_indices: &[usize],
+    z_mm: f32,
+    mirror_x: bool,
+    mirror_y: bool,
+    min_x_mm: f32,
+    min_y_mm: f32,
+    build_width_mm: f32,
+    build_depth_mm: f32,
+    source_width_px: u32,
+    source_height_px: u32,
+    aa_level: AntiAliasingLevel,
+) -> Option<Vec<u8>> {
+    if triangle_indices.is_empty() {
+        return None;
+    }
+
+    let segments = build_layer_segments(
+        triangles,
+        triangle_indices,
+        z_mm,
+        mirror_x,
+        mirror_y,
+        min_x_mm,
+        min_y_mm,
+        build_width_mm,
+        build_depth_mm,
+        source_width_px,
+        source_height_px,
+    );
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    Some(rasterize_segments_solid(
+        source_width_px,
+        source_height_px,
+        &segments,
+        aa_level,
+    ))
 }
 
 fn pack_mask_to_nanodlp_png(
@@ -887,6 +1030,7 @@ fn render_layer_png(
     mirror_y: bool,
     min_x_mm: f32,
     min_y_mm: f32,
+    aa_level: AntiAliasingLevel,
     layer_index: u32,
     empty_layer_png: &mut Option<Vec<u8>>,
 ) -> Result<Vec<u8>, SolidSlicerError> {
@@ -911,39 +1055,116 @@ fn render_layer_png(
         return Ok(empty_layer_png.clone().unwrap_or_default());
     }
 
-    let segments = build_layer_segments(
-        triangles,
-        triangle_indices,
-        z_mm,
-        mirror_x,
-        mirror_y,
-        min_x_mm,
-        min_y_mm,
-        job.build_width_mm,
-        job.build_depth_mm,
-        job.source_width_px,
-        job.source_height_px,
-    );
+    let use_support_aware_aa = aa_level != AntiAliasingLevel::Off
+        && !job.aa_on_supports
+        && job.model_triangle_count > 0
+        && job.model_triangle_count < triangles.len();
 
-    if segments.is_empty() {
-        if empty_layer_png.is_none() {
-            let empty_mask =
-                vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
-            *empty_layer_png = Some(pack_mask_to_nanodlp_png(
-                &empty_mask,
-                job.source_width_px,
-                job.source_height_px,
-                job.width_px,
-                job.height_px,
-                packing_mode,
-                png_strategy,
-            )?);
+    let mask = if use_support_aware_aa {
+        let mut model_indices = Vec::with_capacity(triangle_indices.len());
+        let mut support_indices = Vec::with_capacity(triangle_indices.len());
+        for tri_index in triangle_indices {
+            if *tri_index < job.model_triangle_count {
+                model_indices.push(*tri_index);
+            } else {
+                support_indices.push(*tri_index);
+            }
         }
 
-        return Ok(empty_layer_png.clone().unwrap_or_default());
-    }
+        let mut merged =
+            vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+        let mut wrote_any = false;
 
-    let mask = rasterize_segments_solid(job.source_width_px, job.source_height_px, &segments);
+        if let Some(model_mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            &model_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            aa_level,
+        ) {
+            merge_mask_max(&mut merged, &model_mask);
+            wrote_any = true;
+        }
+
+        if let Some(support_mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            &support_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            AntiAliasingLevel::Off,
+        ) {
+            merge_mask_max(&mut merged, &support_mask);
+            wrote_any = true;
+        }
+
+        if !wrote_any {
+            if empty_layer_png.is_none() {
+                let empty_mask =
+                    vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+                *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                    &empty_mask,
+                    job.source_width_px,
+                    job.source_height_px,
+                    job.width_px,
+                    job.height_px,
+                    packing_mode,
+                    png_strategy,
+                )?);
+            }
+
+            return Ok(empty_layer_png.clone().unwrap_or_default());
+        }
+
+        merged
+    } else {
+        let Some(mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            triangle_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            aa_level,
+        ) else {
+            if empty_layer_png.is_none() {
+                let empty_mask =
+                    vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+                *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                    &empty_mask,
+                    job.source_width_px,
+                    job.source_height_px,
+                    job.width_px,
+                    job.height_px,
+                    packing_mode,
+                    png_strategy,
+                )?);
+            }
+
+            return Ok(empty_layer_png.clone().unwrap_or_default());
+        };
+
+        mask
+    };
+
     pack_mask_to_nanodlp_png(
         &mask,
         job.source_width_px,
@@ -966,6 +1187,7 @@ fn render_layer_png_bvh(
     mirror_y: bool,
     min_x_mm: f32,
     min_y_mm: f32,
+    aa_level: AntiAliasingLevel,
     layer_index: u32,
     empty_layer_png: &mut Option<Vec<u8>>,
 ) -> Result<Vec<u8>, SolidSlicerError> {
@@ -993,39 +1215,116 @@ fn render_layer_png_bvh(
         return Ok(empty_layer_png.clone().unwrap_or_default());
     }
 
-    let segments = build_layer_segments(
-        triangles,
-        &triangle_indices,
-        z_mm,
-        mirror_x,
-        mirror_y,
-        min_x_mm,
-        min_y_mm,
-        job.build_width_mm,
-        job.build_depth_mm,
-        job.source_width_px,
-        job.source_height_px,
-    );
+    let use_support_aware_aa = aa_level != AntiAliasingLevel::Off
+        && !job.aa_on_supports
+        && job.model_triangle_count > 0
+        && job.model_triangle_count < triangles.len();
 
-    if segments.is_empty() {
-        if empty_layer_png.is_none() {
-            let empty_mask =
-                vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
-            *empty_layer_png = Some(pack_mask_to_nanodlp_png(
-                &empty_mask,
-                job.source_width_px,
-                job.source_height_px,
-                job.width_px,
-                job.height_px,
-                packing_mode,
-                png_strategy,
-            )?);
+    let mask = if use_support_aware_aa {
+        let mut model_indices = Vec::with_capacity(triangle_indices.len());
+        let mut support_indices = Vec::with_capacity(triangle_indices.len());
+        for tri_index in &triangle_indices {
+            if *tri_index < job.model_triangle_count {
+                model_indices.push(*tri_index);
+            } else {
+                support_indices.push(*tri_index);
+            }
         }
 
-        return Ok(empty_layer_png.clone().unwrap_or_default());
-    }
+        let mut merged =
+            vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+        let mut wrote_any = false;
 
-    let mask = rasterize_segments_solid(job.source_width_px, job.source_height_px, &segments);
+        if let Some(model_mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            &model_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            aa_level,
+        ) {
+            merge_mask_max(&mut merged, &model_mask);
+            wrote_any = true;
+        }
+
+        if let Some(support_mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            &support_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            AntiAliasingLevel::Off,
+        ) {
+            merge_mask_max(&mut merged, &support_mask);
+            wrote_any = true;
+        }
+
+        if !wrote_any {
+            if empty_layer_png.is_none() {
+                let empty_mask =
+                    vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+                *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                    &empty_mask,
+                    job.source_width_px,
+                    job.source_height_px,
+                    job.width_px,
+                    job.height_px,
+                    packing_mode,
+                    png_strategy,
+                )?);
+            }
+
+            return Ok(empty_layer_png.clone().unwrap_or_default());
+        }
+
+        merged
+    } else {
+        let Some(mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            &triangle_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            aa_level,
+        ) else {
+            if empty_layer_png.is_none() {
+                let empty_mask =
+                    vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+                *empty_layer_png = Some(pack_mask_to_nanodlp_png(
+                    &empty_mask,
+                    job.source_width_px,
+                    job.source_height_px,
+                    job.width_px,
+                    job.height_px,
+                    packing_mode,
+                    png_strategy,
+                )?);
+            }
+
+            return Ok(empty_layer_png.clone().unwrap_or_default());
+        };
+
+        mask
+    };
+
     pack_mask_to_nanodlp_png(
         &mask,
         job.source_width_px,
@@ -1047,6 +1346,7 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
     validate_solid_job(job)?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
     let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let triangles = parse_triangles(&job.triangles_xyz)?;
     let source_metadata: Value = serde_json::from_str(&job.metadata_json)
@@ -1085,6 +1385,7 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
                 mirror_y,
                 min_x_mm,
                 min_y_mm,
+                aa_level,
                 layer_index,
                 &mut empty_layer_png,
             )?
@@ -1099,6 +1400,7 @@ pub fn solid_slice_to_png_layers(job: &SolidSliceJob) -> Result<Vec<Vec<u8>>, So
                 mirror_y,
                 min_x_mm,
                 min_y_mm,
+                aa_level,
                 layer_index,
                 &mut empty_layer_png,
             )?
@@ -1134,6 +1436,7 @@ pub fn slice_solid_chunk_payload(
     }
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
     let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let triangles = parse_triangles(&job.triangles_xyz)?;
     let source_metadata: Value = serde_json::from_str(&job.metadata_json)
@@ -1175,6 +1478,7 @@ pub fn slice_solid_chunk_payload(
                 mirror_y,
                 min_x_mm,
                 min_y_mm,
+                aa_level,
                 layer_index,
                 &mut empty_layer_png,
             )?
@@ -1189,6 +1493,7 @@ pub fn slice_solid_chunk_payload(
                 mirror_y,
                 min_x_mm,
                 min_y_mm,
+                aa_level,
                 layer_index,
                 &mut empty_layer_png,
             )?
@@ -1216,6 +1521,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
     let options_json = json_pretty_bytes(&build_options_json(job))?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
     let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let triangles = parse_triangles(&job.triangles_xyz)?;
@@ -1290,6 +1596,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
                     mirror_y,
                     min_x_mm,
                     min_y_mm,
+                    aa_level,
                     layer_index,
                     &mut empty_layer_png,
                 )?
@@ -1304,6 +1611,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
                     mirror_y,
                     min_x_mm,
                     min_y_mm,
+                    aa_level,
                     layer_index,
                     &mut empty_layer_png,
                 )?

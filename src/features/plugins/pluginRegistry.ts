@@ -126,6 +126,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     manufacturer,
     name,
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
+    antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
     networkSupport: value.networkSupport === 'nanodlp' ? 'nanodlp' : undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),
     pixelSize,

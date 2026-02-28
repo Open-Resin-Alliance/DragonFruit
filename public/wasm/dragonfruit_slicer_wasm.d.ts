@@ -1,7 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
-export function slice_solid_layers_chunk_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, png_compression_strategy: string, bvh_acceleration_enabled: boolean, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string, start_layer: number, layer_count: number): Uint8Array;
-export function slice_solid_and_encode_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, png_compression_strategy: string, bvh_acceleration_enabled: boolean, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string): Uint8Array;
+export function slice_solid_layers_chunk_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, png_compression_strategy: string, bvh_acceleration_enabled: boolean, anti_aliasing_level: string, aa_on_supports: boolean, model_triangle_count: number, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string, start_layer: number, layer_count: number): Uint8Array;
+export function slice_solid_and_encode_raw(output_format: string, source_width_px: number, source_height_px: number, width_px: number, height_px: number, x_packing_mode: string, png_compression_strategy: string, bvh_acceleration_enabled: boolean, anti_aliasing_level: string, aa_on_supports: boolean, model_triangle_count: number, build_width_mm: number, build_depth_mm: number, layer_height_mm: number, total_layers: number, triangles_xyz: Float32Array, metadata_json: string): Uint8Array;
 export function encode_slice_job(job_json: string): Uint8Array;
 export function slice_solid_and_encode_job(job_json: string): Uint8Array;
 
@@ -11,8 +11,8 @@ export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly encode_slice_job: (a: number, b: number) => [number, number, number, number];
   readonly slice_solid_and_encode_job: (a: number, b: number) => [number, number, number, number];
-  readonly slice_solid_and_encode_raw: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number) => [number, number, number, number];
-  readonly slice_solid_layers_chunk_raw: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number) => [number, number, number, number];
+  readonly slice_solid_and_encode_raw: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number) => [number, number, number, number];
+  readonly slice_solid_layers_chunk_raw: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number) => [number, number, number, number];
   readonly __wbindgen_export_0: WebAssembly.Table;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
