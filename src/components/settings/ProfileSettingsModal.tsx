@@ -227,10 +227,30 @@ export function ProfileSettingsModal({
       const searchMatch =
         search.length === 0
         || preset.name.toLowerCase().includes(search)
-        || preset.manufacturer.toLowerCase().includes(search);
+        || preset.manufacturer.toLowerCase().includes(search)
+        || (preset.family ?? '').toLowerCase().includes(search);
       return manufacturerMatch && searchMatch;
     });
   }, [availablePrinterPresets, presetSearch, selectedPresetManufacturer]);
+
+  const groupedFilteredPrinterPresets = React.useMemo(() => {
+    if (selectedPresetManufacturer === 'All') return [] as Array<{ family: string; presets: typeof filteredPrinterPresets }>;
+
+    const grouped = new Map<string, typeof filteredPrinterPresets>();
+    filteredPrinterPresets.forEach((preset) => {
+      const family = (preset.family ?? '').trim() || 'Other';
+      const current = grouped.get(family);
+      if (current) {
+        current.push(preset);
+      } else {
+        grouped.set(family, [preset]);
+      }
+    });
+
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([family, presets]) => ({ family, presets }));
+  }, [filteredPrinterPresets, selectedPresetManufacturer]);
 
   const addedOfficialPresetIds = React.useMemo(() => {
     const set = new Set<string>();
@@ -1284,6 +1304,95 @@ export function ProfileSettingsModal({
     URL.revokeObjectURL(url);
   }, [selectedPrinter]);
 
+  const renderPresetLibraryCard = React.useCallback((preset: (typeof availablePrinterPresets)[number]) => {
+    const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
+    const isGenericPreset = preset.manufacturer.toLowerCase() === 'generic'
+      || preset.name.toLowerCase().includes('generic');
+    const platformBadge = preset.platformBadge?.text?.trim()
+      ? preset.platformBadge
+      : undefined;
+    const bitDepthBits = Number.isFinite(Number(preset.bitDepth?.bits))
+      ? Math.round(Number(preset.bitDepth?.bits))
+      : null;
+    const bitDepthLabel = Number.isFinite(Number(preset.bitDepth?.bits))
+      ? `${Math.round(Number(preset.bitDepth?.bits))} Bit`
+      : null;
+
+    return (
+      <button
+        key={preset.presetId}
+        type="button"
+        disabled={isAlreadyAdded}
+        onClick={() => handleAddPrinterFromPreset(preset.presetId)}
+        className="rounded-lg border p-2.5 text-left disabled:opacity-55"
+        style={{
+          borderColor: isAlreadyAdded
+            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
+            : 'var(--border-subtle)',
+          background: isAlreadyAdded
+            ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
+            : 'var(--surface-1)',
+        }}
+      >
+        <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
+          {preset.imageAssetPath ? (
+            <AutoTrimmedImage src={preset.imageAssetPath} alt={preset.name} className="h-full w-full object-contain" />
+          ) : (
+            isGenericPreset
+              ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+              : <ImagePlus className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+          )}
+          {platformBadge && (
+            <span
+              className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
+              style={{
+                background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, black 18%))`,
+                color: '#ffffff',
+                letterSpacing: '0.04em',
+              }}
+            >
+              <span className="relative top-[0.5px]">{platformBadge.text}</span>
+            </span>
+          )}
+          {bitDepthLabel && (
+            <span
+              className="pointer-events-none absolute bottom-1 right-1 z-10 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
+              style={{
+                borderColor: bitDepthBits === 8
+                  ? 'color-mix(in srgb, #22c55e, white 22%)'
+                  : bitDepthBits === 3
+                    ? 'color-mix(in srgb, #ef4444, white 18%)'
+                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                color: '#f8fafc',
+                background: bitDepthBits === 8
+                  ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
+                  : bitDepthBits === 3
+                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+              }}
+              title={preset.bitDepth?.description || `${bitDepthLabel} display`}
+            >
+              {bitDepthLabel}
+            </span>
+          )}
+        </div>
+        <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
+          <span className="truncate">{preset.name}</span>
+          <span className="shrink-0 inline-flex items-center gap-1">
+            {isAlreadyAdded && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
+                Added
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          {preset.manufacturer}
+        </div>
+      </button>
+    );
+  }, [addedOfficialPresetIds, availablePrinterPresets, handleAddPrinterFromPreset]);
+
   if (!isOpen) return null;
   const hasPrinters = profileState.printerProfiles.length > 0;
   const isCustomSelectedPrinter = Boolean(selectedPrinter?.isCustom && !selectedPrinter?.isOfficial);
@@ -2165,96 +2274,24 @@ export function ProfileSettingsModal({
                 </div>
 
                 <div className="p-3 overflow-y-auto custom-scrollbar">
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
-                    {filteredPrinterPresets.map((preset) => {
-                      const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
-                      const isGenericPreset = preset.manufacturer.toLowerCase() === 'generic'
-                        || preset.name.toLowerCase().includes('generic');
-                      const platformBadge = preset.platformBadge?.text?.trim()
-                        ? preset.platformBadge
-                        : undefined;
-                      const bitDepthBits = Number.isFinite(Number(preset.bitDepth?.bits))
-                        ? Math.round(Number(preset.bitDepth?.bits))
-                        : null;
-                      const bitDepthLabel = Number.isFinite(Number(preset.bitDepth?.bits))
-                        ? `${Math.round(Number(preset.bitDepth?.bits))} Bit`
-                        : null;
-
-                      return (
-                        <button
-                          key={preset.presetId}
-                          type="button"
-                          disabled={isAlreadyAdded}
-                          onClick={() => handleAddPrinterFromPreset(preset.presetId)}
-                          className="rounded-lg border p-2.5 text-left disabled:opacity-55"
-                          style={{
-                            borderColor: isAlreadyAdded
-                              ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
-                              : 'var(--border-subtle)',
-                            background: isAlreadyAdded
-                              ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
-                              : 'var(--surface-1)',
-                          }}
-                        >
-                          <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
-                            {preset.imageAssetPath ? (
-                              <AutoTrimmedImage src={preset.imageAssetPath} alt={preset.name} className="h-full w-full object-contain" />
-                            ) : (
-                              isGenericPreset
-                                ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-                                : <ImagePlus className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-                            )}
-                            {platformBadge && (
-                              <span
-                                className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
-                                style={{
-                                  background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, black 18%))`,
-                                  color: '#ffffff',
-                                  letterSpacing: '0.04em',
-                                }}
-                              >
-                                <span className="relative top-[0.5px]">{platformBadge.text}</span>
-                              </span>
-                            )}
-                            {bitDepthLabel && (
-                              <span
-                                className="pointer-events-none absolute bottom-1 right-1 z-10 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
-                                style={{
-                                  borderColor: bitDepthBits === 8
-                                    ? 'color-mix(in srgb, #22c55e, white 22%)'
-                                    : bitDepthBits === 3
-                                      ? 'color-mix(in srgb, #ef4444, white 18%)'
-                                      : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
-                                  color: '#f8fafc',
-                                  background: bitDepthBits === 8
-                                    ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
-                                    : bitDepthBits === 3
-                                      ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
-                                      : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
-                                }}
-                                title={preset.bitDepth?.description || `${bitDepthLabel} display`}
-                              >
-                                {bitDepthLabel}
-                              </span>
-                            )}
+                  {selectedPresetManufacturer === 'All' ? (
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
+                      {filteredPrinterPresets.map(renderPresetLibraryCard)}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {groupedFilteredPrinterPresets.map((group) => (
+                        <section key={`${selectedPresetManufacturer}-${group.family}`} className="space-y-1.5">
+                          <div className="px-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                            {group.family}
                           </div>
-                          <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
-                            <span className="truncate">{preset.name}</span>
-                            <span className="shrink-0 inline-flex items-center gap-1">
-                              {isAlreadyAdded && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
-                                  Added
-                                </span>
-                              )}
-                            </span>
+                          <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
+                            {group.presets.map(renderPresetLibraryCard)}
                           </div>
-                          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            {preset.manufacturer}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                        </section>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

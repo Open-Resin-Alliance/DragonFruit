@@ -115,6 +115,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
   const presetId = boundedString(value.presetId, 120);
   const manufacturer = boundedString(value.manufacturer, 80);
   const name = boundedString(value.name, 120);
+  const family = boundedString(value.family, 80);
   if (!presetId || !manufacturer || !name) return null;
 
   const resolutionX = Math.round(sanitizeNumber((value as any).display?.resolutionX, 2560, 1, 200000));
@@ -125,6 +126,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     presetId,
     manufacturer,
     name,
+    family: family || undefined,
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
     antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
     networkSupport: value.networkSupport === 'nanodlp' ? 'nanodlp' : undefined,

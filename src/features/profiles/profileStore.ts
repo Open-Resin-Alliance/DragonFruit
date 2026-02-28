@@ -54,6 +54,7 @@ export type PrinterPreset = {
   presetId: string;
   manufacturer: string;
   name: string;
+  family?: string;
   imageAssetPath?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
