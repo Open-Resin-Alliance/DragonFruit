@@ -105,6 +105,19 @@ function formatElapsedClock(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+const SLICING_AA_LEVEL_SESSION_KEY = 'dragonfruit.slicing.aaLevel';
+
+function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' {
+  if (typeof window === 'undefined') return 'Off';
+
+  const stored = window.sessionStorage.getItem(SLICING_AA_LEVEL_SESSION_KEY);
+  if (stored === 'Off' || stored === '2x' || stored === '4x' || stored === '8x') {
+    return stored;
+  }
+
+  return 'Off';
+}
+
 export function SlicingPanel({
   models,
   activeModel,
@@ -131,7 +144,7 @@ export function SlicingPanel({
   const [showSlicingModal, setShowSlicingModal] = useState(false);
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
-  const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x'>('2x');
+  const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x'>(resolveInitialAaLevel);
   const [aaOnSupports, setAaOnSupports] = useState(false);
   const [isLiveStatusExpanded, setIsLiveStatusExpanded] = useState(false);
   const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
@@ -270,6 +283,11 @@ export function SlicingPanel({
   const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
   const effectiveAaOnSupports = antiAliasingAvailable ? aaOnSupports : false;
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.sessionStorage.setItem(SLICING_AA_LEVEL_SESSION_KEY, antiAliasingLevel);
+  }, [antiAliasingLevel]);
+
   const resolvedMaterialLabel = useMemo(() => {
     if (isNanodlpConnected && selectedNanodlpMaterialId) {
       if (isLoadingNanodlpMaterial) return 'Loading NanoDLP material…';
@@ -319,12 +337,6 @@ export function SlicingPanel({
     if (!activeModel) return;
     setFilename(normalizeExportBaseName(activeModel.name));
   }, [activeModel]);
-
-  useEffect(() => {
-    if (antiAliasingAvailable) return;
-    setAntiAliasingLevel('Off');
-    setAaOnSupports(false);
-  }, [antiAliasingAvailable]);
 
   const clearLayerPreviewUrls = useCallback(() => {
     setLayerPreviewUrls((previous) => {
