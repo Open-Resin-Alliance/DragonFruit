@@ -108,6 +108,10 @@ import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelat
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
+import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
+import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 
@@ -345,6 +349,10 @@ export default function Home() {
   const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
+  const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
+  const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
+  const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
+  const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
   const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
   const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
   const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
@@ -1381,22 +1389,547 @@ export default function Home() {
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   }, [printingArtifact]);
 
+  const yieldResinEstimateToMainThread = React.useCallback(async () => {
+    await new Promise<void>((resolve) => {
+      if (typeof window !== 'undefined' && typeof (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback === 'function') {
+        (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback?.(() => resolve(), { timeout: 16 });
+        return;
+      }
+      setTimeout(resolve, 0);
+    });
+  }, []);
+
+  const computeBaseResinMlChunked = React.useCallback(async (
+    position: { getX: (i: number) => number; getY: (i: number) => number; getZ: (i: number) => number; count: number },
+    index: { getX: (i: number) => number; count: number } | null,
+  ): Promise<number | null> => {
+    let signedVolume = 0;
+
+    const vax = { x: 0, y: 0, z: 0 };
+    const vbx = { x: 0, y: 0, z: 0 };
+    const vcx = { x: 0, y: 0, z: 0 };
+
+    const readVertex = (i: number, out: { x: number; y: number; z: number }) => {
+      out.x = position.getX(i);
+      out.y = position.getY(i);
+      out.z = position.getZ(i);
+    };
+
+    const addTriangle = (ia: number, ib: number, ic: number) => {
+      readVertex(ia, vax);
+      readVertex(ib, vbx);
+      readVertex(ic, vcx);
+
+      signedVolume += (
+        vax.x * (vbx.y * vcx.z - vbx.z * vcx.y)
+        - vax.y * (vbx.x * vcx.z - vbx.z * vcx.x)
+        + vax.z * (vbx.x * vcx.y - vbx.y * vcx.x)
+      ) / 6;
+    };
+
+    const yieldEveryTriangles = 4096;
+    let processedTriangles = 0;
+
+    if (index) {
+      for (let i = 0; i < index.count; i += 3) {
+        addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
+        processedTriangles += 1;
+        if (processedTriangles % yieldEveryTriangles === 0) {
+          await yieldResinEstimateToMainThread();
+        }
+      }
+    } else {
+      for (let i = 0; i < position.count; i += 3) {
+        addTriangle(i, i + 1, i + 2);
+        processedTriangles += 1;
+        if (processedTriangles % yieldEveryTriangles === 0) {
+          await yieldResinEstimateToMainThread();
+        }
+      }
+    }
+
+    const baseVolumeMm3 = Math.abs(signedVolume);
+    return Number.isFinite(baseVolumeMm3) ? (baseVolumeMm3 / 1000) : null;
+  }, [yieldResinEstimateToMainThread]);
+
+  const getOrComputeBaseResinMl = React.useCallback(async (model: (typeof scene.models)[number]): Promise<number | null> => {
+    const geometry = model.geometry.geometry;
+    const positionAttr = geometry.getAttribute('position');
+    if (!positionAttr) return null;
+
+    const sourceKey = String(geometry.userData?.resinVolumeSourceKey ?? geometry.uuid);
+    geometry.userData = {
+      ...geometry.userData,
+      resinVolumeSourceKey: sourceKey,
+    };
+
+    const position = positionAttr as {
+      getX: (i: number) => number;
+      getY: (i: number) => number;
+      getZ: (i: number) => number;
+      count: number;
+      version?: number;
+      data?: { version?: number };
+    };
+    const index = geometry.getIndex() as ({ getX: (i: number) => number; count: number; version?: number } | null);
+
+    const positionVersion = position.version ?? position.data?.version ?? 0;
+    const indexVersion = index?.version ?? 0;
+    const cacheKey = `${sourceKey}:${positionVersion}:${indexVersion}`;
+
+    const cached = printingBaseResinMlCacheRef.current.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const inFlight = printingInFlightBaseResinMlRef.current.get(cacheKey);
+    if (inFlight) return inFlight;
+
+    const promise = computeBaseResinMlChunked(position, index)
+      .then((result) => {
+        printingBaseResinMlCacheRef.current.set(cacheKey, result);
+        printingInFlightBaseResinMlRef.current.delete(cacheKey);
+        return result;
+      })
+      .catch(() => {
+        printingInFlightBaseResinMlRef.current.delete(cacheKey);
+        return null;
+      });
+
+    printingInFlightBaseResinMlRef.current.set(cacheKey, promise);
+    return promise;
+  }, [computeBaseResinMlChunked]);
+
+  const supportAndRaftResinMl = React.useMemo(() => {
+    const visibleModelIds = new Set(scene.models.filter((model) => model.visible).map((model) => model.id));
+    if (visibleModelIds.size === 0) return 0;
+
+    const mm3ToMl = (mm3: number) => Math.max(0, mm3) / 1000;
+    const circleArea = (radiusMm: number) => Math.PI * radiusMm * radiusMm;
+    const sphereVolumeMm3 = (radiusMm: number) => (4 / 3) * Math.PI * radiusMm * radiusMm * radiusMm;
+    const cylinderVolumeMm3 = (radiusMm: number, heightMm: number) => circleArea(radiusMm) * Math.max(0, heightMm);
+    const frustumVolumeMm3 = (r1: number, r2: number, heightMm: number) => {
+      const h = Math.max(0, heightMm);
+      return (Math.PI * h / 3) * ((r1 * r1) + (r1 * r2) + (r2 * r2));
+    };
+    const distanceMm = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dz = a.z - b.z;
+      return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+    };
+    const sampleBezierLengthMm = (
+      p0: { x: number; y: number; z: number },
+      p1: { x: number; y: number; z: number },
+      p2: { x: number; y: number; z: number },
+      p3: { x: number; y: number; z: number },
+      samples: number,
+    ) => {
+      let length = 0;
+      let prev = p0;
+      const steps = Math.max(4, samples);
+      for (let i = 1; i <= steps; i += 1) {
+        const t = i / steps;
+        const next = getBezierPointAtT(p0, p1, p2, p3, t);
+        length += distanceMm(prev, next);
+        prev = next;
+      }
+      return length;
+    };
+
+    const contactConeVolumeMl = (cone: {
+      profile: {
+        contactDiameterMm: number;
+        bodyDiameterMm: number;
+        lengthMm: number;
+        type?: 'disk' | 'sphere';
+      };
+      normal: { x: number; y: number; z: number };
+      surfaceNormal?: { x: number; y: number; z: number };
+      diskLengthOverride?: number;
+    }) => {
+      const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
+      const bodyRadius = Math.max(0.001, cone.profile.bodyDiameterMm / 2);
+      const coneLen = Math.max(0, cone.profile.lengthMm);
+      const coneMm3 = frustumVolumeMm3(contactRadius, bodyRadius, coneLen);
+
+      let diskMm3 = 0;
+      if (cone.profile.type === 'disk') {
+        const surfaceNormal = cone.surfaceNormal ?? cone.normal;
+        const diskProfile = {
+          type: 'disk' as const,
+          diskThicknessMm: Math.max(0.01, Number((cone.profile as { diskThicknessMm?: number }).diskThicknessMm ?? 0.1)),
+          maxStandoffMm: Math.max(0.01, Number((cone.profile as { maxStandoffMm?: number }).maxStandoffMm ?? 0.35)),
+          standoffAngleThreshold: Number((cone.profile as { standoffAngleThreshold?: number }).standoffAngleThreshold ?? (Math.PI / 4)),
+        };
+        const diskThickness = cone.diskLengthOverride ?? calculateDiskThickness(surfaceNormal, cone.normal, diskProfile);
+        diskMm3 = cylinderVolumeMm3(contactRadius, Math.max(0, diskThickness));
+      }
+
+      return mm3ToMl(coneMm3 + diskMm3);
+    };
+
+    const contactDiskVolumeMl = (disk: {
+      contactDiameterMm: number;
+      profile: {
+        type?: 'disk';
+        standoffAngleThreshold?: number;
+        diskThicknessMm?: number;
+        maxStandoffMm?: number;
+      };
+      surfaceNormal: { x: number; y: number; z: number };
+      coneAxis: { x: number; y: number; z: number };
+      diskLengthOverride?: number;
+    }) => {
+      const radius = Math.max(0.001, disk.contactDiameterMm / 2);
+      const diskProfile = {
+        type: 'disk' as const,
+        diskThicknessMm: Math.max(0.01, Number(disk.profile.diskThicknessMm ?? 0.1)),
+        maxStandoffMm: Math.max(0.01, Number(disk.profile.maxStandoffMm ?? 0.35)),
+        standoffAngleThreshold: Number(disk.profile.standoffAngleThreshold ?? (Math.PI / 4)),
+      };
+      const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, diskProfile);
+      return mm3ToMl(cylinderVolumeMm3(radius, Math.max(0, thickness)));
+    };
+
+    const segmentVolumeMl = (
+      segment: {
+        diameter: number;
+        type?: 'straight' | 'bezier';
+        controlPoint1?: { x: number; y: number; z: number };
+        controlPoint2?: { x: number; y: number; z: number };
+        resolution?: number;
+      },
+      start: { x: number; y: number; z: number },
+      end: { x: number; y: number; z: number },
+    ) => {
+      const radius = Math.max(0.001, segment.diameter / 2);
+      const length = segment.type === 'bezier' && segment.controlPoint1 && segment.controlPoint2
+        ? sampleBezierLengthMm(start, segment.controlPoint1, segment.controlPoint2, end, segment.resolution ?? 16)
+        : distanceMm(start, end);
+      return mm3ToMl(cylinderVolumeMm3(radius, length));
+    };
+
+    const polygonAreaMm2 = (profile: THREE.Vector2[]) => {
+      if (profile.length < 3) return 0;
+      let sum = 0;
+      for (let i = 0; i < profile.length; i += 1) {
+        const a = profile[i];
+        const b = profile[(i + 1) % profile.length];
+        sum += (a.x * b.y) - (b.x * a.y);
+      }
+      return Math.abs(sum) * 0.5;
+    };
+    const polygonPerimeterMm = (profile: THREE.Vector2[]) => {
+      if (profile.length < 2) return 0;
+      let sum = 0;
+      for (let i = 0; i < profile.length; i += 1) {
+        const a = profile[i];
+        const b = profile[(i + 1) % profile.length];
+        sum += a.distanceTo(b);
+      }
+      return sum;
+    };
+
+    const topDiameterByRootId = new Map<string, number>();
+    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
+      const firstDiameter = trunk.baseDiameterMm ?? trunk.segments[0]?.diameter;
+      if (firstDiameter && firstDiameter > 0) {
+        topDiameterByRootId.set(trunk.rootId, firstDiameter);
+      }
+    }
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      const firstDiameter = supportBrace.profile.terminalStartDiameterMm
+        || supportBrace.segments[0]?.diameter
+        || supportBrace.profile.bodyDiameterMm;
+      if (firstDiameter && firstDiameter > 0) {
+        topDiameterByRootId.set(supportBrace.rootId, firstDiameter);
+      }
+    }
+
+    let supportMl = 0;
+
+    const addRootVolume = (root: { id: string; modelId: string; diameter: number; diskHeight: number; coneHeight: number }) => {
+      if (!visibleModelIds.has(root.modelId)) return;
+
+      const rootRadius = Math.max(0.001, root.diameter / 2);
+      const topDiameter = topDiameterByRootId.get(root.id) ?? Math.max(0.1, root.diameter * 0.35);
+      const topRadius = Math.max(0.001, topDiameter / 2);
+
+      const effectiveDiskHeight = raftSettingsSnapshot.bottomMode === 'solid'
+        ? 0.05
+        : Math.max(0, root.diskHeight);
+      const coneHeight = Math.max(0, root.coneHeight);
+
+      const diskMm3 = cylinderVolumeMm3(rootRadius, effectiveDiskHeight);
+      const coneMm3 = frustumVolumeMm3(rootRadius, topRadius, coneHeight);
+      const capSphereMm3 = coneHeight > 0 ? sphereVolumeMm3(topRadius) : 0;
+      supportMl += mm3ToMl(diskMm3 + coneMm3 + capSphereMm3);
+    };
+
+    for (const root of Object.values(supportStateSnapshot.roots)) {
+      addRootVolume(root);
+    }
+    for (const root of Object.values(supportBraceStateSnapshot.roots)) {
+      addRootVolume(root);
+    }
+
+    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
+      if (!visibleModelIds.has(trunk.modelId)) continue;
+      const root = supportStateSnapshot.roots[trunk.rootId];
+      for (let i = 0; i < trunk.segments.length; i += 1) {
+        const seg = trunk.segments[i];
+        const endpoints = getTrunkSegmentEndpoints(trunk, seg, i, root);
+        if (!endpoints) continue;
+        supportMl += segmentVolumeMl(seg, endpoints.start, endpoints.end);
+      }
+      if (trunk.contactCone) {
+        supportMl += contactConeVolumeMl(trunk.contactCone);
+      }
+    }
+
+    for (const branch of Object.values(supportStateSnapshot.branches)) {
+      if (!visibleModelIds.has(branch.modelId)) continue;
+      const parentKnot = supportStateSnapshot.knots[branch.parentKnotId];
+      for (let i = 0; i < branch.segments.length; i += 1) {
+        const seg = branch.segments[i];
+        const endpoints = getBranchSegmentEndpoints(branch, seg, i, parentKnot);
+        if (!endpoints) continue;
+        supportMl += segmentVolumeMl(seg, endpoints.start, endpoints.end);
+      }
+      if (branch.contactCone) {
+        supportMl += contactConeVolumeMl(branch.contactCone);
+      }
+    }
+
+    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
+      if (!visibleModelIds.has(leaf.modelId)) continue;
+      if (leaf.contactCone) {
+        supportMl += contactConeVolumeMl(leaf.contactCone);
+      }
+    }
+
+    for (const twig of Object.values(supportStateSnapshot.twigs)) {
+      if (!visibleModelIds.has(twig.modelId)) continue;
+
+      for (let i = 0; i < twig.segments.length; i += 1) {
+        const seg = twig.segments[i];
+        const start = i === 0
+          ? (seg.bottomJoint?.pos ?? twig.contactDiskA.pos)
+          : (twig.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? twig.contactDiskA.pos);
+        const end = seg.topJoint?.pos ?? twig.contactDiskB.pos;
+        supportMl += segmentVolumeMl(seg, start, end);
+      }
+
+      supportMl += contactDiskVolumeMl(twig.contactDiskA);
+      supportMl += contactDiskVolumeMl(twig.contactDiskB);
+    }
+
+    for (const stick of Object.values(supportStateSnapshot.sticks)) {
+      if (!visibleModelIds.has(stick.modelId)) continue;
+
+      for (let i = 0; i < stick.segments.length; i += 1) {
+        const seg = stick.segments[i];
+        const start = i === 0
+          ? (seg.bottomJoint?.pos ?? stick.contactConeA.pos)
+          : (stick.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? stick.contactConeA.pos);
+        const end = seg.topJoint?.pos ?? stick.contactConeB.pos;
+        supportMl += segmentVolumeMl(seg, start, end);
+      }
+
+      supportMl += contactConeVolumeMl(stick.contactConeA);
+      supportMl += contactConeVolumeMl(stick.contactConeB);
+    }
+
+    for (const brace of Object.values(supportStateSnapshot.braces)) {
+      if (!visibleModelIds.has(brace.modelId)) continue;
+      const startKnot = supportStateSnapshot.knots[brace.startKnotId];
+      const endKnot = supportStateSnapshot.knots[brace.endKnotId];
+      if (!startKnot || !endKnot) continue;
+
+      const length = brace.curve?.type === 'bezier'
+        ? sampleBezierLengthMm(startKnot.pos, brace.curve.controlPoint1, brace.curve.controlPoint2, endKnot.pos, brace.curve.resolution ?? 16)
+        : distanceMm(startKnot.pos, endKnot.pos);
+      supportMl += mm3ToMl(cylinderVolumeMm3(Math.max(0.001, brace.profile.diameter / 2), length));
+    }
+
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      if (!visibleModelIds.has(supportBrace.modelId)) continue;
+
+      for (let i = 0; i < supportBrace.segments.length; i += 1) {
+        const seg = supportBrace.segments[i];
+        const root = supportBraceStateSnapshot.roots[supportBrace.rootId];
+        const hostKnot = supportBraceStateSnapshot.knots[supportBrace.hostKnotId];
+        const rootTopPos = root
+          ? {
+              x: root.transform.pos.x,
+              y: root.transform.pos.y,
+              z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+            }
+          : null;
+        const start = i === 0
+          ? (seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 })
+          : (supportBrace.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 });
+        const end = seg.topJoint?.pos ?? hostKnot?.pos ?? start;
+        supportMl += segmentVolumeMl(seg, start, end);
+      }
+    }
+
+    let raftMl = 0;
+    if (raftSettingsSnapshot.bottomMode !== 'off') {
+      const rootsByModel = new Map<string, SupportBaseCircle[]>();
+      for (const root of Object.values(supportStateSnapshot.roots)) {
+        if (!visibleModelIds.has(root.modelId)) continue;
+        if (!rootsByModel.has(root.modelId)) rootsByModel.set(root.modelId, []);
+        rootsByModel.get(root.modelId)!.push({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          r: root.diameter / 2,
+        });
+      }
+
+      for (const circles of rootsByModel.values()) {
+        if (circles.length === 0) continue;
+
+        const chamferInset = raftSettingsSnapshot.bottomMode === 'line'
+          ? Math.max(0, raftSettingsSnapshot.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsSnapshot.chamferAngle))))
+          : 0;
+
+        const baseProfile = computeFootprint(circles, {
+          marginMm: 0.2 + chamferInset,
+          samplesPerCircle: 24,
+        });
+
+        if (!baseProfile || baseProfile.length < 3) continue;
+
+        const areaMm2 = polygonAreaMm2(baseProfile);
+        const baseMm3 = raftSettingsSnapshot.bottomMode === 'line'
+          ? (polygonPerimeterMm(baseProfile) * Math.max(0, raftSettingsSnapshot.lineWidthMm) * Math.max(0, raftSettingsSnapshot.lineHeightMm))
+          : (areaMm2 * Math.max(0, raftSettingsSnapshot.thickness));
+
+        let wallMm3 = 0;
+        if (raftSettingsSnapshot.wallEnabled && raftSettingsSnapshot.wallHeight > 0 && raftSettingsSnapshot.wallThickness > 0) {
+          const outerProfile = computeRaftOuterBoundary(baseProfile, raftSettingsSnapshot);
+          const wallPerimeterMm = polygonPerimeterMm(outerProfile.length >= 3 ? outerProfile : baseProfile);
+          wallMm3 = wallPerimeterMm * Math.max(0, raftSettingsSnapshot.wallThickness) * Math.max(0, raftSettingsSnapshot.wallHeight);
+        }
+
+        raftMl += mm3ToMl(baseMm3 + wallMm3);
+      }
+    }
+
+    return supportMl + raftMl;
+  }, [
+    computeFootprint,
+    computeRaftOuterBoundary,
+    raftSettingsSnapshot,
+    scene.models,
+    supportBraceStateSnapshot.knots,
+    supportBraceStateSnapshot.roots,
+    supportBraceStateSnapshot.supportBraces,
+    supportStateSnapshot.braces,
+    supportStateSnapshot.branches,
+    supportStateSnapshot.knots,
+    supportStateSnapshot.leaves,
+    supportStateSnapshot.roots,
+    supportStateSnapshot.sticks,
+    supportStateSnapshot.trunks,
+    supportStateSnapshot.twigs,
+  ]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const visibleModels = scene.models.filter((model) => model.visible);
+
+    if (visibleModels.length === 0) {
+      setPrintingEstimatedResinMl(null);
+      setIsPrintingEstimatedResinBusy(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsPrintingEstimatedResinBusy(true);
+
+    const run = async () => {
+      let totalMl = 0;
+      let found = false;
+
+      for (const model of visibleModels) {
+        if (cancelled) return;
+        const baseMl = await getOrComputeBaseResinMl(model);
+        if (cancelled) return;
+        if (baseMl == null) continue;
+
+        const sx = Math.abs(model.transform.scale.x || 1);
+        const sy = Math.abs(model.transform.scale.y || 1);
+        const sz = Math.abs(model.transform.scale.z || 1);
+        totalMl += baseMl * sx * sy * sz;
+        found = true;
+      }
+
+      if (cancelled) return;
+      const totalWithSupports = totalMl + supportAndRaftResinMl;
+      setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      setIsPrintingEstimatedResinBusy(false);
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getOrComputeBaseResinMl, scene.models, supportAndRaftResinMl]);
+
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);
     if (visible.length === 0) return '—';
+    if (isPrintingEstimatedResinBusy && printingEstimatedResinMl == null) return 'Calculating…';
+    if (printingEstimatedResinMl == null) return '—';
+    return `${printingEstimatedResinMl.toFixed(2)} mL`;
+  }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
 
-    let totalMm3 = 0;
-    for (const model of visible) {
-      const size = model.geometry.bbox.getSize(new THREE.Vector3());
-      const sx = Math.abs(model.transform.scale.x || 1);
-      const sy = Math.abs(model.transform.scale.y || 1);
+  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
+    if (!activeMaterialProfile) return '—';
+
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return '—';
+
+    const layerHeightMm = Math.max(0.001, activeMaterialProfile.layerHeightMm || 0.05);
+    let maxModelHeightMm = 0;
+
+    for (const model of visibleModels) {
+      const bbox = model.geometry.bbox;
+      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
       const sz = Math.abs(model.transform.scale.z || 1);
-      totalMm3 += Math.max(0, size.x * sx) * Math.max(0, size.y * sy) * Math.max(0, size.z * sz);
+      maxModelHeightMm = Math.max(maxModelHeightMm, sizeZ * sz);
     }
 
-    const ml = totalMm3 / 1000;
-    return `${ml.toFixed(2)} mL (bbox estimate)`;
-  }, [scene.models]);
+    const totalLayers = Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
+    if (totalLayers <= 0) return '—';
+
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    const wholeSeconds = Math.max(0, Math.floor(totalSec));
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    const seconds = wholeSeconds % 60;
+
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }, [activeMaterialProfile, scene.models]);
 
   const estimatedPrintTimeLabel = React.useMemo(() => {
     if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
@@ -5624,6 +6157,7 @@ export default function Home() {
               key="export-slicing"
               models={scene.models}
               activeModel={scene.activeModel}
+              estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
               onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
               onSlicingFinished={handleSlicingFinishedForPrinting}
@@ -6118,8 +6652,8 @@ export default function Home() {
                 inBoundsModelIds={inBoundsModelIds}
                 numLayers={slicing.numLayers}
                 heightMm={slicing.heightMm}
-                estimatedPrintTimeLabelOverride={scene.mode === 'printing' ? estimatedPrintTimeLabel : null}
-                estimatedResinLabelOverride={scene.mode === 'printing' ? estimatedVolumeMlLabel : null}
+                estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
+                estimatedResinLabelOverride={estimatedVolumeMlLabel}
               />
             </div>
           )}

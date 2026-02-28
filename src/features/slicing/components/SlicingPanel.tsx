@@ -20,6 +20,7 @@ import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/regis
 interface SlicingPanelProps {
   models: LoadedModel[];
   activeModel: LoadedModel | null;
+  estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
   onLayerPreviewGenerated?: (payload: {
     layerIndex: number;
@@ -107,6 +108,7 @@ function formatElapsedClock(ms: number): string {
 export function SlicingPanel({
   models,
   activeModel,
+  estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
   onLayerPreviewGenerated,
   onSlicingFinished,
@@ -202,6 +204,10 @@ export function SlicingPanel({
   const visibleModels = useMemo(() => models.filter((model) => model.visible), [models]);
 
   const estimatedVolumeLabel = useMemo(() => {
+    if (estimatedVolumeLabelOverride && estimatedVolumeLabelOverride.trim().length > 0) {
+      return estimatedVolumeLabelOverride;
+    }
+
     if (visibleModels.length === 0) return '—';
 
     let totalMm3 = 0;
@@ -218,7 +224,7 @@ export function SlicingPanel({
 
     const ml = totalMm3 / 1000;
     return `${ml.toFixed(2)} mL`;
-  }, [visibleModels]);
+  }, [estimatedVolumeLabelOverride, visibleModels]);
 
   const estimatedLayerCount = useMemo(() => {
     if (!activeMaterialProfile || visibleModels.length === 0) return 0;
@@ -393,13 +399,13 @@ export function SlicingPanel({
           : [];
 
         const materials: NanoDlpMaterial[] = listRaw
-          .map((item) => {
+          .map<NanoDlpMaterial | null>((item) => {
             const value = item as Partial<NanoDlpMaterial>;
             if (typeof value?.id !== 'string' || typeof value?.name !== 'string') return null;
             return {
               id: value.id,
               name: value.name,
-              locked: value.locked === true,
+              locked: value.locked === true ? true : undefined,
             };
           })
           .filter((item): item is NanoDlpMaterial => item !== null);
@@ -920,7 +926,7 @@ export function SlicingPanel({
           <Button
             onClick={handleSliceZipExport}
             disabled={isSlicingZip || !activePrinterProfile || !activeMaterialProfile || models.length === 0}
-            variant="secondary"
+            variant="primary"
             className={`w-full !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
           >
             <Cpu className="w-4 h-4" />
