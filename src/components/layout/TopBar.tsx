@@ -46,6 +46,10 @@ interface TopBarProps {
   onMaterialRoughnessChange: (value: number) => void;
   xrayOpacity: number;
   onXrayOpacityChange: (value: number) => void;
+  heatmapBlend: number;
+  onHeatmapBlendChange: (value: number) => void;
+  heatmapContrast: number;
+  onHeatmapContrastChange: (value: number) => void;
   hoverTintStrength: number;
   onHoverTintStrengthChange: (value: number) => void;
   selectedTintStrength: number;
@@ -63,6 +67,8 @@ interface TopBarProps {
   hasPrintingData: boolean;
   viewTypeOverride: MeshShaderType | null;
   onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
+  heatmapColors: string[];
+  onHeatmapColorChange: (index: number, color: string) => void;
 }
 
 export function TopBar({
@@ -84,6 +90,10 @@ export function TopBar({
   onMaterialRoughnessChange,
   xrayOpacity,
   onXrayOpacityChange,
+  heatmapBlend,
+  onHeatmapBlendChange,
+  heatmapContrast,
+  onHeatmapContrastChange,
   hoverTintStrength,
   onHoverTintStrengthChange,
   selectedTintStrength,
@@ -100,6 +110,8 @@ export function TopBar({
   hasPrintingData,
   viewTypeOverride,
   onViewTypeOverrideChange,
+  heatmapColors,
+  onHeatmapColorChange,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -286,9 +298,9 @@ export function TopBar({
                   } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''} ${printingLocked ? 'grayscale saturate-0' : ''}`}
                   style={active
                     ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)',
-                      }
+                      borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)',
+                    }
                     : {
                         borderColor: printingLocked
                           ? 'color-mix(in srgb, var(--border-subtle), black 30%)'
@@ -308,13 +320,13 @@ export function TopBar({
                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
                     style={active
                       ? {
-                          color: 'var(--accent-contrast)',
-                          background: 'color-mix(in srgb, var(--accent), white 10%)',
-                        }
+                        color: 'var(--accent-contrast)',
+                        background: 'color-mix(in srgb, var(--accent), white 10%)',
+                      }
                       : {
-                          color: 'var(--text-muted)',
-                          background: 'var(--surface-2)',
-                        }
+                        color: 'var(--text-muted)',
+                        background: 'var(--surface-2)',
+                      }
                     }
                   >
                     {item.step}
@@ -413,6 +425,10 @@ export function TopBar({
         onMaterialRoughnessChange={onMaterialRoughnessChange}
         xrayOpacity={xrayOpacity}
         onXrayOpacityChange={onXrayOpacityChange}
+        heatmapBlend={heatmapBlend}
+        onHeatmapBlendChange={onHeatmapBlendChange}
+        heatmapContrast={heatmapContrast}
+        onHeatmapContrastChange={onHeatmapContrastChange}
         hoverTintStrength={hoverTintStrength}
         onHoverTintStrengthChange={onHoverTintStrengthChange}
         selectedTintStrength={selectedTintStrength}
@@ -423,6 +439,8 @@ export function TopBar({
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
         onView3dSettingsChange={onView3dSettingsChange}
+        heatmapColors={heatmapColors}
+        onHeatmapColorChange={onHeatmapColorChange}
       />
 
       <ProfileSettingsModal

@@ -6,7 +6,8 @@ export type MeshShaderType =
   | 'normal_debug'
   | 'wireframe'
   | 'opaque_wire_mesh'
-  | 'xray';
+  | 'xray'
+  | 'overhang_heatmap';
 
 export type MatcapVariant = 'neutral' | 'cool' | 'warm';
 
@@ -33,4 +34,5 @@ export const MESH_SHADER_OPTIONS: MeshShaderOption[] = [
   { value: 'wireframe', label: 'Wireframe' },
   { value: 'opaque_wire_mesh', label: 'Opaque Wire Mesh' },
   { value: 'xray', label: 'X-ray' },
+  { value: 'overhang_heatmap', label: 'Overhang Heatmap' },
 ];
