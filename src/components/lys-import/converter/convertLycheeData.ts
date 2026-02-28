@@ -185,8 +185,9 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
         const supportType = (s as any)?.type;
         // Lychee can encode single-parent support braces as either type 1 or type 0.
         const isSupportBraceSourceType = !Number.isFinite(supportType) || supportType === 1 || supportType === 0;
+        const isObjectTouching = s.isBaseTip === true;
 
-        if (hasExplicitSingleParentHint && baseIsGrounded && isSupportBraceSourceType && !isMiniSupport(s)) {
+        if (hasExplicitSingleParentHint && baseIsGrounded && isSupportBraceSourceType && !isMiniSupport(s) && !isObjectTouching) {
           supportBraceCandidates.push({ id, s, parentIds });
         } else {
           branchCandidates.push({ id, s, parentIds });

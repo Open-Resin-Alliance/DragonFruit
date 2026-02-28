@@ -179,7 +179,7 @@ export interface Brace extends SupportEntity {
     profile: {
         diameter: number;
     };
-    debugSection?: 'top' | 'bottom' | 'middle';
+    debugSection?: 'initial' | 'repeating';
 }
 
 // --- Collection State ---
