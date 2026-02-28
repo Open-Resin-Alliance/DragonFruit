@@ -105,15 +105,21 @@ fn quantize_coverage_to_level(coverage: f32, aa_level: AntiAliasingLevel) -> u8 
             }
         }
         AntiAliasingLevel::X2 => {
-            let q = (c * 2.0).round() / 2.0;
+            // Slight boost so partial edge pixels cure more decisively.
+            let boosted = c.powf(0.82);
+            let q = (boosted * 2.0).round() / 2.0;
             (q * 255.0).round() as u8
         }
         AntiAliasingLevel::X4 => {
-            let q = (c * 4.0).round() / 4.0;
+            // Stronger boost than 2x to reduce visible stair stepping.
+            let boosted = c.powf(0.72);
+            let q = (boosted * 4.0).round() / 4.0;
             (q * 255.0).round() as u8
         }
         AntiAliasingLevel::X8 => {
-            let q = (c * 8.0).round() / 8.0;
+            // Most aggressive edge-strength curve for high-AA profiles.
+            let boosted = c.powf(0.62);
+            let q = (boosted * 8.0).round() / 8.0;
             (q * 255.0).round() as u8
         }
     }
@@ -416,6 +422,40 @@ fn build_row_segment_buckets(height_px: u32, segments: &[Segment]) -> Vec<Vec<us
     row_buckets
 }
 
+fn segment_x_range(seg: &Segment) -> (f32, f32) {
+    let x_at_y_min = seg.x1 + (seg.y_min - seg.y1) * seg.dx_dy;
+    let x_at_y_max = seg.x1 + (seg.y_max - seg.y1) * seg.dx_dy;
+    (x_at_y_min.min(x_at_y_max), x_at_y_min.max(x_at_y_max))
+}
+
+fn build_column_segment_buckets(width_px: u32, segments: &[Segment]) -> Vec<Vec<usize>> {
+    let mut column_buckets = vec![Vec::<usize>::new(); width_px as usize];
+    let x_epsilon = 1e-9f32;
+
+    for (seg_index, seg) in segments.iter().enumerate() {
+        if seg.dx_dy.abs() < 1e-8 {
+            continue;
+        }
+
+        let (x_min, x_max) = segment_x_range(seg);
+        let column_start = (x_min - 0.5).ceil() as i32;
+        let column_end = (x_max - 0.5 - x_epsilon).ceil() as i32 - 1;
+
+        if column_end < 0 || column_start >= width_px as i32 {
+            continue;
+        }
+
+        let clamped_start = column_start.clamp(0, (width_px as i32) - 1) as usize;
+        let clamped_end = column_end.clamp(0, (width_px as i32) - 1) as usize;
+
+        for column in clamped_start..=clamped_end {
+            column_buckets[column].push(seg_index);
+        }
+    }
+
+    column_buckets
+}
+
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 #[inline(always)]
 fn fill_row_span_white(mask_row: &mut [u8], x_start: usize, x_end_inclusive: usize) {
@@ -589,6 +629,122 @@ fn rasterize_segments_solid(
 
             if clamped_end > clamped_start + 1 {
                 fill_row_span_white(row, clamped_start + 1, clamped_end - 1);
+            }
+        }
+    }
+
+    // Second-pass vertical scanline AA to reduce horizontal stair stepping.
+    // This mirrors the row-based pass with column sampling for balanced X/Y behavior.
+    if aa_level != AntiAliasingLevel::Off && height >= 2 {
+        let mut mask_y = vec![0u8; width * height];
+        let mut y_intersections: Vec<f32> = Vec::with_capacity(1024);
+        let column_buckets = build_column_segment_buckets(width_px, segments);
+        let y_epsilon = 1e-6f32;
+
+        for x in 0..width {
+            y_intersections.clear();
+            let x_sample = (x as f32) + 0.5;
+
+            for seg_index in &column_buckets[x] {
+                let seg = segments[*seg_index];
+                if seg.dx_dy.abs() < 1e-8 {
+                    continue;
+                }
+
+                let (x_min, x_max) = segment_x_range(&seg);
+                if x_sample < x_min || x_sample >= x_max {
+                    continue;
+                }
+
+                let y = seg.y1 + (x_sample - seg.x1) / seg.dx_dy;
+                if y.is_finite() {
+                    y_intersections.push(y);
+                }
+            }
+
+            if y_intersections.len() < 2 {
+                continue;
+            }
+
+            if y_intersections.len() <= 32 {
+                for i in 1..y_intersections.len() {
+                    let key = y_intersections[i];
+                    let mut j = i;
+                    while j > 0 && y_intersections[j - 1] > key {
+                        y_intersections[j] = y_intersections[j - 1];
+                        j -= 1;
+                    }
+                    y_intersections[j] = key;
+                }
+            } else {
+                y_intersections
+                    .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            }
+
+            let mut i = 0usize;
+            while i + 1 < y_intersections.len() {
+                let y0 = y_intersections[i];
+                let y1 = y_intersections[i + 1];
+                i += 2;
+
+                if (y1 - y0).abs() <= y_epsilon {
+                    continue;
+                }
+
+                let a = y0.min(y1).max(0.0);
+                let b = y0.max(y1).min(height as f32);
+                if b <= a {
+                    continue;
+                }
+
+                let start_px = a.floor() as i32;
+                let end_px = (b - 1e-6).floor() as i32;
+                if end_px < 0 || start_px >= height as i32 {
+                    continue;
+                }
+
+                let clamped_start = start_px.clamp(0, (height as i32) - 1) as usize;
+                let clamped_end = end_px.clamp(0, (height as i32) - 1) as usize;
+
+                if clamped_start == clamped_end {
+                    let py_top = clamped_start as f32;
+                    let py_bottom = py_top + 1.0;
+                    let coverage = (b.min(py_bottom) - a.max(py_top)).max(0.0);
+                    let value = quantize_coverage_to_level(coverage, aa_level);
+                    let idx = clamped_start * width + x;
+                    if value > mask_y[idx] {
+                        mask_y[idx] = value;
+                    }
+                    continue;
+                }
+
+                let top_py = clamped_start as f32;
+                let top_coverage = (b.min(top_py + 1.0) - a.max(top_py)).max(0.0);
+                let top_value = quantize_coverage_to_level(top_coverage, aa_level);
+                let top_idx = clamped_start * width + x;
+                if top_value > mask_y[top_idx] {
+                    mask_y[top_idx] = top_value;
+                }
+
+                let bottom_py = clamped_end as f32;
+                let bottom_coverage = (b.min(bottom_py + 1.0) - a.max(bottom_py)).max(0.0);
+                let bottom_value = quantize_coverage_to_level(bottom_coverage, aa_level);
+                let bottom_idx = clamped_end * width + x;
+                if bottom_value > mask_y[bottom_idx] {
+                    mask_y[bottom_idx] = bottom_value;
+                }
+
+                if clamped_end > clamped_start + 1 {
+                    for y in (clamped_start + 1)..clamped_end {
+                        mask_y[y * width + x] = 255;
+                    }
+                }
+            }
+        }
+
+        for i in 0..mask.len() {
+            if mask_y[i] > mask[i] {
+                mask[i] = mask_y[i];
             }
         }
     }
