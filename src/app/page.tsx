@@ -25,9 +25,13 @@ import {
 } from '@/components/controls/ArrangePanel';
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
+import { LayerSlider } from '@/components/controls/LayerSlider';
+import { PrintingLayerScrubPreview } from '@/components/controls/PrintingLayerScrubPreview';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
+import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
+import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { IconButton } from '@/components/ui/primitives';
@@ -36,6 +40,7 @@ import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { HistoryDebugModal } from '@/components/modals/HistoryDebugModal';
 import { ModelSupportsModal } from '@/components/modals/ModelSupportsModal';
 import { DestructiveTransformModal } from '@/components/modals/DestructiveTransformModal';
+import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
 import {
   DEBUG_PRIMITIVES_PANEL_VISIBILITY_EVENT,
   isDebugPrimitivesPanelVisibleEnabled,
@@ -73,6 +78,7 @@ import {
   getHistoryDebugEvents,
   getRedoCount,
   getUndoCount,
+  pushHistory,
   redo,
   subscribeHistory,
   subscribeHistoryDebug,
@@ -85,11 +91,13 @@ import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '
 import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
+  getActiveMaterialProfile,
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import {
   getSupportBraceSnapshot,
@@ -100,7 +108,12 @@ import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelat
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
+import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
+import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
+import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
+import { buildProjectedCrossSectionZRange } from '@/features/slicing/rasterLayerZipExport';
 
 import { type MeshShaderType } from '@/features/shaders/mesh';
 import type { ModelTransform } from '@/hooks/useModelTransform';
@@ -163,6 +176,7 @@ export default function Home() {
   const scene = useSceneCollectionManager();
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
   // 2. Transform Management (needs geom for bounds)
@@ -172,6 +186,7 @@ export default function Home() {
   const supportsRef = React.useRef<THREE.Group | null>(null);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
+  const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
@@ -276,6 +291,16 @@ export default function Home() {
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
+    const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
+      exportThumbnailCaptureRef.current = capture;
+    }, []);
+
+    const captureExportThumbnailPng = React.useCallback(async () => {
+      const capture = exportThumbnailCaptureRef.current;
+      if (!capture) return null;
+      return capture();
+    }, []);
+
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
   const [supportsInfoModelId, setSupportsInfoModelId] = React.useState<string | null>(null);
   const [isTransformDebugOverlayOpen, setIsTransformDebugOverlayOpen] = React.useState(false);
@@ -284,6 +309,64 @@ export default function Home() {
     segmentId: null,
     point: null,
   });
+  const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
+  const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
+  const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
+  const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
+  const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
+  const [isPrintingPngLoaded, setIsPrintingPngLoaded] = React.useState(false);
+  const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
+  const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
+  const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
+  const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
+  const [printingPreviewPan, setPrintingPreviewPan] = React.useState({ x: 0, y: 0 });
+  const [isPrintingPreviewPanning, setIsPrintingPreviewPanning] = React.useState(false);
+  const printingPreviewViewportRef = React.useRef<HTMLDivElement | null>(null);
+  const printingPreviewCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const printingPreviewSettleTimeoutRef = React.useRef<number | null>(null);
+  const printingPreviewSettledRef = React.useRef(false);
+  const printingPreviewCanvasRenderNonceRef = React.useRef(0);
+  const printingPreviewLoadNonceRef = React.useRef(0);
+  const lastPrintingLayerSyncPerfRef = React.useRef(0);
+  const pendingPrintingSelectedLayerRef = React.useRef<number | null>(null);
+  const printingSelectedLayerRafRef = React.useRef<number | null>(null);
+  const printingPreviewZoomRef = React.useRef(1);
+  const printingPreviewPanRef = React.useRef({ x: 0, y: 0 });
+  const printingPreviewPanPendingRef = React.useRef({ x: 0, y: 0 });
+  const printingPreviewPanRafRef = React.useRef<number | null>(null);
+  const previousSceneModeRef = React.useRef<typeof scene.mode>(scene.mode);
+  const preservedNonPrintingLayerIndexRef = React.useRef<number | null>(null);
+  const lastSliceHistoryEventIdRef = React.useRef<number | null>(null);
+  const triggerSliceExportRef = React.useRef<(() => void) | null>(null);
+  const modeBeforePrintingRef = React.useRef<typeof scene.mode>('prepare');
+  const shouldReturnToPrintingAfterSliceRef = React.useRef(false);
+  const printingPreviewDragRef = React.useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+  const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
+  const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
+  const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
+  const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
+  const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
+  const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
+  const printingInFlightBaseResinMlRef = React.useRef<Map<string, Promise<number | null>>>(new Map());
+  const [showPrintingResliceModal, setShowPrintingResliceModal] = React.useState(false);
+  const [shouldAutoSliceOnExportEntry, setShouldAutoSliceOnExportEntry] = React.useState(false);
+  const [printingSendBusy, setPrintingSendBusy] = React.useState(false);
+  const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
+  const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
+  const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
+  const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
+  const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
+  const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
+  const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
+  const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
+  const [printingDeviceProcessingStartedAtMs, setPrintingDeviceProcessingStartedAtMs] = React.useState<number | null>(null);
+  const [printingDeviceProcessingElapsedSec, setPrintingDeviceProcessingElapsedSec] = React.useState(0);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -848,6 +931,1482 @@ export default function Home() {
   const cameraResumeTimeoutRef = React.useRef<number | null>(null);
   const { getHotkey } = useHotkeyConfig();
   const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
+
+  const clearPrintingLayerPreviewUrls = React.useCallback(() => {
+    setPrintingLayerPreviewUrls((previous) => {
+      for (const url of previous) {
+        if (url) URL.revokeObjectURL(url);
+      }
+      return [];
+    });
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      clearPrintingLayerPreviewUrls();
+    };
+  }, [clearPrintingLayerPreviewUrls]);
+
+  React.useEffect(() => {
+    printingPreviewZoomRef.current = printingPreviewZoom;
+  }, [printingPreviewZoom]);
+
+  React.useEffect(() => {
+    printingPreviewPanRef.current = printingPreviewPan;
+  }, [printingPreviewPan]);
+
+  React.useEffect(() => {
+    printingPreviewSettledRef.current = isPrintingPreviewSettled;
+  }, [isPrintingPreviewSettled]);
+
+  React.useEffect(() => {
+    return () => {
+      if (printingSelectedLayerRafRef.current !== null) {
+        window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
+      }
+      if (printingPreviewPanRafRef.current !== null) {
+        window.cancelAnimationFrame(printingPreviewPanRafRef.current);
+      }
+      if (printingDisplayedLayerRafRef.current !== null) {
+        window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
+      }
+      if (printingPreviewSettleTimeoutRef.current !== null) {
+        window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const schedulePrintingPreviewSettle = React.useCallback(() => {
+    if (printingPreviewSettledRef.current) {
+      printingPreviewSettledRef.current = false;
+      setIsPrintingPreviewSettled(false);
+    }
+    if (printingPreviewSettleTimeoutRef.current !== null) {
+      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+    }
+    printingPreviewSettleTimeoutRef.current = window.setTimeout(() => {
+      printingPreviewSettleTimeoutRef.current = null;
+      printingPreviewSettledRef.current = true;
+      setIsPrintingPreviewSettled(true);
+    }, 1000);
+  }, []);
+
+  const queuePrintingPreviewPan = React.useCallback((nextPan: { x: number; y: number }) => {
+    printingPreviewPanPendingRef.current = nextPan;
+    if (printingPreviewPanRafRef.current !== null) return;
+
+    printingPreviewPanRafRef.current = window.requestAnimationFrame(() => {
+      printingPreviewPanRafRef.current = null;
+      const pending = printingPreviewPanPendingRef.current;
+      setPrintingPreviewPan((previous) => {
+        if (Math.abs(previous.x - pending.x) < 0.05 && Math.abs(previous.y - pending.y) < 0.05) {
+          return previous;
+        }
+        return pending;
+      });
+    });
+  }, []);
+
+  const clampPrintingLayer = React.useCallback((nextLayer: number) => {
+    const rounded = Math.round(nextLayer);
+    return Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), rounded));
+  }, [printingPreviewTotalLayers]);
+
+  const handlePrintingLayerPreviewGenerated = React.useCallback((payload: {
+    layerIndex: number;
+    totalLayers: number;
+    pngBytes: Uint8Array;
+  }) => {
+    const previewBytes = new Uint8Array(payload.pngBytes.length);
+    previewBytes.set(payload.pngBytes);
+    const blob = new Blob([previewBytes.buffer], { type: 'image/png' });
+    const nextUrl = URL.createObjectURL(blob);
+
+    setPrintingLayerPreviewUrls((previous) => {
+      const next = previous.slice();
+      const requiredLength = Math.max(payload.totalLayers, payload.layerIndex + 1);
+      if (next.length < requiredLength) {
+        next.length = requiredLength;
+      }
+      const prevUrl = next[payload.layerIndex];
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+      next[payload.layerIndex] = nextUrl;
+      return next;
+    });
+
+    setPrintingPreviewTotalLayers(payload.totalLayers);
+    setPrintingSelectedLayer((previous) => {
+      if (!Number.isFinite(previous) || previous <= 0) {
+        return Math.max(1, Math.min(payload.totalLayers, payload.layerIndex + 1));
+      }
+      return Math.max(1, Math.min(payload.totalLayers, previous));
+    });
+  }, []);
+
+  const handleSlicingFinishedForPrinting = React.useCallback((payload: { totalLayers: number }) => {
+    const totalLayers = Math.max(1, payload.totalLayers);
+    setPrintingPreviewTotalLayers(totalLayers);
+    setPrintingSelectedLayer((previous) => Math.max(1, Math.min(totalLayers, previous)));
+    scene.setMode('printing');
+  }, [scene]);
+
+  const selectedPrintingLayerPreviewUrl = React.useMemo(() => {
+    if (printingDisplayedLayer < 1) return null;
+    return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
+  }, [printingLayerPreviewUrls, printingDisplayedLayer]);
+
+  // Show scrub preview while actively scrubbing OR if the target PNG isn't loaded yet (avoids flash)
+  const shouldShowScrubPreview = React.useMemo(() => {
+    return isPrintingLayerScrubbing || !selectedPrintingLayerPreviewUrl || !isPrintingPngLoaded;
+  }, [isPrintingLayerScrubbing, selectedPrintingLayerPreviewUrl, isPrintingPngLoaded]);
+
+  React.useEffect(() => {
+    // Reset load state whenever we change the displayed layer's preview URL.
+    setIsPrintingPngLoaded(false);
+    if (!selectedPrintingLayerPreviewUrl) return;
+
+    const loadNonce = ++printingPreviewLoadNonceRef.current;
+    let cancelled = false;
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => {
+      if (cancelled) return;
+      if (loadNonce !== printingPreviewLoadNonceRef.current) return;
+      setIsPrintingPngLoaded(true);
+    };
+    image.onerror = () => {
+      // Fail-open so we do not get stuck in scrub preview if decode/load fails once.
+      if (cancelled) return;
+      if (loadNonce !== printingPreviewLoadNonceRef.current) return;
+      setIsPrintingPngLoaded(true);
+    };
+    image.src = selectedPrintingLayerPreviewUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPrintingLayerPreviewUrl]);
+
+  const handlePrintingPreviewWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    if (printingPreviewTotalLayers <= 0) return;
+    event.preventDefault();
+    schedulePrintingPreviewSettle();
+
+    const previousZoom = printingPreviewZoomRef.current;
+    const factor = Math.exp(-event.deltaY * 0.0015);
+    const nextZoom = Math.max(1, Math.min(32, previousZoom * factor));
+
+    if (Math.abs(nextZoom - previousZoom) < 1e-5) return;
+
+    const viewportRect = printingPreviewViewportRef.current?.getBoundingClientRect();
+    if (!viewportRect) {
+      setPrintingPreviewZoom(nextZoom);
+      if (nextZoom <= 1.0001) queuePrintingPreviewPan({ x: 0, y: 0 });
+      return;
+    }
+
+    const pointerX = event.clientX - (viewportRect.left + viewportRect.width * 0.5);
+    const pointerY = event.clientY - (viewportRect.top + viewportRect.height * 0.5);
+    const previousPan = printingPreviewPanRef.current;
+    const contentX = (pointerX - previousPan.x) / Math.max(1e-4, previousZoom);
+    const contentY = (pointerY - previousPan.y) / Math.max(1e-4, previousZoom);
+    const nextPan = nextZoom <= 1.0001
+      ? { x: 0, y: 0 }
+      : {
+          x: pointerX - (contentX * nextZoom),
+          y: pointerY - (contentY * nextZoom),
+        };
+
+    setPrintingPreviewZoom(nextZoom);
+    queuePrintingPreviewPan(nextPan);
+  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
+
+  const handlePrintingPreviewPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (printingPreviewTotalLayers <= 0) return;
+    if (printingPreviewZoomRef.current <= 1.0001) return;
+    if (event.button !== 0) return;
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const currentPan = printingPreviewPanRef.current;
+    printingPreviewDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      originX: currentPan.x,
+      originY: currentPan.y,
+    };
+    setIsPrintingPreviewPanning(true);
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
+
+  const handlePrintingPreviewPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = printingPreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+
+    const nextPan = {
+      x: drag.originX + (event.clientX - drag.startClientX),
+      y: drag.originY + (event.clientY - drag.startClientY),
+    };
+    queuePrintingPreviewPan(nextPan);
+    schedulePrintingPreviewSettle();
+  }, [queuePrintingPreviewPan, schedulePrintingPreviewSettle]);
+
+  const handlePrintingPreviewPointerEnd = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = printingPreviewDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    printingPreviewDragRef.current = null;
+    setIsPrintingPreviewPanning(false);
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle]);
+
+  const printingPreviewTargetResolution = React.useMemo(() => {
+    let printerWidth = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionX ?? 0));
+    const printerHeight = Math.max(1, Math.round(activePrinterProfile?.display?.resolutionY ?? 0));
+    const pixelSizeX = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.x ?? 1));
+    const pixelSizeY = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.y ?? 1));
+    const bitDepth = Math.max(0, Math.round(Number(activePrinterProfile?.bitDepth?.bits ?? 0)));
+    const isNanodlpArtifact = (printingArtifact?.outputName ?? '').toLowerCase().endsWith('.nanodlp');
+
+    if (!isNanodlpArtifact || printerWidth <= 0 || printerHeight <= 0) {
+      return null;
+    }
+
+    const isLikely16kClass = printerWidth >= 15000 && printerWidth <= 15400;
+    if (isLikely16kClass) {
+      if (bitDepth === 3) {
+        printerWidth = 15136;
+      } else if (bitDepth === 8) {
+        printerWidth = 15120;
+      }
+    }
+
+    return {
+      widthPx: printerWidth,
+      heightPx: printerHeight,
+      viewportWidth: printerWidth * pixelSizeX,
+      viewportHeight: printerHeight * pixelSizeY,
+    };
+  }, [
+    activePrinterProfile?.display?.resolutionX,
+    activePrinterProfile?.display?.resolutionY,
+    activePrinterProfile?.pixelSize?.x,
+    activePrinterProfile?.pixelSize?.y,
+    activePrinterProfile?.bitDepth?.bits,
+    printingArtifact?.outputName,
+  ]);
+
+  const printingPreviewDeMirrorTransform = React.useMemo(() => {
+    const mirrorX = activePrinterProfile?.display?.mirrorX === true;
+    const mirrorY = activePrinterProfile?.display?.mirrorY === true;
+    const scaleX = mirrorX ? -1 : 1;
+    const scaleY = mirrorY ? -1 : 1;
+    if (scaleX === 1 && scaleY === 1) return undefined;
+    return `scale(${scaleX}, ${scaleY})`;
+  }, [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
+
+  const printingPreviewMirrorScale = React.useMemo(() => ({
+    x: activePrinterProfile?.display?.mirrorX === true ? -1 : 1,
+    y: activePrinterProfile?.display?.mirrorY === true ? -1 : 1,
+  }), [activePrinterProfile?.display?.mirrorX, activePrinterProfile?.display?.mirrorY]);
+
+  const isPrintingPreviewLowResActive = React.useMemo(() => {
+    // Only use low-res PNG upscale path when scrubbing with PNG preview.
+    // When the fake cross-section preview is active, this would double-scale it.
+    return isPrintingLayerScrubbing && !shouldShowScrubPreview && printingPreviewZoom <= 1.0001;
+  }, [isPrintingLayerScrubbing, printingPreviewZoom, shouldShowScrubPreview]);
+
+  const printingPreviewScrubQualityScale = React.useMemo(() => {
+    if (!isPrintingPreviewLowResActive) return 1;
+    return 0.5;
+  }, [isPrintingPreviewLowResActive]);
+
+  const printingPreviewScrubUpscaleTransform = React.useMemo(() => {
+    if (printingPreviewScrubQualityScale >= 0.9999) return undefined;
+    const upscale = 1 / printingPreviewScrubQualityScale;
+    return `scale(${upscale})`;
+  }, [printingPreviewScrubQualityScale]);
+
+  const printingPreviewVisualTransform = React.useMemo(() => {
+    const transformParts: string[] = [];
+    if (Math.abs(printingPreviewPan.x) > 0.01 || Math.abs(printingPreviewPan.y) > 0.01) {
+      transformParts.push(`translate(${printingPreviewPan.x}px, ${printingPreviewPan.y}px)`);
+    }
+    if (Math.abs(printingPreviewZoom - 1) > 1e-4) {
+      transformParts.push(`scale(${printingPreviewZoom})`);
+    }
+    if (printingPreviewDeMirrorTransform) {
+      transformParts.push(printingPreviewDeMirrorTransform);
+    }
+    if (printingPreviewScrubUpscaleTransform) {
+      transformParts.push(printingPreviewScrubUpscaleTransform);
+    }
+    return transformParts.length > 0 ? transformParts.join(' ') : undefined;
+  }, [
+    printingPreviewDeMirrorTransform,
+    printingPreviewPan.x,
+    printingPreviewPan.y,
+    printingPreviewScrubUpscaleTransform,
+    printingPreviewZoom,
+  ]);
+
+  const printingPreviewCursor = React.useMemo<React.CSSProperties['cursor']>(() => {
+    if (!selectedPrintingLayerPreviewUrl) return 'default';
+    if (printingPreviewZoom > 1.0001) {
+      return isPrintingPreviewPanning ? 'grabbing' : 'grab';
+    }
+    return 'zoom-in';
+  }, [isPrintingPreviewPanning, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') {
+      setIsPrintingLayerScrubbing(false);
+      setIsPrintingSettledCanvasReady(false);
+      printingPreviewSettledRef.current = false;
+      setIsPrintingPreviewSettled(false);
+      setPrintingPreviewZoom(1);
+      queuePrintingPreviewPan({ x: 0, y: 0 });
+      setIsPrintingPreviewPanning(false);
+      lastPrintingLayerSyncPerfRef.current = 0;
+      printingPreviewDragRef.current = null;
+      setPrintingDisplayedLayer(1);
+      if (printingPreviewSettleTimeoutRef.current !== null) {
+        window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+        printingPreviewSettleTimeoutRef.current = null;
+      }
+    }
+  }, [queuePrintingPreviewPan, scene.mode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    // Reset transform state on entering printing so scrub/PNG views stay in sync.
+    setIsPrintingSettledCanvasReady(false);
+    printingPreviewSettledRef.current = false;
+    setIsPrintingPreviewSettled(false);
+    setPrintingPreviewZoom(1);
+    queuePrintingPreviewPan({ x: 0, y: 0 });
+    setIsPrintingPreviewPanning(false);
+    printingPreviewDragRef.current = null;
+    if (printingPreviewSettleTimeoutRef.current !== null) {
+      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+      printingPreviewSettleTimeoutRef.current = null;
+    }
+  }, [queuePrintingPreviewPan, scene.mode]);
+
+  React.useEffect(() => {
+    if (scene.mode === 'printing') return;
+    setIsSceneLayerScrubbing(false);
+  }, [scene.mode]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    if (!selectedPrintingLayerPreviewUrl) {
+      printingPreviewSettledRef.current = false;
+      setIsPrintingPreviewSettled(false);
+      setIsPrintingSettledCanvasReady(false);
+      return;
+    }
+    schedulePrintingPreviewSettle();
+  }, [scene.mode, schedulePrintingPreviewSettle, selectedPrintingLayerPreviewUrl]);
+
+  // Refs to batch displayed layer updates and avoid expensive re-renders during scrubbing
+  const printingDisplayedLayerTargetRef = React.useRef(1);
+  const printingSelectedLayerHasUrlRef = React.useRef(false);
+  const printingDisplayedLayerRafRef = React.useRef<number | null>(null);
+
+  // Track if selected layer has a URL available (without depending on whole array)
+  React.useEffect(() => {
+    printingSelectedLayerHasUrlRef.current = Boolean(printingLayerPreviewUrls[printingSelectedLayer - 1]);
+  }, [printingSelectedLayer, printingLayerPreviewUrls]);
+
+  // Sync displayed layer: show fallback during scrub, then switch to selected once settled
+  React.useEffect(() => {
+    if (isPrintingLayerScrubbing) {
+      // During scrubbing: prefer selected layer if available, else keep current
+      const nextTarget = printingSelectedLayerHasUrlRef.current ? printingSelectedLayer : printingDisplayedLayerTargetRef.current;
+      
+      if (printingDisplayedLayerTargetRef.current !== nextTarget) {
+        printingDisplayedLayerTargetRef.current = nextTarget;
+        
+        // Batch updates to avoid excessive re-renders during rapid scrubbing
+        if (printingDisplayedLayerRafRef.current !== null) {
+          window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
+        }
+        printingDisplayedLayerRafRef.current = window.requestAnimationFrame(() => {
+          printingDisplayedLayerRafRef.current = null;
+          setPrintingDisplayedLayer(nextTarget);
+        });
+      }
+    } else if (isPrintingPreviewSettled) {
+      // Once settled and not scrubbing: switch to selected layer immediately
+      if (printingDisplayedLayerRafRef.current !== null) {
+        window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
+        printingDisplayedLayerRafRef.current = null;
+      }
+      if (printingDisplayedLayerTargetRef.current !== printingSelectedLayer) {
+        printingDisplayedLayerTargetRef.current = printingSelectedLayer;
+        setPrintingDisplayedLayer(printingSelectedLayer);
+      }
+    }
+  }, [isPrintingLayerScrubbing, isPrintingPreviewSettled, printingSelectedLayer]);
+
+  React.useEffect(() => {
+    setIsPrintingSettledCanvasReady(false);
+  }, [selectedPrintingLayerPreviewUrl]);
+
+  const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
+
+  const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
+    setPrintingArtifact(artifact);
+    setPrintingArtifactIsInvalid(false);
+    setShowPrintingResliceModal(false);
+    // Push a "Sliced Scene" marker to history so we can detect changes after this point
+    pushHistory({
+      type: 'SCENE_SLICED',
+      description: 'Scene sliced for printing',
+      payload: {},
+    });
+    setPrintingSendStatusText(null);
+    setPrintingSendProgress(0);
+    setPrintingSendStageText(null);
+    setPrintingReadyPlateId(null);
+    setPrintingPrintNowBusy(false);
+    setPrintingUploadDialogOpen(false);
+    setPrintingUploadDialogStage('uploading');
+    setPrintingUploadDisplayProgress(0);
+    setPrintingDeviceProcessingStartedAtMs(null);
+    setPrintingDeviceProcessingElapsedSec(0);
+    // Re-slice can swap preview sources; reset transform to avoid stale zoom/pan desync.
+    setIsPrintingSettledCanvasReady(false);
+    printingPreviewSettledRef.current = false;
+    setIsPrintingPreviewSettled(false);
+    setPrintingPreviewZoom(1);
+    queuePrintingPreviewPan({ x: 0, y: 0 });
+    setIsPrintingPreviewPanning(false);
+    printingPreviewDragRef.current = null;
+    if (printingPreviewSettleTimeoutRef.current !== null) {
+      window.clearTimeout(printingPreviewSettleTimeoutRef.current);
+      printingPreviewSettleTimeoutRef.current = null;
+    }
+    // If we re-sliced from printing mode, return there now
+    if (shouldReturnToPrintingAfterSliceRef.current) {
+      shouldReturnToPrintingAfterSliceRef.current = false;
+      setShouldAutoSliceOnExportEntry(false);
+      scene.setMode('printing');
+    }
+  }, []);
+
+  const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
+    setPrintingSlicingBenchmark(benchmark);
+  }, []);
+
+  const printingOutputSizeLabel = React.useMemo(() => {
+    if (!printingArtifact) return '—';
+    const bytes = Math.max(0, printingArtifact.byteSize);
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }, [printingArtifact]);
+
+  const yieldResinEstimateToMainThread = React.useCallback(async () => {
+    await new Promise<void>((resolve) => {
+      if (typeof window !== 'undefined' && typeof (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback === 'function') {
+        (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback?.(() => resolve(), { timeout: 16 });
+        return;
+      }
+      setTimeout(resolve, 0);
+    });
+  }, []);
+
+  const computeBaseResinMlChunked = React.useCallback(async (
+    position: { getX: (i: number) => number; getY: (i: number) => number; getZ: (i: number) => number; count: number },
+    index: { getX: (i: number) => number; count: number } | null,
+  ): Promise<number | null> => {
+    let signedVolume = 0;
+
+    const vax = { x: 0, y: 0, z: 0 };
+    const vbx = { x: 0, y: 0, z: 0 };
+    const vcx = { x: 0, y: 0, z: 0 };
+
+    const readVertex = (i: number, out: { x: number; y: number; z: number }) => {
+      out.x = position.getX(i);
+      out.y = position.getY(i);
+      out.z = position.getZ(i);
+    };
+
+    const addTriangle = (ia: number, ib: number, ic: number) => {
+      readVertex(ia, vax);
+      readVertex(ib, vbx);
+      readVertex(ic, vcx);
+
+      signedVolume += (
+        vax.x * (vbx.y * vcx.z - vbx.z * vcx.y)
+        - vax.y * (vbx.x * vcx.z - vbx.z * vcx.x)
+        + vax.z * (vbx.x * vcx.y - vbx.y * vcx.x)
+      ) / 6;
+    };
+
+    const yieldEveryTriangles = 4096;
+    let processedTriangles = 0;
+
+    if (index) {
+      for (let i = 0; i < index.count; i += 3) {
+        addTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
+        processedTriangles += 1;
+        if (processedTriangles % yieldEveryTriangles === 0) {
+          await yieldResinEstimateToMainThread();
+        }
+      }
+    } else {
+      for (let i = 0; i < position.count; i += 3) {
+        addTriangle(i, i + 1, i + 2);
+        processedTriangles += 1;
+        if (processedTriangles % yieldEveryTriangles === 0) {
+          await yieldResinEstimateToMainThread();
+        }
+      }
+    }
+
+    const baseVolumeMm3 = Math.abs(signedVolume);
+    return Number.isFinite(baseVolumeMm3) ? (baseVolumeMm3 / 1000) : null;
+  }, [yieldResinEstimateToMainThread]);
+
+  const getOrComputeBaseResinMl = React.useCallback(async (model: (typeof scene.models)[number]): Promise<number | null> => {
+    const geometry = model.geometry.geometry;
+    const positionAttr = geometry.getAttribute('position');
+    if (!positionAttr) return null;
+
+    const sourceKey = String(geometry.userData?.resinVolumeSourceKey ?? geometry.uuid);
+    geometry.userData = {
+      ...geometry.userData,
+      resinVolumeSourceKey: sourceKey,
+    };
+
+    const position = positionAttr as {
+      getX: (i: number) => number;
+      getY: (i: number) => number;
+      getZ: (i: number) => number;
+      count: number;
+      version?: number;
+      data?: { version?: number };
+    };
+    const index = geometry.getIndex() as ({ getX: (i: number) => number; count: number; version?: number } | null);
+
+    const positionVersion = position.version ?? position.data?.version ?? 0;
+    const indexVersion = index?.version ?? 0;
+    const cacheKey = `${sourceKey}:${positionVersion}:${indexVersion}`;
+
+    const cached = printingBaseResinMlCacheRef.current.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const inFlight = printingInFlightBaseResinMlRef.current.get(cacheKey);
+    if (inFlight) return inFlight;
+
+    const promise = computeBaseResinMlChunked(position, index)
+      .then((result) => {
+        printingBaseResinMlCacheRef.current.set(cacheKey, result);
+        printingInFlightBaseResinMlRef.current.delete(cacheKey);
+        return result;
+      })
+      .catch(() => {
+        printingInFlightBaseResinMlRef.current.delete(cacheKey);
+        return null;
+      });
+
+    printingInFlightBaseResinMlRef.current.set(cacheKey, promise);
+    return promise;
+  }, [computeBaseResinMlChunked]);
+
+  const supportAndRaftResinMl = React.useMemo(() => {
+    const visibleModelIds = new Set(scene.models.filter((model) => model.visible).map((model) => model.id));
+    if (visibleModelIds.size === 0) return 0;
+
+    const mm3ToMl = (mm3: number) => Math.max(0, mm3) / 1000;
+    const circleArea = (radiusMm: number) => Math.PI * radiusMm * radiusMm;
+    const sphereVolumeMm3 = (radiusMm: number) => (4 / 3) * Math.PI * radiusMm * radiusMm * radiusMm;
+    const cylinderVolumeMm3 = (radiusMm: number, heightMm: number) => circleArea(radiusMm) * Math.max(0, heightMm);
+    const frustumVolumeMm3 = (r1: number, r2: number, heightMm: number) => {
+      const h = Math.max(0, heightMm);
+      return (Math.PI * h / 3) * ((r1 * r1) + (r1 * r2) + (r2 * r2));
+    };
+    const distanceMm = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dz = a.z - b.z;
+      return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+    };
+    const sampleBezierLengthMm = (
+      p0: { x: number; y: number; z: number },
+      p1: { x: number; y: number; z: number },
+      p2: { x: number; y: number; z: number },
+      p3: { x: number; y: number; z: number },
+      samples: number,
+    ) => {
+      let length = 0;
+      let prev = p0;
+      const steps = Math.max(4, samples);
+      for (let i = 1; i <= steps; i += 1) {
+        const t = i / steps;
+        const next = getBezierPointAtT(p0, p1, p2, p3, t);
+        length += distanceMm(prev, next);
+        prev = next;
+      }
+      return length;
+    };
+
+    const contactConeVolumeMl = (cone: {
+      profile: {
+        contactDiameterMm: number;
+        bodyDiameterMm: number;
+        lengthMm: number;
+        type?: 'disk' | 'sphere';
+      };
+      normal: { x: number; y: number; z: number };
+      surfaceNormal?: { x: number; y: number; z: number };
+      diskLengthOverride?: number;
+    }) => {
+      const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
+      const bodyRadius = Math.max(0.001, cone.profile.bodyDiameterMm / 2);
+      const coneLen = Math.max(0, cone.profile.lengthMm);
+      const coneMm3 = frustumVolumeMm3(contactRadius, bodyRadius, coneLen);
+
+      let diskMm3 = 0;
+      if (cone.profile.type === 'disk') {
+        const surfaceNormal = cone.surfaceNormal ?? cone.normal;
+        const diskProfile = {
+          type: 'disk' as const,
+          diskThicknessMm: Math.max(0.01, Number((cone.profile as { diskThicknessMm?: number }).diskThicknessMm ?? 0.1)),
+          maxStandoffMm: Math.max(0.01, Number((cone.profile as { maxStandoffMm?: number }).maxStandoffMm ?? 0.35)),
+          standoffAngleThreshold: Number((cone.profile as { standoffAngleThreshold?: number }).standoffAngleThreshold ?? (Math.PI / 4)),
+        };
+        const diskThickness = cone.diskLengthOverride ?? calculateDiskThickness(surfaceNormal, cone.normal, diskProfile);
+        diskMm3 = cylinderVolumeMm3(contactRadius, Math.max(0, diskThickness));
+      }
+
+      return mm3ToMl(coneMm3 + diskMm3);
+    };
+
+    const contactDiskVolumeMl = (disk: {
+      contactDiameterMm: number;
+      profile: {
+        type?: 'disk';
+        standoffAngleThreshold?: number;
+        diskThicknessMm?: number;
+        maxStandoffMm?: number;
+      };
+      surfaceNormal: { x: number; y: number; z: number };
+      coneAxis: { x: number; y: number; z: number };
+      diskLengthOverride?: number;
+    }) => {
+      const radius = Math.max(0.001, disk.contactDiameterMm / 2);
+      const diskProfile = {
+        type: 'disk' as const,
+        diskThicknessMm: Math.max(0.01, Number(disk.profile.diskThicknessMm ?? 0.1)),
+        maxStandoffMm: Math.max(0.01, Number(disk.profile.maxStandoffMm ?? 0.35)),
+        standoffAngleThreshold: Number(disk.profile.standoffAngleThreshold ?? (Math.PI / 4)),
+      };
+      const thickness = disk.diskLengthOverride ?? calculateDiskThickness(disk.surfaceNormal, disk.coneAxis, diskProfile);
+      return mm3ToMl(cylinderVolumeMm3(radius, Math.max(0, thickness)));
+    };
+
+    const segmentVolumeMl = (
+      segment: {
+        diameter: number;
+        type?: 'straight' | 'bezier';
+        controlPoint1?: { x: number; y: number; z: number };
+        controlPoint2?: { x: number; y: number; z: number };
+        resolution?: number;
+      },
+      start: { x: number; y: number; z: number },
+      end: { x: number; y: number; z: number },
+    ) => {
+      const radius = Math.max(0.001, segment.diameter / 2);
+      const length = segment.type === 'bezier' && segment.controlPoint1 && segment.controlPoint2
+        ? sampleBezierLengthMm(start, segment.controlPoint1, segment.controlPoint2, end, segment.resolution ?? 16)
+        : distanceMm(start, end);
+      return mm3ToMl(cylinderVolumeMm3(radius, length));
+    };
+
+    const polygonAreaMm2 = (profile: THREE.Vector2[]) => {
+      if (profile.length < 3) return 0;
+      let sum = 0;
+      for (let i = 0; i < profile.length; i += 1) {
+        const a = profile[i];
+        const b = profile[(i + 1) % profile.length];
+        sum += (a.x * b.y) - (b.x * a.y);
+      }
+      return Math.abs(sum) * 0.5;
+    };
+    const polygonPerimeterMm = (profile: THREE.Vector2[]) => {
+      if (profile.length < 2) return 0;
+      let sum = 0;
+      for (let i = 0; i < profile.length; i += 1) {
+        const a = profile[i];
+        const b = profile[(i + 1) % profile.length];
+        sum += a.distanceTo(b);
+      }
+      return sum;
+    };
+
+    const topDiameterByRootId = new Map<string, number>();
+    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
+      const firstDiameter = trunk.baseDiameterMm ?? trunk.segments[0]?.diameter;
+      if (firstDiameter && firstDiameter > 0) {
+        topDiameterByRootId.set(trunk.rootId, firstDiameter);
+      }
+    }
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      const firstDiameter = supportBrace.profile.terminalStartDiameterMm
+        || supportBrace.segments[0]?.diameter
+        || supportBrace.profile.bodyDiameterMm;
+      if (firstDiameter && firstDiameter > 0) {
+        topDiameterByRootId.set(supportBrace.rootId, firstDiameter);
+      }
+    }
+
+    let supportMl = 0;
+
+    const addRootVolume = (root: { id: string; modelId: string; diameter: number; diskHeight: number; coneHeight: number }) => {
+      if (!visibleModelIds.has(root.modelId)) return;
+
+      const rootRadius = Math.max(0.001, root.diameter / 2);
+      const topDiameter = topDiameterByRootId.get(root.id) ?? Math.max(0.1, root.diameter * 0.35);
+      const topRadius = Math.max(0.001, topDiameter / 2);
+
+      const effectiveDiskHeight = raftSettingsSnapshot.bottomMode === 'solid'
+        ? 0.05
+        : Math.max(0, root.diskHeight);
+      const coneHeight = Math.max(0, root.coneHeight);
+
+      const diskMm3 = cylinderVolumeMm3(rootRadius, effectiveDiskHeight);
+      const coneMm3 = frustumVolumeMm3(rootRadius, topRadius, coneHeight);
+      const capSphereMm3 = coneHeight > 0 ? sphereVolumeMm3(topRadius) : 0;
+      supportMl += mm3ToMl(diskMm3 + coneMm3 + capSphereMm3);
+    };
+
+    for (const root of Object.values(supportStateSnapshot.roots)) {
+      addRootVolume(root);
+    }
+    for (const root of Object.values(supportBraceStateSnapshot.roots)) {
+      addRootVolume(root);
+    }
+
+    for (const trunk of Object.values(supportStateSnapshot.trunks)) {
+      if (!visibleModelIds.has(trunk.modelId)) continue;
+      const root = supportStateSnapshot.roots[trunk.rootId];
+      for (let i = 0; i < trunk.segments.length; i += 1) {
+        const seg = trunk.segments[i];
+        const endpoints = getTrunkSegmentEndpoints(trunk, seg, i, root);
+        if (!endpoints) continue;
+        supportMl += segmentVolumeMl(seg, endpoints.start, endpoints.end);
+      }
+      if (trunk.contactCone) {
+        supportMl += contactConeVolumeMl(trunk.contactCone);
+      }
+    }
+
+    for (const branch of Object.values(supportStateSnapshot.branches)) {
+      if (!visibleModelIds.has(branch.modelId)) continue;
+      const parentKnot = supportStateSnapshot.knots[branch.parentKnotId];
+      for (let i = 0; i < branch.segments.length; i += 1) {
+        const seg = branch.segments[i];
+        const endpoints = getBranchSegmentEndpoints(branch, seg, i, parentKnot);
+        if (!endpoints) continue;
+        supportMl += segmentVolumeMl(seg, endpoints.start, endpoints.end);
+      }
+      if (branch.contactCone) {
+        supportMl += contactConeVolumeMl(branch.contactCone);
+      }
+    }
+
+    for (const leaf of Object.values(supportStateSnapshot.leaves)) {
+      if (!visibleModelIds.has(leaf.modelId)) continue;
+      if (leaf.contactCone) {
+        supportMl += contactConeVolumeMl(leaf.contactCone);
+      }
+    }
+
+    for (const twig of Object.values(supportStateSnapshot.twigs)) {
+      if (!visibleModelIds.has(twig.modelId)) continue;
+
+      for (let i = 0; i < twig.segments.length; i += 1) {
+        const seg = twig.segments[i];
+        const start = i === 0
+          ? (seg.bottomJoint?.pos ?? twig.contactDiskA.pos)
+          : (twig.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? twig.contactDiskA.pos);
+        const end = seg.topJoint?.pos ?? twig.contactDiskB.pos;
+        supportMl += segmentVolumeMl(seg, start, end);
+      }
+
+      supportMl += contactDiskVolumeMl(twig.contactDiskA);
+      supportMl += contactDiskVolumeMl(twig.contactDiskB);
+    }
+
+    for (const stick of Object.values(supportStateSnapshot.sticks)) {
+      if (!visibleModelIds.has(stick.modelId)) continue;
+
+      for (let i = 0; i < stick.segments.length; i += 1) {
+        const seg = stick.segments[i];
+        const start = i === 0
+          ? (seg.bottomJoint?.pos ?? stick.contactConeA.pos)
+          : (stick.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? stick.contactConeA.pos);
+        const end = seg.topJoint?.pos ?? stick.contactConeB.pos;
+        supportMl += segmentVolumeMl(seg, start, end);
+      }
+
+      supportMl += contactConeVolumeMl(stick.contactConeA);
+      supportMl += contactConeVolumeMl(stick.contactConeB);
+    }
+
+    for (const brace of Object.values(supportStateSnapshot.braces)) {
+      if (!visibleModelIds.has(brace.modelId)) continue;
+      const startKnot = supportStateSnapshot.knots[brace.startKnotId];
+      const endKnot = supportStateSnapshot.knots[brace.endKnotId];
+      if (!startKnot || !endKnot) continue;
+
+      const length = brace.curve?.type === 'bezier'
+        ? sampleBezierLengthMm(startKnot.pos, brace.curve.controlPoint1, brace.curve.controlPoint2, endKnot.pos, brace.curve.resolution ?? 16)
+        : distanceMm(startKnot.pos, endKnot.pos);
+      supportMl += mm3ToMl(cylinderVolumeMm3(Math.max(0.001, brace.profile.diameter / 2), length));
+    }
+
+    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
+      if (!visibleModelIds.has(supportBrace.modelId)) continue;
+
+      for (let i = 0; i < supportBrace.segments.length; i += 1) {
+        const seg = supportBrace.segments[i];
+        const root = supportBraceStateSnapshot.roots[supportBrace.rootId];
+        const hostKnot = supportBraceStateSnapshot.knots[supportBrace.hostKnotId];
+        const rootTopPos = root
+          ? {
+              x: root.transform.pos.x,
+              y: root.transform.pos.y,
+              z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+            }
+          : null;
+        const start = i === 0
+          ? (seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 })
+          : (supportBrace.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 });
+        const end = seg.topJoint?.pos ?? hostKnot?.pos ?? start;
+        supportMl += segmentVolumeMl(seg, start, end);
+      }
+    }
+
+    let raftMl = 0;
+    if (raftSettingsSnapshot.bottomMode !== 'off') {
+      const rootsByModel = new Map<string, SupportBaseCircle[]>();
+      for (const root of Object.values(supportStateSnapshot.roots)) {
+        if (!visibleModelIds.has(root.modelId)) continue;
+        if (!rootsByModel.has(root.modelId)) rootsByModel.set(root.modelId, []);
+        rootsByModel.get(root.modelId)!.push({
+          x: root.transform.pos.x,
+          y: root.transform.pos.y,
+          r: root.diameter / 2,
+        });
+      }
+
+      for (const circles of rootsByModel.values()) {
+        if (circles.length === 0) continue;
+
+        const chamferInset = raftSettingsSnapshot.bottomMode === 'line'
+          ? Math.max(0, raftSettingsSnapshot.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettingsSnapshot.chamferAngle))))
+          : 0;
+
+        const baseProfile = computeFootprint(circles, {
+          marginMm: 0.2 + chamferInset,
+          samplesPerCircle: 24,
+        });
+
+        if (!baseProfile || baseProfile.length < 3) continue;
+
+        const areaMm2 = polygonAreaMm2(baseProfile);
+        const baseMm3 = raftSettingsSnapshot.bottomMode === 'line'
+          ? (polygonPerimeterMm(baseProfile) * Math.max(0, raftSettingsSnapshot.lineWidthMm) * Math.max(0, raftSettingsSnapshot.lineHeightMm))
+          : (areaMm2 * Math.max(0, raftSettingsSnapshot.thickness));
+
+        let wallMm3 = 0;
+        if (raftSettingsSnapshot.wallEnabled && raftSettingsSnapshot.wallHeight > 0 && raftSettingsSnapshot.wallThickness > 0) {
+          const outerProfile = computeRaftOuterBoundary(baseProfile, raftSettingsSnapshot);
+          const wallPerimeterMm = polygonPerimeterMm(outerProfile.length >= 3 ? outerProfile : baseProfile);
+          wallMm3 = wallPerimeterMm * Math.max(0, raftSettingsSnapshot.wallThickness) * Math.max(0, raftSettingsSnapshot.wallHeight);
+        }
+
+        raftMl += mm3ToMl(baseMm3 + wallMm3);
+      }
+    }
+
+    return supportMl + raftMl;
+  }, [
+    computeFootprint,
+    computeRaftOuterBoundary,
+    raftSettingsSnapshot,
+    scene.models,
+    supportBraceStateSnapshot.knots,
+    supportBraceStateSnapshot.roots,
+    supportBraceStateSnapshot.supportBraces,
+    supportStateSnapshot.braces,
+    supportStateSnapshot.branches,
+    supportStateSnapshot.knots,
+    supportStateSnapshot.leaves,
+    supportStateSnapshot.roots,
+    supportStateSnapshot.sticks,
+    supportStateSnapshot.trunks,
+    supportStateSnapshot.twigs,
+  ]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const visibleModels = scene.models.filter((model) => model.visible);
+
+    if (visibleModels.length === 0) {
+      setPrintingEstimatedResinMl(null);
+      setIsPrintingEstimatedResinBusy(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsPrintingEstimatedResinBusy(true);
+
+    const run = async () => {
+      let totalMl = 0;
+      let found = false;
+
+      for (const model of visibleModels) {
+        if (cancelled) return;
+        const baseMl = await getOrComputeBaseResinMl(model);
+        if (cancelled) return;
+        if (baseMl == null) continue;
+
+        const sx = Math.abs(model.transform.scale.x || 1);
+        const sy = Math.abs(model.transform.scale.y || 1);
+        const sz = Math.abs(model.transform.scale.z || 1);
+        totalMl += baseMl * sx * sy * sz;
+        found = true;
+      }
+
+      if (cancelled) return;
+      const totalWithSupports = totalMl + supportAndRaftResinMl;
+      setPrintingEstimatedResinMl(found || totalWithSupports > 0 ? totalWithSupports : null);
+      setIsPrintingEstimatedResinBusy(false);
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getOrComputeBaseResinMl, scene.models, supportAndRaftResinMl]);
+
+  const estimatedVolumeMlLabel = React.useMemo(() => {
+    const visible = scene.models.filter((model) => model.visible);
+    if (visible.length === 0) return '—';
+    if (isPrintingEstimatedResinBusy && printingEstimatedResinMl == null) return 'Calculating…';
+    if (printingEstimatedResinMl == null) return '—';
+    return `${printingEstimatedResinMl.toFixed(2)} mL`;
+  }, [isPrintingEstimatedResinBusy, printingEstimatedResinMl, scene.models]);
+
+  const modelStatsEstimatedPrintTimeLabel = React.useMemo(() => {
+    if (!activeMaterialProfile) return '—';
+
+    const visibleModels = scene.models.filter((model) => model.visible);
+    if (visibleModels.length === 0) return '—';
+
+    const layerHeightMm = Math.max(0.001, activeMaterialProfile.layerHeightMm || 0.05);
+    let maxModelHeightMm = 0;
+
+    for (const model of visibleModels) {
+      const bbox = model.geometry.bbox;
+      const sizeZ = Math.max(0, bbox.max.z - bbox.min.z);
+      const sz = Math.abs(model.transform.scale.z || 1);
+      maxModelHeightMm = Math.max(maxModelHeightMm, sizeZ * sz);
+    }
+
+    const totalLayers = Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
+    if (totalLayers <= 0) return '—';
+
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    const wholeSeconds = Math.max(0, Math.floor(totalSec));
+    const hours = Math.floor(wholeSeconds / 3600);
+    const minutes = Math.floor((wholeSeconds % 3600) / 60);
+    const seconds = wholeSeconds % 60;
+
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }, [activeMaterialProfile, scene.models]);
+
+  const estimatedPrintTimeLabel = React.useMemo(() => {
+    if (!activeMaterialProfile || printingPreviewTotalLayers <= 0) return '—';
+
+    const totalLayers = printingPreviewTotalLayers;
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const normalLayers = Math.max(0, totalLayers - bottomLayers);
+
+    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+      : 0;
+    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
+      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+      : 0;
+    const travelSecPerLayer = Math.max(0, liftSec + retractSec);
+
+    const totalSec = (
+      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+    );
+
+    const minutes = Math.floor(totalSec / 60);
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    if (hours > 0) return `~${hours}h ${mins}m`;
+    return `~${mins}m`;
+  }, [activeMaterialProfile, printingPreviewTotalLayers]);
+
+  const canDownloadPrintArtifact = Boolean(printingArtifact);
+  const canSendToPrinter = Boolean(
+    printingArtifact
+    && printingArtifact.outputName.toLowerCase().endsWith('.nanodlp')
+    && activePrinterProfile?.networkSupport === 'nanodlp'
+    && activePrinterProfile.networkConnection?.connected === true
+    && (activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '').length > 0,
+  );
+  const canPrintNow = Boolean(
+    printingReadyPlateId
+    && activePrinterProfile?.networkSupport === 'nanodlp'
+    && activePrinterProfile.networkConnection?.connected === true,
+  );
+
+  const printingDialogStageLabel = React.useMemo(() => {
+    if (printingSendStageText && printingSendStageText.trim().length > 0) {
+      return printingSendStageText;
+    }
+
+    switch (printingUploadDialogStage) {
+      case 'uploading': return 'Uploading to printer';
+      case 'processing': return 'Processing on device';
+      case 'ready': return 'Ready to print';
+      case 'starting': return 'Starting print';
+      case 'started': return 'Print started';
+      case 'failed': return 'Upload failed';
+      default: return 'Processing';
+    }
+  }, [printingSendStageText, printingUploadDialogStage]);
+
+  const printingDialogIsIndeterminate = printingUploadDialogStage === 'processing';
+  const printingDialogProgressPercent = Math.max(0, Math.min(100, printingUploadDisplayProgress * 100));
+
+  const printingProcessingElapsedLabel = React.useMemo(() => {
+    const total = Math.max(0, printingDeviceProcessingElapsedSec);
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }, [printingDeviceProcessingElapsedSec]);
+
+  React.useEffect(() => {
+    if (!printingUploadDialogOpen) {
+      setPrintingUploadDisplayProgress(printingSendProgress);
+      return;
+    }
+
+    let raf = 0;
+    const animate = () => {
+      setPrintingUploadDisplayProgress((previous) => {
+        const target = Math.max(0, Math.min(1, printingSendProgress));
+        if (Math.abs(target - previous) < 0.0025) {
+          return target;
+        }
+        return previous + ((target - previous) * 0.18);
+      });
+      raf = window.requestAnimationFrame(animate);
+    };
+
+    raf = window.requestAnimationFrame(animate);
+    return () => {
+      window.cancelAnimationFrame(raf);
+    };
+  }, [printingSendProgress, printingUploadDialogOpen]);
+
+  React.useEffect(() => {
+    if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
+      setPrintingDeviceProcessingElapsedSec(0);
+      return;
+    }
+
+    const updateElapsed = () => {
+      setPrintingDeviceProcessingElapsedSec(Math.max(0, Math.floor((Date.now() - printingDeviceProcessingStartedAtMs) / 1000)));
+    };
+
+    updateElapsed();
+    const id = window.setInterval(updateElapsed, 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [printingDeviceProcessingStartedAtMs, printingUploadDialogOpen, printingUploadDialogStage]);
+
+  const handleDownloadPrintArtifact = React.useCallback(() => {
+    if (!printingArtifact) return;
+    const objectUrl = URL.createObjectURL(printingArtifact.blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = printingArtifact.outputName;
+    anchor.rel = 'noopener';
+    anchor.style.display = 'none';
+    document.body?.appendChild(anchor);
+    anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }, [printingArtifact]);
+
+  const handleSendToPrinter = React.useCallback(async () => {
+    if (!printingArtifact || !activePrinterProfile) return;
+    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (activePrinterProfile.networkConnection?.connected !== true) return;
+
+    const host = (activePrinterProfile.networkConnection.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
+    const port = activePrinterProfile.networkConnection.port || 80;
+    const selectedMaterialId = (activePrinterProfile.networkConnection.selectedMaterialId ?? '').trim();
+    if (!host) {
+      setPrintingSendStatusText('No printer IP address available for send operation.');
+      return;
+    }
+    if (!selectedMaterialId) {
+      setPrintingSendStatusText('No NanoDLP material profile selected. Choose one in Printer Settings first.');
+      return;
+    }
+
+    setPrintingReadyPlateId(null);
+    setPrintingSendBusy(true);
+    setPrintingSendProgress(0.01);
+    setPrintingSendStageText('Uploading print job…');
+    setPrintingSendStatusText('Uploading print job to printer…');
+    setPrintingUploadDialogStage('uploading');
+    setPrintingUploadDialogOpen(true);
+    setPrintingDeviceProcessingStartedAtMs(null);
+    setPrintingDeviceProcessingElapsedSec(0);
+
+    try {
+      const bytes = new Uint8Array(await printingArtifact.blob.arrayBuffer());
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode(...chunk);
+      }
+      const zipBase64 = btoa(binary);
+
+      const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
+
+      const response = await fetch('/api/network/plugin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/job/import',
+          ipAddress: host,
+          port,
+          zipBase64,
+          path: pathBase,
+          profileId: selectedMaterialId,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (!(response.ok && payload?.ok)) {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        setPrintingSendStatusText(`Send failed: ${reason}`);
+        setPrintingSendStageText('Upload failed');
+        setPrintingUploadDialogStage('failed');
+        setPrintingSendProgress(0);
+        return;
+      }
+
+      const importedPlateId = Number(payload?.plateId);
+      let resolvedPlateId = Number.isFinite(importedPlateId) && importedPlateId > 0 ? importedPlateId : null;
+
+      setPrintingSendProgress(1);
+      setPrintingUploadDialogStage('processing');
+      setPrintingSendStageText('Processing on device…');
+      setPrintingSendStatusText('Upload complete. NanoDLP is processing file metadata…');
+      setPrintingDeviceProcessingStartedAtMs(Date.now());
+
+      const startedAt = Date.now();
+      const timeoutMs = 10 * 60 * 1000;
+      const pollMs = 1250;
+      let metadataReady = false;
+      let pollFailureCount = 0;
+
+      while ((Date.now() - startedAt) < timeoutMs) {
+        try {
+          const responseReady = await fetch('/api/network/plugin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pluginId: 'athena',
+              operation: 'nanodlp/plates/list/json',
+              ipAddress: host,
+              port,
+              plateId: resolvedPlateId,
+              jobName: pathBase,
+            }),
+          });
+
+          const readyPayload = await responseReady.json().catch(() => ({} as any));
+          const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
+          const matchedPlateId = Number(
+            (matchedPlate as any)?.PlateID
+            ?? (matchedPlate as any)?.plateId
+            ?? (matchedPlate as any)?.plate_id
+            ?? (matchedPlate as any)?.id,
+          );
+          if (!resolvedPlateId && Number.isFinite(matchedPlateId) && matchedPlateId > 0) {
+            resolvedPlateId = matchedPlateId;
+          }
+
+          metadataReady = readyPayload?.metadataReady === true;
+          pollFailureCount = 0;
+
+          if (metadataReady) {
+            break;
+          }
+        } catch {
+          pollFailureCount += 1;
+          if (pollFailureCount >= 6) {
+            throw new Error('Lost connection while waiting for device processing.');
+          }
+        }
+
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, pollMs);
+        });
+      }
+
+      if (resolvedPlateId) {
+        setPrintingReadyPlateId(resolvedPlateId);
+      }
+
+      if (metadataReady) {
+        setPrintingSendProgress(1);
+        setPrintingSendStageText('Ready to print');
+        setPrintingUploadDialogStage('ready');
+        setPrintingDeviceProcessingStartedAtMs(null);
+        setPrintingSendStatusText(
+          `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
+        );
+      } else {
+        setPrintingSendProgress(1);
+        setPrintingSendStageText('Device still processing');
+        setPrintingUploadDialogStage('failed');
+        setPrintingDeviceProcessingStartedAtMs(null);
+        setPrintingSendStatusText(
+          `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Device is still processing metadata after waiting.`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setPrintingSendStatusText(`Send failed: ${message}`);
+      setPrintingSendStageText('Upload failed');
+      setPrintingUploadDialogStage('failed');
+      setPrintingDeviceProcessingStartedAtMs(null);
+      setPrintingSendProgress(0);
+    } finally {
+      setPrintingSendBusy(false);
+    }
+  }, [activePrinterProfile, printingArtifact]);
+
+  const handlePrintNow = React.useCallback(async () => {
+    if (!activePrinterProfile) return;
+    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (activePrinterProfile.networkConnection?.connected !== true) return;
+    if (!printingReadyPlateId) return;
+
+    const host = (activePrinterProfile.networkConnection.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
+    const port = activePrinterProfile.networkConnection.port || 80;
+    if (!host) {
+      setPrintingSendStatusText('No printer IP address available for Print Now.');
+      return;
+    }
+
+    setPrintingPrintNowBusy(true);
+    setPrintingSendStageText('Starting print…');
+    setPrintingUploadDialogStage('starting');
+    setPrintingDeviceProcessingStartedAtMs(null);
+
+    try {
+      const response = await fetch('/api/network/plugin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pluginId: 'athena',
+          operation: 'nanodlp/printer/start',
+          ipAddress: host,
+          port,
+          plateId: printingReadyPlateId,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (response.ok && payload?.ok) {
+        setPrintingSendStageText('Print started');
+        setPrintingUploadDialogStage('started');
+        setPrintingSendStatusText(`Print started successfully${printingReadyPlateId ? ` • Plate #${printingReadyPlateId}` : ''}.`);
+      } else {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        setPrintingSendStageText('Start print failed');
+        setPrintingUploadDialogStage('failed');
+        setPrintingSendStatusText(`Print start failed: ${reason}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setPrintingSendStageText('Start print failed');
+      setPrintingUploadDialogStage('failed');
+      setPrintingSendStatusText(`Print start failed: ${message}`);
+    } finally {
+      setPrintingPrintNowBusy(false);
+    }
+  }, [activePrinterProfile, printingReadyPlateId]);
+
+  const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
+    const clamped = clampPrintingLayer(nextLayer);
+    schedulePrintingPreviewSettle();
+    pendingPrintingSelectedLayerRef.current = clamped;
+
+    if (printingSelectedLayerRafRef.current !== null) return;
+
+    printingSelectedLayerRafRef.current = window.requestAnimationFrame(() => {
+      printingSelectedLayerRafRef.current = null;
+      const pending = pendingPrintingSelectedLayerRef.current;
+      pendingPrintingSelectedLayerRef.current = null;
+      if (pending == null) return;
+      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
+    });
+  }, [clampPrintingLayer, schedulePrintingPreviewSettle]);
+
+  const handlePrintingLayerScrubStart = React.useCallback(() => {
+    setIsPrintingLayerScrubbing(true);
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle]);
+
+  const handlePrintingLayerScrubEnd = React.useCallback(() => {
+    if (printingSelectedLayerRafRef.current !== null) {
+      window.cancelAnimationFrame(printingSelectedLayerRafRef.current);
+      printingSelectedLayerRafRef.current = null;
+    }
+    const pending = pendingPrintingSelectedLayerRef.current;
+    pendingPrintingSelectedLayerRef.current = null;
+    if (pending != null) {
+      setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
+    }
+    setIsPrintingLayerScrubbing(false);
+    // Immediately show the proper PNG for the selected layer when released
+    setPrintingDisplayedLayer((previous) => {
+      const targetLayer = pending ?? previous;
+      return Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), targetLayer));
+    });
+    schedulePrintingPreviewSettle();
+  }, [schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
+
+  const handleSceneLayerScrubStart = React.useCallback(() => {
+    setIsSceneLayerScrubbing(true);
+  }, []);
+
+  const handleSceneLayerScrubEnd = React.useCallback(() => {
+    setIsSceneLayerScrubbing(false);
+  }, []);
+
+  const usePrintingSettledHiResCanvas = React.useMemo(() => {
+    return Boolean(
+      selectedPrintingLayerPreviewUrl
+      && printingPreviewZoom > 1.0001
+      && !isPrintingLayerScrubbing,
+    );
+  }, [isPrintingLayerScrubbing, printingPreviewZoom, selectedPrintingLayerPreviewUrl]);
+
+  React.useEffect(() => {
+    if (!usePrintingSettledHiResCanvas) return;
+    if (!selectedPrintingLayerPreviewUrl) return;
+
+    const canvas = printingPreviewCanvasRef.current;
+    const viewport = printingPreviewViewportRef.current;
+    if (!canvas || !viewport) return;
+
+    const rect = viewport.getBoundingClientRect();
+    const viewportWidth = Math.max(1, Math.round(rect.width));
+    const viewportHeight = Math.max(1, Math.round(rect.height));
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const canvasWidth = Math.max(1, Math.round(viewportWidth * dpr));
+    const canvasHeight = Math.max(1, Math.round(viewportHeight * dpr));
+
+    if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const renderNonce = ++printingPreviewCanvasRenderNonceRef.current;
+    let cancelled = false;
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => {
+      if (cancelled) return;
+      if (renderNonce !== printingPreviewCanvasRenderNonceRef.current) return;
+
+      const naturalWidth = Math.max(1, image.naturalWidth || 1);
+      const naturalHeight = Math.max(1, image.naturalHeight || 1);
+      const logicalSourceWidth = Math.max(1, printingPreviewTargetResolution?.viewportWidth ?? naturalWidth);
+      const logicalSourceHeight = Math.max(1, printingPreviewTargetResolution?.viewportHeight ?? naturalHeight);
+      const baseScale = Math.min(viewportWidth / logicalSourceWidth, viewportHeight / logicalSourceHeight);
+      const drawWidth = logicalSourceWidth * baseScale;
+      const drawHeight = logicalSourceHeight * baseScale;
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(dpr, dpr);
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(viewportWidth * 0.5 + printingPreviewPan.x, viewportHeight * 0.5 + printingPreviewPan.y);
+      ctx.scale(printingPreviewZoom, printingPreviewZoom);
+      ctx.scale(printingPreviewMirrorScale.x, printingPreviewMirrorScale.y);
+      ctx.drawImage(image, -drawWidth * 0.5, -drawHeight * 0.5, drawWidth, drawHeight);
+      ctx.restore();
+      setIsPrintingSettledCanvasReady(true);
+    };
+    image.src = selectedPrintingLayerPreviewUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    printingPreviewMirrorScale.x,
+    printingPreviewMirrorScale.y,
+    printingPreviewPan.x,
+    printingPreviewPan.y,
+    printingPreviewTargetResolution?.viewportHeight,
+    printingPreviewTargetResolution?.viewportWidth,
+    printingPreviewZoom,
+    selectedPrintingLayerPreviewUrl,
+    usePrintingSettledHiResCanvas,
+  ]);
 
   const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
     if (scene.mode !== 'prepare') return;
@@ -1743,15 +3302,147 @@ export default function Home() {
   }, [transformMgr.onTransformChange, transformMgr.setIsTransforming]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
-  const sceneZRange = React.useMemo(() => ({
-    min: scene.sceneBounds?.min.z ?? 0,
-    max: scene.sceneBounds?.max.z ?? 100 // Default range if empty
-  }), [scene.sceneBounds]);
+  const sceneZRange = React.useMemo(() => {
+    const projected = buildProjectedCrossSectionZRange(scene.models);
+    if (projected) return projected;
+
+    return {
+      min: scene.sceneBounds?.min.z ?? 0,
+      max: scene.sceneBounds?.max.z ?? 100, // Default range if empty
+    };
+  }, [
+    scene.models,
+    scene.sceneBounds,
+    supportStateSnapshot,
+    supportBraceStateSnapshot,
+    raftSettingsSnapshot,
+  ]);
 
   const slicing = useSlicingManager({
     hasGeometry: scene.models.length > 0,
     zRange: sceneZRange
   });
+
+  React.useEffect(() => {
+    const previousMode = previousSceneModeRef.current;
+    const currentMode = scene.mode;
+
+    if (previousMode !== 'printing' && currentMode === 'printing') {
+      // Save the mode we were in before entering printing (for Back button to return to)
+      modeBeforePrintingRef.current = previousMode;
+      // Save the general (prepare/support) layer position before printing takes control.
+      preservedNonPrintingLayerIndexRef.current = slicing.layerIndex;
+    } else if (previousMode === 'printing' && currentMode !== 'printing') {
+      // Restore general slider state so printing scrub position does not leak across modes.
+      const preserved = preservedNonPrintingLayerIndexRef.current;
+      if (preserved != null) {
+        const clamped = Math.max(0, Math.min(Math.max(0, slicing.numLayers), Math.round(preserved)));
+        slicing.setLayerIndex(clamped);
+      }
+      preservedNonPrintingLayerIndexRef.current = null;
+    }
+
+    previousSceneModeRef.current = currentMode;
+  }, [scene.mode, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
+
+  // Invalidate printing artifact if scene changed (detected via history events after the slice marker)
+  React.useEffect(() => {
+    if (!printingArtifact) return; // Nothing to invalidate
+    
+    const historyEvents = getHistoryDebugEvents();
+    if (historyEvents.length === 0) return;
+    
+    // Find the most recent "SCENE_SLICED" marker
+    let sliceMarkerIndex = -1;
+    for (let i = historyEvents.length - 1; i >= 0; i--) {
+      if (historyEvents[i].actionType === 'SCENE_SLICED') {
+        sliceMarkerIndex = i;
+        break;
+      }
+    }
+    
+    if (sliceMarkerIndex >= 0) {
+      // Check if there are any OTHER events (non-undo/redo) after the slice marker
+      const eventsAfterSlice = historyEvents.slice(sliceMarkerIndex + 1);
+      const hasModifications = eventsAfterSlice.some(
+        (e) => e.kind === 'push' && e.actionType !== 'SCENE_SLICED'
+      );
+      
+      if (hasModifications) {
+        setPrintingArtifactIsInvalid(true);
+      }
+    }
+  }, [printingArtifact]);
+
+  // Re-check invalidation when history changes
+  React.useEffect(() => {
+    const checkInvalidation = () => {
+      if (!printingArtifact || printingArtifactIsInvalid) return; // Already invalid or no artifact
+      
+      const historyEvents = getHistoryDebugEvents();
+      if (historyEvents.length === 0) return;
+      
+      // Find the most recent "SCENE_SLICED" marker
+      let sliceMarkerIndex = -1;
+      for (let i = historyEvents.length - 1; i >= 0; i--) {
+        if (historyEvents[i].actionType === 'SCENE_SLICED') {
+          sliceMarkerIndex = i;
+          break;
+        }
+      }
+      
+      if (sliceMarkerIndex >= 0) {
+        // Check if there are any OTHER events (non-undo/redo) after the slice marker
+        const eventsAfterSlice = historyEvents.slice(sliceMarkerIndex + 1);
+        const hasModifications = eventsAfterSlice.some(
+          (e) => e.kind === 'push' && e.actionType !== 'SCENE_SLICED'
+        );
+        
+        if (hasModifications) {
+          setPrintingArtifactIsInvalid(true);
+        }
+      }
+    };
+
+    const unsubscribe = subscribeHistoryDebug(checkInvalidation);
+    return () => {
+      void unsubscribe();
+    };
+  }, [printingArtifact, printingArtifactIsInvalid]);
+
+  // Lock printing workspace when no models exist
+  React.useEffect(() => {
+    if (scene.models.length === 0 && scene.mode === 'printing') {
+      // Reset to prepare mode if we delete the last model while in printing
+      scene.setMode('prepare');
+      setPrintingArtifact(null);
+      setPrintingArtifactIsInvalid(false);
+    }
+  }, [scene.models.length, scene.mode, scene, printingArtifact]);
+
+  // Show re-slice modal when entering printing with invalid artifact
+  React.useEffect(() => {
+    if (scene.mode === 'printing' && printingArtifactIsInvalid && printingArtifact) {
+      setShowPrintingResliceModal(true);
+    }
+  }, [scene.mode, printingArtifactIsInvalid, printingArtifact]);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
+
+    if (isPrintingLayerScrubbing) {
+      const now = performance.now();
+      if ((now - lastPrintingLayerSyncPerfRef.current) < 42) {
+        return;
+      }
+      lastPrintingLayerSyncPerfRef.current = now;
+    } else {
+      lastPrintingLayerSyncPerfRef.current = 0;
+    }
+
+    slicing.setLayerIndex(Math.max(0, clamped - 1));
+  }, [scene.mode, printingPreviewTotalLayers, printingSelectedLayer, slicing.setLayerIndex, isPrintingLayerScrubbing]);
 
   // 4. Islands (needs geom & transform & layerHeight)
   const islands = useIslandManager({
@@ -1768,8 +3459,11 @@ export default function Home() {
       scene.setMode('prepare');
       return;
     }
+    if (nextMode === 'printing' && !hasPrintingWorkspaceData) {
+      return;
+    }
     scene.setMode(nextMode);
-  }, [scene]);
+  }, [hasPrintingWorkspaceData, scene]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
@@ -2970,11 +4664,6 @@ export default function Home() {
     },
   });
 
-  // Auto-set cross-section mode based on app mode
-  React.useEffect(() => {
-    slicing.setCrossSectionMode(scene.mode === 'export' ? 'rasterized' : 'smooth');
-  }, [scene.mode, slicing.setCrossSectionMode]);
-
   React.useEffect(() => {
     if (scene.models.length > 0) return;
     if (scene.mode === 'prepare') return;
@@ -2999,6 +4688,9 @@ export default function Home() {
   }, [allowPrepareWithoutPrinter, hasActivePrinterProfile]);
 
   React.useEffect(() => {
+    // Skip camera changes during automatic re-slice flow to prevent flickering
+    if (shouldReturnToPrintingAfterSliceRef.current) return;
+    
     const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
     const currentProjectionMode = getSavedCameraProjectionSettings().mode;
 
@@ -3008,6 +4700,9 @@ export default function Home() {
   }, [scene.mode]);
 
   React.useEffect(() => {
+    // Skip selection highlight changes during automatic re-slice flow to prevent flickering
+    if (shouldReturnToPrintingAfterSliceRef.current) return;
+    
     const workspaceSelectionHighlightMode = getSavedWorkspaceCameraSettings().selectionHighlightDefaults[scene.mode];
     if (workspaceSelectionHighlightMode !== scene.selectionHighlightMode) {
       scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
@@ -4171,6 +5866,7 @@ export default function Home() {
         mode={scene.mode}
         onModeChange={handleModeChange}
         hasModels={scene.models.length > 0}
+        hasPrintingData={hasPrintingWorkspaceData}
         viewTypeOverride={sessionShaderOverride}
         onViewTypeOverrideChange={setSessionShaderOverride}
         heatmapColors={scene.heatmapColors}
@@ -4476,14 +6172,31 @@ export default function Home() {
             />
           </>
         ) : scene.mode === 'export' ? (
-          <ExportPanel
-            key="export-main"
-            models={scene.models}
-            activeModel={scene.activeModel}
-            activeModelId={scene.activeModelId}
-            onActiveModelChange={scene.setActiveModelId}
-            supportsRef={supportsRef}
-          />
+          <>
+            <ExportPanel
+              key="export-main"
+              models={scene.models}
+              activeModel={scene.activeModel}
+              activeModelId={scene.activeModelId}
+              onActiveModelChange={scene.setActiveModelId}
+              supportsRef={supportsRef}
+            />
+
+            <SlicingPanel
+              key="export-slicing"
+              models={scene.models}
+              activeModel={scene.activeModel}
+              estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
+              captureSceneThumbnailPng={captureExportThumbnailPng}
+              onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
+              onSlicingFinished={handleSlicingFinishedForPrinting}
+              onSliceArtifactReady={handleSliceArtifactReady}
+              onBenchmarkComplete={handleSlicingBenchmarkComplete}
+              onSliceTriggerRef={triggerSliceExportRef}
+              shouldAutoSlice={shouldAutoSliceOnExportEntry}
+              skipThumbnailCapture={shouldReturnToPrintingAfterSliceRef.current}
+            />
+          </>
 
         ) : scene.mode === 'support' ? (
           <>
@@ -4527,17 +6240,37 @@ export default function Home() {
               )}
             </div>
           </>
+        ) : scene.mode === 'printing' ? (
+          <>
+            <PrintingPanel
+              outputName={printingArtifact?.outputName ?? null}
+              outputFormat={printingArtifact?.outputName?.split('.').pop() ? `.${printingArtifact.outputName.split('.').pop()}` : null}
+              outputSizeLabel={printingOutputSizeLabel}
+              printerName={activePrinterProfile?.name ?? 'No printer selected'}
+              resinName={activeMaterialProfile?.name ?? 'No resin selected'}
+              estimatedPrintTimeLabel={estimatedPrintTimeLabel}
+              estimatedVolumeLabel={estimatedVolumeMlLabel}
+              canDownload={canDownloadPrintArtifact}
+              canSendToPrinter={canSendToPrinter}
+              sendBusy={printingSendBusy}
+              sendStatusText={printingSendStatusText}
+              onDownload={handleDownloadPrintArtifact}
+              onSendToPrinter={handleSendToPrinter}
+            />
+          </>
         ) : (
           <>
           </>
         )}
 
-        {scene.models.length > 0 && (
+        {scene.models.length > 0 && scene.mode !== 'printing' && (
           <VisualSettingsPanel
             key="visual-settings"
             layerIndex={slicing.layerIndex}
             maxLayers={slicing.numLayers}
             onLayerIndexChange={slicing.setLayerIndex}
+            onScrubStart={handleSceneLayerScrubStart}
+            onScrubEnd={handleSceneLayerScrubEnd}
             onCrossSectionModeChange={slicing.setCrossSectionMode}
             currentHeightMm={slicing.currentHeightMm}
             maxHeightMm={slicing.heightMm}
@@ -4558,7 +6291,7 @@ export default function Home() {
           >
             <div className="mb-2 flex items-center justify-between">
               <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
-                {scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
+                {scene.mode === 'printing' ? 'Printing Debug Overlay' : scene.mode === 'support' ? 'Support Debug Overlay' : 'Transform Debug Overlay'}
               </div>
               <button
                 type="button"
@@ -4570,7 +6303,19 @@ export default function Home() {
               </button>
             </div>
 
-            {scene.mode === 'support' ? (
+            {scene.mode === 'printing' ? (
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Total layers</div><div>{printingPreviewTotalLayers}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Selected layer</div><div>{printingSelectedLayer}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Displayed layer</div><div>{printingDisplayedLayer}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Is scrubbing</div><div>{isPrintingLayerScrubbing ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Show scrub preview</div><div>{shouldShowScrubPreview ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Send progress</div><div>{(printingSendProgress * 100).toFixed(1)}%</div>
+                <div style={{ color: 'var(--text-muted)' }}>Send busy</div><div>{printingSendBusy ? 'true' : 'false'}</div>
+                <div style={{ color: 'var(--text-muted)' }}>Stage text</div><div className="truncate" title={printingSendStageText ?? 'none'}>{printingSendStageText ?? 'none'}</div>
+              </div>
+            ) : scene.mode === 'support' ? (
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 <div style={{ color: 'var(--text-muted)' }}>Mode</div><div>{scene.mode}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Active model</div><div>{scene.activeModelId ?? 'none'}</div>
@@ -4585,6 +6330,46 @@ export default function Home() {
                 <div style={{ color: 'var(--text-muted)' }}>Display model</div><div>{displayActiveModelId ?? 'none'}</div>
                 <div style={{ color: 'var(--text-muted)' }}>isTransforming</div><div>{transformMgr.isTransforming ? 'true' : 'false'}</div>
                 <div style={{ color: 'var(--text-muted)' }}>Drag group auto</div><div>{String(transformDebugStats.dragGroupAutoUpdate)}</div>
+              </div>
+            )}
+
+            {scene.mode === 'printing' && (
+              <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Preview State
+                </div>
+                <div>Preview URLs loaded: {printingLayerPreviewUrls.filter(u => u !== null).length} / {printingPreviewTotalLayers}</div>
+                <div>Selected URL exists: {(printingLayerPreviewUrls[printingSelectedLayer - 1] ?? null) ? 'true' : 'false'}</div>
+                <div>Displayed URL exists: {(printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null) ? 'true' : 'false'}</div>
+                <div>Artifact ready: {printingArtifact ? 'true' : 'false'}</div>
+                <div>Artifact name: {printingArtifact?.outputName ?? 'none'}</div>
+                <div>Upload dialog open: {printingUploadDialogOpen ? 'true' : 'false'}</div>
+                <div>Upload stage: {printingUploadDialogStage}</div>
+                <div>Display progress: {(printingUploadDisplayProgress * 100).toFixed(1)}%</div>
+                <div>Ready plate ID: {printingReadyPlateId ?? 'none'}</div>
+                <div>Print now busy: {printingPrintNowBusy ? 'true' : 'false'}</div>
+                <div>Status text: {printingSendStatusText ?? 'none'}</div>
+
+                {printingSlicingBenchmark && (
+                  <>
+                    <div className="mt-2 mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                      Slicing Metrics
+                    </div>
+                    <div>Total time: {printingSlicingBenchmark.totalElapsedMs.toFixed(0)} ms</div>
+                    {printingSlicingBenchmark.meshPrepMs !== null && (
+                      <div>Mesh prep: {printingSlicingBenchmark.meshPrepMs.toFixed(0)} ms</div>
+                    )}
+                    {printingSlicingBenchmark.coreSlicingMs !== null && (
+                      <div>Core slicing: {printingSlicingBenchmark.coreSlicingMs.toFixed(0)} ms</div>
+                    )}
+                    {printingSlicingBenchmark.totalLayers !== null && (
+                      <div>Total layers: {printingSlicingBenchmark.totalLayers}</div>
+                    )}
+                    {printingSlicingBenchmark.layersPerSecond !== null && (
+                      <div>Layers/sec: {printingSlicingBenchmark.layersPerSecond.toFixed(1)}</div>
+                    )}
+                  </>
+                )}
               </div>
             )}
 
@@ -4626,7 +6411,7 @@ export default function Home() {
               </div>
             )}
 
-            {scene.mode !== 'support' && (
+            {scene.mode !== 'support' && scene.mode !== 'printing' && (
               <>
                 <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -4664,7 +6449,7 @@ export default function Home() {
               <div>SupportBraces: {transformDebugStats.supportCounts.supportBraces} / {activeSupportEntityCounts.supportBraces}</div>
             </div>
 
-            {scene.mode !== 'support' && (
+            {scene.mode !== 'support' && scene.mode !== 'printing' && (
               <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Transform Timeline
@@ -4687,7 +6472,7 @@ export default function Home() {
               </div>
             )}
 
-            {scene.mode !== 'support' && (
+            {scene.mode !== 'support' && scene.mode !== 'printing' && (
               <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Transform History Commit
@@ -4726,10 +6511,11 @@ export default function Home() {
         )}
       </FloatingPanelStack>
 
-      <div className="absolute inset-0 top-14 z-0">
+      <div className="absolute inset-0 top-14 z-0 flex">
         <div
           id="scene-root"
-          className="relative h-full w-full"
+          className={`relative h-full ${scene.mode === 'printing' ? 'w-1/2 border-r' : 'w-full'}`}
+          style={scene.mode === 'printing' ? { borderColor: 'var(--border-subtle)' } : undefined}
           onPointerDownCapture={handleEditorPointerDownCapture}
           onPointerMoveCapture={handleEditorPointerMoveCapture}
           onPointerUpCapture={handleEditorPointerUpCapture}
@@ -4864,9 +6650,11 @@ export default function Home() {
             supportRenderRefreshNonce={supportRenderRefreshNonce}
             gizmoResetNonce={gizmoResetNonce}
             historyTransformResyncToken={historyTransformResyncTick}
+            isLayerScrubbing={scene.mode === 'printing' ? isPrintingLayerScrubbing : isSceneLayerScrubbing}
             arrangeArrayPreviewItems={arrangeArrayPreviewItems}
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
+            onRegisterExportThumbnailCapture={handleRegisterExportThumbnailCapture}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
@@ -4895,6 +6683,8 @@ export default function Home() {
                 inBoundsModelIds={inBoundsModelIds}
                 numLayers={slicing.numLayers}
                 heightMm={slicing.heightMm}
+                estimatedPrintTimeLabelOverride={modelStatsEstimatedPrintTimeLabel}
+                estimatedResinLabelOverride={estimatedVolumeMlLabel}
               />
             </div>
           )}
@@ -4931,6 +6721,157 @@ export default function Home() {
           )}
 
         </div>
+
+        {scene.mode === 'printing' && (
+          <div
+            className="h-full w-1/2 min-w-0 min-h-0 grid overflow-hidden"
+            style={{ gridTemplateColumns: '104px minmax(0, 1fr)', background: 'var(--surface-0)' }}
+          >
+            <div
+              className="h-full border-r px-1 py-2"
+              style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
+            >
+              <LayerSlider
+                min={1}
+                max={Math.max(1, printingPreviewTotalLayers)}
+                step={1}
+                value={Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}
+                onChange={handlePrintingLayerChange}
+                onScrubStart={handlePrintingLayerScrubStart}
+                onScrubEnd={handlePrintingLayerScrubEnd}
+                currentHeightMm={slicing.currentHeightMm}
+                maxHeightMm={slicing.heightMm}
+                showValue={true}
+                crossSectionMode={slicing.crossSectionMode}
+                docked
+                embedded
+                expandToContainer
+                className="h-full"
+              />
+            </div>
+
+            <div className="h-full min-h-0 min-w-0 p-3 flex flex-col gap-2 overflow-hidden">
+              <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Layer PNG Preview
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Layer {Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer))}/{Math.max(1, printingPreviewTotalLayers)}
+              </div>
+
+              <div
+                className="relative flex-1 min-h-0 min-w-0 rounded-lg border p-2 flex items-center justify-center overflow-hidden"
+                ref={printingPreviewViewportRef}
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
+                  cursor: printingPreviewCursor,
+                  touchAction: 'none',
+                }}
+                onWheel={handlePrintingPreviewWheel}
+                onPointerDown={handlePrintingPreviewPointerDown}
+                onPointerMove={handlePrintingPreviewPointerMove}
+                onPointerUp={handlePrintingPreviewPointerEnd}
+                onPointerCancel={handlePrintingPreviewPointerEnd}
+              >
+                {shouldShowScrubPreview ? (
+                  // While scrubbing: render a vector cross-section instead of decoding PNGs.
+                  // This avoids image-decode memory churn and gives instant visual feedback
+                  // via the same loop data used by the 3-D cross-section cap.
+                  // Wrap in aspect-ratio container to match PNG preview sizing behavior.
+                  (() => {
+                    const aspectW = printingPreviewTargetResolution
+                      ? printingPreviewTargetResolution.viewportWidth
+                      : activePrinterProfile?.buildVolumeMm?.width ?? 143;
+                    const aspectH = printingPreviewTargetResolution
+                      ? printingPreviewTargetResolution.viewportHeight
+                      : activePrinterProfile?.buildVolumeMm?.depth ?? 89;
+                    const aspectRatio = aspectW / aspectH;
+                    return (
+                      <div
+                        className="block rounded"
+                        style={{ 
+                          aspectRatio: aspectRatio.toString(),
+                          width: '100%',
+                          maxWidth: '100%',
+                          maxHeight: '100%',
+                          transform: printingPreviewVisualTransform || 'none',
+                          transformOrigin: 'center center',
+                          willChange: 'transform',
+                        }}
+                      >
+                        <PrintingLayerScrubPreview
+                          models={scene.models}
+                          clipZ={printingSelectedLayer * slicing.layerHeightMm}
+                          buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
+                          buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
+                          mirrorX={activePrinterProfile?.display?.mirrorX === true}
+                          mirrorY={activePrinterProfile?.display?.mirrorY === true}
+                          className="block w-full h-full rounded"
+                        />
+                      </div>
+                    );
+                  })()
+                ) : selectedPrintingLayerPreviewUrl ? (
+                  printingPreviewTargetResolution ? (
+                    <svg
+                      viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
+                      preserveAspectRatio="xMidYMid meet"
+                      className="block w-full h-full max-w-full max-h-full rounded"
+                      style={{
+                        transform: printingPreviewVisualTransform || 'none',
+                        transformOrigin: 'center center',
+                        willChange: 'transform',
+                      }}
+                      role="img"
+                      aria-label={`Layer ${printingSelectedLayer} preview`}
+                    >
+                      <image
+                        href={selectedPrintingLayerPreviewUrl}
+                        x={0}
+                        y={0}
+                        width={printingPreviewTargetResolution.viewportWidth}
+                        height={printingPreviewTargetResolution.viewportHeight}
+                        preserveAspectRatio="none"
+                        style={{ imageRendering: 'pixelated' }}
+                      />
+                    </svg>
+                  ) : (
+                    <img
+                      src={selectedPrintingLayerPreviewUrl}
+                      alt={`Layer ${printingSelectedLayer} preview`}
+                      className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
+                      style={{
+                        imageRendering: 'pixelated',
+                        transform: printingPreviewVisualTransform || 'none',
+                        transformOrigin: 'center center',
+                        willChange: 'transform',
+                      }}
+                    />
+                  )
+                ) : (
+                  <div
+                    className="h-full w-full rounded border border-dashed flex items-center justify-center text-xs"
+                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                  >
+                    No preview PNG available for this layer yet.
+                  </div>
+                )}
+
+                {selectedPrintingLayerPreviewUrl && usePrintingSettledHiResCanvas && (
+                  <canvas
+                    ref={printingPreviewCanvasRef}
+                    className="pointer-events-none absolute inset-0 block h-full w-full rounded transition-opacity duration-75"
+                    style={{
+                      imageRendering: 'pixelated',
+                      opacity: isPrintingSettledCanvasReady ? 1 : 0,
+                    }}
+                    aria-label={`Layer ${printingSelectedLayer} settled preview`}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <EditorContextMenu
@@ -4991,6 +6932,144 @@ export default function Home() {
         onCancel={handleCancelDestructiveTransform}
         onConfirm={handleConfirmDestructiveTransform}
       />
+
+      <PrintingResliceModal
+        isOpen={showPrintingResliceModal}
+        onCancel={() => {
+          setShowPrintingResliceModal(false);
+          scene.setMode(modeBeforePrintingRef.current);
+        }}
+        onResliceNow={() => {
+          setShowPrintingResliceModal(false);
+          shouldReturnToPrintingAfterSliceRef.current = true;
+          setShouldAutoSliceOnExportEntry(true);
+          scene.setMode('export');
+        }}
+      />
+
+      {printingUploadDialogOpen && (
+        <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
+          <div
+            className="w-full max-w-xl overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-live="polite"
+            aria-label="Printer upload status"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Post-Processing
+                </div>
+                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Upload to NanoDLP
+                </div>
+                <div className="mt-0.5 text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                  {printingArtifact?.outputName ?? 'Preparing artifact'}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Stage</div>
+                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {printingDialogStageLabel}
+                  </div>
+                </div>
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Plate</div>
+                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {printingReadyPlateId ? `#${printingReadyPlateId}` : 'Pending'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {printingSendStatusText ?? 'Preparing upload pipeline…'}
+              </div>
+
+              {printingDialogIsIndeterminate ? (
+                <>
+                  <div
+                    className="ui-loading-track h-2.5 w-full rounded-full"
+                    style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+                  >
+                    <div
+                      className="ui-loading-indicator"
+                      style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
+                    />
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Processing on NanoDLP… elapsed {printingProcessingElapsedLabel}
+                  </div>
+                </>
+              ) : (
+                <div
+                  className="h-2.5 w-full rounded-full border overflow-hidden"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'color-mix(in srgb, var(--surface-2), black 20%)',
+                  }}
+                >
+                  <div
+                    className="h-full rounded-full transition-all duration-200"
+                    style={{
+                      width: `${printingDialogProgressPercent.toFixed(1)}%`,
+                      background: printingUploadDialogStage === 'failed'
+                        ? 'linear-gradient(90deg, #ef4444, #f97316)'
+                        : printingUploadDialogStage === 'started'
+                          ? 'linear-gradient(90deg, #60a5fa, #22d3ee)'
+                          : 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))',
+                    }}
+                  />
+                </div>
+              )}
+
+              <div className="mt-1 flex items-center justify-between text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <span>
+                  {printingUploadDialogStage === 'processing'
+                    ? 'Waiting for metadata readiness'
+                    : 'Transfer progress'}
+                </span>
+                <span className="font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {printingDialogIsIndeterminate ? '—' : `${printingDialogProgressPercent.toFixed(0)}%`}
+                </span>
+              </div>
+
+              <div className="pt-1 flex items-center justify-end gap-2">
+                {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                    onClick={() => setPrintingUploadDialogOpen(false)}
+                    disabled={printingSendBusy || printingPrintNowBusy}
+                  >
+                    Close
+                  </button>
+                )}
+
+                {printingUploadDialogStage === 'ready' && (
+                  <button
+                    type="button"
+                    className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                    onClick={handlePrintNow}
+                    disabled={!canPrintNow || printingPrintNowBusy || printingSendBusy}
+                  >
+                    {printingPrintNowBusy ? 'Starting print…' : 'Start Print'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showArrangeBlockingOverlay && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 backdrop-blur-[1px]">

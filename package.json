@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --import tsx --test src/supports/__tests__/*.test.ts",
-    "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts"
+    "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts",
+    "slicer:wasm:build": "cargo build --manifest-path rust/dragonfruit-slicer-wasm/Cargo.toml --release --target wasm32-unknown-unknown",
+    "slicer:wasm:bindgen": "wasm-bindgen rust/dragonfruit-slicer-wasm/target/wasm32-unknown-unknown/release/dragonfruit_slicer_wasm.wasm --target web --out-dir public/wasm",
+    "slicer:wasm:rebuild": "npm run slicer:wasm:build && npm run slicer:wasm:bindgen"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.2",
@@ -17,6 +20,8 @@
     "@react-three/postprocessing": "^3.0.4",
     "@types/uuid": "^10.0.0",
     "clipper-lib": "^6.4.2",
+    "fflate": "^0.8.2",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "next": "^16.0.7",
     "react": "19.2.0",

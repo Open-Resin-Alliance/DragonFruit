@@ -10,6 +10,7 @@ import { BackupsSettingsTab } from '@/components/settings/BackupsSettingsTab';
 import { SpaceMouseSettingsTab } from '@/components/settings/SpaceMouseSettingsTab';
 import { UISettingsTab } from '@/components/settings/UISettingsTab';
 import { WorkspacesSettingsTab } from '@/components/settings/WorkspacesSettingsTab';
+import { PerformanceSettingsTab } from '@/components/settings/PerformanceSettingsTab';
 import { Check, ExternalLink, Gamepad2, Github, Info, Keyboard, MonitorCog, Palette, Plug, RotateCcw, Settings2, X, Camera, Grid3x3, ArchiveRestore } from 'lucide-react';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
@@ -58,6 +59,14 @@ import {
   saveView3DSettings,
   type View3DSettings,
 } from '@/components/settings/view3dPreferences';
+import {
+  DEFAULT_SLICING_PERFORMANCE_SETTINGS,
+  getWebGpuSupportDetails,
+  getSavedSlicingPerformanceSettings,
+  isWebGpuSupported,
+  saveSlicingPerformanceSettings,
+  type SlicingPerformanceSettings,
+} from '@/components/settings/performancePreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 import {
   clearSavedFloatingLayout,
@@ -121,7 +130,7 @@ type SettingsModalProps = {
   onView3dSettingsChange: (settings: View3DSettings) => void;
 };
 
-type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'about';
+type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'about';
 type SettingsTabTone = 'primary' | 'secondary';
 
 export function SettingsModal({
@@ -190,6 +199,9 @@ export function SettingsModal({
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
   const [draftWorkspaceSelectionHighlightDefaults, setDraftWorkspaceSelectionHighlightDefaults] = useState<WorkspaceSelectionHighlightDefaults>(() => getSavedWorkspaceCameraSettings().selectionHighlightDefaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
+  const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
+  const [webGpuSupported, setWebGpuSupported] = useState(false);
+  const [webGpuStatusText, setWebGpuStatusText] = useState('Checking WebGPU capability…');
 
   const resetDraftFromProps = React.useCallback(() => {
     setDraftMeshColor(meshColor);
@@ -218,6 +230,7 @@ export function SettingsModal({
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
     setDraftWorkspaceSelectionHighlightDefaults(getSavedWorkspaceCameraSettings().selectionHighlightDefaults);
     setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
+    setDraftSlicingPerformanceSettings(getSavedSlicingPerformanceSettings());
   }, [
     ambientIntensity,
     directionalIntensity,
@@ -289,6 +302,7 @@ export function SettingsModal({
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
     setDraftWorkspaceSelectionHighlightDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.selectionHighlightDefaults);
     setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
+    setDraftSlicingPerformanceSettings(DEFAULT_SLICING_PERFORMANCE_SETTINGS);
   }, []);
 
   const handleApply = React.useCallback(() => {
@@ -319,6 +333,7 @@ export function SettingsModal({
       defaults: draftWorkspaceCameraDefaults,
       selectionHighlightDefaults: draftWorkspaceSelectionHighlightDefaults,
     });
+    saveSlicingPerformanceSettings(draftSlicingPerformanceSettings);
     const normalized3dView = normalizeView3DSettings(draftView3dSettings);
     saveView3DSettings(normalized3dView);
     onView3dSettingsChange(normalized3dView);
@@ -353,6 +368,7 @@ export function SettingsModal({
     draftCameraFeelPreset,
     draftWorkspaceCameraDefaults,
     draftWorkspaceSelectionHighlightDefaults,
+    draftSlicingPerformanceSettings,
     draftView3dSettings,
     draftXrayOpacity,
     draftHeatmapBlend,
@@ -403,6 +419,21 @@ export function SettingsModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, handleCancel]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+
+    void getWebGpuSupportDetails().then((details) => {
+      if (cancelled) return;
+      setWebGpuSupported(details.supported);
+      setWebGpuStatusText(details.message);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const tabMeta: Record<SettingsTabKey, { label: string; description: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: SettingsTabTone }> = {
@@ -422,6 +453,12 @@ export function SettingsModal({
       label: 'Mesh',
       description: 'Shader preview and render tuning',
       icon: Grid3x3,
+      tone: 'primary',
+    },
+    performance: {
+      label: 'Slicing',
+      description: 'PNG compression, spatial acceleration, and backend tuning',
+      icon: MonitorCog,
       tone: 'primary',
     },
     workspaces: {
@@ -468,7 +505,7 @@ export function SettingsModal({
     },
   };
 
-  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'spacemouse', 'ui', 'hotkeys'];
+  const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'backups', 'about'];
 
   const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
@@ -719,6 +756,14 @@ export function SettingsModal({
                   onHoverTintStrengthChange={setDraftHoverTintStrength}
                   selectedTintStrength={draftSelectedTintStrength}
                   onSelectedTintStrengthChange={setDraftSelectedTintStrength}
+                />
+              )}
+              {activeTab === 'performance' && (
+                <PerformanceSettingsTab
+                  settings={draftSlicingPerformanceSettings}
+                  webGpuSupported={webGpuSupported}
+                  webGpuStatusText={webGpuStatusText}
+                  onChange={setDraftSlicingPerformanceSettings}
                 />
               )}
               {activeTab === 'ui' && (

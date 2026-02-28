@@ -52,4 +52,5 @@ todo_list
 # proprietary local notes
 Scratch/
 
+rust/dragonfruit-slicer-wasm/target/
 conversion/

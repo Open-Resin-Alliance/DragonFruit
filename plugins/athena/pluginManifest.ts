@@ -97,6 +97,30 @@ function withResolvedImagePaths<T extends object>(
   });
 }
 
+function sanitizePositiveNumber(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function resolveBuildDimensionMm(
+  explicitValue: unknown,
+  resolutionPx: unknown,
+  pixelSizeUm: unknown,
+  fallbackMm: number,
+): number {
+  const explicit = sanitizePositiveNumber(explicitValue);
+  if (explicit != null) return explicit;
+
+  const resolution = sanitizePositiveNumber(resolutionPx);
+  const pixelSize = sanitizePositiveNumber(pixelSizeUm);
+  if (resolution != null && pixelSize != null) {
+    return (resolution * pixelSize) / 1000;
+  }
+
+  return fallbackMm;
+}
+
 /**
  * Built-in Athena plugin manifest.
  *
@@ -113,22 +137,49 @@ export const ATHENA_PLUGIN_MANIFEST = {
   name: 'Athena Plugin',
   version: '1.1.0',
   description: 'Athena/NanoDLP integration and Concepts3D profile pack.',
-  printerPresets: withResolvedImagePaths('plugins/athena/printers/concepts3d', concepts3dPrinters).map((preset) => ({
-    presetId: String((preset as any).presetId),
-    manufacturer: String((preset as any).manufacturer),
-    name: String((preset as any).name),
-    imageAssetPath: (preset as any).imageAssetPath,
-    buildVolumeMm: {
-      width: Number((preset as any).buildVolumeMm?.width) || 143,
-      depth: Number((preset as any).buildVolumeMm?.depth) || 89,
-      height: Number((preset as any).buildVolumeMm?.height) || 175,
-    },
-    display: {
-      resolutionX: Number((preset as any).display?.resolutionX) || 2560,
-      resolutionY: Number((preset as any).display?.resolutionY) || 1620,
-      outputFormat: '.nanodlp' as const,
-    },
-    networkSupport: 'nanodlp' as const,
-  })) as PrinterPreset[],
+  printerPresets: withResolvedImagePaths('plugins/athena/printers/concepts3d', concepts3dPrinters).map((preset) => {
+    const resolutionX = Number((preset as any).display?.resolutionX) || 2560;
+    const resolutionY = Number((preset as any).display?.resolutionY) || 1620;
+    const outputFormat = ((preset as any).display?.outputFormat === '.nanodlp'
+      || (preset as any).display?.outputFormat === '.goo'
+      || (preset as any).display?.outputFormat === '.lumen')
+      ? (preset as any).display.outputFormat
+      : '.nanodlp';
+
+    return {
+      presetId: String((preset as any).presetId),
+      manufacturer: String((preset as any).manufacturer),
+      name: String((preset as any).name),
+      family: typeof (preset as any).family === 'string' && (preset as any).family.trim().length > 0
+        ? (preset as any).family.trim()
+        : undefined,
+      imageAssetPath: (preset as any).imageAssetPath,
+      antiAliasing: typeof (preset as any).antiAliasing === 'boolean' ? (preset as any).antiAliasing : undefined,
+      platformBadge: (preset as any).platformBadge,
+      pixelSize: (preset as any).pixelSize,
+      bitDepth: (preset as any).bitDepth,
+      buildVolumeMm: {
+        width: resolveBuildDimensionMm(
+          (preset as any).buildVolumeMm?.width,
+          resolutionX,
+          (preset as any).pixelSize?.x,
+          143,
+        ),
+        depth: resolveBuildDimensionMm(
+          (preset as any).buildVolumeMm?.depth,
+          resolutionY,
+          (preset as any).pixelSize?.y,
+          89,
+        ),
+        height: Number((preset as any).buildVolumeMm?.height) || 175,
+      },
+      display: {
+        resolutionX,
+        resolutionY,
+        outputFormat,
+      },
+      networkSupport: (preset as any).networkSupport === 'nanodlp' ? 'nanodlp' as const : undefined,
+    };
+  }) as PrinterPreset[],
   materialTemplates: [],
 };

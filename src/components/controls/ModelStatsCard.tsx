@@ -17,6 +17,8 @@ interface ModelStatsCardProps {
   inBoundsModelIds: string[];
   numLayers: number;
   heightMm: number;
+  estimatedPrintTimeLabelOverride?: string | null;
+  estimatedResinLabelOverride?: string | null;
 }
 
 export function ModelStatsCard({
@@ -25,7 +27,9 @@ export function ModelStatsCard({
   selectedModelIds,
   inBoundsModelIds,
   numLayers,
-  heightMm
+  heightMm,
+  estimatedPrintTimeLabelOverride,
+  estimatedResinLabelOverride,
 }: ModelStatsCardProps) {
   const [isFlipped, setIsFlipped] = React.useState(false);
   const baseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
@@ -436,14 +440,14 @@ export function ModelStatsCard({
 
               <span>Est. print time:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {estimatedExposureOnlySeconds != null ? formatDuration(estimatedExposureOnlySeconds) : '-'}
+                {estimatedPrintTimeLabelOverride ?? (estimatedExposureOnlySeconds != null ? formatDuration(estimatedExposureOnlySeconds) : '-')}
               </span>
 
               <span>Est. resin:</span>
               <span className="min-w-0 truncate" style={{ color: 'var(--text-strong)' }}>
-                {estimatedResinMl != null
+                {estimatedResinLabelOverride ?? (estimatedResinMl != null
                   ? `${estimatedResinMl.toFixed(2)} ml${estimatedResinCost ? ` (${estimatedResinCost})` : ''}`
-                  : '-'}
+                  : '-')}
               </span>
             </div>
 
