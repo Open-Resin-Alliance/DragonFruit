@@ -133,6 +133,7 @@ export function SlicingPanel({
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x'>('2x');
   const [aaOnSupports, setAaOnSupports] = useState(false);
+  const [isLiveStatusExpanded, setIsLiveStatusExpanded] = useState(false);
   const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
   const [isLoadingNanodlpMaterial, setIsLoadingNanodlpMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
@@ -853,73 +854,101 @@ export function SlicingPanel({
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              <Timer className="w-3.5 h-3.5" />
-              <span>Live Status</span>
-            </div>
-
-            <div className="flex items-center justify-between gap-2 rounded border px-2 py-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>State</div>
-              <div
-                className="rounded px-2 py-0.5 text-[10px] font-semibold"
-                style={{
-                  background: isSlicingZip
-                    ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
+            <button
+              type="button"
+              onClick={() => setIsLiveStatusExpanded((prev) => !prev)}
+              aria-expanded={isLiveStatusExpanded}
+              className="w-full flex items-center justify-between gap-2 rounded border px-2 py-1.5 text-left"
+              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Timer className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
+                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Live Status</span>
+                <div
+                  className="rounded px-2 py-0.5 text-[10px] font-semibold"
+                  style={{
+                    background: isSlicingZip
+                      ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
+                      : sliceStatus.toLowerCase().includes('failed')
+                        ? 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)'
+                        : sliceStatus.toLowerCase().includes('cancel')
+                          ? 'color-mix(in srgb, #f59e0b, var(--surface-1) 78%)'
+                          : 'color-mix(in srgb, #22c55e, var(--surface-1) 82%)',
+                    color: 'var(--text-strong)',
+                  }}
+                >
+                  {isSlicingZip
+                    ? 'Slicing'
                     : sliceStatus.toLowerCase().includes('failed')
-                      ? 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)'
+                      ? 'Failed'
                       : sliceStatus.toLowerCase().includes('cancel')
-                        ? 'color-mix(in srgb, #f59e0b, var(--surface-1) 78%)'
-                        : 'color-mix(in srgb, #22c55e, var(--surface-1) 82%)',
-                  color: 'var(--text-strong)',
-                }}
+                        ? 'Cancelled'
+                        : 'Idle / Ready'}
+                </div>
+              </div>
+
+              <svg
+                className={`w-3 h-3 transform transition-transform shrink-0 ${isLiveStatusExpanded ? 'rotate-180' : ''}`}
+                style={{ color: 'var(--text-muted)' }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
               >
-                {isSlicingZip
-                  ? 'Slicing'
-                  : sliceStatus.toLowerCase().includes('failed')
-                    ? 'Failed'
-                    : sliceStatus.toLowerCase().includes('cancel')
-                      ? 'Cancelled'
-                      : 'Idle / Ready'}
-              </div>
-            </div>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
 
-            <div className="grid grid-cols-2 gap-1.5">
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Phase</div>
-                <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
+            {!isLiveStatusExpanded && (
+              <div className="rounded border px-2 py-1.5 text-[11px]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
+                <span className="font-medium" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</span>
+                {' · '}
+                <span className="truncate" title={currentPhase}>{currentPhase}</span>
+                {' · '}
+                <span>{slicingElapsedLabel}</span>
               </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Progress</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{slicingElapsedLabel}</div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Layers</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{formatProgressLayerLabel(progressDone, progressTotal)}</div>
-              </div>
-            </div>
+            )}
 
-            <div className="grid grid-cols-2 gap-1.5">
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Rasterizer</div>
-                <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineRasterizerLabel}</div>
-              </div>
-              <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Container</div>
-                <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineContainerBackendLabel}</div>
-              </div>
-            </div>
+            {isLiveStatusExpanded && (
+              <>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Phase</div>
+                    <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
+                  </div>
+                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Progress</div>
+                    <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</div>
+                  </div>
+                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
+                    <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{slicingElapsedLabel}</div>
+                  </div>
+                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Layers</div>
+                    <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{formatProgressLayerLabel(progressDone, progressTotal)}</div>
+                  </div>
+                </div>
 
-            <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
-              {sliceStatus}
-            </div>
-            {lastWasmError && (
-              <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)', color: 'var(--status-warning, #f59e0b)', background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)' }}>
-                Last WASM warning: {lastWasmError}
-              </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Rasterizer</div>
+                    <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineRasterizerLabel}</div>
+                  </div>
+                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Container</div>
+                    <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineContainerBackendLabel}</div>
+                  </div>
+                </div>
+
+                <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
+                  {sliceStatus}
+                </div>
+                {lastWasmError && (
+                  <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)', color: 'var(--status-warning, #f59e0b)', background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)' }}>
+                    Last WASM warning: {lastWasmError}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
