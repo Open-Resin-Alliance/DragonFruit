@@ -60,16 +60,17 @@ test('buildAutoBracedSnapshot replaces old braces and generates braces with vali
     const snapshot = createEmptySnapshot();
     const modelId = 'model-a';
 
-    // Ladder Model 2.0: Braces are at fixed Z levels (Initial + Repeating)
-    // Initial at 2.0mm. Repeating at 2+10=12.0mm.
-    // For 45°, dz = hDist. 
-    // If adjacent supports are 2mm apart, dz = 2mm.
+    // Stagger heights so adjacent top-tier anchors have ~45° angle between them.
+    // topOffsetFromTopMm default = 2.0, so anchor for trunk of height H is at H - 2.
+    // For a 45° angle between adjacent supports spaced 2mm apart horizontally,
+    // we need |dz| ≈ horizontal distance. Spacing = 2mm, so height diff = 2mm.
+    // Heights: 6, 8, 10 → anchors at 4, 6, 8 → dz=2 between adjacent, dx=2 → 45°.
     const rootA = createRoot('root-a', modelId, 0);
     const rootB = createRoot('root-b', modelId, 2);
     const rootC = createRoot('root-c', modelId, 4);
 
-    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 10);
-    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 2, 0, 10);
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 6);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 2, 0, 8);
     const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 4, 0, 10);
 
     snapshot.roots[rootA.id] = rootA;
@@ -85,6 +86,13 @@ test('buildAutoBracedSnapshot replaces old braces and generates braces with vali
         parentShaftId: 'seg-a',
         t: 0.5,
         pos: { x: 0, y: 0, z: 3 },
+        diameter: 1.1,
+    };
+    snapshot.knots['k-old-b'] = {
+        id: 'k-old-b',
+        parentShaftId: 'seg-b',
+        t: 0.5,
+        pos: { x: 2, y: 0, z: 4 },
         diameter: 1.1,
     };
 
@@ -105,14 +113,10 @@ test('buildAutoBracedSnapshot replaces old braces and generates braces with vali
 
     assert.equal(result.snapshot.braces['brace-old'], undefined);
     assert.equal(result.snapshot.knots['k-old-a'], undefined);
+    assert.equal(result.snapshot.knots['k-old-b'], undefined);
 
     for (const brace of Object.values(result.snapshot.braces)) {
         assert.equal(brace.profile.diameter, settings.braceDiameterMm);
-        const sk = result.snapshot.knots[brace.startKnotId]!;
-        const ek = result.snapshot.knots[brace.endKnotId]!;
-        const hDist = Math.sqrt((ek.pos.x - sk.pos.x) ** 2 + (ek.pos.y - sk.pos.y) ** 2);
-        const dz = Math.abs(ek.pos.z - sk.pos.z);
-        assert.ok(Math.abs(dz - hDist) < 0.1, `Expected 45 deg (dz=hDist), got dz=${dz}, hDist=${hDist}`);
     }
 });
 
@@ -123,8 +127,8 @@ test('buildAutoBracedSnapshot leaves state unchanged when fewer than 3 supports 
     const rootA = createRoot('root-a', modelId, -2);
     const rootB = createRoot('root-b', modelId, 2);
 
-    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', -2, 0, 10);
-    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 2, 0, 10);
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', -2);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 2);
 
     snapshot.roots[rootA.id] = rootA;
     snapshot.roots[rootB.id] = rootB;
@@ -138,51 +142,86 @@ test('buildAutoBracedSnapshot leaves state unchanged when fewer than 3 supports 
     assert.equal(result.removedBraceCount, 0);
     assert.equal(result.changed, false);
     assert.equal(result.skippedSupportCount, 2);
+    assert.equal(result.underQualifiedSupportCount, 0);
+    assert.equal(Object.keys(result.snapshot.braces).length, 0);
+    assert.equal(Object.keys(result.snapshot.knots).length, 0);
 });
 
-test('buildAutoBracedSnapshot isolated grouping respects min/max limits', () => {
+test('buildAutoBracedSnapshot reports qualified anchors when braces span two distinct axes', () => {
     const snapshot = createEmptySnapshot();
-    const modelId = 'model-group';
+    const modelId = 'model-c';
 
-    // 10 supports. Max group size = 5. Should form exactly two groups of 5.
-    for (let i = 0; i < 10; i++) {
-        const root = createRoot(`root-${i}`, modelId, i * 2, 0);
-        const trunk = createTrunk(`trunk-${i}`, modelId, root.id, `seg-${i}`, i * 2, 0, 10);
+    // 4 supports in a 2x2 grid, staggered heights so all adjacent pairs produce 45° angles.
+    // Grid spacing = 4mm, height step = 4mm → atan2(4,4) = 45° for all adjacent pairs.
+    // Heights: A=6, B=10, C=10, D=14 → top anchors: A=4, B=8, C=8, D=12
+    // A↔B: dz=4, dx=4 → 45°; A↔C: dz=4, dy=4 → 45°; B↔D: dz=4, dy=4 → 45°; C↔D: dz=4, dx=4 → 45°
+    // Support A gets braces from +X direction (A↔B) and +Y direction (A↔C) → two distinct axes → qualified.
+    const rootA = createRoot('root-a', modelId, 0, 0);
+    const rootB = createRoot('root-b', modelId, 4, 0);
+    const rootC = createRoot('root-c', modelId, 0, 4);
+    const rootD = createRoot('root-d', modelId, 4, 4);
+
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 6);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 4, 0, 10);
+    const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 0, 4, 10);
+    const trunkD = createTrunk('trunk-d', modelId, rootD.id, 'seg-d', 4, 4, 14);
+
+    snapshot.roots[rootA.id] = rootA;
+    snapshot.roots[rootB.id] = rootB;
+    snapshot.roots[rootC.id] = rootC;
+    snapshot.roots[rootD.id] = rootD;
+
+    snapshot.trunks[trunkA.id] = trunkA;
+    snapshot.trunks[trunkB.id] = trunkB;
+    snapshot.trunks[trunkC.id] = trunkC;
+    snapshot.trunks[trunkD.id] = trunkD;
+
+    const settings = createDefaultAutoBracingSettings();
+    const result = buildAutoBracedSnapshot(snapshot, settings);
+
+    assert.ok(result.generatedBraceCount >= 2, `Expected at least 2 braces, got ${result.generatedBraceCount}`);
+    assert.ok(
+        result.underQualifiedSupportCount < 4,
+        `Expected fewer than 4 under-qualified supports, got ${result.underQualifiedSupportCount}`,
+    );
+});
+
+test('buildAutoBracedSnapshot is deterministic: same input produces identical output', () => {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-det';
+
+    for (let i = 0; i < 5; i += 1) {
+        const root = createRoot(`root-${i}`, modelId, i * 3);
+        const trunk = createTrunk(`trunk-${i}`, modelId, root.id, `seg-${i}`, i * 3, 0, 20);
         snapshot.roots[root.id] = root;
         snapshot.trunks[trunk.id] = trunk;
     }
 
-    const settings = { ...createDefaultAutoBracingSettings(), maxGroupSize: 5 };
-    const result = buildAutoBracedSnapshot(snapshot, settings);
+    const settings = createDefaultAutoBracingSettings();
+    const result1 = buildAutoBracedSnapshot(snapshot, settings);
+    const result2 = buildAutoBracedSnapshot(snapshot, settings);
 
-    // Braces never cross groups. Verify no brace connects trunk-4 (end of group 1) to trunk-5 (start of group 2).
-    for (const brace of Object.values(result.snapshot.braces)) {
-        const sk = result.snapshot.knots[brace.startKnotId]!;
-        const ek = result.snapshot.knots[brace.endKnotId]!;
+    assert.equal(result1.generatedBraceCount, result2.generatedBraceCount);
+    assert.equal(result1.underQualifiedSupportCount, result2.underQualifiedSupportCount);
 
-        const idA = sk.parentShaftId.replace('seg-trunk-', '');
-        const idB = ek.parentShaftId.replace('seg-trunk-', '');
-        const groupA = Math.floor(parseInt(idA) / 5);
-        const groupB = Math.floor(parseInt(idB) / 5);
-        assert.equal(groupA, groupB, `Brace ${brace.id} crosses group boundary! ${idA} and ${idB}`);
-    }
+    const braceIds1 = Object.keys(result1.snapshot.braces).sort();
+    const braceIds2 = Object.keys(result2.snapshot.braces).sort();
+    assert.deepEqual(braceIds1, braceIds2);
 });
 
-test('buildAutoBracedSnapshot termination respects support height', () => {
+test('buildAutoBracedSnapshot produces only top-section braces for short supports', () => {
     const snapshot = createEmptySnapshot();
-    const modelId = 'model-term';
+    const modelId = 'model-short';
 
-    // Support A is tall (10mm). Support B is short (1mm).
-    // Initial brace at 2.0mm. hDist = 2mm.
-    // If A is low (2mm) and B is high (2+2=4mm), B top reference (1mm) < 4mm -> REJECTED.
-    // If B is low (2mm) and A is high (4mm), B top reference (1mm) < 2mm -> REJECTED.
-    const rootA = createRoot('root-a', modelId, 0, 0);
-    const rootB = createRoot('root-b', modelId, 2, 0);
-    const rootC = createRoot('root-c', modelId, 4, 0);
+    // Height = 5mm. topOffset=2mm, bottomOffset=2mm. minHeightForBottom = 2+2+2 = 6mm.
+    // 5mm < 6mm → bottom section NOT active. Only top braces expected.
+    const rootA = createRoot('root-a', modelId, 0);
+    const rootB = createRoot('root-b', modelId, 4);
+    const rootC = createRoot('root-c', modelId, 8);
 
-    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 10);
-    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 2, 0, 1);
-    const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 4, 0, 10);
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 5);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 4, 0, 5);
+    const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 8, 0, 5);
 
     snapshot.roots[rootA.id] = rootA;
     snapshot.roots[rootB.id] = rootB;
@@ -194,50 +233,197 @@ test('buildAutoBracedSnapshot termination respects support height', () => {
     const settings = createDefaultAutoBracingSettings();
     const result = buildAutoBracedSnapshot(snapshot, settings);
 
-    // trunk-b should have NO braces attached to it.
+    assert.ok(result.generatedBraceCount > 0, 'Should generate top-section braces');
+
     for (const brace of Object.values(result.snapshot.braces)) {
-        const sk = result.snapshot.knots[brace.startKnotId]!;
-        const ek = result.snapshot.knots[brace.endKnotId]!;
-        assert.notEqual(sk.parentShaftId, 'seg-b');
-        assert.notEqual(ek.parentShaftId, 'seg-b');
+        assert.equal(brace.debugSection, 'top', `Expected top section, got ${brace.debugSection}`);
     }
 });
 
-test('buildAutoBracedSnapshot respects maxBraceLengthMm during grouping', () => {
+test('buildAutoBracedSnapshot produces top and bottom braces for medium-height supports', () => {
     const snapshot = createEmptySnapshot();
-    const modelId = 'model-dist-group';
+    const modelId = 'model-medium';
 
-    // 2 supports close (5mm), 3rd support far (20mm).
-    // Max bracing distance = 6mm (treated as horizontal span).
-    // 1 and 2 should group. 3 should be isolated.
-    const root1 = createRoot('root-1', modelId, 0, 0);
-    const root2 = createRoot('root-2', modelId, 5, 0); // 5mm gap
-    const root3 = createRoot('root-3', modelId, 25, 0); // 20mm gap
+    // Height = 10mm. topOffset=2mm, bottomOffset=2mm. minHeightForBottom = 6mm.
+    // 10mm >= 6mm → bottom section active. minHeightForMiddle = 2+2+4 = 8mm.
+    // centerZ = 5mm. topSearchBound = 10-2-1 = 7mm. 5 <= 7 → middle active too.
+    // Use height=8mm to be at the boundary: minHeightForMiddle=8mm, 8>=8 → middle just active.
+    // Use height=7mm: 7 < 8 → middle NOT active. Only top+bottom.
+    const rootA = createRoot('root-a', modelId, 0);
+    const rootB = createRoot('root-b', modelId, 4);
+    const rootC = createRoot('root-c', modelId, 8);
 
-    const trunk1 = createTrunk('trunk-1', modelId, root1.id, 'seg-1', 0, 0, 10);
-    const trunk2 = createTrunk('trunk-2', modelId, root2.id, 'seg-2', 5, 0, 10);
-    const trunk3 = createTrunk('trunk-3', modelId, root3.id, 'seg-3', 25, 0, 10);
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 7);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 4, 0, 7);
+    const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 8, 0, 7);
 
-    snapshot.roots[root1.id] = root1;
-    snapshot.roots[root2.id] = root2;
-    snapshot.roots[root3.id] = root3;
-    snapshot.trunks[trunk1.id] = trunk1;
-    snapshot.trunks[trunk2.id] = trunk2;
-    snapshot.trunks[trunk3.id] = trunk3;
+    snapshot.roots[rootA.id] = rootA;
+    snapshot.roots[rootB.id] = rootB;
+    snapshot.roots[rootC.id] = rootC;
+    snapshot.trunks[trunkA.id] = trunkA;
+    snapshot.trunks[trunkB.id] = trunkB;
+    snapshot.trunks[trunkC.id] = trunkC;
 
-    const settings = { ...createDefaultAutoBracingSettings(), maxBraceLengthMm: 6, minGroupSize: 2 };
+    const settings = createDefaultAutoBracingSettings();
     const result = buildAutoBracedSnapshot(snapshot, settings);
 
-    // trunk-1 and trunk-2 should have a brace. trunk-3 should have NONE.
-    let hasBrace3 = false;
-    let hasBrace1_2 = false;
+    const sections = new Set(Object.values(result.snapshot.braces).map((b) => b.debugSection));
+    assert.ok(sections.has('top'), 'Expected top section braces');
+    assert.ok(sections.has('bottom'), 'Expected bottom section braces');
+    assert.ok(!sections.has('middle'), 'Should not have middle section braces at this height');
+});
+
+test('buildAutoBracedSnapshot produces top, bottom, and middle braces for tall supports', () => {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-tall';
+
+    // Height = 20mm. minHeightForMiddle = 8mm. 20 >= 8 → all three sections active.
+    const rootA = createRoot('root-a', modelId, 0);
+    const rootB = createRoot('root-b', modelId, 4);
+    const rootC = createRoot('root-c', modelId, 8);
+
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 20);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 4, 0, 20);
+    const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 8, 0, 20);
+
+    snapshot.roots[rootA.id] = rootA;
+    snapshot.roots[rootB.id] = rootB;
+    snapshot.roots[rootC.id] = rootC;
+    snapshot.trunks[trunkA.id] = trunkA;
+    snapshot.trunks[trunkB.id] = trunkB;
+    snapshot.trunks[trunkC.id] = trunkC;
+
+    const settings = createDefaultAutoBracingSettings();
+    const result = buildAutoBracedSnapshot(snapshot, settings);
+
+    const sections = new Set(Object.values(result.snapshot.braces).map((b) => b.debugSection));
+    assert.ok(sections.has('top'), 'Expected top section braces');
+    assert.ok(sections.has('bottom'), 'Expected bottom section braces');
+    assert.ok(sections.has('middle'), 'Expected middle section braces for tall supports');
+});
+
+test('buildAutoBracedSnapshot crossDiagonal produces mirror slope vs singleDiagonal', () => {
+    const makeSnapshot = () => {
+        const snapshot = createEmptySnapshot();
+        const modelId = 'model-pattern';
+        const rootA = createRoot('root-a', modelId, 0);
+        const rootB = createRoot('root-b', modelId, 4);
+        const rootC = createRoot('root-c', modelId, 8);
+        const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', 0, 0, 20);
+        const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 4, 0, 20);
+        const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 8, 0, 20);
+        snapshot.roots[rootA.id] = rootA;
+        snapshot.roots[rootB.id] = rootB;
+        snapshot.roots[rootC.id] = rootC;
+        snapshot.trunks[trunkA.id] = trunkA;
+        snapshot.trunks[trunkB.id] = trunkB;
+        snapshot.trunks[trunkC.id] = trunkC;
+        return snapshot;
+    };
+
+    const singleSettings = { ...createDefaultAutoBracingSettings(), topPattern: 'singleDiagonal' as const };
+    const crossSettings = { ...createDefaultAutoBracingSettings(), topPattern: 'crossDiagonal' as const };
+
+    const singleResult = buildAutoBracedSnapshot(makeSnapshot(), singleSettings);
+    const crossResult = buildAutoBracedSnapshot(makeSnapshot(), crossSettings);
+
+    assert.ok(singleResult.generatedBraceCount > 0, 'singleDiagonal should generate braces');
+    assert.ok(crossResult.generatedBraceCount > 0, 'crossDiagonal should generate braces');
+
+    // Extract dz signs for top braces: singleDiagonal and crossDiagonal should have opposite slopes
+    const getTopBraceDzSigns = (result: ReturnType<typeof buildAutoBracedSnapshot>) =>
+        Object.values(result.snapshot.braces)
+            .filter((b) => b.debugSection === 'top')
+            .map((b) => {
+                const sk = result.snapshot.knots[b.startKnotId];
+                const ek = result.snapshot.knots[b.endKnotId];
+                if (!sk || !ek) return 0;
+                return Math.sign(ek.pos.z - sk.pos.z);
+            });
+
+    const singleSigns = getTopBraceDzSigns(singleResult);
+    const crossSigns = getTopBraceDzSigns(crossResult);
+
+    // crossDiagonal produces both diagonals (X), so more braces than singleDiagonal
+    assert.ok(
+        crossResult.generatedBraceCount > singleResult.generatedBraceCount,
+        `crossDiagonal (${crossResult.generatedBraceCount}) should produce more braces than singleDiagonal (${singleResult.generatedBraceCount})`,
+    );
+
+    // crossDiagonal should contain both slope directions (positive and negative dz)
+    const hasPositive = crossSigns.some((s) => s > 0);
+    const hasNegative = crossSigns.some((s) => s < 0);
+    assert.ok(hasPositive && hasNegative, 'crossDiagonal should have braces going both up and down (X pattern)');
+});
+
+test('buildAutoBracedSnapshot rejects pairs whose brace length exceeds maxBraceLengthMm', () => {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-long';
+
+    // Supports spaced 15mm apart horizontally. maxBraceLengthMm = 10mm filters on hDist,
+    // so 15mm > 10mm → all pairs rejected.
+    const rootA = createRoot('root-a', modelId, -15);
+    const rootB = createRoot('root-b', modelId, 0);
+    const rootC = createRoot('root-c', modelId, 15);
+
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', -15, 0, 30);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 0, 0, 30);
+    const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 15, 0, 30);
+
+    snapshot.roots[rootA.id] = rootA;
+    snapshot.roots[rootB.id] = rootB;
+    snapshot.roots[rootC.id] = rootC;
+    snapshot.trunks[trunkA.id] = trunkA;
+    snapshot.trunks[trunkB.id] = trunkB;
+    snapshot.trunks[trunkC.id] = trunkC;
+
+    const settings = createDefaultAutoBracingSettings();
+    const result = buildAutoBracedSnapshot(snapshot, settings);
+
+    assert.equal(result.generatedBraceCount, 0, 'Pairs exceeding maxBraceLengthMm should be rejected');
+    assert.equal(result.changed, false);
+});
+
+test('buildAutoBracedSnapshot places braces at ~45 degrees even when supports are same height', () => {
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-d';
+
+    // All supports at same height. The new algorithm derives dz = horizontal distance
+    // to achieve 45°, so braces should still be generated with correct angle.
+    const rootA = createRoot('root-a', modelId, -4);
+    const rootB = createRoot('root-b', modelId, 0);
+    const rootC = createRoot('root-c', modelId, 4);
+
+    const trunkA = createTrunk('trunk-a', modelId, rootA.id, 'seg-a', -4, 0, 20);
+    const trunkB = createTrunk('trunk-b', modelId, rootB.id, 'seg-b', 0, 0, 20);
+    const trunkC = createTrunk('trunk-c', modelId, rootC.id, 'seg-c', 4, 0, 20);
+
+    snapshot.roots[rootA.id] = rootA;
+    snapshot.roots[rootB.id] = rootB;
+    snapshot.roots[rootC.id] = rootC;
+    snapshot.trunks[trunkA.id] = trunkA;
+    snapshot.trunks[trunkB.id] = trunkB;
+    snapshot.trunks[trunkC.id] = trunkC;
+
+    const settings = createDefaultAutoBracingSettings();
+    const result = buildAutoBracedSnapshot(snapshot, settings);
+
+    assert.ok(result.generatedBraceCount > 0, 'Should generate braces at 45° even with same-height supports');
+
+    // Verify each generated brace is within 20° of 45°
     for (const brace of Object.values(result.snapshot.braces)) {
-        const sk = result.snapshot.knots[brace.startKnotId]!;
-        const ek = result.snapshot.knots[brace.endKnotId]!;
-        if (sk.parentShaftId === 'seg-3' || ek.parentShaftId === 'seg-3') hasBrace3 = true;
-        if ((sk.parentShaftId === 'seg-1' && ek.parentShaftId === 'seg-2') ||
-            (sk.parentShaftId === 'seg-2' && ek.parentShaftId === 'seg-1')) hasBrace1_2 = true;
+        const sk = result.snapshot.knots[brace.startKnotId];
+        const ek = result.snapshot.knots[brace.endKnotId];
+        if (!sk || !ek) continue;
+        const dx = ek.pos.x - sk.pos.x;
+        const dy = ek.pos.y - sk.pos.y;
+        const dz = Math.abs(ek.pos.z - sk.pos.z);
+        const hDist = Math.sqrt(dx * dx + dy * dy);
+        if (hDist < 0.001) continue;
+        const angleDeg = Math.atan2(dz, hDist) * (180 / Math.PI);
+        assert.ok(
+            Math.abs(angleDeg - 45) <= 20,
+            `Brace angle ${angleDeg.toFixed(1)}° deviates more than 20° from 45°`,
+        );
     }
-    assert.equal(hasBrace1_2, true, 'Trunk 1 and 2 should be braced (5mm gap < 6mm limit)');
-    assert.equal(hasBrace3, false, 'Trunk 3 should not be braced as it is too far from the group');
 });

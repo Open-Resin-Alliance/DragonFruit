@@ -32,7 +32,6 @@ import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactC
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './autoBracing/settings';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -1599,10 +1598,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; debugSection?: 'initial' | 'repeating' | null; shafts: InstancedShaft[] }>();
-
-        const sectionColorsEnabled = !!settings.autoBracing.debugSectionColorsEnabled;
-        const splitByDebugSection = sectionColorsEnabled && !dimNonSelected;
+        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
 
         for (const brace of Object.values(state.braces)) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
@@ -1612,12 +1608,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (selectedBraceIds.has(brace.id)) continue;
 
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const debugSection = splitByDebugSection
-                ? (brace.debugSection ?? null)
-                : null;
-            const groupKey = debugSection ? `${modelKey}:${debugSection}` : modelKey;
 
-            const existing = grouped.get(groupKey);
+            const existing = grouped.get(modelKey);
             if (existing) {
                 existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                     ...shaft,
@@ -1625,9 +1617,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     end: applyDropToVec3Like(shaft.end, shaft.modelId),
                 })));
             } else {
-                grouped.set(groupKey, {
+                grouped.set(modelKey, {
                     modelId: shaftSet.modelId,
-                    debugSection,
                     shafts: shaftSet.shafts.map((shaft) => ({
                         ...shaft,
                         start: applyDropToVec3Like(shaft.start, shaft.modelId),
@@ -1638,7 +1629,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected]);
+    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
@@ -1744,67 +1735,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         resolveSceneSupportColor,
         applyDropToVec3Like,
         selectedTrunkIds,
-        restrictToActiveModel,
-        activeModelId,
-    ]);
-
-    const sceneBatchedSupportBraceRootGroups = useMemo(() => {
-        if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
-
-        const grouped = new Map<string, InstancedRoot[]>();
-        const hasSolidBottom = raftSettings.bottomMode === 'solid';
-        const raftThickness = raftSettings.thickness ?? 0;
-
-        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            if (!isModelVisible(supportBrace.modelId, supportBrace.id)) continue;
-            if (selectedSupportBraceIds.has(supportBrace.id)) continue;
-
-            const root = supportBraceState.roots[supportBrace.rootId];
-            if (!root) continue;
-
-            const shaftDiameter = Math.max(
-                0.001,
-                supportBrace.segments[0]?.diameter ?? supportBrace.profile.bodyDiameterMm,
-            );
-            const topRadius = shaftDiameter / 2;
-            const bottomRadius = Math.max(0.001, root.diameter / 2);
-            const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
-            const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
-
-            const color = resolveSceneSupportColor(supportBrace.modelId, supportBrace.id);
-            const rootsForColor = grouped.get(color) ?? [];
-            rootsForColor.push({
-                id: root.id,
-                supportId: supportBrace.id,
-                modelId: supportBrace.modelId,
-                basePos: applyDropToVec3Like({
-                    x: root.transform.pos.x,
-                    y: root.transform.pos.y,
-                    z: root.transform.pos.z + verticalOffset,
-                }, supportBrace.modelId),
-                bottomRadius,
-                topRadius,
-                effectiveDiskHeight,
-                coneHeight: Math.max(0, root.coneHeight),
-            });
-
-            if (rootsForColor.length > 0) {
-                grouped.set(color, rootsForColor);
-            }
-        }
-
-        return Array.from(grouped.entries()).map(([color, roots]) => ({ color, roots }));
-    }, [
-        hidePlateContactPrimitivesEffective,
-        raftSettings.bottomMode,
-        raftSettings.thickness,
-        supportBraceState.supportBraces,
-        supportBraceState.roots,
-        selectedSupportBraceIds,
-        dimNonSelected,
-        resolveBaseColor,
-        resolveSceneSupportColor,
-        applyDropToVec3Like,
         restrictToActiveModel,
         activeModelId,
     ]);
@@ -2321,19 +2251,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             ))}
 
-            {sceneBatchedSupportBraceRootGroups.map((group) => (
-                <InstancedRootsGroup
-                    key={`scene-support-brace-root-batch:${group.color}:${group.roots.length}`}
-                    roots={group.roots}
-                    color={group.color}
-                    transparent={ghostTransparent}
-                    opacity={ghostOpacityClamped}
-                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
-                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
-                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
-                />
-            ))}
-
             {sceneBatchedContactConeGroups.map((group) => (
                 <InstancedContactConeGroup
                     key={`scene-cone-batch:${group.color}:${group.cones.length}`}
@@ -2612,16 +2529,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Braces */}
             {sceneBatchedBraceShaftGroups.map((group) => (
-                <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.debugSection ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={
-                            dimNonSelected
-                                ? '#666666'
-                                : (settings.autoBracing.debugSectionColorsEnabled && group.debugSection
-                                    ? AUTO_BRACING_DEBUG_SECTION_COLORS[group.debugSection]
-                                    : resolveBaseColor(group.modelId))
-                        }
+                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
