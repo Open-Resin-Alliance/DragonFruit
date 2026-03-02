@@ -44,6 +44,16 @@ type NativeSolidSlicePayload = {
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
 
+function createAbortError(message = 'Slicing canceled by user.'): Error {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException(message, 'AbortError');
+  }
+
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
 function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false;
   return '__TAURI_INTERNALS__' in window;
@@ -87,13 +97,62 @@ export async function isNativeSlicerAvailable(): Promise<boolean> {
   return Boolean(core);
 }
 
-export async function sliceSolidAndEncodeWithNativeSlicer(job: NativeSolidSliceJobEnvelope): Promise<Uint8Array> {
+async function invokeWithAbort<T>(
+  core: TauriCoreModule,
+  command: string,
+  args: Record<string, unknown>,
+  abortSignal?: AbortSignal,
+): Promise<T> {
+  if (!abortSignal) {
+    return core.invoke<T>(command, args);
+  }
+
+  if (abortSignal.aborted) {
+    throw createAbortError();
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+
+    const finalize = () => {
+      abortSignal.removeEventListener('abort', handleAbort);
+    };
+
+    const handleAbort = () => {
+      if (settled) return;
+      settled = true;
+      finalize();
+      reject(createAbortError());
+    };
+
+    abortSignal.addEventListener('abort', handleAbort, { once: true });
+
+    core.invoke<T>(command, args)
+      .then((result) => {
+        if (settled) return;
+        settled = true;
+        finalize();
+        resolve(result);
+      })
+      .catch((error) => {
+        if (settled) return;
+        settled = true;
+        finalize();
+        reject(error);
+      });
+  });
+}
+
+export async function sliceSolidAndEncodeWithNativeSlicer(
+  job: NativeSolidSliceJobEnvelope,
+  abortSignal?: AbortSignal,
+): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
     throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
   }
 
   const payload = JSON.stringify(toNativePayload(job));
-  const result = await core.invoke<number[]>('slice_solid_native', { jobJson: payload });
+  const result = await invokeWithAbort<number[]>(core, 'slice_solid_native', { jobJson: payload }, abortSignal);
   return Uint8Array.from(result);
 }
