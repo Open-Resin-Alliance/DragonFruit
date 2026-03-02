@@ -82,6 +82,7 @@ export type SolidSliceMeshForWasm = {
   widthPx: number;
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
+  computeBackend: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
   modelTriangleCount: number;
@@ -1680,6 +1681,11 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
     widthPx: settings.widthPx,
     heightPx: settings.heightPx,
     xPackingMode: settings.xPackingMode,
+    computeBackend: perfSettings.computeBackend === 'gpu'
+      ? 'gpu'
+      : perfSettings.computeBackend === 'cpu'
+        ? 'cpu'
+        : 'auto',
     pngCompressionStrategy: perfSettings.pngCompressionStrategy,
     bvhAccelerationEnabled: perfSettings.bvhAccelerationEnabled,
     modelTriangleCount,

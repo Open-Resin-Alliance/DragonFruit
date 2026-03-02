@@ -13,6 +13,7 @@ export type NativeSolidSliceJobEnvelope = {
   widthPx: number;
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
+  computeBackend?: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
   antiAliasingLevel: 'Off' | '2x' | '4x' | '8x';
@@ -33,6 +34,7 @@ type NativeSolidSlicePayload = {
   width_px: number;
   height_px: number;
   x_packing_mode: 'none' | 'rgb8_div3' | 'gray3_div2';
+  compute_backend: 'auto' | 'cpu' | 'gpu';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvh_acceleration_enabled: boolean;
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x';
@@ -99,6 +101,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     width_px: job.widthPx,
     height_px: job.heightPx,
     x_packing_mode: job.xPackingMode,
+    compute_backend: job.computeBackend ?? 'auto',
     png_compression_strategy: job.pngCompressionStrategy,
     bvh_acceleration_enabled: job.bvhAccelerationEnabled,
     anti_aliasing_level: job.antiAliasingLevel,

@@ -4,6 +4,10 @@ fn default_png_compression_strategy() -> String {
     "balanced".to_string()
 }
 
+fn default_compute_backend() -> String {
+    "auto".to_string()
+}
+
 fn default_bvh_acceleration_enabled() -> bool {
     true
 }
@@ -39,6 +43,8 @@ pub struct SolidSliceJob {
     pub width_px: u32,
     pub height_px: u32,
     pub x_packing_mode: String,
+    #[serde(default = "default_compute_backend")]
+    pub compute_backend: String,
     #[serde(default = "default_png_compression_strategy")]
     pub png_compression_strategy: String,
     #[serde(default = "default_bvh_acceleration_enabled")]

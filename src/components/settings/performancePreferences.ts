@@ -1,4 +1,4 @@
-export type SlicingComputeBackendPreference = 'auto' | 'cpu';
+export type SlicingComputeBackendPreference = 'auto' | 'cpu' | 'gpu';
 export type SlicingCpuProfile = 'balanced' | 'max';
 export type PngCompressionStrategy = 'fastest' | 'balanced' | 'smallest' | 'optimal';
 
@@ -25,7 +25,7 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
   const candidate = input as Partial<SlicingPerformanceSettings>;
 
   const computeBackend: SlicingComputeBackendPreference =
-    candidate.computeBackend === 'cpu'
+    candidate.computeBackend === 'cpu' || candidate.computeBackend === 'gpu'
       ? candidate.computeBackend
       : 'auto';
 

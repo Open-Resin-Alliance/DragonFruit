@@ -3,6 +3,8 @@
 pub mod bvh;
 pub mod fast_png;
 pub mod formats;
+pub mod gpu_pack;
+pub mod gpu_raster;
 pub mod job;
 pub mod solid_slicer;
 
@@ -139,6 +141,7 @@ pub fn slice_solid_and_encode_raw(
         width_px,
         height_px,
         x_packing_mode,
+        compute_backend: "auto".to_string(),
         png_compression_strategy,
         bvh_acceleration_enabled,
         anti_aliasing_level,
@@ -207,6 +210,7 @@ pub fn slice_solid_layers_chunk_raw(
         width_px,
         height_px,
         x_packing_mode,
+        compute_backend: "auto".to_string(),
         png_compression_strategy,
         bvh_acceleration_enabled,
         anti_aliasing_level,

@@ -52,6 +52,7 @@ export function PerformanceSettingsTab({
             {([
               { key: 'auto', label: 'Auto', desc: 'Best available' },
               { key: 'cpu', label: 'CPU', desc: 'Stable' },
+              { key: 'gpu', label: 'GPU', desc: 'Experimental' },
             ] as const).map((option) => {
               const active = settings.computeBackend === option.key;
               return (

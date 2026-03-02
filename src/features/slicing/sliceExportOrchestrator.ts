@@ -162,6 +162,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     widthPx: solidMesh.widthPx,
     heightPx: solidMesh.heightPx,
     xPackingMode: solidMesh.xPackingMode,
+    computeBackend: solidMesh.computeBackend,
     pngCompressionStrategy: solidMesh.pngCompressionStrategy,
     bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',

@@ -89,12 +89,38 @@ enum AntiAliasingLevel {
     X8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RasterComputeBackend {
+    Auto,
+    Cpu,
+    Gpu,
+}
+
 fn parse_anti_aliasing_level(level: &str) -> AntiAliasingLevel {
     match level {
         "2x" => AntiAliasingLevel::X2,
         "4x" => AntiAliasingLevel::X4,
         "8x" => AntiAliasingLevel::X8,
         _ => AntiAliasingLevel::Off,
+    }
+}
+
+fn parse_compute_backend(value: &str) -> RasterComputeBackend {
+    match value {
+        "cpu" => RasterComputeBackend::Cpu,
+        "gpu" => RasterComputeBackend::Gpu,
+        _ => RasterComputeBackend::Auto,
+    }
+}
+
+#[inline]
+fn select_raster_backend(requested: RasterComputeBackend) -> RasterComputeBackend {
+    // GPU raster is slower than CPU raster due to lack of spatial acceleration (no bucketing).
+    // Use CPU for rasterization; GPU pack still helps with output packing.
+    match requested {
+        RasterComputeBackend::Cpu => RasterComputeBackend::Cpu,
+        RasterComputeBackend::Gpu => RasterComputeBackend::Cpu,
+        RasterComputeBackend::Auto => RasterComputeBackend::Cpu,
     }
 }
 
@@ -756,6 +782,38 @@ fn rasterize_segments_solid(
     mask
 }
 
+#[inline]
+fn rasterize_segments_with_backend(
+    width_px: u32,
+    height_px: u32,
+    segments: &[Segment],
+    aa_level: AntiAliasingLevel,
+    backend: RasterComputeBackend,
+) -> Vec<u8> {
+    if backend == RasterComputeBackend::Gpu && aa_level == AntiAliasingLevel::Off {
+        let gpu_segments: Vec<crate::gpu_raster::GpuSegment> = segments
+            .iter()
+            .map(|s| crate::gpu_raster::GpuSegment {
+                x1: s.x1,
+                y1: s.y1,
+                dx_dy: s.dx_dy,
+                y_min: s.y_min,
+                y_max: s.y_max,
+                wind: s.wind,
+                _pad: 0,
+            })
+            .collect();
+
+        if let Some(mask) =
+            crate::gpu_raster::try_rasterize_binary_gpu(&gpu_segments, width_px, height_px)
+        {
+            return mask;
+        }
+    }
+
+    rasterize_segments_solid(width_px, height_px, segments, aa_level)
+}
+
 fn encode_grayscale_png_with_strategy(
     width_px: u32,
     height_px: u32,
@@ -821,11 +879,58 @@ fn rasterize_mask_for_triangle_indices(
         return None;
     }
 
-    Some(rasterize_segments_solid(
+    Some(rasterize_segments_with_backend(
         source_width_px,
         source_height_px,
         &segments,
         aa_level,
+        RasterComputeBackend::Cpu,
+    ))
+}
+
+fn rasterize_mask_for_triangle_indices_with_backend(
+    triangles: &[Tri],
+    triangle_indices: &[usize],
+    z_mm: f32,
+    mirror_x: bool,
+    mirror_y: bool,
+    min_x_mm: f32,
+    min_y_mm: f32,
+    build_width_mm: f32,
+    build_depth_mm: f32,
+    source_width_px: u32,
+    source_height_px: u32,
+    aa_level: AntiAliasingLevel,
+    backend: RasterComputeBackend,
+) -> Option<Vec<u8>> {
+    if triangle_indices.is_empty() {
+        return None;
+    }
+
+    let segments = build_layer_segments(
+        triangles,
+        triangle_indices,
+        z_mm,
+        mirror_x,
+        mirror_y,
+        min_x_mm,
+        min_y_mm,
+        build_width_mm,
+        build_depth_mm,
+        source_width_px,
+        source_height_px,
+    );
+
+    if segments.is_empty() {
+        return None;
+    }
+
+    Some(rasterize_segments_with_backend(
+        source_width_px,
+        source_height_px,
+        &segments,
+        aa_level,
+        backend,
     ))
 }
 
@@ -936,6 +1041,51 @@ fn pack_mask_to_nanodlp_png(
             )
         }
     }
+}
+
+fn pack_mask_to_nanodlp_png_with_backend(
+    source_mask: &[u8],
+    source_width_px: u32,
+    source_height_px: u32,
+    output_width_px: u32,
+    output_height_px: u32,
+    packing_mode: PackingMode,
+    png_strategy: crate::fast_png::CompressionStrategy,
+    backend: RasterComputeBackend,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    if backend == RasterComputeBackend::Gpu {
+        let gpu_mode = match packing_mode {
+            PackingMode::None => crate::gpu_pack::GpuPackingMode::None,
+            PackingMode::Rgb8Div3 => crate::gpu_pack::GpuPackingMode::Rgb8Div3,
+            PackingMode::Gray3Div2 => crate::gpu_pack::GpuPackingMode::Gray3Div2,
+        };
+
+        if let Some(packed) = crate::gpu_pack::try_pack_mask_gpu(
+            source_mask,
+            source_width_px,
+            source_height_px,
+            output_width_px,
+            output_height_px,
+            gpu_mode,
+        ) {
+            return encode_grayscale_png_with_strategy(
+                output_width_px,
+                output_height_px,
+                &packed,
+                png_strategy,
+            );
+        }
+    }
+
+    pack_mask_to_nanodlp_png(
+        source_mask,
+        source_width_px,
+        source_height_px,
+        output_width_px,
+        output_height_px,
+        packing_mode,
+        png_strategy,
+    )
 }
 
 fn extract_printer_name(root: &Value) -> String {
@@ -1836,6 +1986,7 @@ pub fn to_container_job(base: &SolidSliceJob, layer_pngs: Vec<Vec<u8>>) -> Slice
 // ---------------------------------------------------------------------------
 
 fn render_layer_png_parallel(
+    backend: RasterComputeBackend,
     job: &SolidSliceJob,
     triangles: &[Tri],
     bvh: Option<&BVHNode>,
@@ -1928,7 +2079,7 @@ fn render_layer_png_parallel(
 
         merged
     } else {
-        let Some(mask) = rasterize_mask_for_triangle_indices(
+        let Some(mask) = rasterize_mask_for_triangle_indices_with_backend(
             triangles,
             triangle_indices,
             z_mm,
@@ -1941,13 +2092,14 @@ fn render_layer_png_parallel(
             job.source_width_px,
             job.source_height_px,
             aa_level,
+            backend,
         ) else {
             return Ok(empty_png.to_vec());
         };
         mask
     };
 
-    pack_mask_to_nanodlp_png(
+    pack_mask_to_nanodlp_png_with_backend(
         &mask,
         job.source_width_px,
         job.source_height_px,
@@ -1955,7 +2107,47 @@ fn render_layer_png_parallel(
         job.height_px,
         packing_mode,
         png_strategy,
+        backend,
     )
+}
+
+#[inline]
+fn render_layer_png_parallel_with_backend(
+    backend: RasterComputeBackend,
+    job: &SolidSliceJob,
+    triangles: &[Tri],
+    bvh: Option<&BVHNode>,
+    layer_buckets: &[Vec<usize>],
+    empty_png: &[u8],
+    packing_mode: PackingMode,
+    png_strategy: crate::fast_png::CompressionStrategy,
+    mirror_x: bool,
+    mirror_y: bool,
+    min_x_mm: f32,
+    min_y_mm: f32,
+    aa_level: AntiAliasingLevel,
+    layer_index: u32,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    match backend {
+        RasterComputeBackend::Cpu | RasterComputeBackend::Auto | RasterComputeBackend::Gpu => {
+            render_layer_png_parallel(
+                backend,
+                job,
+                triangles,
+                bvh,
+                layer_buckets,
+                empty_png,
+                packing_mode,
+                png_strategy,
+                mirror_x,
+                mirror_y,
+                min_x_mm,
+                min_y_mm,
+                aa_level,
+                layer_index,
+            )
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1988,6 +2180,8 @@ pub fn solid_slice_to_png_layers_with_progress(
     validate_solid_job(job)?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let requested_backend = parse_compute_backend(&job.compute_backend);
+    let raster_backend = select_raster_backend(requested_backend);
     let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
     let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let triangles = parse_triangles(&job.triangles_xyz)?;
@@ -2034,7 +2228,8 @@ pub fn solid_slice_to_png_layers_with_progress(
             check_cancelled(cancel_flag)?;
 
             let png = if use_bvh {
-                render_layer_png_parallel(
+                render_layer_png_parallel_with_backend(
+                    raster_backend,
                     job,
                     &triangles,
                     Some(bvh.as_ref().unwrap()),
@@ -2050,7 +2245,8 @@ pub fn solid_slice_to_png_layers_with_progress(
                     layer_index,
                 )
             } else {
-                render_layer_png_parallel(
+                render_layer_png_parallel_with_backend(
+                    raster_backend,
                     job,
                     &triangles,
                     None,
@@ -2094,6 +2290,8 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
     let options_json = json_pretty_bytes(&build_options_json(job))?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let requested_backend = parse_compute_backend(&job.compute_backend);
+    let raster_backend = select_raster_backend(requested_backend);
     let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
     let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
@@ -2145,8 +2343,12 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
 
     // Reserve output buffer capacity up front to reduce expensive realloc/copy
     // churn as the archive grows with many layers.
-    let metadata_bytes_estimate =
-        meta_json.len() + slicer_json.len() + plate_json.len() + profile_json.len() + options_json.len() + 8192;
+    let metadata_bytes_estimate = meta_json.len()
+        + slicer_json.len()
+        + plate_json.len()
+        + profile_json.len()
+        + options_json.len()
+        + 8192;
     let per_layer_zip_estimate = if use_raw_encoder {
         // Raw PNG + ZIP deflate level 1 typically lands around 100-200 KB/layer
         // for binary masks; reserve conservatively to keep growth amortized.
@@ -2237,7 +2439,8 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
                         let result = (|| -> Result<(u32, Vec<u8>), SolidSlicerError> {
                             check_cancelled(cancel_flag)?;
                             let png = if use_bvh {
-                                render_layer_png_parallel(
+                                render_layer_png_parallel_with_backend(
+                                    raster_backend,
                                     job,
                                     &triangles,
                                     Some(bvh.as_ref().unwrap()),
@@ -2253,7 +2456,8 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
                                     layer_index,
                                 )
                             } else {
-                                render_layer_png_parallel(
+                                render_layer_png_parallel_with_backend(
+                                    raster_backend,
                                     job,
                                     &triangles,
                                     None,
