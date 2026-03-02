@@ -327,6 +327,189 @@ impl FastPngEncoder {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Zero-overhead raw PNG encoder (bypasses flate2 entirely)
+// ---------------------------------------------------------------------------
+//
+// Writes a valid PNG using stored (uncompressed) DEFLATE blocks inside the
+// zlib wrapper.  The only per-row overhead is a single 0x00 filter-type byte.
+// For a 3840×2400 grayscale image this is ~9.2 MB of essentially memcpy work
+// versus running the data through the flate2 pipeline (even at level 0).
+
+/// Encode grayscale pixels into a valid PNG with **zero** DEFLATE compression.
+/// This is the fastest possible valid PNG — the pixel data is stored verbatim
+/// inside stored DEFLATE blocks with no filtering and no compression library.
+pub fn encode_raw_png(width: u32, height: u32, pixels: &[u8]) -> Result<Vec<u8>, FastPngError> {
+    if width == 0 || height == 0 || width > 65535 || height > 65535 {
+        return Err(FastPngError::InvalidDimensions { width, height });
+    }
+    let expected = (width as usize) * (height as usize);
+    if pixels.len() != expected {
+        return Err(FastPngError::InvalidDataLength {
+            expected,
+            actual: pixels.len(),
+        });
+    }
+
+    let row_bytes = width as usize; // grayscale 8-bit
+    let filtered_row_len = 1 + row_bytes; // 0x00 filter byte + pixel data
+    let filtered_total: usize = filtered_row_len * (height as usize);
+
+    // Stored DEFLATE: each block has a 5-byte header and carries up to 65535 bytes.
+    const MAX_BLOCK: usize = 65535;
+    let num_blocks = (filtered_total + MAX_BLOCK - 1) / MAX_BLOCK;
+    let deflate_len = filtered_total + num_blocks * 5; // 5-byte header per block
+    let zlib_len = 2 + deflate_len + 4; // zlib header (2) + adler32 (4)
+
+    // Total PNG size: signature(8) + IHDR(25) + IDAT(12+zlib_len) + IEND(12)
+    let total = 8 + 25 + 12 + zlib_len + 12;
+    let mut out = Vec::with_capacity(total);
+
+    // PNG signature
+    out.extend_from_slice(&[137, 80, 78, 71, 13, 10, 26, 10]);
+
+    // --- IHDR chunk ---
+    {
+        let mut ihdr = [0u8; 13];
+        ihdr[0..4].copy_from_slice(&width.to_be_bytes());
+        ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+        ihdr[8] = 8; // bit depth
+        ihdr[9] = 0; // color type: grayscale
+        ihdr[10] = 0; // compression method: deflate
+        ihdr[11] = 0; // filter method: adaptive
+        ihdr[12] = 0; // interlace method: none
+        write_chunk(&mut out, b"IHDR", &ihdr);
+    }
+
+    // --- IDAT chunk ---
+    //
+    // We build the zlib stream (header + stored deflate blocks + adler32) and
+    // the filtered row data in one pass, writing each row's filter byte + pixels
+    // into consecutive stored DEFLATE blocks.
+    {
+        // Reserve the IDAT chunk length + type (we'll patch the length later)
+        let idat_len_pos = out.len();
+        out.extend_from_slice(&[0u8; 4]); // placeholder for length
+        out.extend_from_slice(b"IDAT");
+
+        let idat_data_start = out.len();
+
+        // Zlib header: CM=8 (deflate), CINFO=7 (32K window), FCHECK to make it valid
+        // 0x78 0x01 → deflate, window 32K, no dict, FCHECK=1
+        out.push(0x78);
+        out.push(0x01);
+
+        // We'll compute adler32 over the uncompressed (filtered) data as we go.
+        let mut adler_a: u32 = 1;
+        let mut adler_b: u32 = 0;
+
+        // We write stored DEFLATE blocks.  Each block:
+        //   1 byte:  BFINAL (1 for last) | BTYPE=00
+        //   2 bytes: LEN   (little-endian)
+        //   2 bytes: NLEN  (one's complement of LEN)
+        //   LEN bytes of literal data
+        //
+        // We iterate row-by-row, packing rows into blocks.  To keep it simple,
+        // we fill a small staging buffer and flush full blocks.
+
+        let mut block_buf: Vec<u8> = Vec::with_capacity(MAX_BLOCK);
+        let mut remaining = filtered_total;
+
+        for y in 0..(height as usize) {
+            // Filter byte (None = 0x00)
+            block_buf.push(0x00);
+            adler_update(&mut adler_a, &mut adler_b, &[0x00]);
+
+            // Pixel data for this row
+            let row_start = y * row_bytes;
+            let row_data = &pixels[row_start..row_start + row_bytes];
+            block_buf.extend_from_slice(row_data);
+            adler_update(&mut adler_a, &mut adler_b, row_data);
+
+            // Flush full blocks
+            while block_buf.len() >= MAX_BLOCK {
+                remaining -= MAX_BLOCK;
+                let is_final = remaining == 0 && block_buf.len() == MAX_BLOCK;
+                write_stored_block(&mut out, &block_buf[..MAX_BLOCK], is_final);
+                block_buf.drain(..MAX_BLOCK);
+            }
+        }
+
+        // Flush leftover partial block
+        if !block_buf.is_empty() {
+            write_stored_block(&mut out, &block_buf, true); // last block
+        }
+
+        // Adler-32 checksum (big-endian)
+        let adler = (adler_b << 16) | adler_a;
+        out.extend_from_slice(&adler.to_be_bytes());
+
+        // Patch IDAT chunk length
+        let idat_data_len = (out.len() - idat_data_start) as u32;
+        out[idat_len_pos..idat_len_pos + 4].copy_from_slice(&idat_data_len.to_be_bytes());
+
+        // IDAT CRC (over "IDAT" + data)
+        let crc = {
+            let mut h = crc32fast::Hasher::new();
+            h.update(b"IDAT");
+            h.update(&out[idat_data_start..]);
+            h.finalize()
+        };
+        out.extend_from_slice(&crc.to_be_bytes());
+    }
+
+    // --- IEND chunk ---
+    write_chunk(&mut out, b"IEND", &[]);
+
+    Ok(out)
+}
+
+/// Write a PNG chunk (length + type + data + CRC).
+#[inline]
+fn write_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(chunk_type);
+    out.extend_from_slice(data);
+    let crc = {
+        let mut h = crc32fast::Hasher::new();
+        h.update(chunk_type);
+        h.update(data);
+        h.finalize()
+    };
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
+/// Write a single stored DEFLATE block.
+#[inline]
+fn write_stored_block(out: &mut Vec<u8>, data: &[u8], is_final: bool) {
+    let len = data.len() as u16;
+    let nlen = !len;
+    out.push(if is_final { 0x01 } else { 0x00 }); // BFINAL | BTYPE=00
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&nlen.to_le_bytes());
+    out.extend_from_slice(data);
+}
+
+/// Incremental Adler-32 update (modular arithmetic, batch-friendly).
+#[inline]
+fn adler_update(a: &mut u32, b: &mut u32, data: &[u8]) {
+    // Process in chunks to keep the modular reduction infrequent.
+    // NMAX = 5552 is the largest n such that 255*n*(n+1)/2 + (n+1)*(65521-1) fits in u32.
+    const NMAX: usize = 5552;
+    for chunk in data.chunks(NMAX) {
+        for &byte in chunk {
+            *a += byte as u32;
+            *b += *a;
+        }
+        *a %= 65521;
+        *b %= 65521;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Original public API (preserved for compatibility)
+// ---------------------------------------------------------------------------
+
 /// Convenience function for quick encoding with default settings
 pub fn encode_binary_mask(width: u32, height: u32, pixels: &[u8]) -> Result<Vec<u8>, FastPngError> {
     let encoder = FastPngEncoder::new(width, height, FastPngConfig::default())?;

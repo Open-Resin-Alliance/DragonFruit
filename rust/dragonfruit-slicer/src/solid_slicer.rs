@@ -1,7 +1,9 @@
 use crate::bvh::BVHNode;
 use crate::job::{SliceJob, SolidSliceJob};
+use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use thiserror::Error;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -68,6 +70,8 @@ pub enum SolidSlicerError {
         layer_count: u32,
         total_layers: u32,
     },
+    #[error("slicing cancelled by user")]
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -758,7 +762,14 @@ fn encode_grayscale_png_with_strategy(
     pixels: &[u8],
     strategy: crate::fast_png::CompressionStrategy,
 ) -> Result<Vec<u8>, SolidSlicerError> {
-    // Use fast PNG encoder optimized for binary masks with specified strategy
+    // For the fastest strategy, bypass flate2 entirely and use the raw PNG
+    // encoder which writes stored DEFLATE blocks directly (pure memcpy speed).
+    if strategy == crate::fast_png::CompressionStrategy::Fastest {
+        return crate::fast_png::encode_raw_png(width_px, height_px, pixels)
+            .map_err(|err| SolidSlicerError::PngEncoding(err.to_string()));
+    }
+
+    // Other strategies use the full FastPngEncoder with flate2 compression.
     use crate::fast_png::FastPngEncoder;
     let config = crate::fast_png::FastPngConfig::from_strategy(strategy);
     FastPngEncoder::new(width_px, height_px, config)
@@ -1818,4 +1829,522 @@ pub fn to_container_job(base: &SolidSliceJob, layer_pngs: Vec<Vec<u8>>) -> Slice
         layer_pngs,
         metadata_json: base.metadata_json.clone(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Thread-safe layer renderer (no &mut state — suitable for Rayon par_iter)
+// ---------------------------------------------------------------------------
+
+fn render_layer_png_parallel(
+    job: &SolidSliceJob,
+    triangles: &[Tri],
+    bvh: Option<&BVHNode>,
+    layer_buckets: &[Vec<usize>],
+    empty_png: &[u8],
+    packing_mode: PackingMode,
+    png_strategy: crate::fast_png::CompressionStrategy,
+    mirror_x: bool,
+    mirror_y: bool,
+    min_x_mm: f32,
+    min_y_mm: f32,
+    aa_level: AntiAliasingLevel,
+    layer_index: u32,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
+
+    // Get triangle indices for this layer (BVH query or bucket lookup)
+    let owned_indices;
+    let triangle_indices: &[usize] = if let Some(bvh_node) = bvh {
+        owned_indices =
+            query_layer_triangles_bvh(bvh_node, triangles, layer_index, job.layer_height_mm);
+        &owned_indices
+    } else {
+        &layer_buckets[layer_index as usize]
+    };
+
+    if triangle_indices.is_empty() {
+        return Ok(empty_png.to_vec());
+    }
+
+    let use_support_aware_aa = aa_level != AntiAliasingLevel::Off
+        && !job.aa_on_supports
+        && job.model_triangle_count > 0
+        && job.model_triangle_count < triangles.len();
+
+    let mask = if use_support_aware_aa {
+        let mut model_indices = Vec::with_capacity(triangle_indices.len());
+        let mut support_indices = Vec::with_capacity(triangle_indices.len());
+        for tri_index in triangle_indices {
+            if *tri_index < job.model_triangle_count {
+                model_indices.push(*tri_index);
+            } else {
+                support_indices.push(*tri_index);
+            }
+        }
+
+        let mut merged =
+            vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+        let mut wrote_any = false;
+
+        if let Some(model_mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            &model_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            aa_level,
+        ) {
+            merge_mask_max(&mut merged, &model_mask);
+            wrote_any = true;
+        }
+
+        if let Some(support_mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            &support_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            AntiAliasingLevel::Off,
+        ) {
+            merge_mask_max(&mut merged, &support_mask);
+            wrote_any = true;
+        }
+
+        if !wrote_any {
+            return Ok(empty_png.to_vec());
+        }
+
+        merged
+    } else {
+        let Some(mask) = rasterize_mask_for_triangle_indices(
+            triangles,
+            triangle_indices,
+            z_mm,
+            mirror_x,
+            mirror_y,
+            min_x_mm,
+            min_y_mm,
+            job.build_width_mm,
+            job.build_depth_mm,
+            job.source_width_px,
+            job.source_height_px,
+            aa_level,
+        ) else {
+            return Ok(empty_png.to_vec());
+        };
+        mask
+    };
+
+    pack_mask_to_nanodlp_png(
+        &mask,
+        job.source_width_px,
+        job.source_height_px,
+        job.width_px,
+        job.height_px,
+        packing_mode,
+        png_strategy,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Progress-aware + cancellable variants
+// ---------------------------------------------------------------------------
+
+pub type ProgressCallback = Box<dyn Fn(u32, u32) + Send + Sync>;
+
+#[inline]
+fn check_cancelled(cancel_flag: Option<&AtomicBool>) -> Result<(), SolidSlicerError> {
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            return Err(SolidSlicerError::Cancelled);
+        }
+    }
+    Ok(())
+}
+
+pub fn solid_slice_to_png_layers_with_progress(
+    job: &SolidSliceJob,
+    on_progress: Option<ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<Vec<Vec<u8>>, SolidSlicerError> {
+    if job.output_format != ".nanodlp" {
+        return Err(SolidSlicerError::UnsupportedOutput(
+            job.output_format.clone(),
+        ));
+    }
+
+    validate_solid_job(job)?;
+
+    let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
+    let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
+    let triangles = parse_triangles(&job.triangles_xyz)?;
+    let source_metadata: Value = serde_json::from_str(&job.metadata_json)
+        .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
+    let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
+    let min_x_mm = -job.build_width_mm * 0.5;
+    let min_y_mm = -job.build_depth_mm * 0.5;
+
+    let use_bvh = should_use_bvh(triangles.len(), job.bvh_acceleration_enabled);
+
+    let bvh = if use_bvh {
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        Some(BVHNode::build(&triangles, indices, 16))
+    } else {
+        None
+    };
+
+    let layer_buckets = if use_bvh {
+        Vec::new()
+    } else {
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm)
+    };
+
+    // Pre-compute the empty layer PNG once (shared across threads)
+    let empty_mask = vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+    let empty_png = pack_mask_to_nanodlp_png(
+        &empty_mask,
+        job.source_width_px,
+        job.source_height_px,
+        job.width_px,
+        job.height_px,
+        packing_mode,
+        png_strategy,
+    )?;
+
+    // Track progress atomically from parallel threads
+    let progress_counter = std::sync::atomic::AtomicU32::new(0);
+
+    // Render all layers in parallel using Rayon
+    let layer_pngs: Result<Vec<Vec<u8>>, SolidSlicerError> = (0..job.total_layers)
+        .into_par_iter()
+        .map(|layer_index| {
+            check_cancelled(cancel_flag)?;
+
+            let png = if use_bvh {
+                render_layer_png_parallel(
+                    job,
+                    &triangles,
+                    Some(bvh.as_ref().unwrap()),
+                    &[],
+                    &empty_png,
+                    packing_mode,
+                    png_strategy,
+                    mirror_x,
+                    mirror_y,
+                    min_x_mm,
+                    min_y_mm,
+                    aa_level,
+                    layer_index,
+                )
+            } else {
+                render_layer_png_parallel(
+                    job,
+                    &triangles,
+                    None,
+                    &layer_buckets,
+                    &empty_png,
+                    packing_mode,
+                    png_strategy,
+                    mirror_x,
+                    mirror_y,
+                    min_x_mm,
+                    min_y_mm,
+                    aa_level,
+                    layer_index,
+                )
+            }?;
+
+            let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(ref cb) = on_progress {
+                cb(done, job.total_layers);
+            }
+
+            Ok(png)
+        })
+        .collect();
+
+    layer_pngs
+}
+
+pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
+    job: &SolidSliceJob,
+    on_progress: Option<ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    let source_metadata: Value = serde_json::from_str(&job.metadata_json)
+        .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
+
+    let plate_json = json_pretty_bytes(&build_plate_json(job, &source_metadata))?;
+    let meta_json = json_pretty_bytes(&build_meta_json())?;
+    let slicer_json = json_pretty_bytes(&build_slicer_json(job))?;
+    let profile_json = json_pretty_bytes(&build_profile_json(job, &source_metadata))?;
+    let options_json = json_pretty_bytes(&build_options_json(job))?;
+
+    let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
+    let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
+    let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
+    let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
+    let triangles = parse_triangles(&job.triangles_xyz)?;
+    let min_x_mm = -job.build_width_mm * 0.5;
+    let min_y_mm = -job.build_depth_mm * 0.5;
+
+    let use_bvh = should_use_bvh(triangles.len(), job.bvh_acceleration_enabled);
+
+    let bvh = if use_bvh {
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        Some(BVHNode::build(&triangles, indices, 16))
+    } else {
+        None
+    };
+
+    let layer_buckets = if use_bvh {
+        Vec::new()
+    } else {
+        build_layer_triangle_buckets(&triangles, job.total_layers, job.layer_height_mm)
+    };
+
+    // Pre-compute the empty layer PNG once
+    let empty_mask = vec![0u8; (job.source_width_px as usize) * (job.source_height_px as usize)];
+    let empty_png = pack_mask_to_nanodlp_png(
+        &empty_mask,
+        job.source_width_px,
+        job.source_height_px,
+        job.width_px,
+        job.height_px,
+        packing_mode,
+        png_strategy,
+    )?;
+
+    // Track progress atomically from parallel threads
+    let progress_counter = std::sync::atomic::AtomicU32::new(0);
+
+    // When the raw encoder is active each PNG is uncompressed (~9.2 MB for 3840×2400).
+    // Use ZIP-level Deflated so the output file stays compact.  Compressed strategies
+    // already have per-PNG deflate; Stored avoids double-compression overhead.
+    let use_raw_encoder = png_strategy == crate::fast_png::CompressionStrategy::Fastest;
+    let png_zip_options = if use_raw_encoder {
+        FileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(1))
+    } else {
+        FileOptions::default().compression_method(CompressionMethod::Stored)
+    };
+
+    // Reserve output buffer capacity up front to reduce expensive realloc/copy
+    // churn as the archive grows with many layers.
+    let metadata_bytes_estimate =
+        meta_json.len() + slicer_json.len() + plate_json.len() + profile_json.len() + options_json.len() + 8192;
+    let per_layer_zip_estimate = if use_raw_encoder {
+        // Raw PNG + ZIP deflate level 1 typically lands around 100-200 KB/layer
+        // for binary masks; reserve conservatively to keep growth amortized.
+        192 * 1024
+    } else {
+        // Stored pre-compressed PNG entries are often larger than raw+zip-deflate.
+        // Keep a broader estimate for non-raw modes.
+        320 * 1024
+    };
+    let reserve_bytes = metadata_bytes_estimate
+        .saturating_add((job.total_layers as usize).saturating_mul(per_layer_zip_estimate));
+
+    let mut cursor = std::io::Cursor::new(Vec::<u8>::with_capacity(reserve_bytes));
+    {
+        let mut zip = ZipWriter::new(&mut cursor);
+        let metadata_options = FileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(7));
+
+        zip.start_file("meta.json", metadata_options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&meta_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("slicer.json", metadata_options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&slicer_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("plate.json", metadata_options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&plate_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("profile.json", metadata_options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&profile_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("options.json", metadata_options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(&options_json)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        zip.start_file("info.json", metadata_options)
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        zip.write_all(b"[]")
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+        let mut first_layer_png: Option<Vec<u8>> = None;
+        let mut preview_layer_png: Option<Vec<u8>> = None;
+
+        // Pipeline: render workers → bounded channel → sequential ZIP writer.
+        //
+        // Render workers (Rayon pool) and the ZIP writer (calling thread) run
+        // concurrently; there is no burst/idle pattern.
+        //
+        // Memory bound: PIPELINE_BUFFER limits how many uncompressed PNGs can sit
+        // in the channel at once.  If the ZIP writer is slower, render workers block
+        // on tx.send() (backpressure) rather than accumulating PNGs unboundedly.
+        // 32 × 9.2 MB ≈ 294 MB peak channel memory for a 3840×2400 build plate.
+        //
+        // The reorder buffer (BTreeMap) holds a small number of out-of-order layers
+        // until the expected next layer arrives.  Its depth is bounded in practice
+        // by the number of Rayon threads.
+        const PIPELINE_BUFFER: usize = 32;
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(u32, Vec<u8>), SolidSlicerError>>(
+            PIPELINE_BUFFER,
+        );
+
+        let mut pipeline_error: Result<(), SolidSlicerError> = Ok(());
+        let mut reorder: std::collections::BTreeMap<u32, Vec<u8>> =
+            std::collections::BTreeMap::new();
+        let mut next_to_write = 0u32;
+
+        // rayon::in_place_scope guarantees the closure runs on the calling thread
+        // (the spawn_blocking OS thread, which is NOT a slicer pool thread), so
+        // &Receiver (not Sync) and &mut zip can be captured without Send bounds.
+        // Spawned tasks still run on the slicer Rayon pool as normal.
+        rayon::in_place_scope(|s| {
+            // Render task: submitted into the slicer Rayon pool.
+            // for_each_with clones `tx` once per Rayon worker thread (cheap —
+            // SyncSender clone is just a refcount bump), not once per layer.
+            s.spawn(|_| {
+                (0..job.total_layers)
+                    .into_par_iter()
+                    .for_each_with(tx, |tx, layer_index| {
+                        let result = (|| -> Result<(u32, Vec<u8>), SolidSlicerError> {
+                            check_cancelled(cancel_flag)?;
+                            let png = if use_bvh {
+                                render_layer_png_parallel(
+                                    job,
+                                    &triangles,
+                                    Some(bvh.as_ref().unwrap()),
+                                    &[],
+                                    &empty_png,
+                                    packing_mode,
+                                    png_strategy,
+                                    mirror_x,
+                                    mirror_y,
+                                    min_x_mm,
+                                    min_y_mm,
+                                    aa_level,
+                                    layer_index,
+                                )
+                            } else {
+                                render_layer_png_parallel(
+                                    job,
+                                    &triangles,
+                                    None,
+                                    &layer_buckets,
+                                    &empty_png,
+                                    packing_mode,
+                                    png_strategy,
+                                    mirror_x,
+                                    mirror_y,
+                                    min_x_mm,
+                                    min_y_mm,
+                                    aa_level,
+                                    layer_index,
+                                )
+                            }?;
+                            let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                            if let Some(ref cb) = on_progress {
+                                cb(done, job.total_layers);
+                            }
+                            Ok((layer_index, png))
+                        })();
+                        // Ignore RecvError: receiver may have dropped after a write error.
+                        let _ = tx.send(result);
+                    });
+                // `tx` consumed by for_each_with; when all tasks finish the last
+                // clone is dropped, closing the channel and ending the for-loop below.
+            });
+
+            // ZIP writer: runs on the calling thread concurrently with render workers.
+            // We always drain the channel even when in error state — if we stopped
+            // reading, render workers would block on a full tx.send() and the scope
+            // would deadlock waiting for the s.spawn task to finish.
+            for msg in &rx {
+                if pipeline_error.is_err() {
+                    // Error already recorded; drain remaining messages and discard.
+                    continue;
+                }
+                match msg {
+                    Err(e) => {
+                        pipeline_error = Err(e);
+                    }
+                    Ok((idx, png)) => {
+                        reorder.insert(idx, png);
+                        // Drain all consecutive in-order layers from the reorder buffer.
+                        while let Some(layer_png) = reorder.remove(&next_to_write) {
+                            if first_layer_png.is_none() {
+                                first_layer_png = Some(layer_png.clone());
+                            } else if preview_layer_png.is_none() {
+                                let first = first_layer_png.as_ref().unwrap();
+                                if first.len() != layer_png.len() || *first != layer_png {
+                                    preview_layer_png = Some(layer_png.clone());
+                                }
+                            }
+                            let name = format!("{}.png", next_to_write + 1);
+                            let r = zip
+                                .start_file(name, png_zip_options)
+                                .map_err(|e| SolidSlicerError::ZipWrite(e.to_string()))
+                                .and_then(|_| {
+                                    zip.write_all(&layer_png)
+                                        .map_err(|e| SolidSlicerError::ZipWrite(e.to_string()))
+                                });
+                            // layer_png is dropped here, freeing the raw PNG memory.
+                            if let Err(e) = r {
+                                pipeline_error = Err(e);
+                                break;
+                            }
+                            next_to_write += 1;
+                        }
+                    }
+                }
+            }
+            // Channel is now exhausted: all render tasks finished and all tx clones dropped.
+        });
+
+        pipeline_error?;
+
+        if let Some(preview_png) = preview_layer_png.as_deref().or(first_layer_png.as_deref()) {
+            zip.start_file("3d.png", png_zip_options)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+            zip.write_all(preview_png)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+
+            zip.start_file("3d.png.meta", metadata_options)
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+            zip.write_all(b"{}")
+                .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+        }
+
+        zip.finish()
+            .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+    }
+
+    Ok(cursor.into_inner())
 }

@@ -2,6 +2,10 @@ type TauriCoreModule = {
   invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 };
 
+type TauriEventModule = {
+  listen: <T>(event: string, handler: (event: { payload: T }) => void) => Promise<() => void>;
+};
+
 export type NativeSolidSliceJobEnvelope = {
   outputFormat: string;
   sourceWidthPx: number;
@@ -42,7 +46,13 @@ type NativeSolidSlicePayload = {
   metadata_json: string;
 };
 
+type SliceProgressEvent = {
+  done: number;
+  total: number;
+};
+
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
+let tauriEventPromise: Promise<TauriEventModule | null> | null = null;
 
 function createAbortError(message = 'Slicing canceled by user.'): Error {
   if (typeof DOMException !== 'undefined') {
@@ -68,6 +78,17 @@ async function loadTauriCore(): Promise<TauriCoreModule | null> {
   }
 
   return tauriCorePromise;
+}
+
+async function loadTauriEvent(): Promise<TauriEventModule | null> {
+  if (!isTauriRuntime()) return null;
+  if (!tauriEventPromise) {
+    tauriEventPromise = import('@tauri-apps/api/event')
+      .then((mod) => ({ listen: mod.listen }))
+      .catch(() => null);
+  }
+
+  return tauriEventPromise;
 }
 
 function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayload {
@@ -97,62 +118,94 @@ export async function isNativeSlicerAvailable(): Promise<boolean> {
   return Boolean(core);
 }
 
-async function invokeWithAbort<T>(
-  core: TauriCoreModule,
-  command: string,
-  args: Record<string, unknown>,
-  abortSignal?: AbortSignal,
-): Promise<T> {
-  if (!abortSignal) {
-    return core.invoke<T>(command, args);
-  }
+export type SlicerProgressCallback = (done: number, total: number) => void;
 
-  if (abortSignal.aborted) {
-    throw createAbortError();
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    let settled = false;
-
-    const finalize = () => {
-      abortSignal.removeEventListener('abort', handleAbort);
-    };
-
-    const handleAbort = () => {
-      if (settled) return;
-      settled = true;
-      finalize();
-      reject(createAbortError());
-    };
-
-    abortSignal.addEventListener('abort', handleAbort, { once: true });
-
-    core.invoke<T>(command, args)
-      .then((result) => {
-        if (settled) return;
-        settled = true;
-        finalize();
-        resolve(result);
-      })
-      .catch((error) => {
-        if (settled) return;
-        settled = true;
-        finalize();
-        reject(error);
-      });
-  });
-}
-
+/**
+ * Invoke the native slicer with real per-layer progress events and cooperative cancellation.
+ */
 export async function sliceSolidAndEncodeWithNativeSlicer(
   job: NativeSolidSliceJobEnvelope,
   abortSignal?: AbortSignal,
+  onProgress?: SlicerProgressCallback,
 ): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
     throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
   }
 
+  if (abortSignal?.aborted) {
+    throw createAbortError();
+  }
+
+  // Subscribe to real per-layer progress events from the Rust backend
+  const eventModule = await loadTauriEvent();
+  let unlistenProgress: (() => void) | null = null;
+
+  if (eventModule && onProgress) {
+    unlistenProgress = await eventModule.listen<SliceProgressEvent>(
+      'slicer://progress',
+      (event) => {
+        onProgress(event.payload.done, event.payload.total);
+      },
+    );
+  }
+
+  // Set up abort handler: sends cancel_slicing command to Rust then rejects
+  let settled = false;
   const payload = JSON.stringify(toNativePayload(job));
-  const result = await invokeWithAbort<number[]>(core, 'slice_solid_native', { jobJson: payload }, abortSignal);
-  return Uint8Array.from(result);
+
+  const cleanup = () => {
+    if (unlistenProgress) {
+      unlistenProgress();
+      unlistenProgress = null;
+    }
+  };
+
+  try {
+    const resultPromise = core.invoke<ArrayBuffer>('slice_solid_native', { jobJson: payload });
+
+    if (!abortSignal) {
+      const result = await resultPromise;
+      cleanup();
+      return new Uint8Array(result);
+    }
+
+    // Race the invoke against the abort signal
+    const result = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const handleAbort = () => {
+        if (settled) return;
+        settled = true;
+        // Tell Rust to stop
+        core.invoke('cancel_slicing').catch(() => {});
+        reject(createAbortError());
+      };
+
+      abortSignal.addEventListener('abort', handleAbort, { once: true });
+
+      resultPromise
+        .then((res) => {
+          if (settled) return;
+          settled = true;
+          abortSignal.removeEventListener('abort', handleAbort);
+          resolve(res);
+        })
+        .catch((err) => {
+          if (settled) return;
+          settled = true;
+          abortSignal.removeEventListener('abort', handleAbort);
+          // Rust cancelled errors should map to AbortError
+          if (typeof err === 'string' && err.includes('cancelled')) {
+            reject(createAbortError());
+          } else {
+            reject(err);
+          }
+        });
+    });
+
+    cleanup();
+    return new Uint8Array(result);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }

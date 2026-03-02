@@ -16,3 +16,14 @@ dragonfruit-slicer = { path = "../rust/dragonfruit-slicer" }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Compile ALL dependencies with full optimizations in dev builds.
+# The slicer and its deps (flate2, crc32fast, png, zip, rayon) are
+# 50-200x slower in debug mode due to heavy numerical/compression work.
+# Only the Tauri shell (dragonfruit-desktop) stays unoptimized for fast recompiles.
+[profile.dev.package."*"]
+opt-level = 3
+
+# The wildcard above only covers registry deps; path deps need explicit entries.
+[profile.dev.package.dragonfruit-slicer]
+opt-level = 3

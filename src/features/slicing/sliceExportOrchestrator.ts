@@ -41,33 +41,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-function startNativeProgressHeartbeat(params: {
-  totalLayers: number;
-  onProgress?: (done: number, total: number, phase: string) => void;
-}): () => void {
-  const { totalLayers, onProgress } = params;
-  if (!onProgress || totalLayers <= 1) {
-    return () => {};
-  }
-
-  let syntheticDone = 0;
-  const cap = Math.max(1, Math.min(totalLayers - 1, Math.floor(totalLayers * 0.9)));
-
-  const timerId = globalThis.setInterval(() => {
-    if (syntheticDone >= cap) return;
-    syntheticDone += 1;
-    onProgress(
-      syntheticDone,
-      totalLayers,
-      `Native slicing in progress · ${syntheticDone}/${totalLayers}`,
-    );
-  }, 220);
-
-  return () => {
-    globalThis.clearInterval(timerId);
-  };
-}
-
 export type SliceExportArtifact = {
   blob: Blob;
   outputName: string;
@@ -203,25 +176,26 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   };
 
   const coreStartMs = performance.now();
-  const stopHeartbeat = startNativeProgressHeartbeat({
-    totalLayers: solidMesh.totalLayers,
-    onProgress: options.onProgress,
-  });
+  logDebug('Native slicing starting…');
 
-  let encodedBytes: Uint8Array;
-  try {
-    encodedBytes = await sliceSolidAndEncodeWithNativeSlicer(nativeJob, options.abortSignal);
-  } finally {
-    stopHeartbeat();
-  }
+  const slicerProgressCallback = (done: number, total: number) => {
+    options.onProgress?.(done, total, `Slicing layer ${done}/${total} · ${format.displayName}`);
+  };
+
+  const encodedBytes = await sliceSolidAndEncodeWithNativeSlicer(
+    nativeJob,
+    options.abortSignal,
+    slicerProgressCallback,
+  );
   const coreSlicingMs = performance.now() - coreStartMs;
+  logDebug('Native slicing completed', { coreSlicingMs });
 
   throwIfAborted(options.abortSignal);
   options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Native slicing finished');
 
   const outputExt = format.outputFormat.replace(/^\./, '') || 'slice';
   const outputName = `${safeFilenameBase(options.filenameBase)}.${outputExt}`;
-  const artifactBlob = new Blob([Uint8Array.from(encodedBytes)], { type: 'application/octet-stream' });
+  const artifactBlob = new Blob([encodedBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
   if (options.outputMode !== 'return') {
     triggerByteDownload(encodedBytes, outputName);
   }

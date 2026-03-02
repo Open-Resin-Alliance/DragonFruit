@@ -16,17 +16,33 @@ use solid_slicer::{
 };
 use wasm_bindgen::prelude::*;
 
-pub fn slice_solid_and_encode_native_json(job_json: &str) -> Result<Vec<u8>, String> {
+use std::sync::atomic::AtomicBool;
+
+/// Progress callback type for native slicing.
+/// Called with (layers_completed, total_layers) after each layer is rendered.
+pub type ProgressCallback = Box<dyn Fn(u32, u32) + Send + Sync>;
+
+/// Slice with per-layer progress reporting and cooperative cancellation.
+pub fn slice_solid_and_encode_native_json_with_progress(
+    job_json: &str,
+    on_progress: Option<ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<Vec<u8>, String> {
     let job: SolidSliceJob = serde_json::from_str(job_json)
         .map_err(|err| format!("Invalid SolidSliceJob JSON: {err}"))?;
 
     if job.output_format == ".nanodlp" {
-        return slice_solid_and_encode_nanodlp_streaming(&job)
-            .map_err(|err| format!("Solid slicing failed: {err}"));
+        return solid_slicer::slice_solid_and_encode_nanodlp_streaming_with_progress(
+            &job,
+            on_progress,
+            cancel_flag,
+        )
+        .map_err(|err| format!("Solid slicing failed: {err}"));
     }
 
     let layer_pngs =
-        solid_slice_to_png_layers(&job).map_err(|err| format!("Solid slicing failed: {err}"))?;
+        solid_slicer::solid_slice_to_png_layers_with_progress(&job, on_progress, cancel_flag)
+            .map_err(|err| format!("Solid slicing failed: {err}"))?;
 
     let container_job = to_container_job(&job, layer_pngs);
     let artifact: SliceArtifact = match container_job.output_format.as_str() {
@@ -38,6 +54,11 @@ pub fn slice_solid_and_encode_native_json(job_json: &str) -> Result<Vec<u8>, Str
     };
 
     Ok(artifact.bytes)
+}
+
+/// Legacy entry point without progress/cancellation (used by WASM path).
+pub fn slice_solid_and_encode_native_json(job_json: &str) -> Result<Vec<u8>, String> {
+    slice_solid_and_encode_native_json_with_progress(job_json, None, None)
 }
 
 #[wasm_bindgen]

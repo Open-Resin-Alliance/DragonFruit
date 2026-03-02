@@ -141,6 +141,8 @@ export function SlicingPanel({
   const [progressTotal, setProgressTotal] = useState(1);
   const [currentElapsedMs, setCurrentElapsedMs] = useState(0);
   const [currentRasterMs, setCurrentRasterMs] = useState(0);
+  const [liveLayersPerSec, setLiveLayersPerSec] = useState<number | null>(null);
+  const [estimatedRemainingMs, setEstimatedRemainingMs] = useState<number | null>(null);
   const [showSlicingModal, setShowSlicingModal] = useState(false);
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
@@ -470,6 +472,8 @@ export function SlicingPanel({
     setProgressTotal(1);
     setCurrentElapsedMs(0);
     setCurrentRasterMs(0);
+    setLiveLayersPerSec(null);
+    setEstimatedRemainingMs(null);
     setShowSlicingModal(true);
     setSlicingModalStage('running');
     clearLayerPreviewUrls();
@@ -481,6 +485,7 @@ export function SlicingPanel({
     slicingAbortControllerRef.current = abortController;
     let rasterStartedMs: number | null = null;
     let rasterAccumulatedMs = 0;
+    let slicingPhaseStartMs: number | null = null;
     let exportThumbnailPng: Uint8Array | null = null;
     let completedTotalLayers = 0;
     let slicingSucceeded = false;
@@ -513,13 +518,27 @@ export function SlicingPanel({
 
           const phaseLower = phase.toLowerCase();
           const nowMs = performance.now();
-          const isRasterPhase = phaseLower.includes('raster');
+          const isSlicingPhase = phaseLower.includes('slicing layer') || phaseLower.includes('raster');
 
-          if (isRasterPhase) {
+          if (isSlicingPhase) {
+            if (slicingPhaseStartMs == null) {
+              slicingPhaseStartMs = nowMs;
+            }
             if (rasterStartedMs == null) {
               rasterStartedMs = nowMs;
             }
             setCurrentRasterMs(rasterAccumulatedMs + (nowMs - rasterStartedMs));
+
+            // Compute live layers/sec and ETA from real progress
+            const phaseElapsedMs = nowMs - slicingPhaseStartMs;
+            if (done > 0 && phaseElapsedMs > 200) {
+              const rate = (done * 1000) / phaseElapsedMs;
+              setLiveLayersPerSec(rate);
+              const remaining = Math.max(0, total - done);
+              if (rate > 0) {
+                setEstimatedRemainingMs((remaining / rate) * 1000);
+              }
+            }
           } else if (rasterStartedMs != null) {
             rasterAccumulatedMs += nowMs - rasterStartedMs;
             rasterStartedMs = null;
@@ -1072,6 +1091,18 @@ export function SlicingPanel({
                   <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Progress</div>
                   <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{Math.round(displayProgressPercent)}%</div>
                 </div>
+                {slicingModalStage === 'running' && liveLayersPerSec != null && (
+                  <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                    <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
+                    <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{formatLayerRate(liveLayersPerSec)}</div>
+                  </div>
+                )}
+                {slicingModalStage === 'running' && estimatedRemainingMs != null && (
+                  <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                    <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>ETA</div>
+                    <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{formatDuration(estimatedRemainingMs)}</div>
+                  </div>
+                )}
               </div>
 
               {slicingModalStage === 'finished' && previewTotalLayers > 0 && (
