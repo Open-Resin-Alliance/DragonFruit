@@ -13,8 +13,9 @@ use formats::{
 };
 use job::{SliceArtifact, SliceJob, SolidSliceJob};
 use solid_slicer::{
-    slice_solid_and_encode_nanodlp_streaming, slice_solid_chunk_payload, solid_slice_to_png_layers,
-    to_container_job,
+    slice_solid_and_encode_nanodlp_streaming,
+    slice_solid_and_encode_nanodlp_streaming_to_temp_path_with_progress, slice_solid_chunk_payload,
+    solid_slice_to_png_layers, to_container_job,
 };
 use wasm_bindgen::prelude::*;
 
@@ -25,17 +26,20 @@ use std::sync::atomic::AtomicBool;
 pub type ProgressCallback = Box<dyn Fn(u32, u32) + Send + Sync>;
 
 /// Slice with per-layer progress reporting and cooperative cancellation.
+/// Takes ownership of the JSON string so it can be freed immediately after parsing,
+/// reclaiming 50–100 MB for large models.
 pub fn slice_solid_and_encode_native_json_with_progress(
-    job_json: &str,
+    job_json: String,
     on_progress: Option<ProgressCallback>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    let job: SolidSliceJob = serde_json::from_str(job_json)
+    let job: SolidSliceJob = serde_json::from_str(&job_json)
         .map_err(|err| format!("Invalid SolidSliceJob JSON: {err}"))?;
+    drop(job_json); // Free the large JSON string immediately after parsing.
 
     if job.output_format == ".nanodlp" {
         return solid_slicer::slice_solid_and_encode_nanodlp_streaming_with_progress(
-            &job,
+            job,
             on_progress,
             cancel_flag,
         )
@@ -58,9 +62,38 @@ pub fn slice_solid_and_encode_native_json_with_progress(
     Ok(artifact.bytes)
 }
 
+/// Slice and encode to a temp file path to avoid large in-memory artifact allocations.
+/// Returns (absolute_temp_path, artifact_byte_len).
+/// Takes ownership of the JSON string so it can be freed immediately after parsing.
+pub fn slice_solid_and_encode_native_json_to_temp_path_with_progress(
+    job_json: String,
+    on_progress: Option<ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(String, u64), String> {
+    let job: SolidSliceJob = serde_json::from_str(&job_json)
+        .map_err(|err| format!("Invalid SolidSliceJob JSON: {err}"))?;
+    drop(job_json); // Free the large JSON string immediately after parsing.
+
+    if job.output_format != ".nanodlp" {
+        return Err(format!(
+            "Temp-path slicing currently supports .nanodlp only (got {}).",
+            job.output_format
+        ));
+    }
+
+    let (path, byte_len) = slice_solid_and_encode_nanodlp_streaming_to_temp_path_with_progress(
+        job,
+        on_progress,
+        cancel_flag,
+    )
+    .map_err(|err| format!("Solid slicing failed: {err}"))?;
+
+    Ok((path.to_string_lossy().to_string(), byte_len))
+}
+
 /// Legacy entry point without progress/cancellation (used by WASM path).
 pub fn slice_solid_and_encode_native_json(job_json: &str) -> Result<Vec<u8>, String> {
-    slice_solid_and_encode_native_json_with_progress(job_json, None, None)
+    slice_solid_and_encode_native_json_with_progress(job_json.to_owned(), None, None)
 }
 
 #[wasm_bindgen]
@@ -147,6 +180,7 @@ pub fn slice_solid_and_encode_raw(
         anti_aliasing_level,
         aa_on_supports,
         model_triangle_count: model_triangle_count as usize,
+        container_compression_level: 2,
         build_width_mm,
         build_depth_mm,
         layer_height_mm,
@@ -216,6 +250,7 @@ pub fn slice_solid_layers_chunk_raw(
         anti_aliasing_level,
         aa_on_supports,
         model_triangle_count: model_triangle_count as usize,
+        container_compression_level: 2,
         build_width_mm,
         build_depth_mm,
         layer_height_mm,

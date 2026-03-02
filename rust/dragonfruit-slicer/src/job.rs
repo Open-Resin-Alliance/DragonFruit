@@ -24,6 +24,10 @@ fn default_model_triangle_count() -> usize {
     0
 }
 
+fn default_container_compression_level() -> u8 {
+    2
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJob {
     pub output_format: String,
@@ -55,6 +59,8 @@ pub struct SolidSliceJob {
     pub aa_on_supports: bool,
     #[serde(default = "default_model_triangle_count")]
     pub model_triangle_count: usize,
+    #[serde(default = "default_container_compression_level")]
+    pub container_compression_level: u8,
     pub build_width_mm: f32,
     pub build_depth_mm: f32,
     pub layer_height_mm: f32,

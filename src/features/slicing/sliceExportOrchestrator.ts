@@ -2,7 +2,10 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { resolveSlicingFormatDefinition } from './formats/registry';
-import { isNativeSlicerAvailable, sliceSolidAndEncodeWithNativeSlicer } from './tauri/nativeSlicerBridge';
+import {
+  isNativeSlicerAvailable,
+  sliceSolidAndEncodeWithNativeSlicerToTempPath,
+} from './tauri/nativeSlicerBridge';
 
 const DEBUG_PREFIX = '[SlicingDebug]';
 
@@ -42,10 +45,11 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 export type SliceExportArtifact = {
-  blob: Blob;
+  blob: Blob | null;
   outputName: string;
   mimeType: string;
   byteSize: number;
+  nativeTempPath: string | null;
 };
 
 export type SliceExportResult = {
@@ -68,42 +72,6 @@ function safeFilenameBase(raw: string): string {
   if (!trimmed) return 'slice_export';
   const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   return cleaned || 'slice_export';
-}
-
-function triggerBlobDownload(blob: Blob, filename: string): void {
-  const nav = typeof navigator !== 'undefined'
-    ? (navigator as Navigator & { msSaveOrOpenBlob?: (payload: Blob, name?: string) => boolean })
-    : null;
-
-  if (nav?.msSaveOrOpenBlob) {
-    nav.msSaveOrOpenBlob(blob, filename);
-    return;
-  }
-
-  if (typeof window === 'undefined' || typeof document === 'undefined') {
-    throw new Error('Browser download APIs are unavailable in this runtime.');
-  }
-
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = filename;
-  anchor.rel = 'noopener';
-  anchor.style.display = 'none';
-
-  document.body?.appendChild(anchor);
-  anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-  anchor.remove();
-
-  window.setTimeout(() => {
-    URL.revokeObjectURL(objectUrl);
-  }, 1000);
-}
-
-function triggerByteDownload(bytes: Uint8Array, filename: string, mimeType = 'application/octet-stream'): void {
-  const normalized = Uint8Array.from(bytes);
-  const blob = new Blob([normalized], { type: mimeType });
-  triggerBlobDownload(blob, filename);
 }
 
 /**
@@ -168,6 +136,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
     aaOnSupports: options.aaOnSupports ?? false,
     modelTriangleCount: solidMesh.modelTriangleCount,
+    containerCompressionLevel: 2,
     buildWidthMm: solidMesh.buildWidthMm,
     buildDepthMm: solidMesh.buildDepthMm,
     layerHeightMm: solidMesh.layerHeightMm,
@@ -183,7 +152,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     options.onProgress?.(done, total, `Slicing layer ${done}/${total} · ${format.displayName}`);
   };
 
-  const encodedBytes = await sliceSolidAndEncodeWithNativeSlicer(
+  const encodedArtifact = await sliceSolidAndEncodeWithNativeSlicerToTempPath(
     nativeJob,
     options.abortSignal,
     slicerProgressCallback,
@@ -196,10 +165,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
   const outputExt = format.outputFormat.replace(/^\./, '') || 'slice';
   const outputName = `${safeFilenameBase(options.filenameBase)}.${outputExt}`;
-  const artifactBlob = new Blob([encodedBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
-  if (options.outputMode !== 'return') {
-    triggerByteDownload(encodedBytes, outputName);
-  }
 
   const totalElapsedMs = performance.now() - orchestratorStartMs;
   const layersPerSecond = totalElapsedMs > 0
@@ -212,10 +177,11 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     nativeAvailable,
     nativeError: null,
     artifact: {
-      blob: artifactBlob,
+      blob: null,
       outputName,
       mimeType: 'application/octet-stream',
-      byteSize: artifactBlob.size,
+      byteSize: encodedArtifact.byteLen,
+      nativeTempPath: encodedArtifact.tempPath,
     },
     benchmark: {
       totalElapsedMs,

@@ -64,8 +64,13 @@ function normalizeExportBaseName(rawName: string | null | undefined): string {
 
 function formatDuration(ms: number | null): string {
   if (ms == null || !Number.isFinite(ms)) return '—';
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(2)} s`;
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours.toString().padStart(2, '0')}:${minutes
+    .toString()
+    .padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 }
 
 function formatLayerRate(layersPerSecond: number | null): string {
@@ -602,6 +607,28 @@ export function SlicingPanel({
 
       const effectiveElapsedMs = benchmarkTotalMs || elapsedMs;
       const effectiveCoreMs = benchmarkCoreMs ?? rasterAccumulatedMs;
+      const effectiveMeshPrepMs = result.benchmark.meshPrepMs ?? 0;
+      const effectivePostRasterMs = Math.max(
+        0,
+        effectiveElapsedMs - effectiveCoreMs - effectiveMeshPrepMs,
+      );
+
+      console.groupCollapsed('[SlicingPerf] Native slicing summary');
+      console.log({
+        backend: result.backend,
+        outputFormat: result.outputFormat,
+        totalElapsedMs: Number(effectiveElapsedMs.toFixed(2)),
+        meshPrepMs: Number(effectiveMeshPrepMs.toFixed(2)),
+        rasterizingMs: Number(effectiveCoreMs.toFixed(2)),
+        postRasterMs: Number(effectivePostRasterMs.toFixed(2)),
+        totalLayers: result.benchmark.totalLayers,
+        layersPerSecond: result.benchmark.layersPerSecond,
+        artifactBytes: result.artifact?.byteSize ?? null,
+      });
+      console.info(
+        '[SlicingPerf] Detailed worker stage timing (raster/pack/zip) is emitted by native Rust logs with the same prefix.',
+      );
+      console.groupEnd();
 
       setLifetimeTelemetry((prev) => ({
         runCount: prev.runCount + 1,

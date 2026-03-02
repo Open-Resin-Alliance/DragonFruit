@@ -98,6 +98,11 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
+import {
+  readPrintArtifactBytesFromPath,
+  savePrintArtifactPathWithNativeDialog,
+  savePrintArtifactWithNativeDialog,
+} from '@/features/slicing/tauri/nativeSlicerBridge';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import {
   getSupportBraceSnapshot,
@@ -2169,8 +2174,46 @@ export default function Home() {
     };
   }, [printingDeviceProcessingStartedAtMs, printingUploadDialogOpen, printingUploadDialogStage]);
 
-  const handleDownloadPrintArtifact = React.useCallback(() => {
+  const handleDownloadPrintArtifact = React.useCallback(async () => {
     if (!printingArtifact) return;
+
+    const nativeTempPath = printingArtifact.nativeTempPath;
+
+    if (nativeTempPath && nativeTempPath.trim().length > 0) {
+      try {
+        await savePrintArtifactPathWithNativeDialog(nativeTempPath, printingArtifact.outputName);
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        const cancelled = message.toLowerCase().includes('cancel');
+        if (!cancelled) {
+          console.warn('[Printing] Native path save dialog failed, attempting byte fallback.', error);
+        }
+      }
+    }
+
+    try {
+      const bytes = printingArtifact.blob
+        ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
+        : (nativeTempPath ? await readPrintArtifactBytesFromPath(nativeTempPath) : null);
+      if (!bytes) {
+        throw new Error('No print artifact bytes available for download.');
+      }
+      await savePrintArtifactWithNativeDialog(bytes, printingArtifact.outputName);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      const cancelled = message.toLowerCase().includes('cancel');
+      if (!cancelled) {
+        console.warn('[Printing] Native save dialog failed, falling back to browser download.', error);
+      }
+    }
+
+    if (!printingArtifact.blob) {
+      console.warn('[Printing] Browser fallback unavailable because artifact is disk-backed only.');
+      return;
+    }
+
     const objectUrl = URL.createObjectURL(printingArtifact.blob);
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
@@ -2211,7 +2254,14 @@ export default function Home() {
     setPrintingDeviceProcessingElapsedSec(0);
 
     try {
-      const bytes = new Uint8Array(await printingArtifact.blob.arrayBuffer());
+      const bytes = printingArtifact.blob
+        ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
+        : (printingArtifact.nativeTempPath
+          ? await readPrintArtifactBytesFromPath(printingArtifact.nativeTempPath)
+          : null);
+      if (!bytes) {
+        throw new Error('No print artifact bytes available for printer upload.');
+      }
       let binary = '';
       const chunkSize = 0x8000;
       for (let i = 0; i < bytes.length; i += chunkSize) {

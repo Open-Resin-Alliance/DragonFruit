@@ -19,6 +19,7 @@ export type NativeSolidSliceJobEnvelope = {
   antiAliasingLevel: 'Off' | '2x' | '4x' | '8x';
   aaOnSupports: boolean;
   modelTriangleCount: number;
+  containerCompressionLevel?: number;
   buildWidthMm: number;
   buildDepthMm: number;
   layerHeightMm: number;
@@ -40,6 +41,7 @@ type NativeSolidSlicePayload = {
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x';
   aa_on_supports: boolean;
   model_triangle_count: number;
+  container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
   layer_height_mm: number;
@@ -107,6 +109,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,
     model_triangle_count: job.modelTriangleCount,
+    container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,
     layer_height_mm: job.layerHeightMm,
@@ -122,6 +125,11 @@ export async function isNativeSlicerAvailable(): Promise<boolean> {
 }
 
 export type SlicerProgressCallback = (done: number, total: number) => void;
+
+export type NativeSliceTempPathArtifact = {
+  tempPath: string;
+  byteLen: number;
+};
 
 /**
  * Invoke the native slicer with real per-layer progress events and cooperative cancellation.
@@ -211,4 +219,147 @@ export async function sliceSolidAndEncodeWithNativeSlicer(
     cleanup();
     throw error;
   }
+}
+
+/**
+ * Invoke the native slicer and keep the encoded artifact on disk,
+ * returning temp file metadata instead of the full byte buffer.
+ */
+export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
+  job: NativeSolidSliceJobEnvelope,
+  abortSignal?: AbortSignal,
+  onProgress?: SlicerProgressCallback,
+): Promise<NativeSliceTempPathArtifact> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  if (abortSignal?.aborted) {
+    throw createAbortError();
+  }
+
+  const eventModule = await loadTauriEvent();
+  let unlistenProgress: (() => void) | null = null;
+
+  if (eventModule && onProgress) {
+    unlistenProgress = await eventModule.listen<SliceProgressEvent>(
+      'slicer://progress',
+      (event) => {
+        onProgress(event.payload.done, event.payload.total);
+      },
+    );
+  }
+
+  let settled = false;
+  const payload = JSON.stringify(toNativePayload(job));
+
+  const cleanup = () => {
+    if (unlistenProgress) {
+      unlistenProgress();
+      unlistenProgress = null;
+    }
+  };
+
+  try {
+    const resultPromise = core.invoke<{ tempPath: string; byteLen: number }>('slice_solid_native_to_temp_path', { jobJson: payload });
+
+    if (!abortSignal) {
+      const result = await resultPromise;
+      cleanup();
+      return {
+        tempPath: result.tempPath,
+        byteLen: Number.isFinite(result.byteLen) ? result.byteLen : 0,
+      };
+    }
+
+    const result = await new Promise<{ tempPath: string; byteLen: number }>((resolve, reject) => {
+      const handleAbort = () => {
+        if (settled) return;
+        settled = true;
+        core.invoke('cancel_slicing').catch(() => {});
+        reject(createAbortError());
+      };
+
+      abortSignal.addEventListener('abort', handleAbort, { once: true });
+
+      resultPromise
+        .then((res) => {
+          if (settled) return;
+          settled = true;
+          abortSignal.removeEventListener('abort', handleAbort);
+          resolve(res);
+        })
+        .catch((err) => {
+          if (settled) return;
+          settled = true;
+          abortSignal.removeEventListener('abort', handleAbort);
+          if (typeof err === 'string' && err.includes('cancelled')) {
+            reject(createAbortError());
+          } else {
+            reject(err);
+          }
+        });
+    });
+
+    cleanup();
+    return {
+      tempPath: result.tempPath,
+      byteLen: Number.isFinite(result.byteLen) ? result.byteLen : 0,
+    };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
+export async function savePrintArtifactWithNativeDialog(
+  bytes: Uint8Array,
+  defaultFilename: string,
+): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native save dialog is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const path = await core.invoke<string>('save_print_file', {
+    args: {
+      defaultFilename,
+      bytes: Uint8Array.from(bytes),
+    },
+  });
+
+  return path;
+}
+
+export async function savePrintArtifactPathWithNativeDialog(
+  sourcePath: string,
+  defaultFilename: string,
+): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native save dialog is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const path = await core.invoke<string>('save_print_file_from_path', {
+    args: {
+      defaultFilename,
+      sourcePath,
+    },
+  });
+
+  return path;
+}
+
+export async function readPrintArtifactBytesFromPath(sourcePath: string): Promise<Uint8Array> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const result = await core.invoke<ArrayBuffer>('read_print_file_bytes', {
+    sourcePath,
+  });
+
+  return new Uint8Array(result);
 }

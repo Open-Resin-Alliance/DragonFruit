@@ -2,8 +2,9 @@ use crate::bvh::BVHNode;
 use crate::job::{SliceJob, SolidSliceJob};
 use rayon::prelude::*;
 use serde_json::{json, Value};
-use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
 use thiserror::Error;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -124,6 +125,16 @@ fn select_raster_backend(requested: RasterComputeBackend) -> RasterComputeBacken
     }
 }
 
+#[inline]
+fn select_pack_backend(requested: RasterComputeBackend) -> RasterComputeBackend {
+    // Keep rasterization on CPU (faster with spatial bucketing), but allow explicit
+    // GPU selection to accelerate mask packing when available.
+    match requested {
+        RasterComputeBackend::Gpu => RasterComputeBackend::Gpu,
+        RasterComputeBackend::Cpu | RasterComputeBackend::Auto => RasterComputeBackend::Cpu,
+    }
+}
+
 fn quantize_coverage_to_level(coverage: f32, aa_level: AntiAliasingLevel) -> u8 {
     let c = coverage.clamp(0.0, 1.0);
     match aa_level {
@@ -171,6 +182,18 @@ fn parse_png_compression_strategy(strategy: &str) -> crate::fast_png::Compressio
         "optimal" => crate::fast_png::CompressionStrategy::Optimal,
         _ => crate::fast_png::CompressionStrategy::Balanced,
     }
+}
+
+#[inline]
+fn normalize_container_compression_level(raw: u8) -> u8 {
+    raw.min(9)
+}
+
+#[inline]
+fn should_store_layer_png_in_zip(png_strategy: crate::fast_png::CompressionStrategy) -> bool {
+    // Layer PNGs are already compressed when strategy != Fastest.
+    // Re-deflating these bytes at the ZIP layer is usually wasted CPU.
+    png_strategy != crate::fast_png::CompressionStrategy::Fastest
 }
 
 fn should_use_bvh(triangle_count: usize, bvh_acceleration_enabled: bool) -> bool {
@@ -615,6 +638,24 @@ fn rasterize_segments_solid(
                 continue;
             }
 
+            let row = &mut mask[row_start..row_start + width];
+
+            if aa_level == AntiAliasingLevel::Off {
+                // Binary on/off: fill pixels touched by coverage [a, b)
+                // Use floor for left (include left-partial pixels) and ceil for right (include right-partial pixels)
+                let start_px = a.floor() as i32;
+                let end_px = b.ceil() as i32;
+                if end_px <= start_px || end_px <= 0 || start_px >= width as i32 {
+                    continue;
+                }
+                let clamped_start = start_px.max(0) as usize;
+                let clamped_end = ((end_px - 1).min(width as i32 - 1)) as usize;
+                if clamped_end >= clamped_start {
+                    fill_row_span_white(row, clamped_start, clamped_end);
+                }
+                continue;
+            }
+
             let start_px = a.floor() as i32;
             let end_px = (b - 1e-6).floor() as i32;
             if end_px < 0 || start_px >= width as i32 {
@@ -623,12 +664,6 @@ fn rasterize_segments_solid(
 
             let clamped_start = start_px.clamp(0, (width as i32) - 1) as usize;
             let clamped_end = end_px.clamp(0, (width as i32) - 1) as usize;
-            let row = &mut mask[row_start..row_start + width];
-
-            if aa_level == AntiAliasingLevel::Off {
-                fill_row_span_white(row, clamped_start, clamped_end);
-                continue;
-            }
 
             if clamped_start == clamped_end {
                 let px_left = clamped_start as f32;
@@ -665,7 +700,11 @@ fn rasterize_segments_solid(
 
     // Second-pass vertical scanline AA to reduce horizontal stair stepping.
     // This mirrors the row-based pass with column sampling for balanced X/Y behavior.
-    if aa_level != AntiAliasingLevel::Off && height >= 2 {
+    // Skip vertical AA on very large outputs to avoid 512MB+ temporary allocations.
+    let pixel_count = (width as u64) * (height as u64);
+    let skip_vertical_aa_due_to_size = pixel_count > 8_000_000; // ~2880x2880+
+
+    if aa_level != AntiAliasingLevel::Off && height >= 2 && !skip_vertical_aa_due_to_size {
         let mut mask_y = vec![0u8; width * height];
         let mut y_intersections: Vec<f32> = Vec::with_capacity(1024);
         let column_buckets = build_column_segment_buckets(width_px, segments);
@@ -1863,13 +1902,23 @@ pub fn slice_solid_and_encode_nanodlp_streaming(
     let mut first_layer_png: Option<Vec<u8>> = None;
     let mut preview_layer_png: Option<Vec<u8>> = None;
 
+    let container_compression_level =
+        normalize_container_compression_level(job.container_compression_level);
+    let store_layer_pngs = should_store_layer_png_in_zip(png_strategy);
+    let png_options = if store_layer_pngs || container_compression_level == 0 {
+        FileOptions::default().compression_method(CompressionMethod::Stored)
+    } else {
+        FileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(container_compression_level as i32))
+    };
+
     let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
     {
         let mut zip = ZipWriter::new(&mut cursor);
         let metadata_options = FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(7));
-        let png_options = FileOptions::default().compression_method(CompressionMethod::Stored);
 
         zip.start_file("meta.json", metadata_options)
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
@@ -1986,7 +2035,8 @@ pub fn to_container_job(base: &SolidSliceJob, layer_pngs: Vec<Vec<u8>>) -> Slice
 // ---------------------------------------------------------------------------
 
 fn render_layer_png_parallel(
-    backend: RasterComputeBackend,
+    raster_backend: RasterComputeBackend,
+    pack_backend: RasterComputeBackend,
     job: &SolidSliceJob,
     triangles: &[Tri],
     bvh: Option<&BVHNode>,
@@ -2000,7 +2050,9 @@ fn render_layer_png_parallel(
     min_y_mm: f32,
     aa_level: AntiAliasingLevel,
     layer_index: u32,
+    perf: Option<&SlicingPerfCounters>,
 ) -> Result<Vec<u8>, SolidSlicerError> {
+    let render_start = Instant::now();
     let z_mm = ((layer_index as f32) + 0.5) * job.layer_height_mm;
 
     // Get triangle indices for this layer (BVH query or bucket lookup)
@@ -2014,8 +2066,15 @@ fn render_layer_png_parallel(
     };
 
     if triangle_indices.is_empty() {
+        if let Some(perf) = perf {
+            perf.render_total_ns
+                .fetch_add(elapsed_ns_u64(render_start), Ordering::Relaxed);
+            perf.rendered_layers.fetch_add(1, Ordering::Relaxed);
+        }
         return Ok(empty_png.to_vec());
     }
+
+    let raster_start = Instant::now();
 
     let use_support_aware_aa = aa_level != AntiAliasingLevel::Off
         && !job.aa_on_supports
@@ -2074,6 +2133,13 @@ fn render_layer_png_parallel(
         }
 
         if !wrote_any {
+            if let Some(perf) = perf {
+                perf.rasterize_ns
+                    .fetch_add(elapsed_ns_u64(raster_start), Ordering::Relaxed);
+                perf.render_total_ns
+                    .fetch_add(elapsed_ns_u64(render_start), Ordering::Relaxed);
+                perf.rendered_layers.fetch_add(1, Ordering::Relaxed);
+            }
             return Ok(empty_png.to_vec());
         }
 
@@ -2092,14 +2158,24 @@ fn render_layer_png_parallel(
             job.source_width_px,
             job.source_height_px,
             aa_level,
-            backend,
+            raster_backend,
         ) else {
+            if let Some(perf) = perf {
+                perf.rasterize_ns
+                    .fetch_add(elapsed_ns_u64(raster_start), Ordering::Relaxed);
+                perf.render_total_ns
+                    .fetch_add(elapsed_ns_u64(render_start), Ordering::Relaxed);
+                perf.rendered_layers.fetch_add(1, Ordering::Relaxed);
+            }
             return Ok(empty_png.to_vec());
         };
         mask
     };
 
-    pack_mask_to_nanodlp_png_with_backend(
+    let raster_elapsed_ns = elapsed_ns_u64(raster_start);
+    let pack_start = Instant::now();
+
+    let packed = pack_mask_to_nanodlp_png_with_backend(
         &mask,
         job.source_width_px,
         job.source_height_px,
@@ -2107,13 +2183,28 @@ fn render_layer_png_parallel(
         job.height_px,
         packing_mode,
         png_strategy,
-        backend,
-    )
+        pack_backend,
+    );
+
+    let pack_elapsed_ns = elapsed_ns_u64(pack_start);
+
+    if let Some(perf) = perf {
+        perf.rasterize_ns
+            .fetch_add(raster_elapsed_ns, Ordering::Relaxed);
+        perf.pack_png_ns
+            .fetch_add(pack_elapsed_ns, Ordering::Relaxed);
+        perf.render_total_ns
+            .fetch_add(elapsed_ns_u64(render_start), Ordering::Relaxed);
+        perf.rendered_layers.fetch_add(1, Ordering::Relaxed);
+    }
+
+    packed
 }
 
 #[inline]
 fn render_layer_png_parallel_with_backend(
-    backend: RasterComputeBackend,
+    raster_backend: RasterComputeBackend,
+    pack_backend: RasterComputeBackend,
     job: &SolidSliceJob,
     triangles: &[Tri],
     bvh: Option<&BVHNode>,
@@ -2127,11 +2218,13 @@ fn render_layer_png_parallel_with_backend(
     min_y_mm: f32,
     aa_level: AntiAliasingLevel,
     layer_index: u32,
+    perf: Option<&SlicingPerfCounters>,
 ) -> Result<Vec<u8>, SolidSlicerError> {
-    match backend {
+    match raster_backend {
         RasterComputeBackend::Cpu | RasterComputeBackend::Auto | RasterComputeBackend::Gpu => {
             render_layer_png_parallel(
-                backend,
+                raster_backend,
+                pack_backend,
                 job,
                 triangles,
                 bvh,
@@ -2145,6 +2238,7 @@ fn render_layer_png_parallel_with_backend(
                 min_y_mm,
                 aa_level,
                 layer_index,
+                perf,
             )
         }
     }
@@ -2155,6 +2249,177 @@ fn render_layer_png_parallel_with_backend(
 // ---------------------------------------------------------------------------
 
 pub type ProgressCallback = Box<dyn Fn(u32, u32) + Send + Sync>;
+
+#[derive(Default)]
+struct SlicingPerfCounters {
+    render_total_ns: AtomicU64,
+    rasterize_ns: AtomicU64,
+    pack_png_ns: AtomicU64,
+    zip_write_ns: AtomicU64,
+    rendered_layers: AtomicU64,
+    zipped_layers: AtomicU64,
+}
+
+#[inline]
+fn elapsed_ns_u64(start: Instant) -> u64 {
+    let nanos = start.elapsed().as_nanos();
+    nanos.min(u64::MAX as u128) as u64
+}
+
+#[inline]
+fn ns_to_ms(ns: u64) -> f64 {
+    (ns as f64) / 1_000_000.0
+}
+
+#[inline]
+fn ns_to_s(ns: u64) -> f64 {
+    (ns as f64) / 1_000_000_000.0
+}
+
+fn choose_pipeline_buffer_layers(
+    job: &SolidSliceJob,
+    compression_level: u8,
+    max_concurrent_renders: usize,
+) -> usize {
+    // Keep at least 6GB available for OS + browser/dev server + desktop shell.
+    // In tauri:dev, node/chromium can spike hard during compile/reload.
+    const SYSTEM_HEADROOM_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+    const MIN_BUFFER: usize = 2;
+    const ABS_MAX_BUFFER: usize = 12;
+
+    // Conservative per-layer estimate of in-flight memory held by channel + reorder map.
+    // Stored entries and low compression can produce larger PNG payloads.
+    let layer_pixels = (job.width_px as u64).saturating_mul(job.height_px as u64);
+    let per_layer_bytes = if compression_level == 0 {
+        layer_pixels.saturating_add(256 * 1024)
+    } else {
+        (layer_pixels / 2).saturating_add(192 * 1024)
+    }
+    .max(1 * 1024 * 1024);
+
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let available_bytes = system.available_memory();
+
+    let budget_bytes = available_bytes.saturating_sub(SYSTEM_HEADROOM_BYTES);
+    if budget_bytes == 0 {
+        return MIN_BUFFER;
+    }
+
+    // Bound queue depth by renderer concurrency so writer lag can't hoard too many PNGs.
+    let concurrency_cap =
+        (max_concurrent_renders.saturating_mul(2)).clamp(MIN_BUFFER, ABS_MAX_BUFFER);
+    let fit = (budget_bytes / per_layer_bytes).clamp(MIN_BUFFER as u64, concurrency_cap as u64);
+    fit as usize
+}
+
+/// Estimate the per-thread working memory for rendering one layer.
+/// Accounts for masks, segment buffers, row_buckets, and PNG encoding.
+fn estimate_per_render_bytes(job: &SolidSliceJob, aa_level: AntiAliasingLevel) -> u64 {
+    let source_pixels = (job.source_width_px as u64).saturating_mul(job.source_height_px as u64);
+    // Base: one mask allocation + row_buckets overhead + segments + PNG output.
+    let base = source_pixels + 512 * 1024 + source_pixels; // mask + overhead + PNG output
+                                                           // Support-aware AA path allocates merged + temp model_mask + temp support_mask.
+    let has_support_aa = aa_level != AntiAliasingLevel::Off
+        && !job.aa_on_supports
+        && job.model_triangle_count > 0
+        && job.model_triangle_count < (job.triangles_xyz.len() / 9);
+    if has_support_aa {
+        // merged + model_mask + support_mask (only 2 coexist at peak)
+        base + source_pixels
+    } else {
+        base
+    }
+}
+
+/// Choose the maximum number of concurrent layer renders based on available memory.
+fn choose_max_concurrent_renders(job: &SolidSliceJob, aa_level: AntiAliasingLevel) -> usize {
+    const SYSTEM_HEADROOM_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+    const MIN_CONCURRENT: usize = 1;
+
+    let hw_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    // The measured per-render peak is much higher than the simple mask estimate,
+    // especially at high resolutions with AA + packing + compression buffers.
+    // Apply a conservative safety multiplier to avoid optimistic over-subscription.
+    let per_render = estimate_per_render_bytes(job, aa_level)
+        .saturating_mul(4)
+        .max(1);
+
+    // Hard cap by source resolution to avoid catastrophic over-parallelization.
+    // 11520x5120 (~59M px) can require very large transient allocations per worker.
+    let source_pixels = (job.source_width_px as u64).saturating_mul(job.source_height_px as u64);
+    let resolution_cap = if source_pixels >= 45_000_000 {
+        2
+    } else if source_pixels >= 20_000_000 {
+        3
+    } else if source_pixels >= 12_000_000 {
+        4
+    } else if source_pixels >= 8_000_000 {
+        6
+    } else if source_pixels >= 4_000_000 {
+        8
+    } else {
+        12
+    };
+
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let available = system.available_memory();
+    let budget = available.saturating_sub(SYSTEM_HEADROOM_BYTES);
+    if budget == 0 {
+        return MIN_CONCURRENT.min(resolution_cap).min(hw_threads);
+    }
+
+    let fit = (budget / per_render) as usize;
+    let auto_cap = fit.clamp(MIN_CONCURRENT, hw_threads).min(resolution_cap);
+
+    // Optional operator override for emergency tuning in dev/prod without rebuild.
+    // Example: set DF_SLICER_MAX_CONCURRENT=2
+    let env_cap = std::env::var("DF_SLICER_MAX_CONCURRENT")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|v| *v >= 1);
+
+    if let Some(cap) = env_cap {
+        auto_cap.min(cap.max(1))
+    } else {
+        auto_cap
+    }
+}
+
+/// Simple counting semaphore for limiting concurrent operations.
+struct RenderSemaphore {
+    state: std::sync::Mutex<usize>,
+    cv: std::sync::Condvar,
+    max: usize,
+}
+
+impl RenderSemaphore {
+    fn new(max: usize) -> Self {
+        Self {
+            state: std::sync::Mutex::new(0),
+            cv: std::sync::Condvar::new(),
+            max,
+        }
+    }
+
+    fn acquire(&self) {
+        let mut count = self.state.lock().unwrap();
+        while *count >= self.max {
+            count = self.cv.wait(count).unwrap();
+        }
+        *count += 1;
+    }
+
+    fn release(&self) {
+        let mut count = self.state.lock().unwrap();
+        *count -= 1;
+        self.cv.notify_one();
+    }
+}
 
 #[inline]
 fn check_cancelled(cancel_flag: Option<&AtomicBool>) -> Result<(), SolidSlicerError> {
@@ -2182,6 +2447,7 @@ pub fn solid_slice_to_png_layers_with_progress(
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
     let requested_backend = parse_compute_backend(&job.compute_backend);
     let raster_backend = select_raster_backend(requested_backend);
+    let pack_backend = select_pack_backend(requested_backend);
     let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
     let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let triangles = parse_triangles(&job.triangles_xyz)?;
@@ -2230,6 +2496,7 @@ pub fn solid_slice_to_png_layers_with_progress(
             let png = if use_bvh {
                 render_layer_png_parallel_with_backend(
                     raster_backend,
+                    pack_backend,
                     job,
                     &triangles,
                     Some(bvh.as_ref().unwrap()),
@@ -2243,10 +2510,12 @@ pub fn solid_slice_to_png_layers_with_progress(
                     min_y_mm,
                     aa_level,
                     layer_index,
+                    None,
                 )
             } else {
                 render_layer_png_parallel_with_backend(
                     raster_backend,
+                    pack_backend,
                     job,
                     &triangles,
                     None,
@@ -2260,6 +2529,7 @@ pub fn solid_slice_to_png_layers_with_progress(
                     min_y_mm,
                     aa_level,
                     layer_index,
+                    None,
                 )
             }?;
 
@@ -2275,27 +2545,48 @@ pub fn solid_slice_to_png_layers_with_progress(
     layer_pngs
 }
 
-pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
-    job: &SolidSliceJob,
+enum StreamingArtifact {
+    Bytes(Vec<u8>),
+    TempPath {
+        path: std::path::PathBuf,
+        byte_len: u64,
+    },
+}
+
+fn slice_solid_and_encode_nanodlp_streaming_with_progress_impl(
+    mut job: SolidSliceJob,
     on_progress: Option<ProgressCallback>,
     cancel_flag: Option<&AtomicBool>,
-) -> Result<Vec<u8>, SolidSlicerError> {
+) -> Result<StreamingArtifact, SolidSlicerError> {
+    let total_start = Instant::now();
     let source_metadata: Value = serde_json::from_str(&job.metadata_json)
         .map_err(|err| SolidSlicerError::MetadataJson(err.to_string()))?;
 
-    let plate_json = json_pretty_bytes(&build_plate_json(job, &source_metadata))?;
+    let plate_json = json_pretty_bytes(&build_plate_json(&job, &source_metadata))?;
     let meta_json = json_pretty_bytes(&build_meta_json())?;
-    let slicer_json = json_pretty_bytes(&build_slicer_json(job))?;
-    let profile_json = json_pretty_bytes(&build_profile_json(job, &source_metadata))?;
-    let options_json = json_pretty_bytes(&build_options_json(job))?;
+    let slicer_json = json_pretty_bytes(&build_slicer_json(&job))?;
+    let profile_json = json_pretty_bytes(&build_profile_json(&job, &source_metadata))?;
+    let options_json = json_pretty_bytes(&build_options_json(&job))?;
 
     let packing_mode = parse_packing_mode(&job.x_packing_mode)?;
     let requested_backend = parse_compute_backend(&job.compute_backend);
     let raster_backend = select_raster_backend(requested_backend);
+    let pack_backend = select_pack_backend(requested_backend);
     let aa_level = parse_anti_aliasing_level(&job.anti_aliasing_level);
     let png_strategy = parse_png_compression_strategy(&job.png_compression_strategy);
     let (mirror_x, mirror_y) = extract_mirror_flags(&source_metadata);
     let triangles = parse_triangles(&job.triangles_xyz)?;
+
+    // Compute memory-aware concurrency limit BEFORE freeing triangles_xyz,
+    // since the estimate needs the triangle count for support-AA detection.
+    let max_concurrent = choose_max_concurrent_renders(&job, aa_level);
+
+    // Free the raw f32 triangle buffer (~36–72 MB for large models).
+    // All subsequent rendering uses the parsed Vec<Tri> instead.
+    let raw_tri_bytes = job.triangles_xyz.len() * std::mem::size_of::<f32>();
+    job.triangles_xyz = Vec::new();
+    eprintln!("[SlicingMem] freed triangles_xyz: {} bytes", raw_tri_bytes);
+
     let min_x_mm = -job.build_width_mm * 0.5;
     let min_y_mm = -job.build_depth_mm * 0.5;
 
@@ -2328,42 +2619,30 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
 
     // Track progress atomically from parallel threads
     let progress_counter = std::sync::atomic::AtomicU32::new(0);
+    let perf = SlicingPerfCounters::default();
 
-    // When the raw encoder is active each PNG is uncompressed (~9.2 MB for 3840×2400).
-    // Use ZIP-level Deflated so the output file stays compact.  Compressed strategies
-    // already have per-PNG deflate; Stored avoids double-compression overhead.
-    let use_raw_encoder = png_strategy == crate::fast_png::CompressionStrategy::Fastest;
-    let png_zip_options = if use_raw_encoder {
+    let container_compression_level =
+        normalize_container_compression_level(job.container_compression_level);
+    let pipeline_buffer =
+        choose_pipeline_buffer_layers(&job, container_compression_level, max_concurrent);
+    let render_semaphore = RenderSemaphore::new(max_concurrent);
+    let store_layer_pngs = should_store_layer_png_in_zip(png_strategy);
+    eprintln!(
+        "[SlicingMem] pipeline_buffer={} max_concurrent_renders={}",
+        pipeline_buffer, max_concurrent
+    );
+    let png_zip_options = if store_layer_pngs || container_compression_level == 0 {
+        FileOptions::default().compression_method(CompressionMethod::Stored)
+    } else {
         FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
-            .compression_level(Some(1))
-    } else {
-        FileOptions::default().compression_method(CompressionMethod::Stored)
+            .compression_level(Some(container_compression_level as i32))
     };
 
-    // Reserve output buffer capacity up front to reduce expensive realloc/copy
-    // churn as the archive grows with many layers.
-    let metadata_bytes_estimate = meta_json.len()
-        + slicer_json.len()
-        + plate_json.len()
-        + profile_json.len()
-        + options_json.len()
-        + 8192;
-    let per_layer_zip_estimate = if use_raw_encoder {
-        // Raw PNG + ZIP deflate level 1 typically lands around 100-200 KB/layer
-        // for binary masks; reserve conservatively to keep growth amortized.
-        192 * 1024
-    } else {
-        // Stored pre-compressed PNG entries are often larger than raw+zip-deflate.
-        // Keep a broader estimate for non-raw modes.
-        320 * 1024
-    };
-    let reserve_bytes = metadata_bytes_estimate
-        .saturating_add((job.total_layers as usize).saturating_mul(per_layer_zip_estimate));
-
-    let mut cursor = std::io::Cursor::new(Vec::<u8>::with_capacity(reserve_bytes));
+    let mut archive_file = tempfile::tempfile()
+        .map_err(|err| SolidSlicerError::ZipWrite(format!("temp archive create failed: {err}")))?;
     {
-        let mut zip = ZipWriter::new(&mut cursor);
+        let mut zip = ZipWriter::new(&mut archive_file);
         let metadata_options = FileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(7));
@@ -2406,17 +2685,18 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
         // Render workers (Rayon pool) and the ZIP writer (calling thread) run
         // concurrently; there is no burst/idle pattern.
         //
-        // Memory bound: PIPELINE_BUFFER limits how many uncompressed PNGs can sit
-        // in the channel at once.  If the ZIP writer is slower, render workers block
-        // on tx.send() (backpressure) rather than accumulating PNGs unboundedly.
-        // 32 × 9.2 MB ≈ 294 MB peak channel memory for a 3840×2400 build plate.
+        // Memory bounds:
+        // - RenderSemaphore limits how many threads render simultaneously,
+        //   capping per-thread mask/PNG working memory.
+        // - PIPELINE_BUFFER limits how many completed PNGs sit in the channel.
+        //   If the ZIP writer is slower, render workers block on tx.send()
+        //   (backpressure) rather than accumulating PNGs unboundedly.
         //
         // The reorder buffer (BTreeMap) holds a small number of out-of-order layers
         // until the expected next layer arrives.  Its depth is bounded in practice
-        // by the number of Rayon threads.
-        const PIPELINE_BUFFER: usize = 32;
+        // by the number of concurrent render permits.
         let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(u32, Vec<u8>), SolidSlicerError>>(
-            PIPELINE_BUFFER,
+            pipeline_buffer,
         );
 
         let mut pipeline_error: Result<(), SolidSlicerError> = Ok(());
@@ -2438,10 +2718,13 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
                     .for_each_with(tx, |tx, layer_index| {
                         let result = (|| -> Result<(u32, Vec<u8>), SolidSlicerError> {
                             check_cancelled(cancel_flag)?;
+                            // Limit concurrent renders to cap peak memory usage.
+                            render_semaphore.acquire();
                             let png = if use_bvh {
                                 render_layer_png_parallel_with_backend(
                                     raster_backend,
-                                    job,
+                                    pack_backend,
+                                    &job,
                                     &triangles,
                                     Some(bvh.as_ref().unwrap()),
                                     &[],
@@ -2454,11 +2737,13 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
                                     min_y_mm,
                                     aa_level,
                                     layer_index,
+                                    Some(&perf),
                                 )
                             } else {
                                 render_layer_png_parallel_with_backend(
                                     raster_backend,
-                                    job,
+                                    pack_backend,
+                                    &job,
                                     &triangles,
                                     None,
                                     &layer_buckets,
@@ -2471,8 +2756,11 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
                                     min_y_mm,
                                     aa_level,
                                     layer_index,
+                                    Some(&perf),
                                 )
-                            }?;
+                            };
+                            render_semaphore.release();
+                            let png = png?;
                             let done = progress_counter.fetch_add(1, Ordering::Relaxed) + 1;
                             if let Some(ref cb) = on_progress {
                                 cb(done, job.total_layers);
@@ -2512,6 +2800,7 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
                                 }
                             }
                             let name = format!("{}.png", next_to_write + 1);
+                            let zip_write_start = Instant::now();
                             let r = zip
                                 .start_file(name, png_zip_options)
                                 .map_err(|e| SolidSlicerError::ZipWrite(e.to_string()))
@@ -2519,6 +2808,9 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
                                     zip.write_all(&layer_png)
                                         .map_err(|e| SolidSlicerError::ZipWrite(e.to_string()))
                                 });
+                            perf.zip_write_ns
+                                .fetch_add(elapsed_ns_u64(zip_write_start), Ordering::Relaxed);
+                            perf.zipped_layers.fetch_add(1, Ordering::Relaxed);
                             // layer_png is dropped here, freeing the raw PNG memory.
                             if let Err(e) = r {
                                 pipeline_error = Err(e);
@@ -2535,10 +2827,13 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
         pipeline_error?;
 
         if let Some(preview_png) = preview_layer_png.as_deref().or(first_layer_png.as_deref()) {
+            let preview_zip_start = Instant::now();
             zip.start_file("3d.png", png_zip_options)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
             zip.write_all(preview_png)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
+            perf.zip_write_ns
+                .fetch_add(elapsed_ns_u64(preview_zip_start), Ordering::Relaxed);
 
             zip.start_file("3d.png.meta", metadata_options)
                 .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
@@ -2550,5 +2845,134 @@ pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
             .map_err(|err| SolidSlicerError::ZipWrite(err.to_string()))?;
     }
 
-    Ok(cursor.into_inner())
+    let archive_len = archive_file.seek(SeekFrom::End(0)).map_err(|err| {
+        SolidSlicerError::ZipWrite(format!("temp archive size probe failed: {err}"))
+    })?;
+
+    archive_file
+        .seek(SeekFrom::Start(0))
+        .map_err(|err| SolidSlicerError::ZipWrite(format!("temp archive rewind failed: {err}")))?;
+
+    let artifact = if archive_len >= 256 * 1024 * 1024 {
+        let unique_name = format!(
+            "dragonfruit_slice_{}_{}.nanodlp",
+            std::process::id(),
+            total_start.elapsed().as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique_name);
+        let mut persisted = std::fs::File::create(&path).map_err(|err| {
+            SolidSlicerError::ZipWrite(format!("temp archive persist create failed: {err}"))
+        })?;
+
+        std::io::copy(&mut archive_file, &mut persisted).map_err(|err| {
+            SolidSlicerError::ZipWrite(format!("temp archive persist copy failed: {err}"))
+        })?;
+
+        StreamingArtifact::TempPath {
+            path,
+            byte_len: archive_len,
+        }
+    } else {
+        let mut archive_bytes = Vec::with_capacity(archive_len as usize);
+        archive_file
+            .read_to_end(&mut archive_bytes)
+            .map_err(|err| {
+                SolidSlicerError::ZipWrite(format!("temp archive read failed: {err}"))
+            })?;
+        StreamingArtifact::Bytes(archive_bytes)
+    };
+
+    let total_ns = elapsed_ns_u64(total_start);
+    let render_total_ns = perf.render_total_ns.load(Ordering::Relaxed);
+    let rasterize_ns = perf.rasterize_ns.load(Ordering::Relaxed);
+    let pack_png_ns = perf.pack_png_ns.load(Ordering::Relaxed);
+    let zip_write_ns = perf.zip_write_ns.load(Ordering::Relaxed);
+    let rendered_layers = perf.rendered_layers.load(Ordering::Relaxed);
+    let zipped_layers = perf.zipped_layers.load(Ordering::Relaxed);
+    let other_ns = total_ns.saturating_sub(
+        rasterize_ns
+            .saturating_add(pack_png_ns)
+            .saturating_add(zip_write_ns),
+    );
+    let avg_render_ms = if rendered_layers > 0 {
+        ns_to_ms(render_total_ns) / (rendered_layers as f64)
+    } else {
+        0.0
+    };
+    let avg_zip_ms = if zipped_layers > 0 {
+        ns_to_ms(zip_write_ns) / (zipped_layers as f64)
+    } else {
+        0.0
+    };
+
+    eprintln!(
+        "[SlicingPerf] total={:.3}s layers={} rendered={} zipped={} raster={:.3}s pack_png={:.3}s zip_write={:.3}s other={:.3}s avg_render={:.3}ms avg_zip={:.3}ms compression_level={} layer_zip_mode={} threads={} pipeline_buffer={} max_concurrent={}",
+        ns_to_s(total_ns),
+        job.total_layers,
+        rendered_layers,
+        zipped_layers,
+        ns_to_s(rasterize_ns),
+        ns_to_s(pack_png_ns),
+        ns_to_s(zip_write_ns),
+        ns_to_s(other_ns),
+        avg_render_ms,
+        avg_zip_ms,
+        normalize_container_compression_level(job.container_compression_level),
+        if store_layer_pngs { "stored" } else { "deflated" },
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+        pipeline_buffer,
+        max_concurrent,
+    );
+
+    Ok(artifact)
+}
+
+pub fn slice_solid_and_encode_nanodlp_streaming_with_progress(
+    job: SolidSliceJob,
+    on_progress: Option<ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<Vec<u8>, SolidSlicerError> {
+    match slice_solid_and_encode_nanodlp_streaming_with_progress_impl(
+        job,
+        on_progress,
+        cancel_flag,
+    )? {
+        StreamingArtifact::Bytes(bytes) => Ok(bytes),
+        StreamingArtifact::TempPath { path, .. } => {
+            let bytes = std::fs::read(&path).map_err(|err| {
+                SolidSlicerError::ZipWrite(format!("temp archive reload failed: {err}"))
+            })?;
+            let _ = std::fs::remove_file(path);
+            Ok(bytes)
+        }
+    }
+}
+
+pub fn slice_solid_and_encode_nanodlp_streaming_to_temp_path_with_progress(
+    job: SolidSliceJob,
+    on_progress: Option<ProgressCallback>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(std::path::PathBuf, u64), SolidSlicerError> {
+    match slice_solid_and_encode_nanodlp_streaming_with_progress_impl(
+        job,
+        on_progress,
+        cancel_flag,
+    )? {
+        StreamingArtifact::TempPath { path, byte_len } => Ok((path, byte_len)),
+        StreamingArtifact::Bytes(bytes) => {
+            let unique_name = format!(
+                "dragonfruit_slice_{}_{}.nanodlp",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+            let path = std::env::temp_dir().join(unique_name);
+            std::fs::write(&path, &bytes).map_err(|err| {
+                SolidSlicerError::ZipWrite(format!("temp archive write failed: {err}"))
+            })?;
+            Ok((path, bytes.len() as u64))
+        }
+    }
 }
