@@ -10,8 +10,9 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { setSelectedId } from '../../state';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
-    initial: '#00ff00',
-    repeating: '#00e5ff',
+    top: '#00e5ff',
+    middle: '#76ff03',
+    bottom: '#ff6d00',
 };
 
 interface BraceRendererProps {
