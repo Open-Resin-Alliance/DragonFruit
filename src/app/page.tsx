@@ -1948,24 +1948,21 @@ export default function Home() {
     return supportMl + raftMl;
   }, [
     shouldCalculateVolumes,
-    // Only depend on support state when we're actually calculating volumes
-    ...(shouldCalculateVolumes ? [
-      computeFootprint,
-      computeRaftOuterBoundary,
-      raftSettingsSnapshot,
-      scene.models,
-      supportBraceStateSnapshot.knots,
-      supportBraceStateSnapshot.roots,
-      supportBraceStateSnapshot.supportBraces,
-      supportStateSnapshot.braces,
-      supportStateSnapshot.branches,
-      supportStateSnapshot.knots,
-      supportStateSnapshot.leaves,
-      supportStateSnapshot.roots,
-      supportStateSnapshot.sticks,
-      supportStateSnapshot.trunks,
-      supportStateSnapshot.twigs,
-    ] : []),
+    computeFootprint,
+    computeRaftOuterBoundary,
+    raftSettingsSnapshot,
+    scene.models,
+    supportBraceStateSnapshot.knots,
+    supportBraceStateSnapshot.roots,
+    supportBraceStateSnapshot.supportBraces,
+    supportStateSnapshot.braces,
+    supportStateSnapshot.branches,
+    supportStateSnapshot.knots,
+    supportStateSnapshot.leaves,
+    supportStateSnapshot.roots,
+    supportStateSnapshot.sticks,
+    supportStateSnapshot.trunks,
+    supportStateSnapshot.twigs,
   ]);
 
   React.useEffect(() => {

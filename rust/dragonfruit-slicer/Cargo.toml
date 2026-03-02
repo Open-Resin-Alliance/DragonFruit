@@ -1,8 +1,8 @@
 [package]
-name = "dragonfruit-slicer-wasm"
+name = "dragonfruit-slicer"
 version = "0.1.0"
 edition = "2021"
-description = "DragonFruit slicer core and container format encoders for WASM"
+description = "DragonFruit slicer core and container format encoders for native desktop"
 license = "MIT"
 
 [lib]
@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 wasm-bindgen = "=0.2.100"
+rayon = "1.10"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 time = "=0.3.36"
 time-core = "=0.1.2"

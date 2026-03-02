@@ -6,15 +6,11 @@ import type { SlicingPerformanceSettings, PngCompressionStrategy } from '@/compo
 
 interface PerformanceSettingsTabProps {
   settings: SlicingPerformanceSettings;
-  webGpuSupported: boolean;
-  webGpuStatusText: string;
   onChange: (settings: SlicingPerformanceSettings) => void;
 }
 
 export function PerformanceSettingsTab({
   settings,
-  webGpuSupported,
-  webGpuStatusText,
   onChange,
 }: PerformanceSettingsTabProps) {
   const patch = React.useCallback((partial: Partial<SlicingPerformanceSettings>) => {
@@ -46,7 +42,7 @@ export function PerformanceSettingsTab({
               Compute Backend
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              {webGpuStatusText}
+              Native Rust slicer backend (Tauri desktop).
             </p>
           </div>
         </div>
@@ -56,17 +52,14 @@ export function PerformanceSettingsTab({
             {([
               { key: 'auto', label: 'Auto', desc: 'Best available' },
               { key: 'cpu', label: 'CPU', desc: 'Stable' },
-              { key: 'webgpu', label: 'WebGPU', desc: 'Experimental' },
             ] as const).map((option) => {
               const active = settings.computeBackend === option.key;
-              const disabled = option.key === 'webgpu' && !webGpuSupported;
               return (
                 <button
                   key={option.key}
                   type="button"
-                  onClick={() => !disabled && patch({ computeBackend: option.key })}
-                  disabled={disabled}
-                  className="flex-1 rounded-md border px-2.5 py-2 text-center transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={() => patch({ computeBackend: option.key })}
+                  className="flex-1 rounded-md border px-2.5 py-2 text-center transition-all"
                   style={{
                     borderColor: active ? 'var(--accent)' : 'var(--border-subtle)',
                     background: active ? 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)' : 'var(--surface-1)',

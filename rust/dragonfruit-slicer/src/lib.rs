@@ -16,6 +16,30 @@ use solid_slicer::{
 };
 use wasm_bindgen::prelude::*;
 
+pub fn slice_solid_and_encode_native_json(job_json: &str) -> Result<Vec<u8>, String> {
+    let job: SolidSliceJob = serde_json::from_str(job_json)
+        .map_err(|err| format!("Invalid SolidSliceJob JSON: {err}"))?;
+
+    if job.output_format == ".nanodlp" {
+        return slice_solid_and_encode_nanodlp_streaming(&job)
+            .map_err(|err| format!("Solid slicing failed: {err}"));
+    }
+
+    let layer_pngs =
+        solid_slice_to_png_layers(&job).map_err(|err| format!("Solid slicing failed: {err}"))?;
+
+    let container_job = to_container_job(&job, layer_pngs);
+    let artifact: SliceArtifact = match container_job.output_format.as_str() {
+        ".nanodlp" => encode_nanodlp_container(&container_job)
+            .map_err(|err| format!("NanoDLP encoding failed: {err}"))?,
+        ".goo" => encode_goo_container(&container_job),
+        ".lumen" => encode_lumen_container(&container_job),
+        other => return Err(format!("Unsupported output format: {other}")),
+    };
+
+    Ok(artifact.bytes)
+}
+
 #[wasm_bindgen]
 pub fn encode_slice_job(job_json: &str) -> Result<Vec<u8>, JsValue> {
     let job: SliceJob = serde_json::from_str(job_json)

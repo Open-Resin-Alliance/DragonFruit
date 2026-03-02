@@ -14,7 +14,7 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { isSlicerWasmAvailable } from '@/features/slicing/wasm/slicerWasmBridge';
+import { isNativeSlicerAvailable } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 
 interface SlicingPanelProps {
@@ -43,7 +43,7 @@ type LifetimeTelemetry = {
   totalRasterMs: number;
   lastElapsedMs: number | null;
   lastRasterMs: number | null;
-  lastBackend: 'wasm-nanodlp' | 'js-raster-zip' | null;
+  lastBackend: 'native-rust-tauri' | null;
 };
 
 type SliceBenchmarkSnapshot = SliceExportResult['benchmark'];
@@ -135,7 +135,7 @@ export function SlicingPanel({
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isSlicingZip, setIsSlicingZip] = useState(false);
   const [sliceStatus, setSliceStatus] = useState('Idle');
-  const [wasmStatus, setWasmStatus] = useState<'n/a' | 'checking' | 'available' | 'missing'>('n/a');
+  const [nativeStatus, setNativeStatus] = useState<'checking' | 'available' | 'missing'>('checking');
   const [currentPhase, setCurrentPhase] = useState('Idle');
   const [progressDone, setProgressDone] = useState(0);
   const [progressTotal, setProgressTotal] = useState(1);
@@ -153,7 +153,7 @@ export function SlicingPanel({
   const [previewTotalLayers, setPreviewTotalLayers] = useState(0);
   const [previewSelectedLayer, setPreviewSelectedLayer] = useState(1);
   const [lastBenchmark, setLastBenchmark] = useState<SliceBenchmarkSnapshot | null>(null);
-  const [lastWasmError, setLastWasmError] = useState<string | null>(null);
+  const [lastNativeError, setLastNativeError] = useState<string | null>(null);
   const [lifetimeTelemetry, setLifetimeTelemetry] = useState<LifetimeTelemetry>({
     runCount: 0,
     totalElapsedMs: 0,
@@ -188,25 +188,23 @@ export function SlicingPanel({
 
   const pipelineContainerBackendLabel = useMemo(() => {
     if (!selectedFormat) return '—';
-    if (selectedFormat.outputFormat !== '.nanodlp') return 'JS prototype ZIP writer';
-    if (wasmStatus === 'available') return 'WASM NanoDLP container encoder';
-    if (wasmStatus === 'checking') return 'Checking WASM availability…';
-    return 'JS fallback ZIP writer';
-  }, [selectedFormat, wasmStatus]);
+    if (nativeStatus === 'available') return 'Native Rust container encoder (Tauri)';
+    if (nativeStatus === 'checking') return 'Checking native slicer runtime…';
+    return 'Native runtime unavailable';
+  }, [selectedFormat, nativeStatus]);
 
   const pipelineRasterizerLabel = useMemo(() => {
     if (!selectedFormat) return '—';
-    if (selectedFormat.outputFormat === '.nanodlp' && wasmStatus === 'available') {
-      return 'WASM solid cross-section slicer';
-    }
-    return 'JS Canvas triangle rasterizer';
-  }, [selectedFormat, wasmStatus]);
+    if (nativeStatus === 'available') return 'Native Rust solid cross-section slicer (Rayon pool)';
+    if (nativeStatus === 'checking') return 'Awaiting native runtime check…';
+    return 'Unavailable outside DragonFruit Desktop';
+  }, [selectedFormat, nativeStatus]);
 
   const backendNote = useMemo(() => {
-    if (lifetimeTelemetry.lastBackend === 'wasm-nanodlp') {
-      return 'NanoDLP slicing + container packaging are running in WASM.';
+    if (lifetimeTelemetry.lastBackend === 'native-rust-tauri') {
+      return 'Slicing + container packaging are running in native Rust via Tauri.';
     }
-    return 'Fallback ZIP uses JS solid cross-section slicing (not shell projection).';
+    return 'Run a slicing job to initialize native backend telemetry.';
   }, [lifetimeTelemetry.lastBackend]);
 
   const progressPercent = useMemo(() => {
@@ -371,21 +369,16 @@ export function SlicingPanel({
   }, [isSlicingZip]);
 
   useEffect(() => {
-    if (activeOutputFormat !== '.nanodlp') {
-      setWasmStatus('n/a');
-      return;
-    }
-
     let cancelled = false;
-    setWasmStatus('checking');
-    void isSlicerWasmAvailable()
+    setNativeStatus('checking');
+    void isNativeSlicerAvailable()
       .then((available) => {
         if (cancelled) return;
-        setWasmStatus(available ? 'available' : 'missing');
+        setNativeStatus(available ? 'available' : 'missing');
       })
       .catch(() => {
         if (cancelled) return;
-        setWasmStatus('missing');
+        setNativeStatus('missing');
       });
 
     return () => {
@@ -576,7 +569,7 @@ export function SlicingPanel({
       setCurrentElapsedMs(benchmarkTotalMs);
       setCurrentRasterMs(benchmarkCoreMs ?? rasterAccumulatedMs);
       setLastBenchmark(result.benchmark);
-      setLastWasmError(result.wasmError);
+      setLastNativeError(result.nativeError);
 
       const effectiveElapsedMs = benchmarkTotalMs || elapsedMs;
       const effectiveCoreMs = benchmarkCoreMs ?? rasterAccumulatedMs;
@@ -590,15 +583,7 @@ export function SlicingPanel({
         lastBackend: result.backend,
       }));
 
-      if (result.backend === 'wasm-nanodlp') {
-        setSliceStatus('Generated .nanodlp via WASM encoder.');
-      } else if (result.outputFormat === '.nanodlp') {
-        setSliceStatus(result.wasmAvailable
-          ? `WASM failed (${result.wasmError ?? 'unknown error'}), used fallback solid ZIP.`
-          : 'WASM not found, used fallback solid ZIP.');
-      } else {
-        setSliceStatus('Slice ZIP generated.');
-      }
+      setSliceStatus(`Generated ${result.outputFormat} via native Rust backend.`);
       setSlicingModalStage('finished');
       slicingSucceeded = true;
       if (result.artifact) {
@@ -805,15 +790,13 @@ export function SlicingPanel({
                 <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>WASM</div>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Native</div>
                 <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {wasmStatus === 'available'
+                  {nativeStatus === 'available'
                     ? 'Available'
-                    : wasmStatus === 'checking'
+                    : nativeStatus === 'checking'
                       ? 'Checking…'
-                      : wasmStatus === 'missing'
-                        ? 'Fallback'
-                        : 'N/A'}
+                      : 'Missing'}
                 </div>
               </div>
             </div>
@@ -988,9 +971,9 @@ export function SlicingPanel({
                 <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
                   {sliceStatus}
                 </div>
-                {lastWasmError && (
+                {lastNativeError && (
                   <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)', color: 'var(--status-warning, #f59e0b)', background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)' }}>
-                    Last WASM warning: {lastWasmError}
+                    Last native backend warning: {lastNativeError}
                   </div>
                 )}
               </>

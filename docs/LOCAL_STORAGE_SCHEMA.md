@@ -147,15 +147,16 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
 
 ### `app-slicing-performance-settings`
 
-- **Description**: Stores slicing throughput preferences including compute backend intent, CPU saturation profile, and progress feedback granularity.
-- **Location**: `src/components/settings/performancePreferences.ts`, `src/components/settings/PerformanceSettingsTab.tsx`, `src/features/slicing/slicingWorkerClient.ts`
-- **Schema**: `{ computeBackend: 'auto' | 'cpu' | 'webgpu'; cpuProfile: 'balanced' | 'max'; progressGranularity: 'balanced' | 'granular' }`
+- **Description**: Stores slicing throughput preferences including native backend strategy, CPU profile, PNG compression strategy, and BVH acceleration toggle.
+- **Location**: `src/components/settings/performancePreferences.ts`, `src/components/settings/PerformanceSettingsTab.tsx`, `src/features/slicing/sliceExportOrchestrator.ts`
+- **Schema**: `{ computeBackend: 'auto' | 'cpu'; cpuProfile: 'balanced' | 'max'; pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal'; bvhAccelerationEnabled: boolean }`
 - **Example**:
   ```json
   {
     "computeBackend": "auto",
     "cpuProfile": "max",
-    "progressGranularity": "granular"
+    "pngCompressionStrategy": "balanced",
+    "bvhAccelerationEnabled": true
   }
   ```
 

@@ -61,9 +61,7 @@ import {
 } from '@/components/settings/view3dPreferences';
 import {
   DEFAULT_SLICING_PERFORMANCE_SETTINGS,
-  getWebGpuSupportDetails,
   getSavedSlicingPerformanceSettings,
-  isWebGpuSupported,
   saveSlicingPerformanceSettings,
   type SlicingPerformanceSettings,
 } from '@/components/settings/performancePreferences';
@@ -200,8 +198,6 @@ export function SettingsModal({
   const [draftWorkspaceSelectionHighlightDefaults, setDraftWorkspaceSelectionHighlightDefaults] = useState<WorkspaceSelectionHighlightDefaults>(() => getSavedWorkspaceCameraSettings().selectionHighlightDefaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
   const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
-  const [webGpuSupported, setWebGpuSupported] = useState(false);
-  const [webGpuStatusText, setWebGpuStatusText] = useState('Checking WebGPU capability…');
 
   const resetDraftFromProps = React.useCallback(() => {
     setDraftMeshColor(meshColor);
@@ -418,21 +414,6 @@ export function SettingsModal({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, handleCancel]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    let cancelled = false;
-
-    void getWebGpuSupportDetails().then((details) => {
-      if (cancelled) return;
-      setWebGpuSupported(details.supported);
-      setWebGpuStatusText(details.message);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -761,8 +742,6 @@ export function SettingsModal({
               {activeTab === 'performance' && (
                 <PerformanceSettingsTab
                   settings={draftSlicingPerformanceSettings}
-                  webGpuSupported={webGpuSupported}
-                  webGpuStatusText={webGpuStatusText}
                   onChange={setDraftSlicingPerformanceSettings}
                 />
               )}

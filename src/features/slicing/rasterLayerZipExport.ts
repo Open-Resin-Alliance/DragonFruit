@@ -4,7 +4,6 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
-import { packNanodlpRgbaWithWebGpu } from '@/features/slicing/webgpu/nanodlpPackingWebGpu';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
@@ -787,27 +786,6 @@ async function nanodlpPackRgbaToPngBlob(
 
   const outImage = new ImageData(outputWidthPx, sourceHeightPx);
   const out = outImage.data;
-
-  const perfSettings = getSavedSlicingPerformanceSettings();
-  const wantsWebGpu = perfSettings.computeBackend === 'webgpu' || perfSettings.computeBackend === 'auto';
-  if (wantsWebGpu && (packingMode === 'rgb8_div3' || packingMode === 'gray3_div2')) {
-    try {
-      const gpuPacked = await packNanodlpRgbaWithWebGpu({
-        sourceRgba,
-        sourceWidthPx,
-        sourceHeightPx,
-        outputWidthPx,
-        packingMode,
-      });
-      if (gpuPacked && gpuPacked.byteLength === out.byteLength) {
-        out.set(gpuPacked);
-        outCtx.putImageData(outImage, 0, 0);
-        return canvasToPngBlob(outCanvas);
-      }
-    } catch {
-      // WebGPU is best-effort for now; fallback to CPU path below.
-    }
-  }
 
   if (packingMode === 'rgb8_div3') {
     const requiredSubpixels = outputWidthPx * 3;

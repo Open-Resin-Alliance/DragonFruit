@@ -85,9 +85,9 @@ define the format in the Rust slicer crate and register metadata in TS.
 Where to add code:
 
 - Rust encoder module:
-  - `rust/dragonfruit-slicer-wasm/src/formats/<format>.rs`
+  - `rust/dragonfruit-slicer/src/formats/<format>.rs`
 - Rust dispatcher:
-  - `rust/dragonfruit-slicer-wasm/src/lib.rs`
+  - `rust/dragonfruit-slicer/src/lib.rs`
 - TS format metadata contract:
   - `src/features/slicing/formats/types.ts`
   - `src/features/slicing/formats/registry.ts`

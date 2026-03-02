@@ -1,6 +1,6 @@
-# dragonfruit-slicer-wasm (Scaffold)
+# dragonfruit-slicer (Scaffold)
 
-Rust/WASM slicer backend scaffold for DragonFruit.
+Rust slicer backend scaffold for DragonFruit.
 
 ## Purpose
 
@@ -35,9 +35,7 @@ When adding a new plugin-owned format, add a new Rust module under `src/formats/
 
 ## Suggested build commands (once rust toolchain is available)
 
-- Install target: `wasm32-unknown-unknown`
-- Build: `cargo build --release --target wasm32-unknown-unknown`
-- Bindings: `wasm-bindgen` (or `wasm-pack`) in a follow-up integration step
+- Build: `cargo build --release`
 
 ## TS integration contract
 

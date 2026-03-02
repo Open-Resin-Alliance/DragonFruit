@@ -179,6 +179,7 @@ export function IslandExpansionVisualization({ simulator, transform, enabled }: 
 
         const texture = textureRef.current;
         const data = texture.image.data;
+        if (!data) return;
         const labels = simulator.labels;
 
         for (let i = 0; i < changes.length; i++) {

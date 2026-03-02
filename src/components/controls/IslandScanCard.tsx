@@ -1,7 +1,7 @@
 import React from 'react';
 import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { NumberInput } from '@/components/ui/NumberInput';
-import type { ImportPhase } from '@/features/lys-conversion/useLycheeImport';
+import type { ImportPhase } from '@/components/lys-import/useLycheeImport';
 import { Search, ScanLine } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 

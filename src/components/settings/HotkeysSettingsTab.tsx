@@ -91,11 +91,11 @@ export function HotkeysSettingsTab() {
           <div key={key} className="flex justify-between items-center py-1 opacity-60" title="System standard - cannot be changed">
             <span>{binding.description}</span>
             <div className="flex gap-1">
-              {binding.modifier && <Kbd>{binding.modifier}</Kbd>}
-              {(binding as any).keys ? (
-                (binding as any).keys.map((k: string) => <Kbd key={k}>{k}</Kbd>)
+              {'modifier' in binding && binding.modifier && <Kbd>{binding.modifier}</Kbd>}
+              {'keys' in binding ? (
+                binding.keys.map((k) => <Kbd key={k}>{k}</Kbd>)
               ) : (
-                <Kbd>{(binding as any).key}</Kbd>
+                <Kbd>{binding.key}</Kbd>
               )}
             </div>
           </div>

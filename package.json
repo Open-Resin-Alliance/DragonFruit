@@ -6,14 +6,14 @@
     "dev": "next dev -p 3005",
     "build": "next build",
     "start": "next start",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "lint": "eslint",
     "test": "node --import tsx --test src/supports/__tests__/*.test.ts",
-    "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts",
-    "slicer:wasm:build": "cargo build --manifest-path rust/dragonfruit-slicer-wasm/Cargo.toml --release --target wasm32-unknown-unknown",
-    "slicer:wasm:bindgen": "wasm-bindgen rust/dragonfruit-slicer-wasm/target/wasm32-unknown-unknown/release/dragonfruit_slicer_wasm.wasm --target web --out-dir public/wasm",
-    "slicer:wasm:rebuild": "npm run slicer:wasm:build && npm run slicer:wasm:bindgen"
+    "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
     "@msgpack/msgpack": "^3.1.2",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.4.0",
@@ -32,6 +32,7 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
