@@ -8,8 +8,6 @@ type LayerSliderProps = {
   step: number;
   value: number;
   onChange: (next: number) => void;
-  onScrubStart?: () => void;
-  onScrubEnd?: () => void;
   onCrossSectionModeChange?: (mode: 'smooth' | 'rasterized') => void;
   currentHeightMm?: number;
   maxHeightMm?: number;
@@ -21,7 +19,7 @@ type LayerSliderProps = {
   expandToContainer?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false }: LayerSliderProps) {
   const isMinimalRail = embedded && docked;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const errorTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -84,7 +82,6 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    onScrubStart?.();
     // Start with current shift state
     setIsDraggingThumb(true);
     dragShiftModeRef.current = e.shiftKey;
@@ -99,29 +96,17 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       }
       setByClientY(ev.clientY, dragShiftModeRef.current);
     };
-
-    let settled = false;
-    const settleDrag = () => {
-      if (settled) return;
-      settled = true;
+    const onUp = () => {
       // Only reset on mouse up
       setIsDraggingThumb(false);
       dragShiftModeRef.current = false;
       setIsShiftHeld(false);
-      onScrubEnd?.();
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('blur', settleDrag);
     };
-
-    const onUp = () => {
-      settleDrag();
-    };
-
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-    window.addEventListener('blur', settleDrag);
-  }, [onScrubEnd, onScrubStart, setByClientY]);
+  }, [setByClientY]);
 
   const nudge = React.useCallback((dir: 1 | -1) => {
     const s = step || 1;

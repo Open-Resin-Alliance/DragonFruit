@@ -8,7 +8,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { Lock, Printer } from 'lucide-react';
+import { Printer } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -64,7 +64,6 @@ interface TopBarProps {
   mode: SupportMode;
   onModeChange: (mode: SupportMode) => void;
   hasModels: boolean;
-  hasPrintingData: boolean;
   viewTypeOverride: MeshShaderType | null;
   onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
   heatmapColors: string[];
@@ -107,7 +106,6 @@ export function TopBar({
   mode,
   onModeChange,
   hasModels,
-  hasPrintingData,
   viewTypeOverride,
   onViewTypeOverrideChange,
   heatmapColors,
@@ -222,42 +220,35 @@ export function TopBar({
     hint: string;
     locked: boolean;
   }> = [
-    {
-      mode: 'prepare',
-      label: 'Prepare',
-      step: 1,
-      hint: 'Arrange model and transforms',
-      locked: false,
-    },
-    {
-      mode: 'analysis',
-      label: 'Analysis',
-      step: 2,
-      hint: 'Inspect islands and diagnostics',
-      locked: !hasModels,
-    },
-    {
-      mode: 'support',
-      label: 'Support',
-      step: 3,
-      hint: 'Build and tune supports',
-      locked: !hasModels,
-    },
-    {
-      mode: 'export',
-      label: 'Export',
-      step: 4,
-      hint: 'Finalize and export output',
-      locked: !hasModels,
-    },
-    {
-      mode: 'printing',
-      label: 'Printing',
-      step: 5,
-      hint: 'Inspect sliced layers before printing',
-      locked: !hasModels || !hasPrintingData,
-    },
-  ];
+      {
+        mode: 'prepare',
+        label: 'Prepare',
+        step: 1,
+        hint: 'Arrange model and transforms',
+        locked: false,
+      },
+      {
+        mode: 'analysis',
+        label: 'Analysis',
+        step: 2,
+        hint: 'Inspect islands and diagnostics',
+        locked: !hasModels,
+      },
+      {
+        mode: 'support',
+        label: 'Support',
+        step: 3,
+        hint: 'Build and tune supports',
+        locked: !hasModels,
+      },
+      {
+        mode: 'export',
+        label: 'Export',
+        step: 4,
+        hint: 'Finalize and export output',
+        locked: !hasModels,
+      },
+    ];
 
   return (
     <div className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative">
@@ -276,11 +267,10 @@ export function TopBar({
             style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 10%)' }}
           />
 
-          <div className="relative grid grid-cols-5 gap-2 pointer-events-auto">
+          <div className="relative grid grid-cols-4 gap-2 pointer-events-auto">
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
-              const printingLocked = item.mode === 'printing' && locked;
 
               return (
                 <button
@@ -291,30 +281,21 @@ export function TopBar({
                     onModeChange(item.mode);
                   }}
                   disabled={locked}
-                  className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${
-                    active
-                      ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
-                      : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
-                  } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''} ${printingLocked ? 'grayscale saturate-0' : ''}`}
+                  className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${active
+                    ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
+                    : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
+                    } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''}`}
                   style={active
                     ? {
                       borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
                       background: 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)',
                     }
                     : {
-                        borderColor: printingLocked
-                          ? 'color-mix(in srgb, var(--border-subtle), black 30%)'
-                          : 'var(--border-subtle)',
-                        background: printingLocked
-                          ? 'color-mix(in srgb, var(--surface-2), black 12%)'
-                          : 'color-mix(in srgb, var(--surface-1), transparent 4%)',
-                      }
+                      borderColor: 'var(--border-subtle)',
+                      background: 'color-mix(in srgb, var(--surface-1), transparent 4%)',
+                    }
                   }
-                  title={locked
-                    ? (item.mode === 'printing'
-                      ? 'Run slicing in Export to unlock Printing preview'
-                      : 'Load a model in Prepare to unlock this stage')
-                    : item.hint}
+                  title={locked ? 'Load a model in Prepare to unlock this stage' : item.hint}
                 >
                   <span
                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold"
@@ -338,10 +319,6 @@ export function TopBar({
                   >
                     {item.label}
                   </span>
-
-                  {printingLocked && (
-                    <Lock className="h-3 w-3 ml-auto" style={{ color: 'var(--text-muted)' }} />
-                  )}
                 </button>
               );
             })}

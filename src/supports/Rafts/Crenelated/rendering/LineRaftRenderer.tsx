@@ -110,8 +110,6 @@ function buildNonCrossingEdges(points: THREE.Vector2[], maxDegree: number, maxLe
 }
 
 interface LineRaftRendererProps {
-  clipLower?: number | null;
-  clipUpper?: number | null;
   colorized?: boolean;
   hoverized?: boolean;
   ghostOpacity?: number;
@@ -127,8 +125,6 @@ interface LineRaftRendererProps {
 }
 
 export default function LineRaftRenderer({
-  clipLower = null,
-  clipUpper = null,
   colorized = true,
   hoverized = false,
   ghostOpacity = 1,
@@ -160,20 +156,6 @@ export default function LineRaftRenderer({
   }, []);
 
   const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
-  const clippingPlanes = React.useMemo(() => {
-    const planes: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    return planes;
-  }, [clipLower, clipUpper]);
-
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
   const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
@@ -317,7 +299,7 @@ export default function LineRaftRenderer({
       borderProfile: null,
     });
     unionMesh.renderOrder = ghostRenderOrder;
-    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+    unionMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
     unionMesh.castShadow = false;
     unionMesh.receiveShadow = true;
     unionMesh.userData.modelId = modelId;
@@ -336,7 +318,7 @@ export default function LineRaftRenderer({
           chamferAngleDeg: 90,
         });
         mesh.renderOrder = ghostRenderOrder;
-        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+        mesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
         mesh.castShadow = false;
         mesh.receiveShadow = true;
         mesh.userData.modelId = modelId;
@@ -348,7 +330,7 @@ export default function LineRaftRenderer({
     if (hasBorderRing) {
       const borderMesh = generatePerimeterBorderBeam(profile, { widthMm: raft.lineWidthMm, heightMm: beamHeight, chamferAngleDeg: raft.chamferAngle });
       borderMesh.renderOrder = ghostRenderOrder;
-      borderMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+      borderMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
       borderMesh.castShadow = false;
       borderMesh.receiveShadow = true;
       borderMesh.userData.modelId = modelId;
@@ -375,7 +357,7 @@ export default function LineRaftRenderer({
               thickness: beamHeight,
             });
 
-        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+        wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
   wallMesh.renderOrder = ghostRenderOrder;
         wallMesh.castShadow = false;
         wallMesh.receiveShadow = true;
@@ -388,7 +370,7 @@ export default function LineRaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, excludedModelIdSet, modelFilterId, raft, supportState, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, raft, supportState, raftOpacity, raftTransparent, ghostRenderOrder]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
@@ -472,11 +454,6 @@ export default function LineRaftRenderer({
         material.transparent = raftTransparent;
       }
 
-      if (material.clippingPlanes !== clippingPlanes) {
-        material.clippingPlanes = clippingPlanes;
-        material.needsUpdate = true;
-      }
-
       if (Math.abs(material.opacity - raftOpacity) > 1e-4) {
         material.opacity = raftOpacity;
       }
@@ -490,7 +467,7 @@ export default function LineRaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet]);
 
   if (raft.bottomMode !== 'line') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;

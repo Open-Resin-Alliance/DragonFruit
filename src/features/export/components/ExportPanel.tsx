@@ -84,7 +84,7 @@ export function ExportPanel({
   useEffect(() => {
     if (!activeModel) return;
     setFilename(normalizeExportBaseName(activeModel.name));
-  }, [activeModel]);
+  }, [activeModel?.id]);
 
   const handleExport = async () => {
     if (!activeModel) return;
@@ -122,7 +122,6 @@ export function ExportPanel({
       }
     }, 100);
   };
-
 
   if (models.length === 0) {
     return (
@@ -306,7 +305,6 @@ export function ExportPanel({
                 </>
               )}
             </Button>
-
           </>
         )}
       </div>

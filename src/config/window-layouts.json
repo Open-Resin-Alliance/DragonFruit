@@ -287,16 +287,12 @@
     },
     {
       "id": "export",
-      "matchPanelIds": ["export-main", "export-slicing"],
-      "order": ["export-main", "visual-settings", "export-slicing"],
+      "matchPanelIds": ["export-main"],
+      "order": ["export-main", "visual-settings"],
       "anchors": {
         "visual-settings": {
           "to": "export-main",
           "side": "right-edge"
-        },
-        "export-slicing": {
-          "to": "visual-settings",
-          "side": "left"
         }
       }
     },

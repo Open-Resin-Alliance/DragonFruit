@@ -130,14 +130,6 @@ function resolveOfficialPresetIdFromProfile(profile: PrinterProfile): string | n
   return null;
 }
 
-type BuildDimensionEditMode = 'manual' | 'auto';
-
-function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): number {
-  const safeResolution = Math.max(1, Math.round(resolutionPx));
-  const safePixelSize = Math.max(0.001, Number(pixelSizeUm) || 0.001);
-  return Number(((safeResolution * safePixelSize) / 1000).toFixed(3));
-}
-
 export function ProfileSettingsModal({
   isOpen,
   onClose,
@@ -210,7 +202,6 @@ export function ProfileSettingsModal({
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
   const [presetSearch, setPresetSearch] = React.useState('');
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('All');
-  const [buildDimensionModeByPrinterId, setBuildDimensionModeByPrinterId] = React.useState<Record<string, BuildDimensionEditMode>>({});
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
@@ -227,30 +218,10 @@ export function ProfileSettingsModal({
       const searchMatch =
         search.length === 0
         || preset.name.toLowerCase().includes(search)
-        || preset.manufacturer.toLowerCase().includes(search)
-        || (preset.family ?? '').toLowerCase().includes(search);
+        || preset.manufacturer.toLowerCase().includes(search);
       return manufacturerMatch && searchMatch;
     });
   }, [availablePrinterPresets, presetSearch, selectedPresetManufacturer]);
-
-  const groupedFilteredPrinterPresets = React.useMemo(() => {
-    if (selectedPresetManufacturer === 'All') return [] as Array<{ family: string; presets: typeof filteredPrinterPresets }>;
-
-    const grouped = new Map<string, typeof filteredPrinterPresets>();
-    filteredPrinterPresets.forEach((preset) => {
-      const family = (preset.family ?? '').trim() || 'Other';
-      const current = grouped.get(family);
-      if (current) {
-        current.push(preset);
-      } else {
-        grouped.set(family, [preset]);
-      }
-    });
-
-    return Array.from(grouped.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([family, presets]) => ({ family, presets }));
-  }, [filteredPrinterPresets, selectedPresetManufacturer]);
 
   const addedOfficialPresetIds = React.useMemo(() => {
     const set = new Set<string>();
@@ -268,96 +239,6 @@ export function ProfileSettingsModal({
     if (!selectedPrinterId) return fallback;
     return profileState.printerProfiles.find((profile) => profile.id === selectedPrinterId) ?? fallback;
   }, [profileState, selectedPrinterId]);
-
-  const selectedBuildDimensionMode: BuildDimensionEditMode = React.useMemo(() => {
-    if (!selectedPrinter) return 'manual';
-    return buildDimensionModeByPrinterId[selectedPrinter.id] ?? 'manual';
-  }, [buildDimensionModeByPrinterId, selectedPrinter]);
-
-  const applyAutoBuildDimensions = React.useCallback((printer: PrinterProfile, overrides?: {
-    resolutionX?: number;
-    resolutionY?: number;
-    pixelSizeX?: number;
-    pixelSizeY?: number;
-  }) => {
-    const resolutionX = overrides?.resolutionX ?? printer.display.resolutionX;
-    const resolutionY = overrides?.resolutionY ?? printer.display.resolutionY;
-    const pixelSizeX = overrides?.pixelSizeX ?? printer.pixelSize?.x ?? 1;
-    const pixelSizeY = overrides?.pixelSizeY ?? printer.pixelSize?.y ?? 1;
-
-    return {
-      ...printer.buildVolumeMm,
-      width: computeBuildDimensionMm(resolutionX, pixelSizeX),
-      depth: computeBuildDimensionMm(resolutionY, pixelSizeY),
-    };
-  }, []);
-
-  const setBuildDimensionMode = React.useCallback((mode: BuildDimensionEditMode) => {
-    if (!selectedPrinter) return;
-    setBuildDimensionModeByPrinterId((prev) => ({
-      ...prev,
-      [selectedPrinter.id]: mode,
-    }));
-
-    if (mode === 'auto') {
-      updatePrinterProfile(selectedPrinter.id, {
-        buildVolumeMm: applyAutoBuildDimensions(selectedPrinter),
-      });
-    }
-  }, [applyAutoBuildDimensions, selectedPrinter]);
-
-  const handlePrinterDisplayChange = React.useCallback((partialDisplay: Partial<PrinterProfile['display']>) => {
-    if (!selectedPrinter) return;
-
-    const nextDisplay: PrinterProfile['display'] = {
-      ...selectedPrinter.display,
-      ...partialDisplay,
-    };
-
-    updatePrinterProfile(selectedPrinter.id, {
-      display: nextDisplay,
-      buildVolumeMm: selectedBuildDimensionMode === 'auto'
-        ? applyAutoBuildDimensions(selectedPrinter, {
-          resolutionX: nextDisplay.resolutionX,
-          resolutionY: nextDisplay.resolutionY,
-        })
-        : selectedPrinter.buildVolumeMm,
-    });
-  }, [applyAutoBuildDimensions, selectedBuildDimensionMode, selectedPrinter]);
-
-  const handlePrinterPixelSizeChange = React.useCallback((axis: 'x' | 'y', value: number) => {
-    if (!selectedPrinter) return;
-
-    const safeValue = Math.max(0.001, Number(value) || 0.001);
-    const currentPixelX = selectedPrinter.pixelSize?.x ?? 1;
-    const currentPixelY = selectedPrinter.pixelSize?.y ?? 1;
-
-    const nextPixelSize = {
-      x: axis === 'x' ? safeValue : currentPixelX,
-      y: axis === 'y' ? safeValue : currentPixelY,
-    };
-
-    updatePrinterProfile(selectedPrinter.id, {
-      pixelSize: nextPixelSize,
-      buildVolumeMm: selectedBuildDimensionMode === 'auto'
-        ? applyAutoBuildDimensions(selectedPrinter, {
-          pixelSizeX: nextPixelSize.x,
-          pixelSizeY: nextPixelSize.y,
-        })
-        : selectedPrinter.buildVolumeMm,
-    });
-  }, [applyAutoBuildDimensions, selectedBuildDimensionMode, selectedPrinter]);
-
-  const handlePrinterBitDepthChange = React.useCallback((value: number) => {
-    if (!selectedPrinter) return;
-    const bits = Math.max(1, Math.round(value));
-    updatePrinterProfile(selectedPrinter.id, {
-      bitDepth: {
-        bits,
-        description: selectedPrinter.bitDepth?.description,
-      },
-    });
-  }, [selectedPrinter]);
 
   const printerMaterials = React.useMemo(() => {
     if (!selectedPrinter) return [];
@@ -421,7 +302,6 @@ export function ProfileSettingsModal({
 
   const selectedNanodlpMaterialIdRef = React.useRef('');
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
-  const wasOpenRef = React.useRef(false);
 
   React.useEffect(() => {
     selectedNanodlpMaterialIdRef.current = selectedNanodlpMaterialId;
@@ -515,16 +395,7 @@ export function ProfileSettingsModal({
   }, [nanodlpEditDraft]);
 
   React.useLayoutEffect(() => {
-    if (!isOpen) {
-      wasOpenRef.current = false;
-      return;
-    }
-
-    const justOpened = !wasOpenRef.current;
-    if (!justOpened) {
-      return;
-    }
-    wasOpenRef.current = true;
+    if (!isOpen) return;
 
     const shouldOpenPrinterLibrary =
       initialTab === 'printer'
@@ -1304,95 +1175,6 @@ export function ProfileSettingsModal({
     URL.revokeObjectURL(url);
   }, [selectedPrinter]);
 
-  const renderPresetLibraryCard = React.useCallback((preset: (typeof availablePrinterPresets)[number]) => {
-    const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
-    const isGenericPreset = preset.manufacturer.toLowerCase() === 'generic'
-      || preset.name.toLowerCase().includes('generic');
-    const platformBadge = preset.platformBadge?.text?.trim()
-      ? preset.platformBadge
-      : undefined;
-    const bitDepthBits = Number.isFinite(Number(preset.bitDepth?.bits))
-      ? Math.round(Number(preset.bitDepth?.bits))
-      : null;
-    const bitDepthLabel = Number.isFinite(Number(preset.bitDepth?.bits))
-      ? `${Math.round(Number(preset.bitDepth?.bits))} Bit`
-      : null;
-
-    return (
-      <button
-        key={preset.presetId}
-        type="button"
-        disabled={isAlreadyAdded}
-        onClick={() => handleAddPrinterFromPreset(preset.presetId)}
-        className="rounded-lg border p-2.5 text-left disabled:opacity-55"
-        style={{
-          borderColor: isAlreadyAdded
-            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
-            : 'var(--border-subtle)',
-          background: isAlreadyAdded
-            ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
-            : 'var(--surface-1)',
-        }}
-      >
-        <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
-          {preset.imageAssetPath ? (
-            <AutoTrimmedImage src={preset.imageAssetPath} alt={preset.name} className="h-full w-full object-contain" />
-          ) : (
-            isGenericPreset
-              ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-              : <ImagePlus className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
-          )}
-          {platformBadge && (
-            <span
-              className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
-              style={{
-                background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge.color || '#0ea5e9'}, black 18%))`,
-                color: '#ffffff',
-                letterSpacing: '0.04em',
-              }}
-            >
-              <span className="relative top-[0.5px]">{platformBadge.text}</span>
-            </span>
-          )}
-          {bitDepthLabel && (
-            <span
-              className="pointer-events-none absolute bottom-1 right-1 z-10 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
-              style={{
-                borderColor: bitDepthBits === 8
-                  ? 'color-mix(in srgb, #22c55e, white 22%)'
-                  : bitDepthBits === 3
-                    ? 'color-mix(in srgb, #ef4444, white 18%)'
-                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
-                color: '#f8fafc',
-                background: bitDepthBits === 8
-                  ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
-                  : bitDepthBits === 3
-                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
-                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
-              }}
-              title={preset.bitDepth?.description || `${bitDepthLabel} display`}
-            >
-              {bitDepthLabel}
-            </span>
-          )}
-        </div>
-        <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
-          <span className="truncate">{preset.name}</span>
-          <span className="shrink-0 inline-flex items-center gap-1">
-            {isAlreadyAdded && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
-                Added
-              </span>
-            )}
-          </span>
-        </div>
-        <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-          {preset.manufacturer}
-        </div>
-      </button>
-    );
-  }, [addedOfficialPresetIds, availablePrinterPresets, handleAddPrinterFromPreset]);
-
   if (!isOpen) return null;
   const hasPrinters = profileState.printerProfiles.length > 0;
   const isCustomSelectedPrinter = Boolean(selectedPrinter?.isCustom && !selectedPrinter?.isOfficial);
@@ -1512,18 +1294,6 @@ export function ProfileSettingsModal({
                   const isGenericPrinter = (printer.manufacturer ?? '').toLowerCase() === 'generic'
                     || printer.name.toLowerCase().includes('generic');
                   const isNetworkConnected = printer.networkConnection?.connected === true;
-                  const platformBadge = printer.platformBadge?.text?.trim()
-                    ? printer.platformBadge
-                    : undefined;
-                  const cardBadgeText = printer.isCustom
-                    ? 'CUSTOM'
-                    : platformBadge?.text;
-                  const bitDepthBits = Number.isFinite(Number(printer.bitDepth?.bits))
-                    ? Math.round(Number(printer.bitDepth?.bits))
-                    : null;
-                  const bitDepthLabel = Number.isFinite(Number(printer.bitDepth?.bits))
-                    ? `${Math.round(Number(printer.bitDepth?.bits))} Bit`
-                    : null;
                   const cardWidth = isEditingPrinter ? 'w-[198px]' : 'w-[236px]';
                   const imageHeight = isEditingPrinter ? 'h-[124px]' : 'h-[148px]';
 
@@ -1544,6 +1314,31 @@ export function ProfileSettingsModal({
                           }}
                     >
                       <div className={`${imageHeight} rounded-lg border overflow-hidden flex items-center justify-center p-2 relative`} style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                        {isNetworkConnected && (
+                          <span
+                            className="absolute top-1 left-1 inline-flex h-5 w-5 items-center justify-center rounded-full border"
+                            title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
+                            style={{
+                              borderColor: 'color-mix(in srgb, #22c55e, white 10%)',
+                              background: 'color-mix(in srgb, #22c55e, #0f172a 38%)',
+                              color: '#dcfce7',
+                            }}
+                          >
+                            <Wifi className="w-3 h-3" />
+                          </span>
+                        )}
+                        {printer.isCustom && (
+                          <span
+                            className="absolute top-1 right-1 text-[9px] font-bold px-1.5 py-0.5 rounded"
+                            style={{
+                              background: '#dc2626',
+                              color: '#ffffff',
+                              letterSpacing: '0.04em',
+                            }}
+                          >
+                            CUSTOM
+                          </span>
+                        )}
                         {printer.imageDataUrl ? (
                           <AutoTrimmedImage src={printer.imageDataUrl} alt={printer.name} className="h-full w-full object-contain" />
                         ) : (
@@ -1561,63 +1356,9 @@ export function ProfileSettingsModal({
                             )}
                           </div>
                         )}
-                        {isNetworkConnected && (
-                          <span
-                            className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border"
-                            title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
-                            style={{
-                              borderColor: 'color-mix(in srgb, #22c55e, white 10%)',
-                              background: 'color-mix(in srgb, #22c55e, #0f172a 38%)',
-                              color: '#dcfce7',
-                            }}
-                          >
-                            <Wifi className="w-3 h-3" />
-                          </span>
-                        )}
-                        {cardBadgeText && (
-                          <span
-                            className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
-                            style={printer.isCustom
-                              ? {
-                                  background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
-                                  color: '#ffffff',
-                                  letterSpacing: '0.04em',
-                                }
-                              : {
-                                  background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, black 18%))`,
-                                  color: '#ffffff',
-                                  letterSpacing: '0.04em',
-                                }}
-                          >
-                            <span className="relative top-[0.5px]">{cardBadgeText}</span>
-                          </span>
-                        )}
                       </div>
-                      <div className="mt-2.5 flex items-center gap-1.5">
-                        <div className="text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
-                          {printer.name}
-                        </div>
-                        {bitDepthLabel && (
-                          <span
-                            className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
-                            style={{
-                              borderColor: bitDepthBits === 8
-                                ? 'color-mix(in srgb, #22c55e, white 22%)'
-                                : bitDepthBits === 3
-                                  ? 'color-mix(in srgb, #ef4444, white 18%)'
-                                  : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
-                              color: '#f8fafc',
-                              background: bitDepthBits === 8
-                                ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
-                                : bitDepthBits === 3
-                                  ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
-                                  : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
-                            }}
-                            title={printer.bitDepth?.description || `${bitDepthLabel} display`}
-                          >
-                            <span className="relative top-[0.5px]">{bitDepthLabel}</span>
-                          </span>
-                        )}
+                      <div className="mt-2.5 text-[12px] leading-snug font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                        {printer.name}
                       </div>
                       <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
                         {printer.manufacturer || 'Generic'}
@@ -1631,42 +1372,6 @@ export function ProfileSettingsModal({
                 <div className="mt-3 rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>
                     Edit Printer Profile
-                  </div>
-
-                  <div className="mb-3 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setBuildDimensionMode('manual')}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
-                      style={selectedBuildDimensionMode === 'manual'
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
-                        : { color: 'var(--text-muted)' }}
-                    >
-                      Manual build mm
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBuildDimensionMode('auto')}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
-                      style={selectedBuildDimensionMode === 'auto'
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
-                        : { color: 'var(--text-muted)' }}
-                    >
-                      Auto-calc from px + μm
-                    </button>
-                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      {selectedBuildDimensionMode === 'auto'
-                        ? 'Build width/depth are derived from resolution and pixel size.'
-                        : 'Build width/depth are edited directly in mm.'}
-                    </span>
                   </div>
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -1683,7 +1388,6 @@ export function ProfileSettingsModal({
 
                     <LabeledNumberInput
                       label="Build width (mm)"
-                      disabled={selectedBuildDimensionMode === 'auto'}
                       value={selectedPrinter.buildVolumeMm.width}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         buildVolumeMm: {
@@ -1694,7 +1398,6 @@ export function ProfileSettingsModal({
                     />
                     <LabeledNumberInput
                       label="Build depth (mm)"
-                      disabled={selectedBuildDimensionMode === 'auto'}
                       value={selectedPrinter.buildVolumeMm.depth}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         buildVolumeMm: {
@@ -1717,60 +1420,34 @@ export function ProfileSettingsModal({
                     <LabeledNumberInput
                       label="Resolution X (px)"
                       value={selectedPrinter.display.resolutionX}
-                      onChange={(value) => handlePrinterDisplayChange({
-                        resolutionX: Math.max(1, Math.round(value)),
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        display: {
+                          ...selectedPrinter.display,
+                          resolutionX: value,
+                        },
                       })}
                     />
 
                     <LabeledNumberInput
                       label="Resolution Y (px)"
                       value={selectedPrinter.display.resolutionY}
-                      onChange={(value) => handlePrinterDisplayChange({
-                        resolutionY: Math.max(1, Math.round(value)),
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        display: {
+                          ...selectedPrinter.display,
+                          resolutionY: value,
+                        },
                       })}
                     />
-
-                    <LabeledNumberInput
-                      label="Pixel size X (μm)"
-                      value={selectedPrinter.pixelSize?.x ?? 1}
-                      onChange={(value) => handlePrinterPixelSizeChange('x', value)}
-                    />
-
-                    <LabeledNumberInput
-                      label="Pixel size Y (μm)"
-                      value={selectedPrinter.pixelSize?.y ?? 1}
-                      onChange={(value) => handlePrinterPixelSizeChange('y', value)}
-                    />
-
-                    <LabeledNumberInput
-                      label="Bit depth"
-                      value={selectedPrinter.bitDepth?.bits ?? 8}
-                      onChange={handlePrinterBitDepthChange}
-                    />
-
                     <LabeledSelectInput
                       label="Output format"
                       value={selectedPrinter.display.outputFormat}
                       options={OUTPUT_FORMAT_OPTIONS}
-                      onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
-                    />
-
-                    <LabeledToggleInput
-                      label="Mirror X"
-                      checked={selectedPrinter.display.mirrorX === true}
-                      onChange={(checked) => handlePrinterDisplayChange({ mirrorX: checked })}
-                    />
-
-                    <LabeledToggleInput
-                      label="Mirror Y"
-                      checked={selectedPrinter.display.mirrorY === true}
-                      onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
-                    />
-
-                    <LabeledToggleInput
-                      label="Anti-Aliasing"
-                      checked={selectedPrinter.antiAliasing === true}
-                      onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { antiAliasing: checked })}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        display: {
+                          ...selectedPrinter.display,
+                          outputFormat: value,
+                        },
+                      })}
                     />
                   </div>
                 </div>
@@ -2274,24 +1951,52 @@ export function ProfileSettingsModal({
                 </div>
 
                 <div className="p-3 overflow-y-auto custom-scrollbar">
-                  {selectedPresetManufacturer === 'All' ? (
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
-                      {filteredPrinterPresets.map(renderPresetLibraryCard)}
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {groupedFilteredPrinterPresets.map((group) => (
-                        <section key={`${selectedPresetManufacturer}-${group.family}`} className="space-y-1.5">
-                          <div className="px-1 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                            {group.family}
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
+                    {filteredPrinterPresets.map((preset) => {
+                      const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
+                      const isGenericPreset = preset.manufacturer.toLowerCase() === 'generic'
+                        || preset.name.toLowerCase().includes('generic');
+
+                      return (
+                        <button
+                          key={preset.presetId}
+                          type="button"
+                          disabled={isAlreadyAdded}
+                          onClick={() => handleAddPrinterFromPreset(preset.presetId)}
+                          className="rounded-lg border p-2.5 text-left disabled:opacity-55"
+                          style={{
+                            borderColor: isAlreadyAdded
+                              ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)'
+                              : 'var(--border-subtle)',
+                            background: isAlreadyAdded
+                              ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)'
+                              : 'var(--surface-1)',
+                          }}
+                        >
+                          <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
+                            {preset.imageAssetPath ? (
+                              <AutoTrimmedImage src={preset.imageAssetPath} alt={preset.name} className="h-full w-full object-contain" />
+                            ) : (
+                              isGenericPreset
+                                ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+                                : <ImagePlus className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+                            )}
                           </div>
-                          <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
-                            {group.presets.map(renderPresetLibraryCard)}
+                          <div className="mt-2 text-[12px] font-semibold leading-tight flex items-center justify-between gap-2" style={{ color: 'var(--text-strong)' }}>
+                            <span className="truncate">{preset.name}</span>
+                            {isAlreadyAdded && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 35%)', color: 'var(--accent-secondary)' }}>
+                                Added
+                              </span>
+                            )}
                           </div>
-                        </section>
-                      ))}
-                    </div>
-                  )}
+                          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            {preset.manufacturer}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -3105,48 +2810,6 @@ function LabeledSelectInput({ label, value, options, onChange }: LabeledSelectIn
           </option>
         ))}
       </select>
-    </label>
-  );
-}
-
-type LabeledToggleInputProps = {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-};
-
-function LabeledToggleInput({ label, checked, onChange }: LabeledToggleInputProps) {
-  return (
-    <label className="space-y-1 block">
-      <span className="ui-label font-medium">
-        {label}
-      </span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm inline-flex items-center justify-between"
-        style={{
-          borderColor: checked
-            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
-            : 'var(--border-subtle)',
-          background: checked
-            ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
-            : 'var(--surface-1)',
-          color: checked ? 'var(--text-strong)' : 'var(--text-muted)',
-        }}
-      >
-        <span>{checked ? 'Enabled' : 'Disabled'}</span>
-        <span
-          className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
-          style={{ background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
-        >
-          <span
-            className={`h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`}
-          />
-        </span>
-      </button>
     </label>
   );
 }

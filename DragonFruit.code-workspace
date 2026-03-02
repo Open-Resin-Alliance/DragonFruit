@@ -5,10 +5,6 @@
 		}
 	],
 	"settings": {
-		"discord.enabled": false,
-		"chat.tools.terminal.autoApprove": {
-			"cargo check": true,
-			"wasm-pack": true
-		}
+		"discord.enabled": false
 	}
 }

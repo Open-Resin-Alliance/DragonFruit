@@ -70,8 +70,6 @@ function CameraHeadlight({ intensity }: { intensity: number }) {
   return (
     <pointLight
       ref={lightRef}
-      name="camera-headlight"
-      userData={{ followCaptureCamera: true }}
       intensity={intensity}
       decay={0}
       distance={0}

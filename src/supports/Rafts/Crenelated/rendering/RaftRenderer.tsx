@@ -18,8 +18,6 @@ import { generateCrenelatedWallManual } from '../geometry/generateCrenelatedWall
  * - Generates chamfered base mesh and renders it at Z=0 when enabled
  */
 interface RaftRendererProps {
-  clipLower?: number | null;
-  clipUpper?: number | null;
   colorized?: boolean;
   hoverized?: boolean;
   ghostOpacity?: number;
@@ -35,8 +33,6 @@ interface RaftRendererProps {
 }
 
 export default function RaftRenderer({
-  clipLower = null,
-  clipUpper = null,
   colorized = true,
   hoverized = false,
   ghostOpacity = 1,
@@ -68,20 +64,6 @@ export default function RaftRenderer({
   }, []);
 
   const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
-  const clippingPlanes = React.useMemo(() => {
-    const planes: THREE.Plane[] = [];
-
-    if (clipLower != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -clipLower));
-    }
-
-    if (clipUpper != null) {
-      planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
-    }
-
-    return planes;
-  }, [clipLower, clipUpper]);
-
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
   const hasSelectedModels = !!activeModelId || selectedModelIdSet.size > 0;
@@ -128,7 +110,7 @@ export default function RaftRenderer({
       const baseMesh = generateChamferedBase(profile, { thickness: raft.thickness, chamferAngle: raft.chamferAngle });
       baseMesh.userData.modelId = modelId;
       baseMesh.renderOrder = ghostRenderOrder;
-      baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+      baseMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
       baseMesh.castShadow = false;
       baseMesh.receiveShadow = true;
 
@@ -150,7 +132,7 @@ export default function RaftRenderer({
           wallMesh.userData.modelId = modelId;
           wallMesh.userData.isWall = true;
           wallMesh.renderOrder = ghostRenderOrder;
-          wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent, clippingPlanes });
+          wallMesh.material = new THREE.MeshStandardMaterial({ color: '#a3a3a3', roughness: 0.9, metalness: 0.0, opacity: raftOpacity, transparent: raftTransparent, depthWrite: !raftTransparent });
           wallMesh.castShadow = false;
           wallMesh.receiveShadow = true;
         }
@@ -160,7 +142,7 @@ export default function RaftRenderer({
     }
 
     return meshes;
-  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder, clippingPlanes]);
+  }, [excludeModelId, excludedModelIdSet, modelFilterId, supportState, raft.bottomMode, raft.wallEnabled, raft.thickness, raft.chamferAngle, raft.wallHeight, raft.wallThickness, raft.crenulationGapWidth, raft.crenulationSpacing, raftOpacity, raftTransparent, ghostRenderOrder]);
 
   const handleClick = React.useCallback((e: any) => {
     const modelId = e?.object?.userData?.modelId;
@@ -250,11 +232,6 @@ export default function RaftRenderer({
         material.transparent = raftTransparent;
       }
 
-      if (material.clippingPlanes !== clippingPlanes) {
-        material.clippingPlanes = clippingPlanes;
-        material.needsUpdate = true;
-      }
-
       if (Math.abs(material.opacity - raftOpacity) > 1e-4) {
         material.opacity = raftOpacity;
       }
@@ -268,7 +245,7 @@ export default function RaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes]);
+  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.thickness, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet]);
 
   if (raft.bottomMode === 'off') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;
