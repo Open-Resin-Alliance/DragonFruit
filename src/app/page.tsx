@@ -126,6 +126,96 @@ interface ShaftHoverDebugDetail {
   point: { x: number; y: number; z: number } | null;
 }
 
+const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
+
+type HomeSupportSnapshot = ReturnType<typeof getSupportSnapshot>;
+type HomeSupportCollectionsSnapshot = Pick<
+  HomeSupportSnapshot,
+  'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'roots' | 'knots'
+>;
+
+type HomeSupportBraceSnapshot = ReturnType<typeof getSupportBraceSnapshot>;
+type HomeSupportBraceCollectionsSnapshot = Pick<
+  HomeSupportBraceSnapshot,
+  'supportBraces' | 'roots' | 'knots'
+>;
+
+const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = {
+  trunks: {},
+  branches: {},
+  leaves: {},
+  twigs: {},
+  sticks: {},
+  braces: {},
+  roots: {},
+  knots: {},
+};
+
+const EMPTY_HOME_SUPPORT_BRACE_COLLECTIONS_SNAPSHOT: HomeSupportBraceCollectionsSnapshot = {
+  supportBraces: {},
+  roots: {},
+  knots: {},
+};
+
+let cachedHomeSupportCollectionsSnapshot: HomeSupportCollectionsSnapshot | null = null;
+let cachedHomeSupportBraceCollectionsSnapshot: HomeSupportBraceCollectionsSnapshot | null = null;
+
+function getHomeSupportCollectionsSnapshot(): HomeSupportCollectionsSnapshot {
+  const snapshot = getSupportSnapshot();
+  const cached = cachedHomeSupportCollectionsSnapshot;
+
+  if (
+    cached
+    && cached.trunks === snapshot.trunks
+    && cached.branches === snapshot.branches
+    && cached.leaves === snapshot.leaves
+    && cached.twigs === snapshot.twigs
+    && cached.sticks === snapshot.sticks
+    && cached.braces === snapshot.braces
+    && cached.roots === snapshot.roots
+    && cached.knots === snapshot.knots
+  ) {
+    return cached;
+  }
+
+  const next: HomeSupportCollectionsSnapshot = {
+    trunks: snapshot.trunks,
+    branches: snapshot.branches,
+    leaves: snapshot.leaves,
+    twigs: snapshot.twigs,
+    sticks: snapshot.sticks,
+    braces: snapshot.braces,
+    roots: snapshot.roots,
+    knots: snapshot.knots,
+  };
+
+  cachedHomeSupportCollectionsSnapshot = next;
+  return next;
+}
+
+function getHomeSupportBraceCollectionsSnapshot(): HomeSupportBraceCollectionsSnapshot {
+  const snapshot = getSupportBraceSnapshot();
+  const cached = cachedHomeSupportBraceCollectionsSnapshot;
+
+  if (
+    cached
+    && cached.supportBraces === snapshot.supportBraces
+    && cached.roots === snapshot.roots
+    && cached.knots === snapshot.knots
+  ) {
+    return cached;
+  }
+
+  const next: HomeSupportBraceCollectionsSnapshot = {
+    supportBraces: snapshot.supportBraces,
+    roots: snapshot.roots,
+    knots: snapshot.knots,
+  };
+
+  cachedHomeSupportBraceCollectionsSnapshot = next;
+  return next;
+}
+
 function installReactDevtoolsSemverGuard() {
   if (process.env.NODE_ENV !== 'development') return;
   if (typeof window === 'undefined') return;
@@ -506,8 +596,17 @@ export default function Home() {
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
-  const supportStateSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
-  const supportBraceStateSnapshot = React.useSyncExternalStore(subscribeToSupportBraceStore, getSupportBraceSnapshot, getSupportBraceSnapshot);
+  const trackSupportCollectionsInHome = scene.mode !== 'support';
+  const supportStateSnapshot = React.useSyncExternalStore(
+    subscribeSupportState,
+    trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT),
+    trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT),
+  );
+  const supportBraceStateSnapshot = React.useSyncExternalStore(
+    subscribeToSupportBraceStore,
+    trackSupportCollectionsInHome ? getHomeSupportBraceCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_BRACE_COLLECTIONS_SNAPSHOT),
+    trackSupportCollectionsInHome ? getHomeSupportBraceCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_BRACE_COLLECTIONS_SNAPSHOT),
+  );
   const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const bracePlacementSnapshot = React.useSyncExternalStore(
     bracePlacementStore.subscribe,
@@ -808,8 +907,8 @@ export default function Home() {
     const jointOnlyGuardRemainingMs = Math.max(0, (supportRendererDebug?.jointOnlyGuardUntil ?? 0) - nowEpoch);
 
     return {
-      hoveredCategory: supportStateSnapshot.hoveredCategory,
-      hoveredId: supportStateSnapshot.hoveredId,
+      hoveredCategory: supportRendererDebug?.rawHoveredCategory ?? null,
+      hoveredId: supportRendererDebug?.rawHoveredId ?? null,
       shaftHoveredSegmentId: hoveredSegmentId,
       shaftHoverPoint: supportShaftHoverDebug.point,
       braceAltActive: bracePlacementSnapshot.altActive,
@@ -843,7 +942,7 @@ export default function Home() {
       hoveredCategoryForVisual: supportRendererDebug?.hoveredCategoryForVisual ?? null,
       hoveredIdForVisual: supportRendererDebug?.hoveredIdForVisual ?? null,
     };
-  }, [bracePlacementSnapshot, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, supportStateSnapshot.hoveredCategory, supportStateSnapshot.hoveredId, transformDebugTick]);
+  }, [bracePlacementSnapshot, supportShaftHoverDebug.point, supportShaftHoverDebug.segmentId, transformDebugTick]);
 
   const getSupportPrimitiveCountForModel = React.useCallback((modelId: string | null | undefined) => {
     if (!modelId) return 0;
@@ -1521,7 +1620,14 @@ export default function Home() {
     return promise;
   }, [computeBaseResinMlChunked]);
 
+  // First, check if we should even calculate volumes based on mode
+  // This is a cheap check that prevents us from depending on support state changes during editing
+  const shouldCalculateVolumes = scene.mode === 'export' || scene.mode === 'printing';
+
   const supportAndRaftResinMl = React.useMemo(() => {
+    if (!shouldCalculateVolumes) return 0;
+
+    // Expensive calculation ONLY runs when mode is export/printing
     const visibleModelIds = new Set(scene.models.filter((model) => model.visible).map((model) => model.id));
     if (visibleModelIds.size === 0) return 0;
 
@@ -1841,21 +1947,25 @@ export default function Home() {
 
     return supportMl + raftMl;
   }, [
-    computeFootprint,
-    computeRaftOuterBoundary,
-    raftSettingsSnapshot,
-    scene.models,
-    supportBraceStateSnapshot.knots,
-    supportBraceStateSnapshot.roots,
-    supportBraceStateSnapshot.supportBraces,
-    supportStateSnapshot.braces,
-    supportStateSnapshot.branches,
-    supportStateSnapshot.knots,
-    supportStateSnapshot.leaves,
-    supportStateSnapshot.roots,
-    supportStateSnapshot.sticks,
-    supportStateSnapshot.trunks,
-    supportStateSnapshot.twigs,
+    shouldCalculateVolumes,
+    // Only depend on support state when we're actually calculating volumes
+    ...(shouldCalculateVolumes ? [
+      computeFootprint,
+      computeRaftOuterBoundary,
+      raftSettingsSnapshot,
+      scene.models,
+      supportBraceStateSnapshot.knots,
+      supportBraceStateSnapshot.roots,
+      supportBraceStateSnapshot.supportBraces,
+      supportStateSnapshot.braces,
+      supportStateSnapshot.branches,
+      supportStateSnapshot.knots,
+      supportStateSnapshot.leaves,
+      supportStateSnapshot.roots,
+      supportStateSnapshot.sticks,
+      supportStateSnapshot.trunks,
+      supportStateSnapshot.twigs,
+    ] : []),
   ]);
 
   React.useEffect(() => {
@@ -3576,6 +3686,10 @@ export default function Home() {
   }, [displayActiveModelId, scene.activeModelId, transformMgr.transform]);
 
   const supportBoundsByModelId = React.useMemo(() => {
+    if (scene.mode !== 'prepare') {
+      return EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID;
+    }
+
     const boundsByModelId = new Map<string, THREE.Box3>();
 
     const ensureBounds = (modelId: string) => {
@@ -3751,6 +3865,7 @@ export default function Home() {
 
     return boundsByModelId;
   }, [
+    scene.mode,
     supportStateSnapshot.braces,
     supportStateSnapshot.branches,
     supportStateSnapshot.knots,
