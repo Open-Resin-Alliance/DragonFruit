@@ -143,6 +143,7 @@ export function SlicingPanel({
   const [currentRasterMs, setCurrentRasterMs] = useState(0);
   const [liveLayersPerSec, setLiveLayersPerSec] = useState<number | null>(null);
   const [estimatedRemainingMs, setEstimatedRemainingMs] = useState<number | null>(null);
+  const smoothedMetricsRef = useRef({ layersPerSec: 0, remainingMs: 0 });
   const [showSlicingModal, setShowSlicingModal] = useState(false);
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
@@ -474,6 +475,7 @@ export function SlicingPanel({
     setCurrentRasterMs(0);
     setLiveLayersPerSec(null);
     setEstimatedRemainingMs(null);
+    smoothedMetricsRef.current = { layersPerSec: 0, remainingMs: 0 };
     setShowSlicingModal(true);
     setSlicingModalStage('running');
     clearLayerPreviewUrls();
@@ -533,10 +535,18 @@ export function SlicingPanel({
             const phaseElapsedMs = nowMs - slicingPhaseStartMs;
             if (done > 0 && phaseElapsedMs > 200) {
               const rate = (done * 1000) / phaseElapsedMs;
-              setLiveLayersPerSec(rate);
+              // Apply EMA smoothing to reduce jitter (alpha = 0.25 for responsive but smooth)
+              const alpha = 0.25;
+              const smoothedRate = (1 - alpha) * smoothedMetricsRef.current.layersPerSec + alpha * rate;
+              smoothedMetricsRef.current.layersPerSec = smoothedRate;
+              setLiveLayersPerSec(smoothedRate);
+              
               const remaining = Math.max(0, total - done);
               if (rate > 0) {
-                setEstimatedRemainingMs((remaining / rate) * 1000);
+                const rawRemainingMs = (remaining / rate) * 1000;
+                const smoothedRemaining = (1 - alpha) * smoothedMetricsRef.current.remainingMs + alpha * rawRemainingMs;
+                smoothedMetricsRef.current.remainingMs = smoothedRemaining;
+                setEstimatedRemainingMs(smoothedRemaining);
               }
             }
           } else if (rasterStartedMs != null) {
