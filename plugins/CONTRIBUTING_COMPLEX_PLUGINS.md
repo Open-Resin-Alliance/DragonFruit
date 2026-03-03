@@ -77,6 +77,32 @@ Before opening a PR:
 
 ---
 
+## 5.1) Rust/WASM slicing format definitions (for file containers)
+
+If your complex plugin needs a custom sliced output container (example: Athena `.nanodlp`),
+define the format in the Rust slicer crate and register metadata in TS.
+
+Where to add code:
+
+- Rust encoder module:
+  - `rust/dragonfruit-slicer-v3/src/encode.rs`
+- Rust dispatcher:
+  - `rust/dragonfruit-slicer-v3/src/lib.rs`
+- TS format metadata contract:
+  - `src/features/slicing/formats/types.ts`
+  - `src/features/slicing/formats/registry.ts`
+- Plugin-owned TS definition (example Athena NanoDLP):
+  - `plugins/athena/slicing/nanodlpFormatDefinition.ts`
+
+Guidelines:
+
+- Keep binary/container serialization in Rust (not in UI TS files).
+- Keep plugin ownership explicit (`pluginId`) in TS format definition metadata.
+- Keep format dispatch deterministic by `printerProfile.display.outputFormat`.
+- Keep external (GitHub) plugins data-only unless promoted to built-in complex plugins.
+
+---
+
 ## 6) PR content recommendations
 
 Include in your PR description:

@@ -52,4 +52,7 @@ todo_list
 # proprietary local notes
 Scratch/
 
+src-tauri/gen/
 conversion/
+
+**/target/

@@ -203,6 +203,81 @@ function extractListFromJson(decoded: unknown, keys: string[]): unknown[] {
   return [];
 }
 
+function hasPositiveNumber(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+  const parsed = Number(String(value).trim());
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function normalizeJobName(value: string): string {
+  return value
+    .trim()
+    .replace(/\.[^.]+$/i, '')
+    .toLowerCase();
+}
+
+function getPlateName(plate: Record<string, unknown>): string {
+  const candidates = [plate.Path, plate.path, plate.File, plate.file, plate.Name, plate.name];
+  for (const value of candidates) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
+function findPlate(
+  plates: Array<Record<string, unknown>>,
+  options: { plateId?: number | null; jobName?: string | null },
+): Record<string, unknown> | null {
+  const { plateId, jobName } = options;
+  const normalizedJob = jobName ? normalizeJobName(jobName) : '';
+
+  for (const plate of plates) {
+    const rawId = plate.PlateID ?? plate.plateId ?? plate.plate_id ?? plate.id;
+    const parsedId = Number(String(rawId ?? '').trim());
+    if (plateId && Number.isFinite(parsedId) && parsedId === plateId) {
+      return plate;
+    }
+  }
+
+  if (!normalizedJob) return null;
+
+  for (const plate of plates) {
+    const plateName = getPlateName(plate);
+    if (!plateName) continue;
+    if (normalizeJobName(plateName) === normalizedJob) {
+      return plate;
+    }
+  }
+
+  return null;
+}
+
+function isPlateMetadataReady(plate: Record<string, unknown>): boolean {
+  const candidates = [
+    plate.LayerHeight,
+    plate.layerHeight,
+    plate.LayersCount,
+    plate.layerCount,
+    plate.PrintTime,
+    plate.printTime,
+    plate.UsedMaterial,
+    plate.usedMaterial,
+  ];
+
+  if (candidates.some(hasPositiveNumber)) return true;
+
+  const fileData = (plate.file_data ?? plate.fileData) as Record<string, unknown> | undefined;
+  if (fileData && typeof fileData === 'object') {
+    const lastModified = fileData.last_modified ?? fileData.lastModified;
+    if (hasPositiveNumber(lastModified)) return true;
+  }
+
+  return false;
+}
+
 function resolveProfileId(raw: NanoDlpRawProfile): string | null {
   const candidates = [raw.profileId, raw.ProfileID, raw.ProfileId, raw.id, raw.ID, raw.Path, raw.path, raw.File, raw.file, raw.name, raw.Name];
 
@@ -668,6 +743,111 @@ async function handleNanoDlpMaterialsEdit(payload: unknown): Promise<HandlerResu
   }
 }
 
+async function handleNanoDlpJobImport(payload: unknown): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+  const zipBase64 = typeof (payload as any)?.zipBase64 === 'string' ? (payload as any).zipBase64.trim() : '';
+  if (!zipBase64) {
+    return { status: 400, body: { ok: false, error: 'zipBase64 payload is required' } };
+  }
+
+  const pathRaw = typeof (payload as any)?.path === 'string' ? (payload as any).path.trim() : '';
+  const path = pathRaw || 'dragonfruit_job';
+  const profileId = typeof (payload as any)?.profileId === 'string' ? (payload as any).profileId.trim() : '';
+  if (!profileId) {
+    return { status: 400, body: { ok: false, error: 'profileId is required for NanoDLP import' } };
+  }
+
+  const host = parsedHost.host.toLowerCase();
+  const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host.startsWith('127.');
+  const usbFilePath = typeof (payload as any)?.usbFilePath === 'string' ? (payload as any).usbFilePath.trim() : '';
+
+  try {
+    const zipBytes = Buffer.from(zipBase64, 'base64');
+    if (!zipBytes || zipBytes.length === 0) {
+      return { status: 400, body: { ok: false, error: 'Decoded job payload is empty' } };
+    }
+
+    const form = new FormData();
+    form.set('Path', path);
+    form.set('ProfileID', profileId);
+
+    if (isLocalhost && usbFilePath) {
+      form.set('USBFile', usbFilePath);
+    } else {
+      form.set('ZipFile', new Blob([zipBytes], { type: 'application/octet-stream' }), `${path}.nanodlp`);
+    }
+
+    const response = await fetch(`${buildNanoDlpBaseUrl(parsedHost.host, port)}/plate/add`, {
+      method: 'POST',
+      body: form,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    const responseText = await response.text().catch(() => '');
+    const location = response.headers.get('location') ?? '';
+    const locationPlateMatch = /\/(\d+)(?:\D*$)?/.exec(location);
+    const bodyPlateMatch = /(plate[_\s-]?id|\bplate\b)\D{0,12}(\d{1,10})/i.exec(responseText);
+    const plateId = Number(locationPlateMatch?.[1] ?? bodyPlateMatch?.[2] ?? '');
+    const responseJson = (() => {
+      if (!responseText) return null;
+      try {
+        return JSON.parse(responseText) as unknown;
+      } catch {
+        return null;
+      }
+    })();
+
+    if (!(response.ok || response.status === 302)) {
+      return {
+        status: 502,
+        body: {
+          ok: false,
+          ipAddress: parsedHost.host,
+          port,
+          status: response.status,
+          error: `HTTP ${response.status}`,
+          response: responseJson ?? responseText,
+        },
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        ipAddress: parsedHost.host,
+        port,
+        path,
+        plateId: Number.isFinite(plateId) && plateId > 0 ? plateId : null,
+        status: response.status,
+        location,
+        response: responseJson ?? responseText,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to upload print job to NanoDLP';
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        ipAddress: parsedHost.host,
+        port,
+        error: message,
+      },
+    };
+  }
+}
+
 export async function handleAthenaNetworkOperation(operationPath: string[], payload: unknown): Promise<HandlerResult> {
   // Athena currently exposes NanoDLP operations under `nanodlp/*`.
   if (operationPath.length === 0 || operationPath[0] !== 'nanodlp') {
@@ -682,6 +862,155 @@ export async function handleAthenaNetworkOperation(operationPath: string[], payl
   if (op === 'discover') return handleNanoDlpDiscover(payload);
   if (op === 'materials') return handleNanoDlpMaterials(payload);
   if (op === 'materials/edit') return handleNanoDlpMaterialsEdit(payload);
+  if (op === 'job/import') return handleNanoDlpJobImport(payload);
+  if (op === 'plates/list/json') return handleNanoDlpPlatesListJson(payload);
+  if (op === 'printer/start') return handleNanoDlpPrinterStart(payload);
 
   return { status: 404, body: { error: 'Unknown Athena NanoDLP operation' } };
+}
+
+async function handleNanoDlpPlatesListJson(payload: unknown): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+  const baseUrl = buildNanoDlpBaseUrl(parsedHost.host, port);
+
+  try {
+    const response = await fetch(`${baseUrl}/plates/list/json`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (response.status !== 200) {
+      return {
+        status: 502,
+        body: {
+          ok: false,
+          ipAddress: parsedHost.host,
+          port,
+          status: response.status,
+          error: `HTTP ${response.status}`,
+          plates: [],
+        },
+      };
+    }
+
+    const decoded = await response.json().catch(() => null);
+    if (!decoded) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          ipAddress: parsedHost.host,
+          port,
+          plates: [],
+        },
+      };
+    }
+
+    const entries = extractListFromJson(decoded, ['plates', 'files', 'data']);
+    const plates = entries
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry) => entry as Record<string, unknown>);
+
+    const targetPlateId = Number((payload as any)?.plateId);
+    const targetJobName = typeof (payload as any)?.jobName === 'string' ? (payload as any).jobName : '';
+    const matchedPlate = findPlate(plates, {
+      plateId: Number.isFinite(targetPlateId) && targetPlateId > 0 ? targetPlateId : null,
+      jobName: targetJobName || null,
+    });
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        ipAddress: parsedHost.host,
+        port,
+        plates,
+        matchedPlate,
+        metadataReady: matchedPlate ? isPlateMetadataReady(matchedPlate) : false,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to list NanoDLP plates';
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        ipAddress: parsedHost.host,
+        port,
+        error: message,
+        plates: [],
+      },
+    };
+  }
+}
+
+async function handleNanoDlpPrinterStart(payload: unknown): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const plateIdRaw = Number((payload as any)?.plateId);
+  if (!Number.isFinite(plateIdRaw) || plateIdRaw <= 0) {
+    return { status: 400, body: { ok: false, error: 'Invalid plateId' } };
+  }
+
+  const plateId = Math.round(plateIdRaw);
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+  const baseNoSlash = buildNanoDlpBaseUrl(parsedHost.host, port).replace(/\/+$/, '');
+
+  try {
+    const response = await fetch(`${baseNoSlash}/printer/start/${plateId}`, {
+      method: 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (response.status !== 200 && response.status !== 302) {
+      return {
+        status: 502,
+        body: {
+          ok: false,
+          ipAddress: parsedHost.host,
+          port,
+          plateId,
+          status: response.status,
+          error: `HTTP ${response.status}`,
+        },
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        ipAddress: parsedHost.host,
+        port,
+        plateId,
+        status: response.status,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to start print job';
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        ipAddress: parsedHost.host,
+        port,
+        plateId,
+        error: message,
+      },
+    };
+  }
 }

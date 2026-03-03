@@ -35,12 +35,32 @@ export type PrinterNetworkConnectionState = {
   selectedMaterialBottomLayerCount?: number;
 };
 
+export type PrinterPlatformBadge = {
+  text: string;
+  color?: string;
+};
+
+export type PrinterPixelSize = {
+  x: number;
+  y: number;
+};
+
+export type PrinterBitDepth = {
+  bits: number;
+  description?: string;
+};
+
 export type PrinterPreset = {
   presetId: string;
   manufacturer: string;
   name: string;
+  family?: string;
   imageAssetPath?: string;
+  antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  platformBadge?: PrinterPlatformBadge;
+  pixelSize?: PrinterPixelSize;
+  bitDepth?: PrinterBitDepth;
   buildVolumeMm: {
     width: number;
     depth: number;
@@ -50,6 +70,8 @@ export type PrinterPreset = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    mirrorX?: boolean;
+    mirrorY?: boolean;
   };
 };
 
@@ -58,7 +80,11 @@ export type PrinterProfile = {
   name: string;
   manufacturer?: string;
   imageDataUrl?: string;
+  antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  platformBadge?: PrinterPlatformBadge;
+  pixelSize?: PrinterPixelSize;
+  bitDepth?: PrinterBitDepth;
   officialPresetId?: string;
   isOfficial?: boolean;
   isCustom?: boolean;
@@ -71,6 +97,8 @@ export type PrinterProfile = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    mirrorX?: boolean;
+    mirrorY?: boolean;
   };
   network?: PrinterNetworkSettings;
   networkConnection?: PrinterNetworkConnectionState;
@@ -79,6 +107,46 @@ export type PrinterProfile = {
 function normalizeNetworkSupport(value: unknown): PrinterNetworkSupport | undefined {
   if (value === 'nanodlp') return 'nanodlp';
   return undefined;
+}
+
+function sanitizePlatformBadge(input: unknown): PrinterPlatformBadge | undefined {
+  const source = (input ?? {}) as any;
+  const text = typeof source.text === 'string' ? source.text.trim() : '';
+  if (!text) return undefined;
+
+  const color = typeof source.color === 'string' ? source.color.trim() : '';
+  return {
+    text,
+    color: color || undefined,
+  };
+}
+
+function sanitizePixelSize(input: unknown): PrinterPixelSize | undefined {
+  const source = (input ?? {}) as any;
+  const x = Number(source.x);
+  const y = Number(source.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) {
+    return undefined;
+  }
+
+  return {
+    x,
+    y,
+  };
+}
+
+function sanitizeBitDepth(input: unknown): PrinterBitDepth | undefined {
+  const source = (input ?? {}) as any;
+  const bits = Number(source.bits);
+  if (!Number.isFinite(bits) || bits <= 0) {
+    return undefined;
+  }
+
+  const description = typeof source.description === 'string' ? source.description.trim() : '';
+  return {
+    bits: Math.round(bits),
+    description: description || undefined,
+  };
 }
 
 export type MaterialProfile = {
@@ -127,6 +195,11 @@ const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
   discoveryEnabled: true,
   ipAddress: '',
 };
+
+function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  return undefined;
+}
 
 function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddress = ''): PrinterNetworkConnectionState {
   return {
@@ -200,6 +273,8 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
   display: {
     ...preset.display,
     outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+    mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown } | undefined)?.mirrorX, false),
+    mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown } | undefined)?.mirrorY, false),
   },
 }));
 
@@ -218,7 +293,11 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   name: preset.name,
   manufacturer: preset.manufacturer,
   imageDataUrl: preset.imageAssetPath,
+  antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
   networkSupport: normalizeNetworkSupport(preset.networkSupport),
+  platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
+  pixelSize: sanitizePixelSize((preset as any).pixelSize),
+  bitDepth: sanitizeBitDepth((preset as any).bitDepth),
   officialPresetId: preset.presetId,
   isOfficial: true,
   isCustom: false,
@@ -265,6 +344,11 @@ function normalizeOutputFormat(value: unknown): PrinterOutputFormat {
   if (value === '.nanodlp' || value === '.goo' || value === '.lumen') return value;
   if (value === '.luman') return '.lumen';
   return DEFAULT_OUTPUT_FORMAT;
+}
+
+function normalizeMirrorFlag(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  return fallback;
 }
 
 function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProfile[] {
@@ -334,7 +418,12 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           name: profile.name,
           manufacturer: typeof profile.manufacturer === 'string' ? profile.manufacturer : undefined,
           imageDataUrl: typeof profile.imageDataUrl === 'string' ? profile.imageDataUrl : undefined,
+          antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
+            ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
           networkSupport: resolveNetworkSupport(profile),
+          platformBadge: sanitizePlatformBadge((profile as any).platformBadge) ?? sanitizePlatformBadge((matchedPreset as any)?.platformBadge),
+          pixelSize: sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize),
+          bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
           officialPresetId,
           isOfficial: isOfficialProfileByHeuristic(profile),
           isCustom: typeof profile.isCustom === 'boolean' ? profile.isCustom : !isOfficialProfileByHeuristic(profile),
@@ -347,6 +436,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
             resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
             outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
+            mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
+            mirrorY: normalizeMirrorFlag(rawDisplay?.mirrorY, normalizeMirrorFlag(fallbackDisplay?.mirrorY, false)),
           },
           network: sanitizePrinterNetworkSettings((profile as any).network),
           networkConnection: resolveNetworkSupport(profile)
@@ -625,7 +716,11 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     name: partial?.name?.trim() || `Printer ${state.printerProfiles.length + 1}`,
     manufacturer: partial?.manufacturer?.trim() || 'Generic',
     imageDataUrl: partial?.imageDataUrl,
+    antiAliasing: normalizeAntiAliasingSupport(partial?.antiAliasing),
     networkSupport,
+    platformBadge: sanitizePlatformBadge(partial?.platformBadge),
+    pixelSize: sanitizePixelSize(partial?.pixelSize),
+    bitDepth: sanitizeBitDepth(partial?.bitDepth),
     officialPresetId: partial?.officialPresetId?.trim(),
     isOfficial: partial?.isOfficial ?? false,
     isCustom: partial?.isCustom ?? true,
@@ -634,6 +729,8 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       resolutionX: partial?.display?.resolutionX ?? 2560,
       resolutionY: partial?.display?.resolutionY ?? 1620,
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
+      mirrorX: normalizeMirrorFlag(partial?.display?.mirrorX, false),
+      mirrorY: normalizeMirrorFlag(partial?.display?.mirrorY, false),
     },
     network: networkSettings,
     networkConnection: networkSupport
@@ -677,7 +774,11 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     name: preset.name,
     manufacturer: preset.manufacturer,
     imageDataUrl: preset.imageAssetPath,
+    antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
     networkSupport: normalizeNetworkSupport(preset.networkSupport),
+    platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
+    pixelSize: sanitizePixelSize((preset as any).pixelSize),
+    bitDepth: sanitizeBitDepth((preset as any).bitDepth),
     officialPresetId: preset.presetId,
     isOfficial: true,
     isCustom: false,
@@ -686,6 +787,8 @@ export function addPrinterProfileFromPreset(presetId: string): string {
       resolutionX: preset.display.resolutionX,
       resolutionY: preset.display.resolutionY,
       outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+      mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
+      mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
     },
   });
 }
@@ -745,13 +848,33 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       ...updates,
       name: updates.name !== undefined ? updates.name : profile.name,
       manufacturer: updates.manufacturer !== undefined ? updates.manufacturer : profile.manufacturer,
+      antiAliasing: updates.antiAliasing !== undefined
+        ? normalizeAntiAliasingSupport(updates.antiAliasing)
+        : profile.antiAliasing,
       networkSupport: updates.networkSupport !== undefined
         ? normalizeNetworkSupport(updates.networkSupport)
         : profile.networkSupport,
+      platformBadge: updates.platformBadge !== undefined
+        ? sanitizePlatformBadge(updates.platformBadge)
+        : profile.platformBadge,
+      pixelSize: updates.pixelSize !== undefined
+        ? sanitizePixelSize(updates.pixelSize)
+        : profile.pixelSize,
+      bitDepth: updates.bitDepth !== undefined
+        ? sanitizeBitDepth(updates.bitDepth)
+        : profile.bitDepth,
       isOfficial: profile.isOfficial,
       isCustom: profile.isCustom,
       buildVolumeMm: updates.buildVolumeMm ?? profile.buildVolumeMm,
-      display: updates.display ?? profile.display,
+      display: updates.display
+        ? {
+          resolutionX: Number(updates.display.resolutionX) || profile.display.resolutionX,
+          resolutionY: Number(updates.display.resolutionY) || profile.display.resolutionY,
+          outputFormat: normalizeOutputFormat(updates.display.outputFormat ?? profile.display.outputFormat),
+          mirrorX: normalizeMirrorFlag(updates.display.mirrorX, profile.display.mirrorX === true),
+          mirrorY: normalizeMirrorFlag(updates.display.mirrorY, profile.display.mirrorY === true),
+        }
+        : profile.display,
       network: updates.network !== undefined ? sanitizePrinterNetworkSettings(updates.network) : profile.network,
       networkConnection: updates.networkConnection !== undefined
         ? (

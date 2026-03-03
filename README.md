@@ -2,11 +2,20 @@
 
 **DragonFruit is a 3D Printing slicer prototype**
 
+## Desktop Runtime Direction (Tauri v2)
+
+DragonFruit is being migrated to a **Tauri v2 desktop app** with a **native Rust slicer backend**.
+
+- Native command path lives in `src-tauri/`.
+- Slicing orchestration now targets native Rust backend invocation from the frontend.
+- Legacy JS/WebGPU slicing routes are deprecated and no longer part of the primary slicing path.
+
 ## STL Slicer POC — Project Documentation
 
 ### Tech Stack
 
 - Frontend framework: Next.js (App Router), TypeScript
+- Desktop shell/runtime: Tauri v2
 - UI/styling: TailwindCSS + custom CSS in `globals.css`
 - 3D rendering: three.js via react-three-fiber (Canvas) and drei (OrbitControls)
 - STL loading: three/examples STLLoader

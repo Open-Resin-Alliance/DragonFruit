@@ -40,7 +40,7 @@ export function useSlicingManager({ hasGeometry, zRange }: SlicingStateProps) {
   const clipUpper = useMemo(() => {
     if (!hasGeometry || layerIndex === 0) return null;
     const EPS = 1e-6;
-    const upper = layerIndex * layerHeightMm + EPS;
+    const upper = zRange.min + (layerIndex * layerHeightMm) + EPS;
     return Math.min(Math.max(upper, zRange.min), zRange.max + EPS);
   }, [hasGeometry, layerIndex, zRange, layerHeightMm]);
 
