@@ -22,11 +22,39 @@ fn active_edge_cmp(a: &ActiveEdge, b: &ActiveEdge) -> std::cmp::Ordering {
 }
 
 #[inline]
-fn insert_active_edge_sorted(active_edges: &mut Vec<ActiveEdge>, edge: ActiveEdge) {
-    let insert_at = active_edges
-        .binary_search_by(|probe| active_edge_cmp(probe, &edge))
-        .unwrap_or_else(|idx| idx);
-    active_edges.insert(insert_at, edge);
+fn merge_active_edges_sorted(
+    active_edges: &mut Vec<ActiveEdge>,
+    starting: &[ActiveEdge],
+    scratch: &mut Vec<ActiveEdge>,
+) {
+    if starting.is_empty() {
+        return;
+    }
+
+    scratch.clear();
+    scratch.reserve(active_edges.len() + starting.len());
+
+    let mut i = 0usize;
+    let mut j = 0usize;
+
+    while i < active_edges.len() && j < starting.len() {
+        if active_edge_cmp(&active_edges[i], &starting[j]).is_gt() {
+            scratch.push(starting[j]);
+            j += 1;
+        } else {
+            scratch.push(active_edges[i]);
+            i += 1;
+        }
+    }
+
+    if i < active_edges.len() {
+        scratch.extend_from_slice(&active_edges[i..]);
+    }
+    if j < starting.len() {
+        scratch.extend_from_slice(&starting[j..]);
+    }
+
+    std::mem::swap(active_edges, scratch);
 }
 
 #[inline]
@@ -341,6 +369,7 @@ fn build_scanline_segment_index(
                 end_exclusive: end_exclusive[*seg_idx],
             });
         }
+        indexed[y].sort_unstable_by(active_edge_cmp);
     }
 
     Some(ScanlineSegmentIndex {
@@ -420,12 +449,13 @@ pub fn rasterize_layer_with_stats(
     let mut max_y = i32::MIN;
 
     let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
 
     for y in y_start..y_end_exclusive {
         active_edges.retain(|edge| edge.end_exclusive > y);
         if let Some(starting) = scanline_starts.get(y) {
-            for edge in starting {
-                insert_active_edge_sorted(&mut active_edges, *edge);
+            if !starting.is_empty() {
+                merge_active_edges_sorted(&mut active_edges, starting, &mut merge_scratch);
             }
         }
         if active_edges.is_empty() {
