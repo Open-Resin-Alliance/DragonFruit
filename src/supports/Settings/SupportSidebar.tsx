@@ -237,7 +237,7 @@ export function SupportSidebar() {
             const result = runAutoBracing();
             if (!result.changed) {
                 setAutoBraceStatus({ kind: 'warning', message: result.message });
-            } else if (result.underQualifiedSupportCount > 0) {
+            } else if (result.skippedSupportCount > 0) {
                 setAutoBraceStatus({ kind: 'warning', message: result.message });
             } else {
                 setAutoBraceStatus({ kind: 'success', message: result.message });

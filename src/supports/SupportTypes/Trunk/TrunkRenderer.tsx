@@ -87,7 +87,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     // Actually, we should probably align the logic.
     
     const diskHeight = rootsSettings.diskHeightMm; // Use global setting
-    const coneHeight = baseFlareEnabled ? baseFlare.heightMm : (root.height || 1.5);
+    const coneHeight = baseFlareEnabled ? baseFlare.heightMm : (root.coneHeight || 1.5);
     
     // Effective Cone Height depends on Base Flare setting
     const effectiveConeHeight = baseFlareEnabled ? coneHeight : 0;
@@ -231,7 +231,6 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                         color={visuals.color}
                         emissive={visuals.emissive}
                         emissiveIntensity={visuals.emissiveIntensity}
-                        selectedColor={visuals.selectedColor}
                         radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                         sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                     />

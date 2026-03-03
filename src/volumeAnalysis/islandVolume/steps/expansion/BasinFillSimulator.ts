@@ -50,7 +50,7 @@ export class BasinFillSimulator {
     public layerHeightMm: number;
     public pxMm: number;
 
-    private islandCenters: Map<number, THREE.Vector3>;
+    private islandCenters: Map<number, { x: number; y: number; z: number }>;
     public seedIndices: Set<number>;
 
     public isComplete = false;

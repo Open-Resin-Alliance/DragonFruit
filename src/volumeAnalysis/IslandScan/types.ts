@@ -57,6 +57,7 @@ export interface Island {
   centroidCount: number; // Total pixel count for global centroid
   centroid?: { x: number; y: number; z: number }; // Final computed global centroid (mm)
   lastLayerCentroid?: { x: number; y: number; z: number }; // Centroid of the LAST active layer (Terminal Centroid)
+  seedVoxel?: { x: number; y: number; z: number }; // Grid coordinates of internal center voxel
 }
 
 export interface LayerIslandResult {

@@ -45,7 +45,7 @@ export function solveJointConstraint(
         } else if (root && bottomSegIndex === 0) {
             // Fallback if root provided but parentStartPos not
             const rPos = root.transform.pos;
-            const h = (root.height || 1.5) + 0.5;
+            const h = (root.coneHeight || 1.5) + 0.5;
             start = { x: rPos.x, y: rPos.y, z: rPos.z + h };
         } else if ('parentKnotId' in structure && bottomSegIndex === 0) {
             // Fallback: Branch with no parentStartPos provided - Try global store lookup

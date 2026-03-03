@@ -50,7 +50,7 @@ export function useJointCreation() {
 
             // Start from root base top (Match TrunkRenderer logic)
             const diskHeight = 0.5;
-            const coneHeight = root.height || 1.5;
+            const coneHeight = root.coneHeight || 1.5;
             const startZOffset = diskHeight + coneHeight;
             
             const rootPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
