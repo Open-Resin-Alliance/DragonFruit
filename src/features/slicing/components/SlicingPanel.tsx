@@ -21,6 +21,14 @@ interface SlicingPanelProps {
   activeModel: LoadedModel | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
+  thumbnailIncludeGradient?: boolean;
+  thumbnailIncludeBuildPlate?: boolean;
+  thumbnailIncludeGrid?: boolean;
+  onThumbnailRenderOptionsChange?: (next: {
+    includeGradient?: boolean;
+    includeBuildPlate?: boolean;
+    includeGrid?: boolean;
+  }) => void;
   onSliceRunStarted?: () => void;
   onLayerPreviewGenerated?: (payload: {
     layerIndex: number;
@@ -141,6 +149,10 @@ export function SlicingPanel({
   activeModel,
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
+  thumbnailIncludeGradient = false,
+  thumbnailIncludeBuildPlate = true,
+  thumbnailIncludeGrid = true,
+  onThumbnailRenderOptionsChange,
   onSliceRunStarted,
   onLayerPreviewGenerated,
   onSlicingFinished,
@@ -979,6 +991,76 @@ export function SlicingPanel({
                 >
                   <span
                     className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${aaOnSupports ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-1 rounded-md border px-2.5 py-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Export Thumbnail</div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px]" style={{ color: 'var(--text-strong)' }}>Background gradient</div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Scene mood overlay in thumbnail</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={thumbnailIncludeGradient}
+                  onClick={() => onThumbnailRenderOptionsChange?.({ includeGradient: !thumbnailIncludeGradient })}
+                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                  style={{
+                    background: thumbnailIncludeGradient ? 'var(--accent)' : 'var(--surface-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeGradient ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px]" style={{ color: 'var(--text-strong)' }}>Build plate</div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Render build plate in thumbnail</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={thumbnailIncludeBuildPlate}
+                  onClick={() => onThumbnailRenderOptionsChange?.({ includeBuildPlate: !thumbnailIncludeBuildPlate })}
+                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                  style={{
+                    background: thumbnailIncludeBuildPlate ? 'var(--accent)' : 'var(--surface-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeBuildPlate ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[11px]" style={{ color: 'var(--text-strong)' }}>Grid</div>
+                  <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Render build grid in thumbnail</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={thumbnailIncludeGrid}
+                  onClick={() => onThumbnailRenderOptionsChange?.({ includeGrid: !thumbnailIncludeGrid })}
+                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                  style={{
+                    background: thumbnailIncludeGrid ? 'var(--accent)' : 'var(--surface-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeGrid ? 'translate-x-4' : 'translate-x-0'}`}
                   />
                 </button>
               </div>

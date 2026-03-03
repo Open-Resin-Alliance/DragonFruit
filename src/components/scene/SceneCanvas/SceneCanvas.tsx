@@ -103,6 +103,13 @@ const EXPORT_THUMBNAIL_WIDTH = 1600;
 const EXPORT_THUMBNAIL_HEIGHT = 960;
 const EXPORT_THUMBNAIL_MARGIN = 1.1;
 
+export type ExportThumbnailRenderOptions = {
+  includeGradient?: boolean;
+  includeBuildPlate?: boolean;
+  includeGrid?: boolean;
+  centerOnModel?: boolean;
+};
+
 function getBoxCorners(bounds: THREE.Box3): THREE.Vector3[] {
   const { min, max } = bounds;
   return [
@@ -873,6 +880,7 @@ export function SceneCanvas({
   historyTransformResyncToken = 0,
   isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
+  exportThumbnailRenderOptions,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -1008,6 +1016,7 @@ export function SceneCanvas({
   historyTransformResyncToken?: number;
   isLayerScrubbing?: boolean;
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
+  exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -3940,6 +3949,30 @@ export function SceneCanvas({
     }
 
     const target = boundsUnion.getCenter(new THREE.Vector3());
+    const focusBounds = boundsUnion.clone();
+    const centerOnModel = exportThumbnailRenderOptions?.centerOnModel ?? true;
+    if (centerOnModel) {
+      const visibleModelGeometryBounds = models
+        .filter((model) => model.visible)
+        .map((model) => {
+          const effectiveTransform =
+            (model.id === activeTransformOverrideModelId && transform)
+              ? transform
+              : model.transform;
+          return computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+        })
+        .filter((box): box is THREE.Box3 => !!box && !box.isEmpty());
+
+      if (visibleModelGeometryBounds.length > 0) {
+        const geometryUnion = visibleModelGeometryBounds[0].clone();
+        for (let i = 1; i < visibleModelGeometryBounds.length; i += 1) {
+          geometryUnion.union(visibleModelGeometryBounds[i]);
+        }
+        focusBounds.copy(geometryUnion);
+        const geometryCenter = geometryUnion.getCenter(new THREE.Vector3());
+        target.copy(geometryCenter);
+      }
+    }
 
     const orbitTarget = orbitControlsRef.current?.target;
     const introDirection = orbitTarget
@@ -3966,7 +3999,8 @@ export function SceneCanvas({
     viewRight.normalize();
     const viewUp = new THREE.Vector3().crossVectors(viewForward, viewRight).normalize();
 
-    const corners = getBoxCorners(boundsUnion);
+    const fitCorners = getBoxCorners(boundsUnion);
+    const focusCorners = getBoxCorners(focusBounds);
 
     const prevRenderTarget = renderer.getRenderTarget();
     const prevPixelRatio = renderer.getPixelRatio();
@@ -3975,6 +4009,7 @@ export function SceneCanvas({
     const prevScissor = renderer.getScissor(new THREE.Vector4());
     const prevScissorTest = renderer.getScissorTest();
     const prevBuildVolumeOverlayVisible = buildVolumeBoundsOverlayRef.current?.visible ?? null;
+    const visibilityRestores: Array<{ node: THREE.Object3D; visible: boolean }> = [];
 
     const restoreCamera = () => {
       renderer.setRenderTarget(prevRenderTarget);
@@ -3985,6 +4020,10 @@ export function SceneCanvas({
       renderer.setScissorTest(prevScissorTest);
       if (buildVolumeBoundsOverlayRef.current && prevBuildVolumeOverlayVisible != null) {
         buildVolumeBoundsOverlayRef.current.visible = prevBuildVolumeOverlayVisible;
+      }
+      for (let i = visibilityRestores.length - 1; i >= 0; i -= 1) {
+        const entry = visibilityRestores[i];
+        entry.node.visible = entry.visible;
       }
     };
 
@@ -4005,8 +4044,8 @@ export function SceneCanvas({
         const tanHalfH = Math.tan(halfH);
 
         let requiredDistance = 0;
-        for (let i = 0; i < corners.length; i += 1) {
-          const offset = corners[i].clone().sub(target);
+        for (let i = 0; i < fitCorners.length; i += 1) {
+          const offset = fitCorners[i].clone().sub(target);
           const x = Math.abs(offset.dot(viewRight));
           const y = Math.abs(offset.dot(viewUp));
           const zForward = offset.dot(viewForward);
@@ -4027,8 +4066,8 @@ export function SceneCanvas({
 
         let halfWidth = 0;
         let halfHeight = 0;
-        for (let i = 0; i < corners.length; i += 1) {
-          const offset = corners[i].clone().sub(target);
+        for (let i = 0; i < fitCorners.length; i += 1) {
+          const offset = fitCorners[i].clone().sub(target);
           halfWidth = Math.max(halfWidth, Math.abs(offset.dot(viewRight)));
           halfHeight = Math.max(halfHeight, Math.abs(offset.dot(viewUp)));
         }
@@ -4053,6 +4092,64 @@ export function SceneCanvas({
         captureCamera = fallback;
       }
 
+      // Recenter the capture camera in screen-space so the model lands truly
+      // centered in the final thumbnail, even with perspective asymmetry.
+      const focusNdcBounds = {
+        minX: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+      };
+
+      for (let i = 0; i < focusCorners.length; i += 1) {
+        const ndc = focusCorners[i].clone().project(captureCamera);
+        if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) continue;
+        focusNdcBounds.minX = Math.min(focusNdcBounds.minX, ndc.x);
+        focusNdcBounds.maxX = Math.max(focusNdcBounds.maxX, ndc.x);
+        focusNdcBounds.minY = Math.min(focusNdcBounds.minY, ndc.y);
+        focusNdcBounds.maxY = Math.max(focusNdcBounds.maxY, ndc.y);
+      }
+
+      if (
+        Number.isFinite(focusNdcBounds.minX)
+        && Number.isFinite(focusNdcBounds.maxX)
+        && Number.isFinite(focusNdcBounds.minY)
+        && Number.isFinite(focusNdcBounds.maxY)
+      ) {
+        const ndcCenterX = (focusNdcBounds.minX + focusNdcBounds.maxX) * 0.5;
+        const ndcCenterY = (focusNdcBounds.minY + focusNdcBounds.maxY) * 0.5;
+
+        if (Math.abs(ndcCenterX) > 1e-4 || Math.abs(ndcCenterY) > 1e-4) {
+          const recenterOffset = new THREE.Vector3();
+
+          if (captureCamera instanceof THREE.PerspectiveCamera) {
+            const targetDistance = Math.max(1e-6, captureCamera.position.distanceTo(target));
+            const halfV = Math.max(1e-6, THREE.MathUtils.degToRad(captureCamera.fov) * 0.5);
+            const halfHeight = Math.tan(halfV) * targetDistance;
+            const halfWidth = halfHeight * captureCamera.aspect;
+            recenterOffset
+              .addScaledVector(viewRight, ndcCenterX * halfWidth)
+              .addScaledVector(viewUp, ndcCenterY * halfHeight);
+          } else if (captureCamera instanceof THREE.OrthographicCamera) {
+            const halfWidth = (captureCamera.right - captureCamera.left) / Math.max(1e-6, captureCamera.zoom) * 0.5;
+            const halfHeight = (captureCamera.top - captureCamera.bottom) / Math.max(1e-6, captureCamera.zoom) * 0.5;
+            recenterOffset
+              .addScaledVector(viewRight, ndcCenterX * halfWidth)
+              .addScaledVector(viewUp, ndcCenterY * halfHeight);
+          }
+
+          if (recenterOffset.lengthSq() > 1e-10) {
+            target.add(recenterOffset);
+            captureCamera.position.add(recenterOffset);
+            captureCamera.lookAt(target);
+            if (captureCamera instanceof THREE.PerspectiveCamera || captureCamera instanceof THREE.OrthographicCamera) {
+              captureCamera.updateProjectionMatrix();
+            }
+            captureCamera.updateMatrixWorld(true);
+          }
+        }
+      }
+
       // Thumbnail rendering bypasses R3F's frame loop, so camera-follow lights
       // (like the headlight) may be stale unless we synchronize them manually.
       sceneGraph.traverse((node) => {
@@ -4062,6 +4159,29 @@ export function SceneCanvas({
         if (!followCaptureCamera) return;
         light.position.copy(captureCamera.position);
         light.updateMatrixWorld(true);
+      });
+
+      const includeBuildPlate = exportThumbnailRenderOptions?.includeBuildPlate ?? true;
+      const includeGrid = exportThumbnailRenderOptions?.includeGrid ?? true;
+
+      // Force helper/overlay visibility for thumbnail capture independent of
+      // React render timing so toggles are always honored.
+      sceneGraph.traverse((node) => {
+        const helperType = (node.userData as Record<string, unknown> | undefined)?.thumbnailHelperType;
+        if (helperType === 'buildPlate' && !includeBuildPlate) {
+          visibilityRestores.push({ node, visible: node.visible });
+          node.visible = false;
+          return;
+        }
+        if (helperType === 'grid' && !includeGrid) {
+          visibilityRestores.push({ node, visible: node.visible });
+          node.visible = false;
+          return;
+        }
+        if (helperType === 'buildVolumeOverlay') {
+          visibilityRestores.push({ node, visible: node.visible });
+          node.visible = false;
+        }
       });
 
       // Ensure build-volume boundary lines are hidden in exported thumbnails.
@@ -4089,37 +4209,40 @@ export function SceneCanvas({
 
       context.drawImage(renderer.domElement, 0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
 
-      // Approximate SceneMoodOverlay so exported thumbnail keeps viewport ambience.
-      const rootStyles = getComputedStyle(document.documentElement);
-      const radialColor = rootStyles.getPropertyValue('--scene-gradient-radial').trim() || '#ff37aa';
-      const linearStartColor = rootStyles.getPropertyValue('--scene-gradient-linear-start').trim() || '#ff37aa';
-      const linearMidColor = rootStyles.getPropertyValue('--scene-gradient-linear-mid').trim() || '#6f33ff';
+      const includeGradient = exportThumbnailRenderOptions?.includeGradient ?? false;
+      if (includeGradient) {
+        // Approximate SceneMoodOverlay so exported thumbnail keeps viewport ambience.
+        const rootStyles = getComputedStyle(document.documentElement);
+        const radialColor = rootStyles.getPropertyValue('--scene-gradient-radial').trim() || '#ff37aa';
+        const linearStartColor = rootStyles.getPropertyValue('--scene-gradient-linear-start').trim() || '#ff37aa';
+        const linearMidColor = rootStyles.getPropertyValue('--scene-gradient-linear-mid').trim() || '#6f33ff';
 
-      context.save();
-      context.globalCompositeOperation = 'screen';
+        context.save();
+        context.globalCompositeOperation = 'screen';
 
-      const radialGradient = context.createRadialGradient(
-        EXPORT_THUMBNAIL_WIDTH * 0.5,
-        EXPORT_THUMBNAIL_HEIGHT * 0.46,
-        0,
-        EXPORT_THUMBNAIL_WIDTH * 0.5,
-        EXPORT_THUMBNAIL_HEIGHT * 0.46,
-        Math.max(EXPORT_THUMBNAIL_WIDTH * 0.72, EXPORT_THUMBNAIL_HEIGHT * 0.72),
-      );
-      radialGradient.addColorStop(0.56, 'rgba(0, 0, 0, 0)');
-      radialGradient.addColorStop(1, radialColor);
-      context.globalAlpha = 0.14;
-      context.fillStyle = radialGradient;
-      context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+        const radialGradient = context.createRadialGradient(
+          EXPORT_THUMBNAIL_WIDTH * 0.5,
+          EXPORT_THUMBNAIL_HEIGHT * 0.46,
+          0,
+          EXPORT_THUMBNAIL_WIDTH * 0.5,
+          EXPORT_THUMBNAIL_HEIGHT * 0.46,
+          Math.max(EXPORT_THUMBNAIL_WIDTH * 0.72, EXPORT_THUMBNAIL_HEIGHT * 0.72),
+        );
+        radialGradient.addColorStop(0.56, 'rgba(0, 0, 0, 0)');
+        radialGradient.addColorStop(1, radialColor);
+        context.globalAlpha = 0.14;
+        context.fillStyle = radialGradient;
+        context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
 
-      const linearGradient = context.createLinearGradient(0, 0, 0, EXPORT_THUMBNAIL_HEIGHT);
-      linearGradient.addColorStop(0, linearStartColor);
-      linearGradient.addColorStop(0.4, linearMidColor);
-      linearGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      context.globalAlpha = 0.08;
-      context.fillStyle = linearGradient;
-      context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
-      context.restore();
+        const linearGradient = context.createLinearGradient(0, 0, 0, EXPORT_THUMBNAIL_HEIGHT);
+        linearGradient.addColorStop(0, linearStartColor);
+        linearGradient.addColorStop(0.4, linearMidColor);
+        linearGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        context.globalAlpha = 0.08;
+        context.fillStyle = linearGradient;
+        context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+        context.restore();
+      }
 
       const blob = await new Promise<Blob | null>((resolve) => {
         canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
@@ -4134,13 +4257,20 @@ export function SceneCanvas({
       setThumbnailCaptureActive(false);
     }
   }, [
+    activeTransformOverrideModelId,
     buildVolumeBounds,
+    computeApproxModelWorldBounds,
     computeModelWorldBounds,
     defaultCamera.position,
     defaultCamera.up,
+    exportThumbnailRenderOptions,
     modelWorldBounds,
     models,
+    transform,
   ]);
+
+  const includeHelpersGridDuringCapture = exportThumbnailRenderOptions?.includeGrid ?? true;
+  const includeBuildPlateDuringCapture = exportThumbnailRenderOptions?.includeBuildPlate ?? true;
 
   React.useEffect(() => {
     if (!onRegisterExportThumbnailCapture) return;
@@ -4297,7 +4427,9 @@ export function SceneCanvas({
           gridDepthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.depthMm : undefined}
           originMinX={buildVolumeBounds?.min.x}
           originMinY={buildVolumeBounds?.min.y}
-          buildPlateOpacity={buildPlateOpacity}
+          buildPlateOpacity={(!thumbnailCaptureActive || includeBuildPlateDuringCapture) ? buildPlateOpacity : 0}
+          showGrid={!thumbnailCaptureActive || includeHelpersGridDuringCapture}
+          showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null} />
         <CameraProvider cameraRef={cameraRef} />
@@ -4708,6 +4840,7 @@ export function SceneCanvas({
               {!thumbnailCaptureActive && activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
                 <group
                   ref={buildVolumeBoundsOverlayRef}
+                  userData={{ thumbnailHelperType: 'buildVolumeOverlay' }}
                   position={[
                     (buildVolumeBounds!.min.x + buildVolumeBounds!.max.x) * 0.5,
                     (buildVolumeBounds!.min.y + buildVolumeBounds!.max.y) * 0.5,

@@ -270,6 +270,13 @@ if (typeof window !== 'undefined') {
   console.log('[App] BVH acceleration initialized');
 }
 
+type ExportThumbnailRenderOptions = {
+  includeGradient: boolean;
+  includeBuildPlate: boolean;
+  includeGrid: boolean;
+  centerOnModel: boolean;
+};
+
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
@@ -422,6 +429,12 @@ export default function Home() {
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
   const [printingPreviewPan, setPrintingPreviewPan] = React.useState({ x: 0, y: 0 });
   const [isPrintingPreviewPanning, setIsPrintingPreviewPanning] = React.useState(false);
+  const [exportThumbnailRenderOptions, setExportThumbnailRenderOptions] = React.useState<ExportThumbnailRenderOptions>({
+    includeGradient: false,
+    includeBuildPlate: true,
+    includeGrid: true,
+    centerOnModel: true,
+  });
   const printingPreviewViewportRef = React.useRef<HTMLDivElement | null>(null);
   const printingPreviewCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const printingPreviewSettleTimeoutRef = React.useRef<number | null>(null);
@@ -6543,6 +6556,15 @@ export default function Home() {
               activeModel={scene.activeModel}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
+              thumbnailIncludeGradient={exportThumbnailRenderOptions.includeGradient}
+              thumbnailIncludeBuildPlate={exportThumbnailRenderOptions.includeBuildPlate}
+              thumbnailIncludeGrid={exportThumbnailRenderOptions.includeGrid}
+              onThumbnailRenderOptionsChange={(next) => {
+                setExportThumbnailRenderOptions((previous) => ({
+                  ...previous,
+                  ...next,
+                }));
+              }}
               onSliceRunStarted={handleSliceRunStartedForPrinting}
               onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
               onSlicingFinished={handleSlicingFinishedForPrinting}
@@ -7011,6 +7033,7 @@ export default function Home() {
             hideDuplicateSourceDuringApply={isDuplicating}
             view3dSettings={scene.view3dSettings}
             onRegisterExportThumbnailCapture={handleRegisterExportThumbnailCapture}
+            exportThumbnailRenderOptions={exportThumbnailRenderOptions}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />

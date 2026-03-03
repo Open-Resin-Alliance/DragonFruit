@@ -133,14 +133,20 @@ export function Helpers({
   originMinX,
   originMinY,
   buildPlateOpacity,
+  showGrid,
+  showBuildPlate,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
   originMinX?: number;
   originMinY?: number;
   buildPlateOpacity?: number;
+  showGrid?: boolean;
+  showBuildPlate?: boolean;
 }) {
   const nullRaycast = () => null;
+  const shouldShowGrid = showGrid ?? true;
+  const shouldShowBuildPlate = showBuildPlate ?? true;
 
   const width = Number.isFinite(gridWidthMm) && (gridWidthMm as number) > 0 ? (gridWidthMm as number) : 200;
   const depth = Number.isFinite(gridDepthMm) && (gridDepthMm as number) > 0 ? (gridDepthMm as number) : 200;
@@ -345,7 +351,8 @@ export function Helpers({
       <mesh
         position={[buildVolumeCenterX, buildVolumeCenterY, buildPlateCenterZ]}
         raycast={nullRaycast}
-        visible={clampedBuildPlateOpacity > 0.001}
+        visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
+        userData={{ thumbnailHelperType: 'buildPlate' }}
       >
         <primitive object={buildPlateGeometry} attach="geometry" />
         <meshStandardMaterial
@@ -358,15 +365,19 @@ export function Helpers({
       </mesh>
 
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
-      <gridHelper
-        args={[baseSize, divisions, gridMajorColor, gridMinorColor]}
-        position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
-        rotation={[Math.PI / 2, 0, 0]}
-        scale={[scaleX, 1, scaleZ]}
-        raycast={nullRaycast}
-      />
+      {shouldShowGrid && (
+        <gridHelper
+          args={[baseSize, divisions, gridMajorColor, gridMinorColor]}
+          position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
+          rotation={[Math.PI / 2, 0, 0]}
+          scale={[scaleX, 1, scaleZ]}
+          raycast={nullRaycast}
+          userData={{ thumbnailHelperType: 'grid' }}
+        />
+      )}
       {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping */}
-      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]}>
+      {shouldShowGrid && (
+      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]} userData={{ thumbnailHelperType: 'grid' }}>
         {/* X axis */}
         <mesh position={[axisLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
           <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
@@ -401,9 +412,11 @@ export function Helpers({
           <AxisLabels size={axisLength + 6} />
         </group>
       </group>
+      )}
 
       {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
-      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]}>
+      {shouldShowBuildPlate && (
+      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]} userData={{ thumbnailHelperType: 'buildPlate' }}>
         {frontTexture && (
           <mesh raycast={nullRaycast}>
             <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />
@@ -421,6 +434,7 @@ export function Helpers({
           </mesh>
         )}
       </group>
+      )}
     </>
   );
 }
