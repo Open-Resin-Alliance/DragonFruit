@@ -293,7 +293,7 @@ export function SettingsModal({
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
     setDraftFloatingLayoutPersistence(true);
-    setDraftDebugPrimitivesPanelVisible(true);
+    setDraftDebugPrimitivesPanelVisible(false);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
     setDraftWorkspaceSelectionHighlightDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.selectionHighlightDefaults);
