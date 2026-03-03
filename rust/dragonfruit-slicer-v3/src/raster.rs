@@ -24,6 +24,13 @@ struct ActiveEdge {
     end_exclusive: usize,
 }
 
+#[derive(Debug)]
+struct ScanlineSegmentIndex {
+    starts: Vec<Vec<ActiveEdge>>,
+    y_start: usize,
+    y_end_exclusive: usize,
+}
+
 #[inline]
 fn mm_to_pixel_x(x_mm: f32, min_x_mm: f32, build_width_mm: f32, width_px: u32) -> f32 {
     let t = (x_mm - min_x_mm) / build_width_mm;
@@ -243,9 +250,14 @@ fn aa_subpixel_steps(level: &str) -> u8 {
     }
 }
 
-fn build_scanline_segment_index(segments: &[Segment], height: usize) -> Vec<Vec<ActiveEdge>> {
+fn build_scanline_segment_index(
+    segments: &[Segment],
+    height: usize,
+) -> Option<ScanlineSegmentIndex> {
     let mut starts = vec![Vec::<usize>::new(); height];
     let mut end_exclusive = vec![0usize; segments.len()];
+    let mut global_start = height;
+    let mut global_end = 0usize;
 
     for (idx, seg) in segments.iter().enumerate() {
         // Segment is active for rows where:
@@ -264,6 +276,12 @@ fn build_scanline_segment_index(segments: &[Segment], height: usize) -> Vec<Vec<
 
         starts[clamped_start].push(idx);
         end_exclusive[idx] = clamped_end;
+        global_start = global_start.min(clamped_start);
+        global_end = global_end.max(clamped_end);
+    }
+
+    if global_start >= global_end {
+        return None;
     }
 
     let mut indexed = vec![Vec::<ActiveEdge>::new(); height];
@@ -284,7 +302,11 @@ fn build_scanline_segment_index(segments: &[Segment], height: usize) -> Vec<Vec<
         }
     }
 
-    indexed
+    Some(ScanlineSegmentIndex {
+        starts: indexed,
+        y_start: global_start,
+        y_end_exclusive: global_end,
+    })
 }
 
 #[inline]
@@ -330,7 +352,12 @@ pub fn rasterize_layer_with_stats(
         return (mask, stats);
     }
 
-    let scanline_starts = build_scanline_segment_index(&segments, height);
+    let Some(scanline_index) = build_scanline_segment_index(&segments, height) else {
+        return (mask, stats);
+    };
+    let scanline_starts = scanline_index.starts;
+    let y_start = scanline_index.y_start;
+    let y_end_exclusive = scanline_index.y_end_exclusive;
 
     let x_eps = 1e-6f32;
     let aa_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
@@ -354,7 +381,7 @@ pub fn rasterize_layer_with_stats(
     let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
     let mut intersections: Vec<(f32, i32)> = Vec::with_capacity(128);
 
-    for y in 0..height {
+    for y in y_start..y_end_exclusive {
         active_edges.retain(|edge| edge.end_exclusive > y);
         if let Some(starting) = scanline_starts.get(y) {
             active_edges.extend(starting.iter().copied());
