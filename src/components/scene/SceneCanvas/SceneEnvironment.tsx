@@ -186,14 +186,17 @@ export function Helpers({
   const axisHeadRadius = 1.3;
   const axisHeadLength = 1.9;
   const axisLabelLift = 1.0;
-  const plateLogoAspect = 404 / 88;
+  // Keep decal geometry in lockstep with the logo SVG's intrinsic viewBox ratio
+  // to avoid non-uniform stretching on the build plate.
+  const plateLogoAspect = 1772 / 304;
   const plateLogoBaseWidth = Math.max(16, Math.min(42, width * 0.2));
-  const plateLogoWidth = plateLogoBaseWidth * 1.08;
-  const plateLogoHeight = (plateLogoBaseWidth / plateLogoAspect) * 0.96;
+  const plateLogoScale = 1.0;
+  const plateLogoWidth = plateLogoBaseWidth * plateLogoScale;
+  const plateLogoHeight = (plateLogoBaseWidth / plateLogoAspect) * plateLogoScale;
   const plateLogoInset = 1.6;
   const plateLogoX = resolvedOriginMinX + width - plateLogoInset - plateLogoWidth * 0.5;
   const plateLogoY = resolvedOriginMinY + plateLogoInset + plateLogoHeight * 0.5;
-  const plateLogoZ = 0.012;
+  const plateLogoZ = 0.12;
   // Seat marker over the front tab so it reads as part of the build plate geometry.
   const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.1;
 
