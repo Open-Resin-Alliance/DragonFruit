@@ -8,6 +8,8 @@ type VisualSettingsPanelProps = {
   layerIndex: number;
   maxLayers: number;
   onLayerIndexChange: (value: number) => void;
+  onScrubStart?: () => void;
+  onScrubEnd?: () => void;
   onCrossSectionModeChange?: (mode: 'smooth' | 'rasterized') => void;
   currentHeightMm?: number;
   maxHeightMm?: number;
@@ -18,6 +20,8 @@ export function VisualSettingsPanel({
   layerIndex,
   maxLayers,
   onLayerIndexChange,
+  onScrubStart,
+  onScrubEnd,
   onCrossSectionModeChange,
   currentHeightMm,
   maxHeightMm,
@@ -33,6 +37,8 @@ export function VisualSettingsPanel({
             step={1}
             value={layerIndex}
             onChange={(v) => onLayerIndexChange(Math.round(v))}
+            onScrubStart={onScrubStart}
+            onScrubEnd={onScrubEnd}
             onCrossSectionModeChange={onCrossSectionModeChange}
             currentHeightMm={currentHeightMm}
             maxHeightMm={maxHeightMm}

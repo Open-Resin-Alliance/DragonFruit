@@ -43,6 +43,7 @@ const defaultContextValue: PickingContextValue = {
   pause: () => {},
   resume: () => {},
   isPaused: false,
+  isDragging: false,
 };
 
 /**

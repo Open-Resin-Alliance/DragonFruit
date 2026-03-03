@@ -3,13 +3,14 @@
 import React from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import type { SupportMode } from '@/supports/types';
 
 type CameraIntroControllerProps = {
   bounds: THREE.Box3 | null;
   runId: number;
   onComplete?: (runId: number) => void;
   preserveCurrentViewDirection?: boolean;
-  mode?: 'prepare' | 'analysis' | 'support' | 'export';
+  mode?: SupportMode;
   plateWidthMm?: number;
   plateDepthMm?: number;
 };

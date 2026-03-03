@@ -145,6 +145,21 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
   }
   ```
 
+### `app-slicing-performance-settings`
+
+- **Description**: Stores slicing throughput preferences including native backend strategy, CPU profile, PNG compression strategy, and BVH acceleration toggle.
+- **Location**: `src/components/settings/performancePreferences.ts`, `src/components/settings/PerformanceSettingsTab.tsx`, `src/features/slicing/sliceExportOrchestrator.ts`
+- **Schema**: `{ computeBackend: 'auto' | 'cpu'; cpuProfile: 'balanced' | 'max'; pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal'; bvhAccelerationEnabled: boolean }`
+- **Example**:
+  ```json
+  {
+    "computeBackend": "auto",
+    "cpuProfile": "max",
+    "pngCompressionStrategy": "balanced",
+    "bvhAccelerationEnabled": true
+  }
+  ```
+
 ### `dragonfruit-backups:auto-sync-enabled`
 
 - **Description**: Whether automated GitHub backup sync is enabled.

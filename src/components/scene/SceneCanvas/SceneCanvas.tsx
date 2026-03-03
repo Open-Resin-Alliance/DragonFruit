@@ -99,6 +99,50 @@ import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
+const EXPORT_THUMBNAIL_WIDTH = 1600;
+const EXPORT_THUMBNAIL_HEIGHT = 960;
+const EXPORT_THUMBNAIL_MARGIN = 1.1;
+
+function getBoxCorners(bounds: THREE.Box3): THREE.Vector3[] {
+  const { min, max } = bounds;
+  return [
+    new THREE.Vector3(min.x, min.y, min.z),
+    new THREE.Vector3(max.x, min.y, min.z),
+    new THREE.Vector3(max.x, max.y, min.z),
+    new THREE.Vector3(min.x, max.y, min.z),
+    new THREE.Vector3(min.x, min.y, max.z),
+    new THREE.Vector3(max.x, min.y, max.z),
+    new THREE.Vector3(max.x, max.y, max.z),
+    new THREE.Vector3(min.x, max.y, max.z),
+  ];
+}
+
+function SceneRenderBindings({
+  rendererRef,
+  sceneRef,
+}: {
+  rendererRef: React.MutableRefObject<THREE.WebGLRenderer | null>;
+  sceneRef: React.MutableRefObject<THREE.Scene | null>;
+}) {
+  const { gl, scene } = useThree();
+
+  React.useEffect(() => {
+    rendererRef.current = gl;
+    sceneRef.current = scene;
+
+    return () => {
+      if (rendererRef.current === gl) {
+        rendererRef.current = null;
+      }
+      if (sceneRef.current === scene) {
+        sceneRef.current = null;
+      }
+    };
+  }, [gl, scene, rendererRef, sceneRef]);
+
+  return null;
+}
+
 function buildBoxWireframePositions(bounds: THREE.Box3): Float32Array {
   const min = bounds.min;
   const max = bounds.max;
@@ -655,6 +699,8 @@ function ModelAttachedSupportLayer({
       {!hideRaftPrimitives && (
         <>
           <RaftRenderer
+            clipLower={clipLower}
+            clipUpper={clipUpper}
             colorized={raftColorized}
             hoverized={raftHoverized}
             ghostOpacity={ghostOpacity}
@@ -669,6 +715,8 @@ function ModelAttachedSupportLayer({
             onModelPointerSelect={onModelPointerSelect}
           />
           <LineRaftRenderer
+            clipLower={clipLower}
+            clipUpper={clipUpper}
             colorized={raftColorized}
             hoverized={raftHoverized}
             ghostOpacity={ghostOpacity}
@@ -808,6 +856,8 @@ export function SceneCanvas({
   supportRenderRefreshNonce = 0,
   gizmoResetNonce = 0,
   historyTransformResyncToken = 0,
+  isLayerScrubbing = false,
+  onRegisterExportThumbnailCapture,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -941,6 +991,8 @@ export function SceneCanvas({
   supportRenderRefreshNonce?: number;
   gizmoResetNonce?: number;
   historyTransformResyncToken?: number;
+  isLayerScrubbing?: boolean;
+  onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -1226,6 +1278,9 @@ export function SceneCanvas({
   }, []);
 
   const cameraRef = React.useRef<THREE.Camera | null>(null);
+  const rendererRef = React.useRef<THREE.WebGLRenderer | null>(null);
+  const sceneRef = React.useRef<THREE.Scene | null>(null);
+  const buildVolumeBoundsOverlayRef = React.useRef<THREE.Group | null>(null);
   const orbitControlsRef = React.useRef<{
     target: THREE.Vector3;
     rotateSpeed: number;
@@ -1245,6 +1300,7 @@ export function SceneCanvas({
   const [isOrbitInteracting, setIsOrbitInteracting] = React.useState(false);
   const [isOrbitRotating, setIsOrbitRotating] = React.useState(false);
   const [spaceMouseNavigationActive, setSpaceMouseNavigationActive] = React.useState(false);
+  const [thumbnailCaptureActive, setThumbnailCaptureActive] = React.useState(false);
     const isOrbitInRotateState = React.useCallback(() => {
       const orbitControls = orbitControlsRef.current as unknown as { state?: number } | null;
       const state = orbitControls?.state;
@@ -2787,6 +2843,14 @@ export function SceneCanvas({
     transform,
   ]);
 
+  const crossSectionInteractive = Boolean(isLayerScrubbing);
+  const crossSectionModeForRender: 'smooth' | 'rasterized' = crossSectionInteractive
+    ? 'rasterized'
+    : (crossSectionMode ?? 'smooth');
+  const crossSectionPxMmForRender = crossSectionInteractive
+    ? Math.max(pxMm ?? 0.1, 0.35)
+    : pxMm;
+
   const introControllerBounds = introBoundsSnapshot;
 
   const introControllerRunId = cameraIntroRunId;
@@ -3781,6 +3845,236 @@ export function SceneCanvas({
     window.dispatchEvent(new Event('picking-orbit-end'));
   }, [mode, onCameraEnd, updateCameraBelowBuildPlate]);
 
+  const captureExportThumbnailPng = React.useCallback(async (): Promise<Uint8Array | null> => {
+    const renderer = rendererRef.current;
+    const sceneGraph = sceneRef.current;
+    const camera = cameraRef.current;
+
+    if (!renderer || !sceneGraph || !camera) return null;
+
+    const visibleBounds = models
+      .filter((model) => model.visible)
+      .map((model) => modelWorldBounds.get(model.id) ?? computeModelWorldBounds(model, model.transform, buildVolumeBounds))
+      .filter((box): box is THREE.Box3 => !!box && !box.isEmpty());
+
+    if (visibleBounds.length === 0) return null;
+
+    const boundsUnion = visibleBounds[0].clone();
+    for (let i = 1; i < visibleBounds.length; i += 1) {
+      boundsUnion.union(visibleBounds[i]);
+    }
+
+    const target = boundsUnion.getCenter(new THREE.Vector3());
+
+    const orbitTarget = orbitControlsRef.current?.target;
+    const introDirection = orbitTarget
+      ? camera.position.clone().sub(orbitTarget)
+      : camera.position.clone().sub(target);
+    if (introDirection.lengthSq() < 1e-8) {
+      introDirection.set(
+        defaultCamera.position[0],
+        defaultCamera.position[1],
+        defaultCamera.position[2],
+      ).sub(target);
+    }
+    if (introDirection.lengthSq() < 1e-8) {
+      introDirection.set(-1, -1, 1);
+    }
+    introDirection.normalize();
+
+    const worldUp = new THREE.Vector3(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]).normalize();
+    const viewForward = introDirection.clone(); // target -> camera
+    const viewRight = new THREE.Vector3().crossVectors(worldUp, viewForward);
+    if (viewRight.lengthSq() < 1e-8) {
+      viewRight.set(1, 0, 0);
+    }
+    viewRight.normalize();
+    const viewUp = new THREE.Vector3().crossVectors(viewForward, viewRight).normalize();
+
+    const corners = getBoxCorners(boundsUnion);
+
+    const prevRenderTarget = renderer.getRenderTarget();
+    const prevPixelRatio = renderer.getPixelRatio();
+    const prevSize = renderer.getSize(new THREE.Vector2());
+    const prevViewport = renderer.getViewport(new THREE.Vector4());
+    const prevScissor = renderer.getScissor(new THREE.Vector4());
+    const prevScissorTest = renderer.getScissorTest();
+    const prevBuildVolumeOverlayVisible = buildVolumeBoundsOverlayRef.current?.visible ?? null;
+
+    const restoreCamera = () => {
+      renderer.setRenderTarget(prevRenderTarget);
+      renderer.setPixelRatio(prevPixelRatio);
+      renderer.setSize(prevSize.x, prevSize.y, false);
+      renderer.setViewport(prevViewport.x, prevViewport.y, prevViewport.z, prevViewport.w);
+      renderer.setScissor(prevScissor.x, prevScissor.y, prevScissor.z, prevScissor.w);
+      renderer.setScissorTest(prevScissorTest);
+      if (buildVolumeBoundsOverlayRef.current && prevBuildVolumeOverlayVisible != null) {
+        buildVolumeBoundsOverlayRef.current.visible = prevBuildVolumeOverlayVisible;
+      }
+    };
+
+    try {
+      setThumbnailCaptureActive(true);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      const aspect = EXPORT_THUMBNAIL_WIDTH / EXPORT_THUMBNAIL_HEIGHT;
+      let captureCamera: THREE.Camera;
+      if (camera instanceof THREE.PerspectiveCamera) {
+        const perspective = new THREE.PerspectiveCamera(camera.fov, aspect, camera.near, camera.far);
+        perspective.up.set(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]);
+
+        const vFov = THREE.MathUtils.degToRad(perspective.fov);
+        const halfV = Math.max(0.0001, vFov * 0.5);
+        const halfH = Math.max(0.0001, Math.atan(Math.tan(halfV) * perspective.aspect));
+        const tanHalfV = Math.tan(halfV);
+        const tanHalfH = Math.tan(halfH);
+
+        let requiredDistance = 0;
+        for (let i = 0; i < corners.length; i += 1) {
+          const offset = corners[i].clone().sub(target);
+          const x = Math.abs(offset.dot(viewRight));
+          const y = Math.abs(offset.dot(viewUp));
+          const zForward = offset.dot(viewForward);
+          const distanceForX = zForward + (x / Math.max(1e-6, tanHalfH));
+          const distanceForY = zForward + (y / Math.max(1e-6, tanHalfV));
+          requiredDistance = Math.max(requiredDistance, distanceForX, distanceForY);
+        }
+
+        const distance = Math.max(10, requiredDistance * EXPORT_THUMBNAIL_MARGIN);
+        perspective.position.copy(target.clone().addScaledVector(introDirection, Math.max(10, distance)));
+        perspective.lookAt(target);
+        perspective.updateProjectionMatrix();
+        perspective.updateMatrixWorld(true);
+        captureCamera = perspective;
+      } else if (camera instanceof THREE.OrthographicCamera) {
+        const ortho = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, camera.near, camera.far);
+        ortho.up.set(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]);
+
+        let halfWidth = 0;
+        let halfHeight = 0;
+        for (let i = 0; i < corners.length; i += 1) {
+          const offset = corners[i].clone().sub(target);
+          halfWidth = Math.max(halfWidth, Math.abs(offset.dot(viewRight)));
+          halfHeight = Math.max(halfHeight, Math.abs(offset.dot(viewUp)));
+        }
+
+        halfWidth = Math.max(1e-6, halfWidth * EXPORT_THUMBNAIL_MARGIN);
+        halfHeight = Math.max(1e-6, halfHeight * EXPORT_THUMBNAIL_MARGIN);
+        const zoomByHeight = 1 / halfHeight;
+        const zoomByWidth = aspect / halfWidth;
+        ortho.zoom = Math.max(0.0001, Math.min(zoomByHeight, zoomByWidth));
+        const distance = Math.max(10, boundsUnion.getSize(new THREE.Vector3()).length() * 1.25);
+        ortho.position.copy(target.clone().addScaledVector(introDirection, distance));
+        ortho.lookAt(target);
+        ortho.updateProjectionMatrix();
+        ortho.updateMatrixWorld(true);
+        captureCamera = ortho;
+      } else {
+        const fallback = camera.clone() as THREE.Camera;
+        fallback.up.set(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]);
+        fallback.position.copy(target.clone().addScaledVector(introDirection, Math.max(10, boundsUnion.getSize(new THREE.Vector3()).length() * 1.25)));
+        fallback.lookAt(target);
+        fallback.updateMatrixWorld(true);
+        captureCamera = fallback;
+      }
+
+      // Thumbnail rendering bypasses R3F's frame loop, so camera-follow lights
+      // (like the headlight) may be stale unless we synchronize them manually.
+      sceneGraph.traverse((node) => {
+        if ((node as any).isLight !== true) return;
+        const light = node as THREE.Light;
+        const followCaptureCamera = Boolean((light.userData as Record<string, unknown> | undefined)?.followCaptureCamera);
+        if (!followCaptureCamera) return;
+        light.position.copy(captureCamera.position);
+        light.updateMatrixWorld(true);
+      });
+
+      // Ensure build-volume boundary lines are hidden in exported thumbnails.
+      if (buildVolumeBoundsOverlayRef.current) {
+        buildVolumeBoundsOverlayRef.current.visible = false;
+      }
+
+      // Render directly to the main framebuffer at export resolution to preserve
+      // the same viewport tone-mapping/color pipeline, then copy into PNG canvas.
+      renderer.setRenderTarget(null);
+      renderer.setPixelRatio(1);
+      renderer.setSize(EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT, false);
+      renderer.setViewport(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+      renderer.setScissorTest(false);
+      renderer.clear(true, true, true);
+      renderer.render(sceneGraph, captureCamera);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = EXPORT_THUMBNAIL_WIDTH;
+      canvas.height = EXPORT_THUMBNAIL_HEIGHT;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      context.drawImage(renderer.domElement, 0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+
+      // Approximate SceneMoodOverlay so exported thumbnail keeps viewport ambience.
+      const rootStyles = getComputedStyle(document.documentElement);
+      const radialColor = rootStyles.getPropertyValue('--scene-gradient-radial').trim() || '#ff37aa';
+      const linearStartColor = rootStyles.getPropertyValue('--scene-gradient-linear-start').trim() || '#ff37aa';
+      const linearMidColor = rootStyles.getPropertyValue('--scene-gradient-linear-mid').trim() || '#6f33ff';
+
+      context.save();
+      context.globalCompositeOperation = 'screen';
+
+      const radialGradient = context.createRadialGradient(
+        EXPORT_THUMBNAIL_WIDTH * 0.5,
+        EXPORT_THUMBNAIL_HEIGHT * 0.46,
+        0,
+        EXPORT_THUMBNAIL_WIDTH * 0.5,
+        EXPORT_THUMBNAIL_HEIGHT * 0.46,
+        Math.max(EXPORT_THUMBNAIL_WIDTH * 0.72, EXPORT_THUMBNAIL_HEIGHT * 0.72),
+      );
+      radialGradient.addColorStop(0.56, 'rgba(0, 0, 0, 0)');
+      radialGradient.addColorStop(1, radialColor);
+      context.globalAlpha = 0.14;
+      context.fillStyle = radialGradient;
+      context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+
+      const linearGradient = context.createLinearGradient(0, 0, 0, EXPORT_THUMBNAIL_HEIGHT);
+      linearGradient.addColorStop(0, linearStartColor);
+      linearGradient.addColorStop(0.4, linearMidColor);
+      linearGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      context.globalAlpha = 0.08;
+      context.fillStyle = linearGradient;
+      context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+      context.restore();
+
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
+      });
+      if (!blob) {
+        return null;
+      }
+
+      return new Uint8Array(await blob.arrayBuffer());
+    } finally {
+      restoreCamera();
+      setThumbnailCaptureActive(false);
+    }
+  }, [
+    buildVolumeBounds,
+    computeModelWorldBounds,
+    defaultCamera.position,
+    defaultCamera.up,
+    modelWorldBounds,
+    models,
+  ]);
+
+  React.useEffect(() => {
+    if (!onRegisterExportThumbnailCapture) return;
+    onRegisterExportThumbnailCapture(captureExportThumbnailPng);
+    return () => {
+      onRegisterExportThumbnailCapture(null);
+    };
+  }, [captureExportThumbnailPng, onRegisterExportThumbnailCapture]);
+
   React.useEffect(() => {
     const forceOrbitEndIfActive = () => {
       if (!orbitInteractionActiveRef.current) return;
@@ -3912,6 +4206,7 @@ export function SceneCanvas({
         gl={{ stencil: true, logarithmicDepthBuffer: false, powerPreference: 'high-performance' }}
         onPointerMissed={handleScenePointerMissed}
       >
+        <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
         <LoggingHelper mode={mode} />
         <Lights
           ambientIntensity={ambientIntensity ?? 1.2}
@@ -3942,8 +4237,9 @@ export function SceneCanvas({
 
             <React.Suspense fallback={null}>
               {models.map((model) => {
-                const isActive = model.id === activeModelId;
-                const isSelectedModel = selectedModelIdSet.has(model.id);
+                const isCaptureTintModel = thumbnailCaptureActive && model.visible;
+                const isActive = isCaptureTintModel || model.id === activeModelId;
+                const isSelectedModel = isCaptureTintModel || selectedModelIdSet.has(model.id);
                 const isMarqueeCandidate = isMarqueeSelecting && marqueeCandidateIdSet.has(model.id);
                 const suppressModelInteraction = isGizmoDragging || isPostGizmoInteractionGuardActive || isOrbitInteracting;
                 const interactionLodEnabled = (isOrbitInteracting || spaceMouseNavigationActive) && !isActive;
@@ -4071,31 +4367,6 @@ export function SceneCanvas({
                       )}
                     </StlMesh>
 
-                    {/* Cross-section cap (fill) at the cut plane - Render per model */}
-                    {clipUpper != null && !hideCrossSectionCap && (
-                      <CrossSectionCap
-                        geometry={model.geometry.geometry}
-                        y={clipUpper}
-                        color="#FFFFFF"
-                        // We need the matrix for THIS model
-                        transformMatrix={(() => {
-                          // Duplicate logic from previous SceneCanvas to build matrix
-                          const t = animatedTransform;
-                          if (!t) return undefined;
-
-                          const center = model.geometry.center;
-
-                          const matrix = new THREE.Matrix4();
-                          matrix.compose(t.position, quaternionFromGlobalEuler(t.rotation), t.scale);
-                          const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-                          matrix.multiply(offsetMatrix);
-                          return matrix;
-                        })()}
-                        mode={crossSectionMode}
-                        pxMm={pxMm}
-                        visible={!hideCrossSectionCap && clipUpper != null}
-                      />
-                    )}
                   </React.Fragment>
                 );
               })}
@@ -4306,7 +4577,7 @@ export function SceneCanvas({
                   ))
                 : null}
 
-              {activeBuildVolumeSettings.showModelBoundingBoxes
+              {activeBuildVolumeSettings.showModelBoundingBoxes && !thumbnailCaptureActive
                 ? modelBoundingBoxDebugData.map((entry) => (
                   <lineSegments key={`model-bounds-debug-${entry.id}`} renderOrder={8} raycast={() => null}>
                     <bufferGeometry>
@@ -4355,8 +4626,9 @@ export function SceneCanvas({
                   ))
                 : null}
 
-              {activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
+              {!thumbnailCaptureActive && activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
                 <group
+                  ref={buildVolumeBoundsOverlayRef}
                   position={[
                     (buildVolumeBounds!.min.x + buildVolumeBounds!.max.x) * 0.5,
                     (buildVolumeBounds!.min.y + buildVolumeBounds!.max.y) * 0.5,
@@ -4414,6 +4686,22 @@ export function SceneCanvas({
                 />
               )}
               </group>{/* end supportDragGroupRef */}
+
+              {/* Projection-based cross-section cap sourced from slicer world triangles (models + supports + rafts). */}
+              {clipUpper != null && !hideCrossSectionCap && (
+                <CrossSectionCap
+                  projectedModels={models}
+                  sourceObject={supportDragGroupRef?.current ?? null}
+                  y={clipUpper}
+                  color="#FFFFFF"
+                  mode={crossSectionModeForRender}
+                  pxMm={crossSectionPxMmForRender}
+                  interactive={crossSectionInteractive}
+                  interactiveZStepMm={0.4}
+                  preferProjectedOnlyDuringInteractive
+                  visible={!hideCrossSectionCap && clipUpper != null}
+                />
+              )}
 
               {!hideRaftPrimitives && !isGizmoDragging && (
                 <FootprintBorderRenderer
@@ -4511,7 +4799,7 @@ export function SceneCanvas({
               )}
 
               {/* Gizmo attached to active model */}
-              {mode === 'prepare' && transformMode === 'transform' && activeModelId && (
+              {mode === 'prepare' && transformMode === 'transform' && activeModelId && !thumbnailCaptureActive && (
                 <UnifiedGizmo
                   key={`main-gizmo-${gizmoResetNonce}`}
                   meshRef={(isMultiGizmoSelection ? multiGizmoAnchorRef : activeGroupRef) as React.RefObject<THREE.Group | THREE.Mesh | null>}
@@ -5140,7 +5428,7 @@ export function SceneCanvas({
         {/* Selection outline - renders when model is selected */}
         <SelectionOutlineRenderer
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
-          enabled={effectiveModelSelected && selectionHighlightMode === 'fresnel'}
+          enabled={!thumbnailCaptureActive && effectiveModelSelected && selectionHighlightMode === 'fresnel'}
           color="#82ccff"
           intensity={0.38}
           power={3.5}
@@ -5151,7 +5439,7 @@ export function SceneCanvas({
         {/* Selection spotlight - illuminates only the selected model via layers */}
         <SelectionSpotlight
           meshRef={activeActualMeshRef as React.RefObject<THREE.Mesh>}
-          enabled={effectiveModelSelected && selectionHighlightMode === 'spotlight'}
+          enabled={!thumbnailCaptureActive && effectiveModelSelected && selectionHighlightMode === 'spotlight'}
           color="#ffeacc"
           intensity={7.6}
           angle={Math.PI / 3}
@@ -5182,7 +5470,7 @@ export function SceneCanvas({
           target={orbitTarget}
           mouseButtons={{ LEFT: undefined as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }}
         />
-        <OrbitPivotIndicator visible={isOrbitInteracting && isOrbitRotating} />
+        <OrbitPivotIndicator visible={!thumbnailCaptureActive && isOrbitInteracting && isOrbitRotating} />
         <SpaceMouseController
           pivotPoint={selectedSpaceMousePivotPoint}
           pivotCandidates={spaceMousePivotCandidates}

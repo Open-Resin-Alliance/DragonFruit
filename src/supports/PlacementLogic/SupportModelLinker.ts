@@ -2,6 +2,11 @@ import type { SupportState } from '../types';
 import { setSnapshot } from '../state';
 import { getSupportBraceSnapshot, setSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
 
+type SupportCollectionsState = Pick<
+    SupportState,
+    'roots' | 'trunks' | 'branches' | 'braces' | 'leaves' | 'twigs' | 'sticks'
+>;
+
 /**
  * SupportModelLinker
  * 
@@ -26,7 +31,7 @@ interface ModelSupportIds {
 /**
  * Finds all support entity IDs associated with a given model ID.
  */
-export function getSupportsForModel(state: SupportState, modelId: string): ModelSupportIds {
+export function getSupportsForModel(state: SupportCollectionsState, modelId: string): ModelSupportIds {
     const result: ModelSupportIds = {
         roots: [],
         trunks: [],

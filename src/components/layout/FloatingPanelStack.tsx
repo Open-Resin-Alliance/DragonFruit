@@ -106,7 +106,7 @@ type LayoutConfig = {
   profiles: LayoutProfile[];
 };
 
-const WINDOW_LAYOUTS = windowLayouts as LayoutConfig;
+const WINDOW_LAYOUTS: LayoutConfig = windowLayouts as unknown as LayoutConfig;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -556,15 +556,15 @@ function flattenPanelChildren(children: React.ReactNode, prefix = 'panel'): Pane
 
     const fallbackId = `${prefix}-${index}`;
 
-    if (React.isValidElement(child) && child.type === React.Fragment) {
+    if (React.isValidElement<{ children?: React.ReactNode }>(child) && child.type === React.Fragment) {
       entries.push(...flattenPanelChildren(child.props.children, fallbackId));
       return;
     }
 
     const id = React.isValidElement(child) && child.key != null ? String(child.key) : fallbackId;
-    if (React.isValidElement(child) && child.props && typeof child.props === 'object') {
-      const props = child.props as { x?: number; y?: number; width?: number; height?: number };
-      entries.push({ id, node: child, x: props.x, y: props.y, width: props.width, height: props.height });
+    if (React.isValidElement<{ x?: number; y?: number; width?: number; height?: number }>(child)) {
+      const { x, y, width, height } = child.props;
+      entries.push({ id, node: child, x, y, width, height });
       return;
     }
 

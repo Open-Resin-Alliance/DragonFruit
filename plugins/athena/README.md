@@ -15,6 +15,8 @@ Built-in vendor plugin for Athena / Concepts3D NanoDLP workflows.
   - NanoDLP network parsing/heuristics shared by API routes
 - `nanodlp/*`
   - NanoDLP edit semantics used by Profile Settings UI
+- `slicing/nanodlpFormatDefinition.ts`
+  - Athena-owned TypeScript format metadata used to map `.nanodlp` printers to Rust/WASM encoder entrypoints
 
 ## Runtime integration map
 
@@ -71,3 +73,20 @@ This is a typical end-to-end path when a user edits an Athena NanoDLP material p
 - Built-in Athena presets come from `pluginManifest.ts`.
 - Thumbnail assets are served from
   `/api/profile-assets/plugins/athena/printers/concepts3d/assets/...`.
+
+## Slicing format ownership
+
+Athena's `.nanodlp` container format is plugin-owned:
+
+- TS metadata definition:
+  - `plugins/athena/slicing/nanodlpFormatDefinition.ts`
+- Rust/WASM format module scaffold:
+  - `plugins/athena/slicing/rust/encoder_impl.rs`
+  - (registered by the native V3 encoder registry in `rust/dragonfruit-slicer-v3/src/encoders/registry.rs`)
+
+This keeps vendor-specific container rules localized while the UI stays generic.
+
+### Supported vs unsupported container targets
+
+- Supported for Athena plugin: `.nanodlp`
+- Not supported: `.ctb`

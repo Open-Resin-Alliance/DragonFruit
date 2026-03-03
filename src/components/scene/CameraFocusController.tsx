@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import type { IslandMarker } from '@/modules/island/islandOverlayLogic';
+import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 
 type CameraFocusControllerProps = {
   selectedIslandId: number | null;

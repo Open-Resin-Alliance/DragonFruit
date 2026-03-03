@@ -19,12 +19,14 @@ export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
     analysis: 'orthographic',
     support: 'perspective',
     export: 'orthographic',
+    printing: 'orthographic',
   },
   selectionHighlightDefaults: {
     prepare: 'tint',
     analysis: 'tint',
     support: 'tint',
     export: 'tint',
+    printing: 'tint',
   },
 };
 
@@ -54,12 +56,14 @@ export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCamer
       analysis: normalizeMode(defaults.analysis),
       support: normalizeMode(defaults.support),
       export: normalizeMode(defaults.export),
+      printing: normalizeMode(defaults.printing),
     },
     selectionHighlightDefaults: {
       prepare: normalizeSelectionHighlightMode(selectionHighlightDefaults.prepare),
       analysis: normalizeSelectionHighlightMode(selectionHighlightDefaults.analysis),
       support: normalizeSelectionHighlightMode(selectionHighlightDefaults.support),
       export: normalizeSelectionHighlightMode(selectionHighlightDefaults.export),
+      printing: normalizeSelectionHighlightMode(selectionHighlightDefaults.printing),
     },
   };
 }
