@@ -101,7 +101,21 @@ const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), {
 
 const EXPORT_THUMBNAIL_WIDTH = 1600;
 const EXPORT_THUMBNAIL_HEIGHT = 960;
-const EXPORT_THUMBNAIL_MARGIN = 0.95;
+const EXPORT_THUMBNAIL_MARGIN = 1.1;
+
+function getBoxCorners(bounds: THREE.Box3): THREE.Vector3[] {
+  const { min, max } = bounds;
+  return [
+    new THREE.Vector3(min.x, min.y, min.z),
+    new THREE.Vector3(max.x, min.y, min.z),
+    new THREE.Vector3(max.x, max.y, min.z),
+    new THREE.Vector3(min.x, max.y, min.z),
+    new THREE.Vector3(min.x, min.y, max.z),
+    new THREE.Vector3(max.x, min.y, max.z),
+    new THREE.Vector3(max.x, max.y, max.z),
+    new THREE.Vector3(min.x, max.y, max.z),
+  ];
+}
 
 function SceneRenderBindings({
   rendererRef,
@@ -3850,19 +3864,34 @@ export function SceneCanvas({
       boundsUnion.union(visibleBounds[i]);
     }
 
-    const boundsSphere = boundsUnion.getBoundingSphere(new THREE.Sphere());
-    const radius = Math.max(1, boundsSphere.radius);
-    const target = boundsSphere.center.clone();
+    const target = boundsUnion.getCenter(new THREE.Vector3());
 
-    const introDirection = new THREE.Vector3(
-      defaultCamera.position[0] - buildVolumeCenterTarget.x,
-      defaultCamera.position[1] - buildVolumeCenterTarget.y,
-      defaultCamera.position[2] - buildVolumeCenterTarget.z,
-    );
+    const orbitTarget = orbitControlsRef.current?.target;
+    const introDirection = orbitTarget
+      ? camera.position.clone().sub(orbitTarget)
+      : camera.position.clone().sub(target);
+    if (introDirection.lengthSq() < 1e-8) {
+      introDirection.set(
+        defaultCamera.position[0],
+        defaultCamera.position[1],
+        defaultCamera.position[2],
+      ).sub(target);
+    }
     if (introDirection.lengthSq() < 1e-8) {
       introDirection.set(-1, -1, 1);
     }
     introDirection.normalize();
+
+    const worldUp = new THREE.Vector3(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]).normalize();
+    const viewForward = introDirection.clone(); // target -> camera
+    const viewRight = new THREE.Vector3().crossVectors(worldUp, viewForward);
+    if (viewRight.lengthSq() < 1e-8) {
+      viewRight.set(1, 0, 0);
+    }
+    viewRight.normalize();
+    const viewUp = new THREE.Vector3().crossVectors(viewForward, viewRight).normalize();
+
+    const corners = getBoxCorners(boundsUnion);
 
     const prevRenderTarget = renderer.getRenderTarget();
     const prevPixelRatio = renderer.getPixelRatio();
@@ -3893,10 +3922,25 @@ export function SceneCanvas({
       if (camera instanceof THREE.PerspectiveCamera) {
         const perspective = new THREE.PerspectiveCamera(camera.fov, aspect, camera.near, camera.far);
         perspective.up.set(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]);
+
         const vFov = THREE.MathUtils.degToRad(perspective.fov);
-        const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * perspective.aspect);
-        const fitFov = Math.max(0.0001, Math.min(vFov, hFov));
-        const distance = (radius * EXPORT_THUMBNAIL_MARGIN) / Math.sin(fitFov * 0.5);
+        const halfV = Math.max(0.0001, vFov * 0.5);
+        const halfH = Math.max(0.0001, Math.atan(Math.tan(halfV) * perspective.aspect));
+        const tanHalfV = Math.tan(halfV);
+        const tanHalfH = Math.tan(halfH);
+
+        let requiredDistance = 0;
+        for (let i = 0; i < corners.length; i += 1) {
+          const offset = corners[i].clone().sub(target);
+          const x = Math.abs(offset.dot(viewRight));
+          const y = Math.abs(offset.dot(viewUp));
+          const zForward = offset.dot(viewForward);
+          const distanceForX = zForward + (x / Math.max(1e-6, tanHalfH));
+          const distanceForY = zForward + (y / Math.max(1e-6, tanHalfV));
+          requiredDistance = Math.max(requiredDistance, distanceForX, distanceForY);
+        }
+
+        const distance = Math.max(10, requiredDistance * EXPORT_THUMBNAIL_MARGIN);
         perspective.position.copy(target.clone().addScaledVector(introDirection, Math.max(10, distance)));
         perspective.lookAt(target);
         perspective.updateProjectionMatrix();
@@ -3905,11 +3949,21 @@ export function SceneCanvas({
       } else if (camera instanceof THREE.OrthographicCamera) {
         const ortho = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, camera.near, camera.far);
         ortho.up.set(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]);
-        const requiredDiameter = Math.max(1e-6, radius * 2 * EXPORT_THUMBNAIL_MARGIN);
-        const zoomByHeight = 2 / requiredDiameter;
-        const zoomByWidth = (2 * aspect) / requiredDiameter;
+
+        let halfWidth = 0;
+        let halfHeight = 0;
+        for (let i = 0; i < corners.length; i += 1) {
+          const offset = corners[i].clone().sub(target);
+          halfWidth = Math.max(halfWidth, Math.abs(offset.dot(viewRight)));
+          halfHeight = Math.max(halfHeight, Math.abs(offset.dot(viewUp)));
+        }
+
+        halfWidth = Math.max(1e-6, halfWidth * EXPORT_THUMBNAIL_MARGIN);
+        halfHeight = Math.max(1e-6, halfHeight * EXPORT_THUMBNAIL_MARGIN);
+        const zoomByHeight = 1 / halfHeight;
+        const zoomByWidth = aspect / halfWidth;
         ortho.zoom = Math.max(0.0001, Math.min(zoomByHeight, zoomByWidth));
-        const distance = Math.max(10, radius * 2.4);
+        const distance = Math.max(10, boundsUnion.getSize(new THREE.Vector3()).length() * 1.25);
         ortho.position.copy(target.clone().addScaledVector(introDirection, distance));
         ortho.lookAt(target);
         ortho.updateProjectionMatrix();
@@ -3918,7 +3972,7 @@ export function SceneCanvas({
       } else {
         const fallback = camera.clone() as THREE.Camera;
         fallback.up.set(defaultCamera.up[0], defaultCamera.up[1], defaultCamera.up[2]);
-        fallback.position.copy(target.clone().addScaledVector(introDirection, Math.max(10, radius * 2.2)));
+        fallback.position.copy(target.clone().addScaledVector(introDirection, Math.max(10, boundsUnion.getSize(new THREE.Vector3()).length() * 1.25)));
         fallback.lookAt(target);
         fallback.updateMatrixWorld(true);
         captureCamera = fallback;
@@ -4006,9 +4060,6 @@ export function SceneCanvas({
     }
   }, [
     buildVolumeBounds,
-    buildVolumeCenterTarget.x,
-    buildVolumeCenterTarget.y,
-    buildVolumeCenterTarget.z,
     computeModelWorldBounds,
     defaultCamera.position,
     defaultCamera.up,
