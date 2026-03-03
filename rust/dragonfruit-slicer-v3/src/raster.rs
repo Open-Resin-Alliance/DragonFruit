@@ -133,9 +133,25 @@ fn compute_component_area_stats_8_connected(
     mask: &[u8],
     width: usize,
     height: usize,
+    min_x: usize,
+    max_x: usize,
+    min_y: usize,
+    max_y: usize,
     pixel_area_mm2: f64,
 ) -> (u32, f64, f64, u32) {
-    let mut visited = vec![0u8; mask.len()];
+    if width == 0
+        || height == 0
+        || min_x > max_x
+        || min_y > max_y
+        || max_x >= width
+        || max_y >= height
+    {
+        return (0, 0.0, 0.0, 0);
+    }
+
+    let roi_w = max_x - min_x + 1;
+    let roi_h = max_y - min_y + 1;
+    let mut visited = vec![0u8; roi_w * roi_h];
     let mut stack = Vec::<usize>::new();
 
     let mut total_solid_pixels = 0u32;
@@ -143,50 +159,57 @@ fn compute_component_area_stats_8_connected(
     let mut smallest_area_mm2 = f64::INFINITY;
     let mut area_count = 0u32;
 
-    for idx in 0..mask.len() {
-        if mask[idx] == 0 || visited[idx] != 0 {
-            continue;
-        }
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let local_idx = (y - min_y) * roi_w + (x - min_x);
+            let idx = y * width + x;
+            if mask[idx] == 0 || visited[local_idx] != 0 {
+                continue;
+            }
 
-        area_count = area_count.saturating_add(1);
-        let mut component_pixels = 0u32;
+            area_count = area_count.saturating_add(1);
+            let mut component_pixels = 0u32;
 
-        visited[idx] = 1;
-        stack.push(idx);
+            visited[local_idx] = 1;
+            stack.push(local_idx);
 
-        while let Some(cur) = stack.pop() {
-            component_pixels = component_pixels.saturating_add(1);
+            while let Some(cur_local) = stack.pop() {
+                component_pixels = component_pixels.saturating_add(1);
 
-            let y = cur / width;
-            let x = cur - (y * width);
+                let ly = cur_local / roi_w;
+                let lx = cur_local - (ly * roi_w);
+                let gy = min_y + ly;
+                let gx = min_x + lx;
 
-            let y0 = y.saturating_sub(1);
-            let y1 = (y + 1).min(height - 1);
-            let x0 = x.saturating_sub(1);
-            let x1 = (x + 1).min(width - 1);
+                let y0 = gy.saturating_sub(1).max(min_y);
+                let y1 = (gy + 1).min(max_y);
+                let x0 = gx.saturating_sub(1).max(min_x);
+                let x1 = (gx + 1).min(max_x);
 
-            for ny in y0..=y1 {
-                for nx in x0..=x1 {
-                    if nx == x && ny == y {
-                        continue;
+                for ny in y0..=y1 {
+                    for nx in x0..=x1 {
+                        if nx == gx && ny == gy {
+                            continue;
+                        }
+                        let nidx = ny * width + nx;
+                        let nlocal = (ny - min_y) * roi_w + (nx - min_x);
+                        if mask[nidx] == 0 || visited[nlocal] != 0 {
+                            continue;
+                        }
+                        visited[nlocal] = 1;
+                        stack.push(nlocal);
                     }
-                    let nidx = ny * width + nx;
-                    if mask[nidx] == 0 || visited[nidx] != 0 {
-                        continue;
-                    }
-                    visited[nidx] = 1;
-                    stack.push(nidx);
                 }
             }
-        }
 
-        total_solid_pixels = total_solid_pixels.saturating_add(component_pixels);
-        let area_mm2 = (component_pixels as f64) * pixel_area_mm2;
-        if area_mm2 > largest_area_mm2 {
-            largest_area_mm2 = area_mm2;
-        }
-        if area_mm2 < smallest_area_mm2 {
-            smallest_area_mm2 = area_mm2;
+            total_solid_pixels = total_solid_pixels.saturating_add(component_pixels);
+            let area_mm2 = (component_pixels as f64) * pixel_area_mm2;
+            if area_mm2 > largest_area_mm2 {
+                largest_area_mm2 = area_mm2;
+            }
+            if area_mm2 < smallest_area_mm2 {
+                smallest_area_mm2 = area_mm2;
+            }
         }
     }
 
@@ -199,6 +222,36 @@ fn compute_component_area_stats_8_connected(
             smallest_area_mm2,
             area_count,
         )
+    }
+}
+
+fn aa_subpixel_steps(level: &str) -> u8 {
+    match level {
+        "2x" => 2,
+        "4x" => 4,
+        "8x" => 8,
+        _ => 0,
+    }
+}
+
+#[inline]
+fn quantize_coverage(coverage: f32, steps: u8) -> f32 {
+    if steps <= 1 {
+        return coverage.clamp(0.0, 1.0);
+    }
+    let s = steps as f32;
+    ((coverage.clamp(0.0, 1.0) * s).round() / s).clamp(0.0, 1.0)
+}
+
+#[inline]
+fn write_aa_pixel_max(row: &mut [u8], x: usize, coverage: f32, steps: u8) {
+    if x >= row.len() {
+        return;
+    }
+    let quantized = quantize_coverage(coverage, steps);
+    let value = (quantized * 255.0).round() as u8;
+    if value > row[x] {
+        row[x] = value;
     }
 }
 
@@ -224,6 +277,16 @@ pub fn rasterize_layer_with_stats(
     }
 
     let x_eps = 1e-6f32;
+    let aa_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
+    let aa_enabled = aa_steps > 0;
+
+    // Keep area stats on a strict binary mask while allowing grayscale AA output.
+    let mut stats_mask = if aa_enabled {
+        Some(vec![0u8; width * height])
+    } else {
+        None
+    };
+
     let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
         * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
 
@@ -284,7 +347,47 @@ pub fn rasterize_layer_with_stats(
             let clamped_start = start_px.max(0) as usize;
             let clamped_end = ((end_px - 1).min(width as i32 - 1)) as usize;
             if clamped_end >= clamped_start {
-                row[clamped_start..=clamped_end].fill(255);
+                if let Some(ref mut binary) = stats_mask {
+                    binary[row_start + clamped_start..=row_start + clamped_end].fill(255);
+                }
+
+                if !aa_enabled {
+                    row[clamped_start..=clamped_end].fill(255);
+                } else {
+                    // Cheap AA: compute edge coverage from span endpoints and fill
+                    // interior as full white. This avoids full-frame blur passes.
+                    let left_i = a.floor() as i32;
+                    let right_i = b.ceil() as i32 - 1;
+
+                    if right_i < left_i {
+                        continue;
+                    }
+
+                    if left_i == right_i {
+                        if left_i >= 0 && left_i < width as i32 {
+                            let cov = (b - a).clamp(0.0, 1.0);
+                            write_aa_pixel_max(row, left_i as usize, cov, aa_steps);
+                        }
+                    } else {
+                        let left_cov = ((left_i as f32 + 1.0) - a).clamp(0.0, 1.0);
+                        let right_cov = (b - right_i as f32).clamp(0.0, 1.0);
+
+                        if left_i >= 0 && left_i < width as i32 {
+                            write_aa_pixel_max(row, left_i as usize, left_cov, aa_steps);
+                        }
+
+                        let interior_start = (left_i + 1).max(0) as usize;
+                        let interior_end = (right_i - 1).min(width as i32 - 1) as usize;
+                        if interior_end >= interior_start {
+                            row[interior_start..=interior_end].fill(255);
+                        }
+
+                        if right_i >= 0 && right_i < width as i32 {
+                            write_aa_pixel_max(row, right_i as usize, right_cov, aa_steps);
+                        }
+                    }
+                }
+
                 let filled = (clamped_end - clamped_start + 1) as u32;
                 stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
 
@@ -297,8 +400,18 @@ pub fn rasterize_layer_with_stats(
     }
 
     if stats.total_solid_pixels > 0 {
+        let stats_source = stats_mask.as_deref().unwrap_or(&mask);
         let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
-            compute_component_area_stats_8_connected(&mask, width, height, pixel_area_mm2);
+            compute_component_area_stats_8_connected(
+                stats_source,
+                width,
+                height,
+                min_x as usize,
+                max_x as usize,
+                min_y as usize,
+                max_y as usize,
+                pixel_area_mm2,
+            );
 
         stats.total_solid_pixels = total_pixels;
         let total_area = (total_pixels as f64) * pixel_area_mm2;
@@ -398,6 +511,8 @@ mod tests {
             export_thumbnail_png_base64: None,
             png_compression_strategy: "fastest".to_string(),
             container_compression_level: 0,
+            anti_aliasing_level: "Off".to_string(),
+            aa_on_supports: false,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
         }

@@ -1164,6 +1164,17 @@ export default function Home() {
     scene.setMode('printing');
   }, [scene]);
 
+  const handleSliceRunStartedForPrinting = React.useCallback(() => {
+    clearPrintingLayerPreviewUrls();
+    setPrintingPreviewTotalLayers(0);
+    setPrintingSelectedLayer(1);
+    setPrintingDisplayedLayer(1);
+    printingDisplayedLayerTargetRef.current = 1;
+    setPrintingArtifact(null);
+    setPrintingArtifactIsInvalid(false);
+    setPrintingReadyPlateId(null);
+  }, [clearPrintingLayerPreviewUrls]);
+
   const selectedPrintingLayerPreviewUrl = React.useMemo(() => {
     if (printingDisplayedLayer < 1) return null;
     return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
@@ -6500,6 +6511,7 @@ export default function Home() {
               activeModel={scene.activeModel}
               estimatedVolumeLabelOverride={estimatedVolumeMlLabel}
               captureSceneThumbnailPng={captureExportThumbnailPng}
+              onSliceRunStarted={handleSliceRunStartedForPrinting}
               onLayerPreviewGenerated={handlePrintingLayerPreviewGenerated}
               onSlicingFinished={handleSlicingFinishedForPrinting}
               onSliceArtifactReady={handleSliceArtifactReady}

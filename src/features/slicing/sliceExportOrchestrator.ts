@@ -181,6 +181,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
   const coreStartMs = performance.now();
   logDebug('Native slicing starting…');
+  logDebug('Native slicing AA settings', {
+    antiAliasingLevel: nativeJob.antiAliasingLevel,
+    aaOnSupports: nativeJob.aaOnSupports,
+  });
 
   options.onProgress?.(0, solidMesh.totalLayers, 'Slicing');
 

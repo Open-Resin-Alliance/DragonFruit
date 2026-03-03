@@ -21,6 +21,7 @@ interface SlicingPanelProps {
   activeModel: LoadedModel | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
+  onSliceRunStarted?: () => void;
   onLayerPreviewGenerated?: (payload: {
     layerIndex: number;
     totalLayers: number;
@@ -140,6 +141,7 @@ export function SlicingPanel({
   activeModel,
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
+  onSliceRunStarted,
   onLayerPreviewGenerated,
   onSlicingFinished,
   onSliceArtifactReady,
@@ -196,7 +198,9 @@ export function SlicingPanel({
   }, [activeMaterialProfile, activePrinterProfile]);
 
   const selectedNanodlpMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
-  const antiAliasingAvailable = activePrinterProfile?.antiAliasing === true;
+  // V3 supports grayscale anti-aliasing in the native raster pipeline,
+  // so this should not be gated by legacy profile capability flags.
+  const antiAliasingAvailable = true;
   const isNanodlpConnected = activePrinterProfile?.networkSupport === 'nanodlp'
     && activePrinterProfile.networkConnection?.connected === true;
   const nanodlpHost = (activePrinterProfile?.networkConnection?.ipAddress
@@ -488,6 +492,7 @@ export function SlicingPanel({
     clearLayerPreviewUrls();
     setPreviewTotalLayers(0);
     setPreviewSelectedLayer(1);
+    onSliceRunStarted?.();
 
     const runStartMs = performance.now();
     const abortController = new AbortController();

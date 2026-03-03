@@ -12,6 +12,10 @@ fn default_container_compression_level() -> u8 {
     2
 }
 
+fn default_anti_aliasing_level() -> String {
+    "Off".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
@@ -38,6 +42,12 @@ pub struct SliceJobV3 {
     /// ZIP deflate level for metadata entries.
     #[serde(default = "default_container_compression_level")]
     pub container_compression_level: u8,
+    /// Raster anti-aliasing quality hint (`Off`, `2x`, `4x`, `8x`).
+    #[serde(default = "default_anti_aliasing_level")]
+    pub anti_aliasing_level: String,
+    /// Whether AA should apply to support geometry (reserved for future split masks).
+    #[serde(default)]
+    pub aa_on_supports: bool,
     /// Flat triangle buffer (`x,y,z` * 3 vertices per triangle).
     pub triangles_xyz: Vec<f32>,
     /// Opaque metadata JSON passed through from app layer.

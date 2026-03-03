@@ -60,6 +60,8 @@ type NativeSolidSliceMetadataPayload = {
   width_px: number;
   height_px: number;
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
+  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x';
+  aa_on_supports: boolean;
   container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
@@ -147,6 +149,8 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     width_px: job.widthPx,
     height_px: job.heightPx,
     png_compression_strategy: job.pngCompressionStrategy,
+    anti_aliasing_level: job.antiAliasingLevel,
+    aa_on_supports: job.aaOnSupports,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,
