@@ -5,6 +5,8 @@ import { resolveSlicingFormatDefinition } from './formats/registry';
 import {
   isNativeSlicerAvailable,
   sliceSolidAndEncodeWithNativeSlicerToTempPath,
+  type NativeSlicerPerfMetrics,
+  type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 
 const DEBUG_PREFIX = '[SlicingDebug]';
@@ -27,6 +29,17 @@ export type SliceExportOrchestratorOptions = {
   onProgress?: (done: number, total: number, phase: string) => void;
   onLayerPreview?: (layerIndex: number, totalLayers: number, pngBytes: Uint8Array) => void;
 };
+
+function encodeBytesToBase64(bytes: Uint8Array): string {
+  // Chunk to avoid stack/memory pressure on large arrays.
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
 
 function createAbortError(message = 'Slicing canceled by user.'): Error {
   if (typeof DOMException !== 'undefined') {
@@ -64,6 +77,28 @@ export type SliceExportResult = {
     coreSlicingMs: number | null;
     totalLayers: number | null;
     layersPerSecond: number | null;
+    nativePerf: {
+      perf: NativeSlicerPerfMetrics | null;
+      runtime: NativeSlicerRuntimeMetrics | null;
+      bridgePayloadBuildMs: number | null;
+      bridgeInvokeRoundTripMs: number | null;
+      bridgeTotalMs: number | null;
+      bridgePayloadChars: number | null;
+      triangleFloatCount: number | null;
+      meshBytesLen: number | null;
+      stageMeshMs: number | null;
+      transportOverheadMs: number | null;
+      renderWallMs: number | null;
+      renderCpuMs: number | null;
+      indexBuildMs: number | null;
+      pngEncodeCpuMs: number | null;
+      archiveEncodeMs: number | null;
+      totalMs: number | null;
+      renderWallMsPerLayer: number | null;
+      renderCpuMsPerLayer: number | null;
+      pngCpuMsPerLayer: number | null;
+      totalMsPerLayer: number | null;
+    };
   };
 };
 
@@ -99,7 +134,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     throw new Error('Native slicer requires DragonFruit Desktop (Tauri). JS/WebGPU slicing has been removed.');
   }
 
-  options.onProgress?.(0, 1, `Preparing solid mesh · ${format.displayName}`);
+  options.onProgress?.(0, 1, 'Preparing');
   const meshPrepStartMs = performance.now();
   const solidMesh = buildSolidSliceMeshForWasm({
     models: options.models,
@@ -117,11 +152,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     meshPrepMs,
   });
 
-  options.onProgress?.(
-    0,
-    solidMesh.totalLayers,
-    `Native Rust slicing (${format.displayName}) · mode=${solidMesh.xPackingMode} · ${solidMesh.widthPx}x${solidMesh.heightPx}`,
-  );
+  options.onProgress?.(0, solidMesh.totalLayers, 'Staging');
 
   const nativeJob = {
     outputFormat: format.outputFormat,
@@ -141,6 +172,9 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     buildDepthMm: solidMesh.buildDepthMm,
     layerHeightMm: solidMesh.layerHeightMm,
     totalLayers: solidMesh.totalLayers,
+    exportThumbnailPngBase64: options.exportThumbnailPng && options.exportThumbnailPng.length > 0
+      ? encodeBytesToBase64(options.exportThumbnailPng)
+      : null,
     trianglesXYZ: solidMesh.trianglesXYZ,
     metadataJson: solidMesh.metadataJson,
   };
@@ -148,8 +182,14 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   const coreStartMs = performance.now();
   logDebug('Native slicing starting…');
 
+  options.onProgress?.(0, solidMesh.totalLayers, 'Slicing');
+
   const slicerProgressCallback = (done: number, total: number) => {
-    options.onProgress?.(done, total, `Slicing layer ${done}/${total} · ${format.displayName}`);
+    options.onProgress?.(
+      done,
+      total,
+      done >= total ? `Compression (${nativeJob.pngCompressionStrategy})` : 'Slicing',
+    );
   };
 
   const encodedArtifact = await sliceSolidAndEncodeWithNativeSlicerToTempPath(
@@ -161,12 +201,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   logDebug('Native slicing completed', { coreSlicingMs });
 
   throwIfAborted(options.abortSignal);
-  options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Native slicing finished');
+  options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Encoding');
 
   const outputExt = format.outputFormat.replace(/^\./, '') || 'slice';
   const outputName = `${safeFilenameBase(options.filenameBase)}.${outputExt}`;
 
   const totalElapsedMs = performance.now() - orchestratorStartMs;
+  options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Handoff');
   const layersPerSecond = totalElapsedMs > 0
     ? (solidMesh.totalLayers * 1000) / totalElapsedMs
     : null;
@@ -189,6 +230,38 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       coreSlicingMs,
       totalLayers: solidMesh.totalLayers,
       layersPerSecond,
+      nativePerf: {
+        perf: encodedArtifact.perf,
+        runtime: encodedArtifact.runtime,
+        bridgePayloadBuildMs: encodedArtifact.bridge?.payloadBuildMs ?? null,
+        bridgeInvokeRoundTripMs: encodedArtifact.bridge?.invokeRoundTripMs ?? null,
+        bridgeTotalMs: encodedArtifact.bridge?.bridgeTotalMs ?? null,
+        bridgePayloadChars: encodedArtifact.bridge?.payloadChars ?? null,
+        triangleFloatCount: encodedArtifact.bridge?.triangleFloatCount ?? null,
+        meshBytesLen: encodedArtifact.bridge?.meshBytesLen ?? null,
+        stageMeshMs: encodedArtifact.bridge?.stageMeshMs ?? null,
+        transportOverheadMs: encodedArtifact.perf
+          ? Math.max(0, coreSlicingMs - (encodedArtifact.perf.totalNs / 1_000_000))
+          : null,
+        renderWallMs: encodedArtifact.perf ? (encodedArtifact.perf.renderWallNs / 1_000_000) : null,
+        renderCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.renderNs / 1_000_000) : null,
+        indexBuildMs: encodedArtifact.perf ? (encodedArtifact.perf.indexBuildNs / 1_000_000) : null,
+        pngEncodeCpuMs: encodedArtifact.perf ? (encodedArtifact.perf.pngEncodeNs / 1_000_000) : null,
+        archiveEncodeMs: encodedArtifact.perf ? (encodedArtifact.perf.archiveEncodeNs / 1_000_000) : null,
+        totalMs: encodedArtifact.perf ? (encodedArtifact.perf.totalNs / 1_000_000) : null,
+        renderWallMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+          ? (encodedArtifact.perf.renderWallNs / 1_000_000) / encodedArtifact.perf.layers
+          : null,
+        renderCpuMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+          ? (encodedArtifact.perf.renderNs / 1_000_000) / encodedArtifact.perf.layers
+          : null,
+        pngCpuMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+          ? (encodedArtifact.perf.pngEncodeNs / 1_000_000) / encodedArtifact.perf.layers
+          : null,
+        totalMsPerLayer: encodedArtifact.perf && encodedArtifact.perf.layers > 0
+          ? (encodedArtifact.perf.totalNs / 1_000_000) / encodedArtifact.perf.layers
+          : null,
+      },
     },
   };
 }

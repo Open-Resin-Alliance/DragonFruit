@@ -1736,6 +1736,18 @@ export function buildProjectedCrossSectionLoopsAtZFromContext(options: {
     const tri = triangles[i];
     if (zMm < tri.zMin || zMm > tri.zMax) continue;
 
+    const ux = tri.bx - tri.ax;
+    const uy = tri.by - tri.ay;
+    const uz = tri.bz - tri.az;
+    const vx = tri.cx - tri.ax;
+    const vy = tri.cy - tri.ay;
+    const vz = tri.cz - tri.az;
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    // Line-of-intersection direction for tri plane ∩ z=const plane (n × +Z)
+    const dirX = ny;
+    const dirY = -nx;
+
     const points: Array<[number, number]> = [];
     const p01 = edgePlaneIntersectionXY(tri.ax, tri.ay, tri.az, tri.bx, tri.by, tri.bz, zMm);
     if (p01) pushDistinctPoint(points, p01);
@@ -1747,7 +1759,17 @@ export function buildProjectedCrossSectionLoopsAtZFromContext(options: {
     if (p20) pushDistinctPoint(points, p20);
 
     if (points.length === 2) {
-      segments.push([points[0], points[1]]);
+      let p1 = points[0];
+      let p2 = points[1];
+      if (Math.abs(dirX) > 1e-10 || Math.abs(dirY) > 1e-10) {
+        const segX = p2[0] - p1[0];
+        const segY = p2[1] - p1[1];
+        if ((segX * dirX + segY * dirY) < 0) {
+          p1 = points[1];
+          p2 = points[0];
+        }
+      }
+      segments.push([p1, p2]);
     }
   }
 

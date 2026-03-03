@@ -12,7 +12,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.15"
 rayon = "1.10"
-dragonfruit-slicer = { path = "../rust/dragonfruit-slicer" }
+zip = "2"
+dragonfruit-slicer-v3 = { path = "../rust/dragonfruit-slicer-v3" }
 
 [features]
 default = ["custom-protocol"]
@@ -26,5 +27,10 @@ custom-protocol = ["tauri/custom-protocol"]
 opt-level = 3
 
 # The wildcard above only covers registry deps; path deps need explicit entries.
-[profile.dev.package.dragonfruit-slicer]
+[profile.dev.package.dragonfruit-slicer-v3]
+opt-level = 3
+
+# The desktop shell crate contains IPC/glue hot paths (mesh staging/decoding).
+# Keep it optimized in dev so bridge overhead measurements are representative.
+[profile.dev.package.dragonfruit-desktop]
 opt-level = 3

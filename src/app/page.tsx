@@ -32,6 +32,7 @@ import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
 import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
+import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { IconButton } from '@/components/ui/primitives';
@@ -99,6 +100,9 @@ import {
 } from '@/features/profiles/profileStore';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import {
+  cleanupStalePrintTempArtifacts,
+  deletePrintTempArtifactPath,
+  readPrintLayerPreviewPngFromPath,
   readPrintArtifactBytesFromPath,
   savePrintArtifactPathWithNativeDialog,
   savePrintArtifactWithNativeDialog,
@@ -386,6 +390,7 @@ export default function Home() {
   const [debugPrimitivesPanelVisible, setDebugPrimitivesPanelVisible] = React.useState<boolean>(true);
   const [editorContextMenuPos, setEditorContextMenuPos] = React.useState<{ x: number; y: number } | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = React.useState(false);
+  const [isSliceMetricsDebugOpen, setIsSliceMetricsDebugOpen] = React.useState(false);
     const handleRegisterExportThumbnailCapture = React.useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
       exportThumbnailCaptureRef.current = capture;
     }, []);
@@ -405,6 +410,7 @@ export default function Home() {
     point: null,
   });
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
+  const printingLayerPreviewLoadInFlightRef = React.useRef<Set<number>>(new Set());
   const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
   const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
@@ -462,6 +468,7 @@ export default function Home() {
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
   const [printingDeviceProcessingStartedAtMs, setPrintingDeviceProcessingStartedAtMs] = React.useState<number | null>(null);
   const [printingDeviceProcessingElapsedSec, setPrintingDeviceProcessingElapsedSec] = React.useState(0);
+  const lastOwnedPrintTempPathRef = React.useRef<string | null>(null);
   const [historyDebugEvents, setHistoryDebugEvents] = React.useState<HistoryDebugEvent[]>([]);
   const [historyStackCounts, setHistoryStackCounts] = React.useState<{ undo: number; redo: number }>({
     undo: 0,
@@ -1037,6 +1044,7 @@ export default function Home() {
   const supportSpotlightHoldHotkey = getHotkey('SUPPORTS', 'TEMP_SPOTLIGHT_HOLD');
 
   const clearPrintingLayerPreviewUrls = React.useCallback(() => {
+    printingLayerPreviewLoadInFlightRef.current.clear();
     setPrintingLayerPreviewUrls((previous) => {
       for (const url of previous) {
         if (url) URL.revokeObjectURL(url);
@@ -1150,7 +1158,9 @@ export default function Home() {
   const handleSlicingFinishedForPrinting = React.useCallback((payload: { totalLayers: number }) => {
     const totalLayers = Math.max(1, payload.totalLayers);
     setPrintingPreviewTotalLayers(totalLayers);
-    setPrintingSelectedLayer((previous) => Math.max(1, Math.min(totalLayers, previous)));
+    setPrintingSelectedLayer(1);
+    setPrintingDisplayedLayer(1);
+    printingDisplayedLayerTargetRef.current = 1;
     scene.setMode('printing');
   }, [scene]);
 
@@ -1159,10 +1169,73 @@ export default function Home() {
     return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
   }, [printingLayerPreviewUrls, printingDisplayedLayer]);
 
-  // Show scrub preview while actively scrubbing OR if the target PNG isn't loaded yet (avoids flash)
+  React.useEffect(() => {
+    if (scene.mode !== 'printing') return;
+    if (!printingArtifact?.nativeTempPath) return;
+    if (printingPreviewTotalLayers <= 0) return;
+
+    const layerNumber = Math.max(1, Math.min(printingPreviewTotalLayers, printingDisplayedLayer));
+    const layerIndex = layerNumber - 1;
+    if (printingLayerPreviewUrls[layerIndex]) return;
+
+    const inFlight = printingLayerPreviewLoadInFlightRef.current;
+    if (inFlight.has(layerNumber)) return;
+    inFlight.add(layerNumber);
+
+    let cancelled = false;
+    void readPrintLayerPreviewPngFromPath(printingArtifact.nativeTempPath, layerNumber)
+      .then((pngBytes: Uint8Array) => {
+        if (cancelled) return;
+        const previewBytes = new Uint8Array(pngBytes.length);
+        previewBytes.set(pngBytes);
+        const blob = new Blob([previewBytes.buffer], { type: 'image/png' });
+        const nextUrl = URL.createObjectURL(blob);
+        setPrintingLayerPreviewUrls((previous) => {
+          const next = previous.slice();
+          if (next.length < printingPreviewTotalLayers) {
+            next.length = printingPreviewTotalLayers;
+          }
+          const prevUrl = next[layerIndex];
+          if (prevUrl) URL.revokeObjectURL(prevUrl);
+          next[layerIndex] = nextUrl;
+          return next;
+        });
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          console.warn(`[Printing] Failed loading layer ${layerNumber} preview PNG from archive.`, error);
+        }
+      })
+      .finally(() => {
+        inFlight.delete(layerNumber);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    scene.mode,
+    printingArtifact?.nativeTempPath,
+    printingDisplayedLayer,
+    printingLayerPreviewUrls,
+    printingPreviewTotalLayers,
+  ]);
+
+  // Show scrub preview while actively scrubbing, before settle completes,
+  // or if the target PNG isn't loaded yet (avoids stale-frame flash).
   const shouldShowScrubPreview = React.useMemo(() => {
-    return isPrintingLayerScrubbing || !selectedPrintingLayerPreviewUrl || !isPrintingPngLoaded;
-  }, [isPrintingLayerScrubbing, selectedPrintingLayerPreviewUrl, isPrintingPngLoaded]);
+    return (
+      isPrintingLayerScrubbing
+      || !isPrintingPreviewSettled
+      || !selectedPrintingLayerPreviewUrl
+      || !isPrintingPngLoaded
+    );
+  }, [
+    isPrintingLayerScrubbing,
+    isPrintingPreviewSettled,
+    selectedPrintingLayerPreviewUrl,
+    isPrintingPngLoaded,
+  ]);
 
   React.useEffect(() => {
     // Reset load state whenever we change the displayed layer's preview URL.
@@ -1427,7 +1500,8 @@ export default function Home() {
     printingSelectedLayerHasUrlRef.current = Boolean(printingLayerPreviewUrls[printingSelectedLayer - 1]);
   }, [printingSelectedLayer, printingLayerPreviewUrls]);
 
-  // Sync displayed layer: show fallback during scrub, then switch to selected once settled
+  // Sync displayed layer: during scrub prefer available previews;
+  // once scrub ends, switch to selected layer immediately.
   React.useEffect(() => {
     if (isPrintingLayerScrubbing) {
       // During scrubbing: prefer selected layer if available, else keep current
@@ -1445,8 +1519,9 @@ export default function Home() {
           setPrintingDisplayedLayer(nextTarget);
         });
       }
-    } else if (isPrintingPreviewSettled) {
-      // Once settled and not scrubbing: switch to selected layer immediately
+    } else {
+      // Not scrubbing: switch to selected layer immediately so we don't keep
+      // showing the previous layer while waiting for settle/load.
       if (printingDisplayedLayerRafRef.current !== null) {
         window.cancelAnimationFrame(printingDisplayedLayerRafRef.current);
         printingDisplayedLayerRafRef.current = null;
@@ -1456,7 +1531,11 @@ export default function Home() {
         setPrintingDisplayedLayer(printingSelectedLayer);
       }
     }
-  }, [isPrintingLayerScrubbing, isPrintingPreviewSettled, printingSelectedLayer]);
+  }, [
+    isPrintingLayerScrubbing,
+    isPrintingPreviewSettled,
+    printingSelectedLayer,
+  ]);
 
   React.useEffect(() => {
     setIsPrintingSettledCanvasReady(false);
@@ -2132,6 +2211,43 @@ export default function Home() {
     const seconds = total % 60;
     return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
   }, [printingDeviceProcessingElapsedSec]);
+
+  // Best-effort background cleanup of stale DragonFruit temp artifacts from prior runs.
+  React.useEffect(() => {
+    void cleanupStalePrintTempArtifacts(3 * 24 * 60 * 60)
+      .then((removed) => {
+        if (removed > 0) {
+          console.info(`[Printing] Cleaned up ${removed} stale temporary slice artifact(s).`);
+        }
+      })
+      .catch((error) => {
+        console.warn('[Printing] Failed to clean stale temp artifacts.', error);
+      });
+  }, []);
+
+  // Delete previously-owned temp artifacts once replaced or cleared.
+  React.useEffect(() => {
+    const currentPath = printingArtifact?.nativeTempPath?.trim() || null;
+    const previousPath = lastOwnedPrintTempPathRef.current;
+
+    if (previousPath && previousPath !== currentPath) {
+      void deletePrintTempArtifactPath(previousPath).catch((error) => {
+        console.warn('[Printing] Failed to delete replaced temp artifact.', error);
+      });
+    }
+
+    lastOwnedPrintTempPathRef.current = currentPath;
+  }, [printingArtifact]);
+
+  // Delete currently-owned temp artifact on page unmount.
+  React.useEffect(() => {
+    return () => {
+      const path = lastOwnedPrintTempPathRef.current;
+      if (path) {
+        void deletePrintTempArtifactPath(path).catch(() => {});
+      }
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!printingUploadDialogOpen) {
@@ -3167,15 +3283,31 @@ export default function Home() {
       setIsTransformDebugOverlayOpen((prev) => !prev);
     };
 
+    const handleSliceMetricsDebugHotkey = (event: KeyboardEvent) => {
+      const isCtrlShiftA = event.ctrlKey
+        && event.shiftKey
+        && (event.code === 'KeyA' || event.key.toLowerCase() === 'a');
+      if (!isCtrlShiftA) return;
+
+      // Only toggle when we actually have slicing metrics from a completed run.
+      if (!printingSlicingBenchmark) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setIsSliceMetricsDebugOpen((prev) => !prev);
+    };
+
     window.addEventListener('keydown', handleDiagnosticsHotkey, true);
     window.addEventListener('keydown', handleHistoryDebugHotkey, true);
     window.addEventListener('keydown', handleTransformDebugOverlayHotkey, true);
+    window.addEventListener('keydown', handleSliceMetricsDebugHotkey, true);
     return () => {
       window.removeEventListener('keydown', handleDiagnosticsHotkey, true);
       window.removeEventListener('keydown', handleHistoryDebugHotkey, true);
       window.removeEventListener('keydown', handleTransformDebugOverlayHotkey, true);
+      window.removeEventListener('keydown', handleSliceMetricsDebugHotkey, true);
     };
-  }, []);
+  }, [printingSlicingBenchmark]);
 
   const formatDebugVec3 = React.useCallback((v: THREE.Vector3 | null | undefined) => {
     if (!v) return 'n/a';
@@ -3481,6 +3613,18 @@ export default function Home() {
   });
 
   React.useEffect(() => {
+    const profileLayerHeightMm = Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
+    const targetMicron = Math.max(1, Math.round(profileLayerHeightMm * 1000));
+    if (slicing.layerHeightMicron !== targetMicron) {
+      slicing.setLayerHeightMicron(targetMicron);
+    }
+  }, [
+    activeMaterialProfile?.layerHeightMm,
+    slicing.layerHeightMicron,
+    slicing.setLayerHeightMicron,
+  ]);
+
+  React.useEffect(() => {
     const previousMode = previousSceneModeRef.current;
     const currentMode = scene.mode;
 
@@ -3489,6 +3633,10 @@ export default function Home() {
       modeBeforePrintingRef.current = previousMode;
       // Save the general (prepare/support) layer position before printing takes control.
       preservedNonPrintingLayerIndexRef.current = slicing.layerIndex;
+      // Printing preview should always begin at the first layer.
+      setPrintingSelectedLayer(1);
+      setPrintingDisplayedLayer(1);
+      printingDisplayedLayerTargetRef.current = 1;
     } else if (previousMode === 'printing' && currentMode !== 'printing') {
       // Restore general slider state so printing scrub position does not leak across modes.
       const preserved = preservedNonPrintingLayerIndexRef.current;
@@ -3598,7 +3746,9 @@ export default function Home() {
       lastPrintingLayerSyncPerfRef.current = 0;
     }
 
-    slicing.setLayerIndex(Math.max(0, clamped - 1));
+    // Keep 3D cross-section in lock-step with selected PNG layer.
+    // Use 1-based layer index here so layer 1 still produces a real cut plane.
+    slicing.setLayerIndex(Math.max(1, clamped));
   }, [scene.mode, printingPreviewTotalLayers, printingSelectedLayer, slicing.setLayerIndex, isPrintingLayerScrubbing]);
 
   // 4. Islands (needs geom & transform & layerHeight)
@@ -7078,6 +7228,14 @@ export default function Home() {
           clearHistory();
           clearHistoryDebugEvents();
         }}
+      />
+
+      <SliceMetricsDebugModal
+        isOpen={isSliceMetricsDebugOpen}
+        onClose={() => setIsSliceMetricsDebugOpen(false)}
+        benchmark={printingSlicingBenchmark}
+        outputName={printingArtifact?.outputName ?? null}
+        outputSizeLabel={printingOutputSizeLabel}
       />
 
       <ModelSupportsModal

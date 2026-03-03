@@ -99,8 +99,8 @@ import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
 
-const EXPORT_THUMBNAIL_WIDTH = 800;
-const EXPORT_THUMBNAIL_HEIGHT = 480;
+const EXPORT_THUMBNAIL_WIDTH = 1600;
+const EXPORT_THUMBNAIL_HEIGHT = 960;
 const EXPORT_THUMBNAIL_MARGIN = 0.95;
 
 function SceneRenderBindings({

@@ -52,7 +52,6 @@ todo_list
 # proprietary local notes
 Scratch/
 
-rust/dragonfruit-slicer/target/
 src-tauri/gen/
 conversion/
 

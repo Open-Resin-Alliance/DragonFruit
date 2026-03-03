@@ -14,7 +14,6 @@ import {
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { isNativeSlicerAvailable } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 
 interface SlicingPanelProps {
@@ -85,6 +84,19 @@ function formatProgressLayerLabel(done: number, total: number): string {
   return `${doneSafe}/${totalSafe}`;
 }
 
+type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'finalizing' | 'handoff' | 'other';
+
+function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
+  const lower = phase.toLowerCase();
+  if (lower.includes('slicing')) return 'slicing';
+  if (lower.includes('preparing')) return 'preparing';
+  if (lower.includes('staging mesh') || lower.includes('transferring mesh')) return 'staging';
+  if (lower.includes('slicing layer') || lower.includes('raster')) return 'slicing';
+  if (lower.includes('finalizing') || lower.includes('encoding') || lower.includes('compression') || lower.includes('packaging')) return 'finalizing';
+  if (lower.includes('opening printing') || lower.includes('handoff') || lower.includes('ready')) return 'handoff';
+  return 'other';
+}
+
 function formatClockFromSeconds(totalSeconds: number): string {
   const total = Math.max(0, Math.floor(totalSeconds));
   const hours = Math.floor(total / 3600);
@@ -140,7 +152,6 @@ export function SlicingPanel({
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isSlicingZip, setIsSlicingZip] = useState(false);
   const [sliceStatus, setSliceStatus] = useState('Idle');
-  const [nativeStatus, setNativeStatus] = useState<'checking' | 'available' | 'missing'>('checking');
   const [currentPhase, setCurrentPhase] = useState('Idle');
   const [progressDone, setProgressDone] = useState(0);
   const [progressTotal, setProgressTotal] = useState(1);
@@ -175,7 +186,6 @@ export function SlicingPanel({
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
-  const activeOutputFormat = activePrinterProfile?.display.outputFormat ?? null;
 
   const selectedFormat = useMemo(() => {
     if (!activePrinterProfile || !activeMaterialProfile) return null;
@@ -194,31 +204,41 @@ export function SlicingPanel({
     || '').trim();
   const nanodlpPort = activePrinterProfile?.networkConnection?.port || 80;
 
-  const pipelineContainerBackendLabel = useMemo(() => {
-    if (!selectedFormat) return '—';
-    if (nativeStatus === 'available') return 'Native Rust container encoder (Tauri)';
-    if (nativeStatus === 'checking') return 'Checking native slicer runtime…';
-    return 'Native runtime unavailable';
-  }, [selectedFormat, nativeStatus]);
+  const pipelineContainerBackendLabel = useMemo(() => (
+    selectedFormat ? 'Native Rust container encoder (Tauri)' : '—'
+  ), [selectedFormat]);
 
-  const pipelineRasterizerLabel = useMemo(() => {
-    if (!selectedFormat) return '—';
-    if (nativeStatus === 'available') return 'Native Rust solid cross-section slicer (Rayon pool)';
-    if (nativeStatus === 'checking') return 'Awaiting native runtime check…';
-    return 'Unavailable outside DragonFruit Desktop';
-  }, [selectedFormat, nativeStatus]);
-
-  const backendNote = useMemo(() => {
-    if (lifetimeTelemetry.lastBackend === 'native-rust-tauri') {
-      return 'Slicing + container packaging are running in native Rust via Tauri.';
-    }
-    return 'Run a slicing job to initialize native backend telemetry.';
-  }, [lifetimeTelemetry.lastBackend]);
+  const pipelineRasterizerLabel = useMemo(() => (
+    selectedFormat ? 'Native Rust solid cross-section slicer (Rayon pool)' : '—'
+  ), [selectedFormat]);
 
   const progressPercent = useMemo(() => {
     const total = Math.max(1, progressTotal);
-    return Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
-  }, [progressDone, progressTotal]);
+    const layerProgress = Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
+    if (slicingModalStage !== 'running') {
+      return layerProgress;
+    }
+
+    const phaseKind = resolveSlicingPhaseKind(currentPhase);
+    switch (phaseKind) {
+      case 'preparing':
+        return Math.max(layerProgress, 4);
+      case 'staging':
+        return Math.max(layerProgress, 10);
+      case 'slicing':
+        return Math.min(99, Math.max(layerProgress, 12));
+      case 'finalizing':
+        return 99;
+      case 'handoff':
+        return 99;
+      default:
+        return Math.min(99, Math.max(layerProgress, 8));
+    }
+  }, [currentPhase, progressDone, progressTotal, slicingModalStage]);
+
+  const phaseKind = useMemo(() => resolveSlicingPhaseKind(currentPhase), [currentPhase]);
+  const canCancelSlicing = slicingModalStage === 'running'
+    && (phaseKind === 'preparing' || phaseKind === 'staging' || phaseKind === 'slicing');
 
   const slicingElapsedLabel = useMemo(() => formatElapsedClock(currentElapsedMs), [currentElapsedMs]);
 
@@ -377,24 +397,6 @@ export function SlicingPanel({
   }, [isSlicingZip]);
 
   useEffect(() => {
-    let cancelled = false;
-    setNativeStatus('checking');
-    void isNativeSlicerAvailable()
-      .then((available) => {
-        if (cancelled) return;
-        setNativeStatus(available ? 'available' : 'missing');
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setNativeStatus('missing');
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeOutputFormat]);
-
-  useEffect(() => {
     if (!isNanodlpConnected || !nanodlpHost || !selectedNanodlpMaterialId) {
       setNanodlpSelectedMaterialName(null);
       setIsLoadingNanodlpMaterial(false);
@@ -472,8 +474,8 @@ export function SlicingPanel({
     }
 
     setIsSlicingZip(true);
-    setCurrentPhase('Preparing slicer…');
-    setSliceStatus('Preparing slicer…');
+    setCurrentPhase('Preparing');
+    setSliceStatus('Preparing');
     setProgressDone(0);
     setProgressTotal(1);
     setCurrentElapsedMs(0);
@@ -518,14 +520,14 @@ export function SlicingPanel({
         exportThumbnailPng,
         abortSignal: abortController.signal,
         onProgress: (done, total, phase) => {
+          const phaseKind = resolveSlicingPhaseKind(phase);
+          const isSlicingPhase = phaseKind === 'slicing';
           setCurrentPhase(phase);
-          setSliceStatus(`${phase} ${formatProgressLayerLabel(done, total)}`);
+          setSliceStatus(phase);
           setProgressDone(done);
           setProgressTotal(Math.max(1, total));
 
-          const phaseLower = phase.toLowerCase();
           const nowMs = performance.now();
-          const isSlicingPhase = phaseLower.includes('slicing layer') || phaseLower.includes('raster');
 
           if (isSlicingPhase) {
             if (slicingPhaseStartMs == null) {
@@ -536,20 +538,26 @@ export function SlicingPanel({
             }
             setCurrentRasterMs(rasterAccumulatedMs + (nowMs - rasterStartedMs));
 
-            // Compute live layers/sec and ETA from real progress
-            const phaseElapsedMs = nowMs - slicingPhaseStartMs;
-            if (done > 0 && phaseElapsedMs > 200) {
-              const rate = (done * 1000) / phaseElapsedMs;
-              // Apply EMA smoothing to reduce jitter (alpha = 0.25 for responsive but smooth)
-              const alpha = 0.25;
-              const smoothedRate = (1 - alpha) * smoothedMetricsRef.current.layersPerSec + alpha * rate;
+            // Compute speed from cumulative elapsed time to avoid burst-induced spikes
+            // when progress events are delivered in batches.
+            const phaseElapsedMs = Math.max(1, nowMs - slicingPhaseStartMs);
+            if (done > 0 && phaseElapsedMs > 300) {
+              const rawRate = (done * 1000) / phaseElapsedMs;
+              const alpha = 0.2;
+              const priorRate = smoothedMetricsRef.current.layersPerSec;
+              const smoothedRate = priorRate > 0
+                ? ((1 - alpha) * priorRate + alpha * rawRate)
+                : rawRate;
               smoothedMetricsRef.current.layersPerSec = smoothedRate;
               setLiveLayersPerSec(smoothedRate);
-              
+
               const remaining = Math.max(0, total - done);
-              if (rate > 0) {
-                const rawRemainingMs = (remaining / rate) * 1000;
-                const smoothedRemaining = (1 - alpha) * smoothedMetricsRef.current.remainingMs + alpha * rawRemainingMs;
+              if (smoothedRate > 0) {
+                const rawRemainingMs = (remaining / smoothedRate) * 1000;
+                const priorRemaining = smoothedMetricsRef.current.remainingMs;
+                const smoothedRemaining = priorRemaining > 0
+                  ? ((1 - alpha) * priorRemaining + alpha * rawRemainingMs)
+                  : rawRemainingMs;
                 smoothedMetricsRef.current.remainingMs = smoothedRemaining;
                 setEstimatedRemainingMs(smoothedRemaining);
               }
@@ -558,6 +566,11 @@ export function SlicingPanel({
             rasterAccumulatedMs += nowMs - rasterStartedMs;
             rasterStartedMs = null;
             setCurrentRasterMs(rasterAccumulatedMs);
+            setLiveLayersPerSec(null);
+            setEstimatedRemainingMs(null);
+          } else {
+            setLiveLayersPerSec(null);
+            setEstimatedRemainingMs(null);
           }
         },
         onLayerPreview: (layerIndex, totalLayers, pngBytes) => {
@@ -590,6 +603,9 @@ export function SlicingPanel({
           });
         },
       });
+
+      setCurrentPhase('Encoding');
+      setSliceStatus('Encoding');
 
       const runEndMs = performance.now();
       completedTotalLayersFromResult = Math.max(completedTotalLayersFromResult, result.benchmark.totalLayers ?? 0);
@@ -639,6 +655,7 @@ export function SlicingPanel({
         lastBackend: result.backend,
       }));
 
+      setCurrentPhase('Ready');
       setSliceStatus(`Generated ${result.outputFormat} via native Rust backend.`);
       setSlicingModalStage('finished');
       slicingSucceeded = true;
@@ -651,13 +668,13 @@ export function SlicingPanel({
     } catch (error) {
       if ((error as { name?: string } | null)?.name === 'AbortError') {
         setCurrentPhase('Cancelled');
-        setSliceStatus('Slicing cancelled by user.');
+        setSliceStatus('Cancelled');
         setSlicingModalStage('cancelled');
       } else {
         console.error('Slice ZIP export failed:', error);
         const message = error instanceof Error ? error.message : 'Unknown slicing error.';
         setCurrentPhase('Failed');
-        setSliceStatus(`Failed: ${message}`);
+        setSliceStatus('Failed');
         setSlicingModalStage('failed');
         alert(`Slice ZIP export failed: ${message}`);
       }
@@ -667,6 +684,8 @@ export function SlicingPanel({
       }
       setIsSlicingZip(false);
       if (slicingSucceeded) {
+        setCurrentPhase('Opening');
+        setSliceStatus('Opening');
         onSlicingFinished?.({ totalLayers: Math.max(completedTotalLayers, completedTotalLayersFromResult, 1) });
       }
     }
@@ -674,8 +693,8 @@ export function SlicingPanel({
 
   const handleCancelSlicing = useCallback(() => {
     if (!isSlicingZip) return;
-    setCurrentPhase('Cancelling…');
-    setSliceStatus('Cancelling slicing job…');
+    setCurrentPhase('Cancelling');
+    setSliceStatus('Cancelling');
     slicingAbortControllerRef.current?.abort();
   }, [isSlicingZip]);
 
@@ -846,13 +865,9 @@ export function SlicingPanel({
                 <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Native</div>
+                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Engine</div>
                 <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {nativeStatus === 'available'
-                    ? 'Available'
-                    : nativeStatus === 'checking'
-                      ? 'Checking…'
-                      : 'Missing'}
+                  Slicer V3
                 </div>
               </div>
             </div>
@@ -1119,6 +1134,10 @@ export function SlicingPanel({
 
               <div className="grid grid-cols-2 gap-2.5">
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Pipeline Stage</div>
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
+                </div>
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Sliced Layers</div>
                   <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
                     {formatProgressLayerLabel(progressDone, progressTotal)}
@@ -1132,12 +1151,6 @@ export function SlicingPanel({
                   <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                     <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
                     <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{formatLayerRate(liveLayersPerSec)}</div>
-                  </div>
-                )}
-                {slicingModalStage === 'running' && estimatedRemainingMs != null && (
-                  <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>ETA</div>
-                    <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{formatDuration(estimatedRemainingMs)}</div>
                   </div>
                 )}
               </div>
@@ -1188,9 +1201,10 @@ export function SlicingPanel({
                     <Button
                       variant="secondary"
                       className="!h-9 text-xs"
+                      disabled={!canCancelSlicing}
                       onClick={handleCancelSlicing}
                     >
-                      Cancel Slicing
+                      {canCancelSlicing ? 'Cancel Slicing' : 'Finishing…'}
                     </Button>
                   )}
                   {slicingModalStage !== 'running' && (

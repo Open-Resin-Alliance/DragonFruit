@@ -1,5 +1,5 @@
 type TauriCoreModule = {
-  invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+  invoke: <T>(cmd: string, args?: Record<string, unknown> | ArrayBuffer | Uint8Array, options?: { headers: HeadersInit }) => Promise<T>;
 };
 
 type TauriEventModule = {
@@ -24,6 +24,7 @@ export type NativeSolidSliceJobEnvelope = {
   buildDepthMm: number;
   layerHeightMm: number;
   totalLayers: number;
+  exportThumbnailPngBase64?: string | null;
   trianglesXYZ: Float32Array;
   metadataJson: string;
 };
@@ -46,7 +47,25 @@ type NativeSolidSlicePayload = {
   build_depth_mm: number;
   layer_height_mm: number;
   total_layers: number;
+  export_thumbnail_png_base64?: string | null;
   triangles_xyz: number[];
+  metadata_json: string;
+};
+
+/** Metadata-only payload for the binary mesh staging path (no inline triangles). */
+type NativeSolidSliceMetadataPayload = {
+  output_format: string;
+  source_width_px: number;
+  source_height_px: number;
+  width_px: number;
+  height_px: number;
+  png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
+  container_compression_level: number;
+  build_width_mm: number;
+  build_depth_mm: number;
+  layer_height_mm: number;
+  total_layers: number;
+  export_thumbnail_png_base64?: string | null;
   metadata_json: string;
 };
 
@@ -114,7 +133,26 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     build_depth_mm: job.buildDepthMm,
     layer_height_mm: job.layerHeightMm,
     total_layers: job.totalLayers,
+    export_thumbnail_png_base64: job.exportThumbnailPngBase64 ?? null,
     triangles_xyz: Array.from(job.trianglesXYZ),
+    metadata_json: job.metadataJson,
+  };
+}
+
+function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidSliceMetadataPayload {
+  return {
+    output_format: job.outputFormat,
+    source_width_px: job.sourceWidthPx,
+    source_height_px: job.sourceHeightPx,
+    width_px: job.widthPx,
+    height_px: job.heightPx,
+    png_compression_strategy: job.pngCompressionStrategy,
+    container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
+    build_width_mm: job.buildWidthMm,
+    build_depth_mm: job.buildDepthMm,
+    layer_height_mm: job.layerHeightMm,
+    total_layers: job.totalLayers,
+    export_thumbnail_png_base64: job.exportThumbnailPngBase64 ?? null,
     metadata_json: job.metadataJson,
   };
 }
@@ -129,6 +167,37 @@ export type SlicerProgressCallback = (done: number, total: number) => void;
 export type NativeSliceTempPathArtifact = {
   tempPath: string;
   byteLen: number;
+  perf: NativeSlicerPerfMetrics | null;
+  runtime: NativeSlicerRuntimeMetrics | null;
+  bridge: NativeSlicerBridgeMetrics;
+};
+
+export type NativeSlicerBridgeMetrics = {
+  payloadBuildMs: number;
+  invokeRoundTripMs: number;
+  bridgeTotalMs: number;
+  payloadChars: number;
+  triangleFloatCount: number;
+  /** Raw binary mesh size in bytes (Float32Array.byteLength). */
+  meshBytesLen: number;
+  /** Time to stage mesh binary via IPC (ms). */
+  stageMeshMs: number;
+};
+
+export type NativeSlicerPerfMetrics = {
+  totalNs: number;
+  indexBuildNs: number;
+  renderWallNs: number;
+  renderNs: number;
+  pngEncodeNs: number;
+  archiveEncodeNs: number;
+  layers: number;
+};
+
+export type NativeSlicerRuntimeMetrics = {
+  poolThreads: number;
+  maxConcurrent: number;
+  queueBuffer: number;
 };
 
 /**
@@ -224,12 +293,17 @@ export async function sliceSolidAndEncodeWithNativeSlicer(
 /**
  * Invoke the native slicer and keep the encoded artifact on disk,
  * returning temp file metadata instead of the full byte buffer.
+ *
+ * Uses a two-step binary staging protocol:
+ *   1. Stage raw mesh bytes via efficient binary IPC (no JSON serialization)
+ *   2. Send tiny metadata JSON to kick off slicing
  */
 export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
   job: NativeSolidSliceJobEnvelope,
   abortSignal?: AbortSignal,
   onProgress?: SlicerProgressCallback,
 ): Promise<NativeSliceTempPathArtifact> {
+  const bridgeStart = performance.now();
   const core = await loadTauriCore();
   if (!core) {
     throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
@@ -251,8 +325,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
     );
   }
 
-  let settled = false;
-  const payload = JSON.stringify(toNativePayload(job));
+  const triangleFloatCount = job.trianglesXYZ.length;
 
   const cleanup = () => {
     if (unlistenProgress) {
@@ -262,18 +335,78 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
   };
 
   try {
-    const resultPromise = core.invoke<{ tempPath: string; byteLen: number }>('slice_solid_native_to_temp_path', { jobJson: payload });
+    // --- Step 1: Stage raw mesh bytes via binary IPC ---
+    const payloadBuildStart = performance.now();
+    // Zero-copy Uint8Array view of the underlying Float32Array buffer
+    const meshBytes = new Uint8Array(
+      job.trianglesXYZ.buffer,
+      job.trianglesXYZ.byteOffset,
+      job.trianglesXYZ.byteLength,
+    );
+    const meshBytesLen = meshBytes.byteLength;
+    const metadataJson = JSON.stringify(toNativeMetadataPayload(job));
+    const payloadBuildMs = performance.now() - payloadBuildStart;
+
+    if (abortSignal?.aborted) {
+      cleanup();
+      throw createAbortError();
+    }
+
+    const stageStart = performance.now();
+    await core.invoke<number>('stage_mesh_binary', meshBytes, {
+      headers: { 'Content-Type': 'application/octet-stream' },
+    });
+    const stageMeshMs = performance.now() - stageStart;
+
+    // --- Step 2: Send tiny metadata JSON to kick off slicing ---
+
+    if (abortSignal?.aborted) {
+      cleanup();
+      throw createAbortError();
+    }
+
+    let settled = false;
+    const invokeStart = performance.now();
+    const resultPromise = core.invoke<{
+      tempPath: string;
+      byteLen: number;
+      perf?: NativeSlicerPerfMetrics | null;
+      runtime?: NativeSlicerRuntimeMetrics | null;
+    }>('slice_solid_native_to_temp_path', { jobJson: metadataJson });
+
+    const buildResult = (result: {
+      tempPath: string;
+      byteLen: number;
+      perf?: NativeSlicerPerfMetrics | null;
+      runtime?: NativeSlicerRuntimeMetrics | null;
+    }): NativeSliceTempPathArtifact => ({
+      tempPath: result.tempPath,
+      byteLen: Number.isFinite(result.byteLen) ? result.byteLen : 0,
+      perf: result.perf ?? null,
+      runtime: result.runtime ?? null,
+      bridge: {
+        payloadBuildMs,
+        invokeRoundTripMs: performance.now() - invokeStart,
+        bridgeTotalMs: performance.now() - bridgeStart,
+        payloadChars: metadataJson.length,
+        triangleFloatCount,
+        meshBytesLen,
+        stageMeshMs,
+      },
+    });
 
     if (!abortSignal) {
       const result = await resultPromise;
       cleanup();
-      return {
-        tempPath: result.tempPath,
-        byteLen: Number.isFinite(result.byteLen) ? result.byteLen : 0,
-      };
+      return buildResult(result);
     }
 
-    const result = await new Promise<{ tempPath: string; byteLen: number }>((resolve, reject) => {
+    const result = await new Promise<{
+      tempPath: string;
+      byteLen: number;
+      perf?: NativeSlicerPerfMetrics | null;
+      runtime?: NativeSlicerRuntimeMetrics | null;
+    }>((resolve, reject) => {
       const handleAbort = () => {
         if (settled) return;
         settled = true;
@@ -303,10 +436,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
     });
 
     cleanup();
-    return {
-      tempPath: result.tempPath,
-      byteLen: Number.isFinite(result.byteLen) ? result.byteLen : 0,
-    };
+    return buildResult(result);
   } catch (error) {
     cleanup();
     throw error;
@@ -362,4 +492,54 @@ export async function readPrintArtifactBytesFromPath(sourcePath: string): Promis
   });
 
   return new Uint8Array(result);
+}
+
+export async function readPrintLayerPreviewPngFromPath(
+  sourcePath: string,
+  layerNumber: number,
+): Promise<Uint8Array> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const safeLayerNumber = Math.max(1, Math.floor(layerNumber));
+  const result = await core.invoke<ArrayBuffer>('read_print_layer_png', {
+    sourcePath,
+    layerNumber: safeLayerNumber,
+  });
+
+  return new Uint8Array(result);
+}
+
+export async function deletePrintTempArtifactPath(sourcePath: string): Promise<boolean> {
+  const core = await loadTauriCore();
+  if (!core) {
+    return false;
+  }
+
+  return core.invoke<boolean>('delete_print_temp_file', {
+    sourcePath,
+  });
+}
+
+export async function cleanupStalePrintTempArtifacts(maxAgeSeconds: number): Promise<number> {
+  const core = await loadTauriCore();
+  if (!core) {
+    return 0;
+  }
+
+  const safeAge = Math.max(60, Math.floor(maxAgeSeconds));
+  return core.invoke<number>('cleanup_stale_print_temp_files', {
+    maxAgeSeconds: safeAge,
+  });
+}
+
+export async function cleanupAllPrintTempArtifacts(): Promise<number> {
+  const core = await loadTauriCore();
+  if (!core) {
+    return 0;
+  }
+
+  return core.invoke<number>('cleanup_all_print_temp_files');
 }

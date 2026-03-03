@@ -179,8 +179,9 @@ export function PrintingLayerScrubPreview({
         }
         path.closePath();
       }
-      // evenodd fill correctly handles nested holes (same as CrossSectionCap smooth mode)
-      ctx.fill(path, 'evenodd');
+      // Use non-zero winding so overlapping solids union together instead of
+      // canceling out (evenodd can produce false voids in overlaps).
+      ctx.fill(path, 'nonzero');
     }
 
     ctx.restore();
