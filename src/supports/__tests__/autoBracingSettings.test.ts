@@ -12,51 +12,51 @@ test('auto-bracing defaults are created from the SSOT constraint defaults', () =
     const settings = createDefaultAutoBracingSettings();
 
     assert.equal(settings.braceDiameterMm, AUTO_BRACING_CONSTRAINTS.braceDiameterMm.defaultValue);
-    assert.equal(settings.maxGroupSize, AUTO_BRACING_CONSTRAINTS.maxGroupSize.defaultValue);
-    assert.equal(settings.topOffsetFromTopMm, AUTO_BRACING_CONSTRAINTS.topOffsetFromTopMm.defaultValue);
-    assert.equal(settings.middleRepeatIntervalMm, AUTO_BRACING_CONSTRAINTS.middleRepeatIntervalMm.defaultValue);
-    assert.equal(settings.bottomOffsetFromBottomMm, AUTO_BRACING_CONSTRAINTS.bottomOffsetFromBottomMm.defaultValue);
-    assert.equal(settings.topPattern, 'singleDiagonal');
-    assert.equal(settings.middlePattern, 'singleDiagonal');
-    assert.equal(settings.bottomPattern, 'singleDiagonal');
+    assert.equal(settings.initialDistanceMm, AUTO_BRACING_CONSTRAINTS.initialDistanceMm.defaultValue);
+    assert.equal(settings.patternIntervalMm, AUTO_BRACING_CONSTRAINTS.patternIntervalMm.defaultValue);
+    assert.equal(settings.seedSpacingMm, AUTO_BRACING_CONSTRAINTS.seedSpacingMm.defaultValue);
+    assert.equal(settings.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm.defaultValue);
+    assert.equal(settings.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.defaultValue);
+    assert.equal(settings.initialPattern, 'singleDiagonal');
+    assert.equal(settings.repeatingPattern, 'singleDiagonal');
     assert.equal(settings.debugSectionColorsEnabled, false);
 });
 
 test('normalizeAutoBracingSettings clamps numeric values and restores invalid patterns', () => {
     const normalized = normalizeAutoBracingSettings({
         braceDiameterMm: -5,
-        maxGroupSize: 42,
-        topPattern: 'invalid-pattern' as any,
-        topOffsetFromTopMm: 999,
-        middlePattern: 'crossDiagonal',
-        middleRepeatIntervalMm: -1,
-        bottomPattern: 'invalid-pattern' as any,
-        bottomOffsetFromBottomMm: 999,
+        initialDistanceMm: 999,
+        patternIntervalMm: -1,
+        seedSpacingMm: 999,
+        seedJitterMm: 999,
+        maxBraceLengthMm: -1,
+        initialPattern: 'invalid-pattern' as any,
+        repeatingPattern: 'crossDiagonal',
         debugSectionColorsEnabled: 'yes' as any,
     });
 
     assert.equal(normalized.braceDiameterMm, AUTO_BRACING_CONSTRAINTS.braceDiameterMm.min);
-    assert.equal(normalized.maxGroupSize, AUTO_BRACING_CONSTRAINTS.maxGroupSize.max);
-    assert.equal(normalized.topPattern, 'singleDiagonal');
-    assert.equal(normalized.topOffsetFromTopMm, AUTO_BRACING_CONSTRAINTS.topOffsetFromTopMm.max);
-    assert.equal(normalized.middlePattern, 'crossDiagonal');
-    assert.equal(normalized.middleRepeatIntervalMm, AUTO_BRACING_CONSTRAINTS.middleRepeatIntervalMm.min);
-    assert.equal(normalized.bottomPattern, 'singleDiagonal');
-    assert.equal(normalized.bottomOffsetFromBottomMm, AUTO_BRACING_CONSTRAINTS.bottomOffsetFromBottomMm.max);
+    assert.equal(normalized.initialDistanceMm, AUTO_BRACING_CONSTRAINTS.initialDistanceMm.max);
+    assert.equal(normalized.patternIntervalMm, AUTO_BRACING_CONSTRAINTS.patternIntervalMm.min);
+    assert.equal(normalized.seedSpacingMm, AUTO_BRACING_CONSTRAINTS.seedSpacingMm.max);
+    assert.equal(normalized.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm.max);
+    assert.equal(normalized.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.min);
+    assert.equal(normalized.initialPattern, 'singleDiagonal');
+    assert.equal(normalized.repeatingPattern, 'crossDiagonal');
     assert.equal(normalized.debugSectionColorsEnabled, false);
 });
 
 test('applyAutoBracingSettingsPatch keeps untouched fields and normalizes patched values', () => {
     const base = createDefaultAutoBracingSettings();
     const patched = applyAutoBracingSettingsPatch(base, {
-        maxGroupSize: 8.8,
-        topPattern: 'crossDiagonal',
+        seedSpacingMm: 8.6,
+        initialPattern: 'crossDiagonal',
         debugSectionColorsEnabled: true,
     });
 
-    assert.equal(patched.maxGroupSize, 9);
-    assert.equal(patched.topPattern, 'crossDiagonal');
+    assert.equal(patched.seedSpacingMm, 8.5);
+    assert.equal(patched.initialPattern, 'crossDiagonal');
     assert.equal(patched.debugSectionColorsEnabled, true);
-    assert.equal(patched.bottomPattern, base.bottomPattern);
+    assert.equal(patched.repeatingPattern, base.repeatingPattern);
     assert.equal(patched.braceDiameterMm, base.braceDiameterMm);
 });

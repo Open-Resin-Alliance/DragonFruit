@@ -31,6 +31,7 @@ import {
     type AutoBracingSettings,
 } from './settings';
 import { generateRequiredSupportBraces } from './generativeBracing';
+import { partitionSupportsWithVoronoi } from './voronoiPartitioning';
 
 const EPS = 0.000001;
 const SQRT2 = Math.SQRT2;
@@ -404,90 +405,6 @@ function buildGroupPairs(group: SupportSample[], maxLen: number): Edge[] {
     return result;
 }
 
-function partitionSupportsIntoGroups(
-    supports: SupportSample[],
-    max: number,
-    maxBraceLen: number,
-    weightBySupportId?: Map<string, number>,
-): SupportSample[][] {
-    const min = AUTO_BRACING_HARD_RULES.minGroupSize;
-    
-    const maxRun = maxHorizontalRunFromBraceLen(maxBraceLen);
-    const weightOf = (s: SupportSample) => weightBySupportId?.get(s.supportId) ?? 1;
-    const groupWeight = (items: SupportSample[]) => items.reduce((sum, item) => sum + weightOf(item), 0);
-
-    // If total weight is less than min, we can still brace them if there's enough elements in the end, 
-    // but the strict "skip everything if < min" rule is handled later after support braces are mixed in.
-    if (groupWeight(supports) < min && supports.length > 0 && groupWeight(supports) === supports.length) {
-        // If it's pure trunks and still below min, we can bail. But if weight > length, it means it has support braces, so we should try to keep it.
-        if (groupWeight(supports) < min) {
-             return [];
-        }
-    }
-
-    const remaining = [...supports].sort(sortSupports);
-    const groups: SupportSample[][] = [];
-
-    while (remaining.length > 0) {
-        const seed = remaining.shift()!;
-        const group = [seed];
-        let currentWeight = weightOf(seed);
-
-        while (currentWeight < max && remaining.length > 0) {
-            let bestIdx = -1;
-            let bestDist = Infinity;
-
-            for (let i = 0; i < remaining.length; i++) {
-                const candidate = remaining[i];
-                const candidateWeight = weightOf(candidate);
-                if (currentWeight + candidateWeight > max) continue;
-
-                for (const g of group) {
-                    const d = Math.sqrt(
-                        (g.sortAnchor.x - candidate.sortAnchor.x) ** 2
-                        + (g.sortAnchor.y - candidate.sortAnchor.y) ** 2,
-                    );
-                    if (d < bestDist) {
-                        bestDist = d;
-                        bestIdx = i;
-                    }
-                }
-            }
-
-            if (bestIdx === -1) break;
-            if (bestDist > maxRun) break;
-
-            const chosen = remaining.splice(bestIdx, 1)[0];
-            group.push(chosen);
-            currentWeight += weightOf(chosen);
-        }
-        groups.push(group);
-    }
-    // Cleanup small tail groups
-    if (groups.length > 1) {
-        const last = groups[groups.length - 1];
-        if (groupWeight(last) < min) {
-            const prev = groups[groups.length - 2];
-            if (groupWeight(prev) + groupWeight(last) <= max) {
-                prev.push(...last);
-                groups.pop();
-            } else {
-                while (groupWeight(last) < min && groupWeight(prev) > min) {
-                    const moved = prev[prev.length - 1];
-                    if (!moved) break;
-                    if (groupWeight(last) + weightOf(moved) > max) break;
-                    last.unshift(prev.pop()!);
-                }
-                if (groupWeight(last) < min && groupWeight(prev) + groupWeight(last) <= max) {
-                    prev.push(...last);
-                    groups.pop();
-                }
-            }
-        }
-    }
-    return groups.filter(g => groupWeight(g) >= min); 
-}
-
 export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: AutoBracingSettings): BuildSnapshotResult {
     const settings = normalizeAutoBracingSettings(inputSettings);
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
@@ -592,12 +509,6 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         supportBracesByTrunkId.set(assignedTrunkId, list);
     }
 
-    const weightByTrunkId = new Map<string, number>();
-    for (const trunk of trunkSamples) {
-        const count = supportBracesByTrunkId.get(trunk.supportId)?.length ?? 0;
-        weightByTrunkId.set(trunk.supportId, 1 + count);
-    }
-
     const byModel = new Map<string, SupportSample[]>();
     for (const s of trunkSamples) {
         if (!byModel.has(s.modelId)) byModel.set(s.modelId, []);
@@ -606,8 +517,26 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
     const groupedSupports: SupportSample[][] = [];
     for (const list of byModel.values()) {
-        const trunkGroups = partitionSupportsIntoGroups(list, settings.maxGroupSize, settings.maxBraceLengthMm, weightByTrunkId);
-        for (const g of trunkGroups) {
+        const trunkById = new Map(list.map((trunk) => [trunk.supportId, trunk]));
+        const trunkGroupIds = partitionSupportsWithVoronoi(
+            list.map((trunk) => ({
+                supportId: trunk.supportId,
+                modelId: trunk.modelId,
+                point: { x: trunk.sortAnchor.x, y: trunk.sortAnchor.y },
+            })),
+            {
+                seedSpacingMm: settings.seedSpacingMm,
+                seedJitterMm: settings.seedJitterMm,
+                maxNeighborDistanceMm: maxRun,
+            },
+        );
+
+        for (const groupIds of trunkGroupIds) {
+            const g = groupIds
+                .map((id) => trunkById.get(id))
+                .filter((trunk): trunk is SupportSample => Boolean(trunk));
+            if (g.length < AUTO_BRACING_HARD_RULES.minGroupSize) continue;
+
             const members: SupportSample[] = [...g];
             for (const trunk of g) {
                 const sbs = supportBracesByTrunkId.get(trunk.supportId);
