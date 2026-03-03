@@ -193,7 +193,7 @@ fn slicer_pool() -> &'static ThreadPool {
             .map(|n| n.get())
             .unwrap_or(1);
         ThreadPoolBuilder::new()
-            .thread_name(|i| format!("dragonfruit-slicer-{i}"))
+            .thread_name(|i| format!("dragonfruit-slicer-v3-{i}"))
             .num_threads(threads)
             .build()
             .expect("failed to create slicer rayon thread pool")
@@ -257,7 +257,7 @@ async fn slice_solid_native(
             });
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
-            let artifact = dragonfruit_slicer_v3::slice_nanodlp_with_progress_v3(
+            let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
                 &job,
                 Some(progress_cb),
                 Some(flag.as_ref()),
@@ -335,7 +335,7 @@ async fn slice_solid_native_to_temp_path(
 
         slicer_pool().install(
             || -> Result<(String, u64, NativeSlicerPerfMetrics, NativeSlicerRuntimeMetrics), String> {
-            let artifact = dragonfruit_slicer_v3::slice_nanodlp_with_progress_v3(
+            let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
                 &job,
                 Some(progress_cb),
                 Some(flag.as_ref()),

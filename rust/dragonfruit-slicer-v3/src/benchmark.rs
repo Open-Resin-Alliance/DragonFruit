@@ -3,7 +3,8 @@
 //! The benchmark builds a procedural scene of box solids, runs a full slice,
 //! and returns coarse stage timing/throughput metrics.
 
-use crate::engine::{slice_nanodlp_with_progress_v3, SlicerV3Error};
+use crate::encoders::registry::supported_output_formats;
+use crate::engine::{slice_with_progress_v3, SlicerV3Error};
 use crate::types::SliceJobV3;
 
 #[derive(Debug, Clone)]
@@ -52,17 +53,29 @@ fn push_box_triangles(out: &mut Vec<f32>, cx: f32, cy: f32, z0: f32, z1: f32, sx
     let y1 = cy + sy * 0.5;
 
     let verts = [
-        [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],
-        [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1],
+        [x0, y0, z0],
+        [x1, y0, z0],
+        [x1, y1, z0],
+        [x0, y1, z0],
+        [x0, y0, z1],
+        [x1, y0, z1],
+        [x1, y1, z1],
+        [x0, y1, z1],
     ];
 
     let faces = [
-        (0, 1, 2), (0, 2, 3),
-        (4, 6, 5), (4, 7, 6),
-        (0, 4, 5), (0, 5, 1),
-        (1, 5, 6), (1, 6, 2),
-        (2, 6, 7), (2, 7, 3),
-        (3, 7, 4), (3, 4, 0),
+        (0, 1, 2),
+        (0, 2, 3),
+        (4, 6, 5),
+        (4, 7, 6),
+        (0, 4, 5),
+        (0, 5, 1),
+        (1, 5, 6),
+        (1, 6, 2),
+        (2, 6, 7),
+        (2, 7, 3),
+        (3, 7, 4),
+        (3, 4, 0),
     ];
 
     for (a, b, c) in faces {
@@ -86,7 +99,15 @@ fn build_synthetic_triangles(cfg: &BenchmarkConfigV3) -> Vec<f32> {
             }
             let cx = -cfg.build_width_mm * 0.5 + dx * (ix as f32 + 0.5);
             let cy = -cfg.build_depth_mm * 0.5 + dy * (iy as f32 + 0.5);
-            push_box_triangles(&mut tris, cx, cy, 0.0, cfg.layers as f32 * cfg.layer_height_mm * 0.8, dx * 0.7, dy * 0.7);
+            push_box_triangles(
+                &mut tris,
+                cx,
+                cy,
+                0.0,
+                cfg.layers as f32 * cfg.layer_height_mm * 0.8,
+                dx * 0.7,
+                dy * 0.7,
+            );
             produced += 1;
         }
     }
@@ -96,8 +117,13 @@ fn build_synthetic_triangles(cfg: &BenchmarkConfigV3) -> Vec<f32> {
 
 pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, SlicerV3Error> {
     let triangles = build_synthetic_triangles(&cfg);
+    let output_format = supported_output_formats()
+        .first()
+        .copied()
+        .ok_or_else(|| SlicerV3Error::UnsupportedOutput("no registered output formats".into()))?;
+
     let job = SliceJobV3 {
-        output_format: ".nanodlp".to_string(),
+        output_format: output_format.to_string(),
         source_width_px: cfg.source_width_px,
         source_height_px: cfg.source_height_px,
         width_px: cfg.output_width_px,
@@ -106,14 +132,14 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         build_depth_mm: cfg.build_depth_mm,
         layer_height_mm: cfg.layer_height_mm,
         total_layers: cfg.layers,
-            export_thumbnail_png_base64: None,
+        export_thumbnail_png_base64: None,
         png_compression_strategy: "fastest".to_string(),
         container_compression_level: 2,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),
     };
 
-    let artifact = slice_nanodlp_with_progress_v3(&job, None, None)?;
+    let artifact = slice_with_progress_v3(&job, None, None)?;
     Ok(BenchmarkResultV3 {
         artifact_bytes: artifact.bytes.len(),
         total_s: artifact.perf.total_s(),

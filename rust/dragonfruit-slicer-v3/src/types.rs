@@ -14,7 +14,7 @@ fn default_container_compression_level() -> u8 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
-    /// Target output extension (currently `.nanodlp`).
+    /// Target output extension selected from registered encoders.
     pub output_format: String,
     /// Source raster resolution used for layer PNG generation.
     pub source_width_px: u32,

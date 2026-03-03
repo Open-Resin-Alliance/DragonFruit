@@ -1,6 +1,6 @@
 //! V3 engine orchestration and validation layer.
 
-use crate::encode::encode_nanodlp_archive;
+use crate::encoders::registry::{find_encoder, supported_output_formats};
 use crate::geometry::parse_triangles;
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
@@ -74,18 +74,31 @@ fn validate_job(job: &SliceJobV3) -> Result<(), SlicerV3Error> {
 
 /// Clean-room V3 entry point with full pipeline:
 /// parse triangles -> build layer index -> bounded parallel render -> zip archive encode.
-pub fn slice_nanodlp_with_progress_v3(
+pub fn slice_with_progress_v3(
     job: &SliceJobV3,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<SliceArtifactV3, SlicerV3Error> {
-    if job.output_format != ".nanodlp" {
-        return Err(SlicerV3Error::UnsupportedOutput(job.output_format.clone()));
-    }
+    let total_start = std::time::Instant::now();
+    let (layer_pngs, mut perf) = slice_and_rasterize_v3(job, on_progress, cancel_flag)?;
 
+    let encode_start = std::time::Instant::now();
+    let bytes = dispatch_encode_by_format(job, &layer_pngs)?;
+    perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
+    perf.total_ns = total_start.elapsed().as_nanos() as u64;
+    perf.layers = job.total_layers;
+
+    Ok(SliceArtifactV3 { bytes, perf })
+}
+
+/// Format-agnostic geometry/index/raster stage that outputs layer PNG bytes.
+pub fn slice_and_rasterize_v3(
+    job: &SliceJobV3,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(Vec<Vec<u8>>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
-    let total_start = std::time::Instant::now();
     let triangles = parse_triangles(&job.triangles_xyz);
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
@@ -95,13 +108,22 @@ pub fn slice_nanodlp_with_progress_v3(
         render_layers_bounded(job, &triangles, &layer_index, on_progress, cancel_flag)?;
     perf.index_build_ns = index_ns;
 
-    let encode_start = std::time::Instant::now();
-    let bytes = encode_nanodlp_archive(job, &layer_pngs)?;
-    perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
-    perf.total_ns = total_start.elapsed().as_nanos() as u64;
-    perf.layers = job.total_layers;
+    Ok((layer_pngs, perf))
+}
 
-    Ok(SliceArtifactV3 { bytes, perf })
+/// Encode rendered layers through a registered format encoder.
+pub fn dispatch_encode_by_format(
+    job: &SliceJobV3,
+    layer_pngs: &[Vec<u8>],
+) -> Result<Vec<u8>, SlicerV3Error> {
+    let Some(encoder) = find_encoder(&job.output_format) else {
+        return Err(SlicerV3Error::UnsupportedOutput(format!(
+            "{} (supported: {})",
+            job.output_format,
+            supported_output_formats().join(", ")
+        )));
+    };
+    encoder.encode_container(job, layer_pngs)
 }
 
 impl From<png::EncodingError> for SlicerV3Error {

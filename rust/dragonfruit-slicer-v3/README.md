@@ -17,7 +17,7 @@ For each slicing job, V3 runs a deterministic pipeline:
 
 ## Public API
 
-- `slice_nanodlp_with_progress_v3(job, on_progress, cancel_flag)`
+- `slice_with_progress_v3(job, on_progress, cancel_flag)`
 - `SliceJobV3`, `SliceArtifactV3`, `ProgressCallbackV3`
 
 Primary exports are in:

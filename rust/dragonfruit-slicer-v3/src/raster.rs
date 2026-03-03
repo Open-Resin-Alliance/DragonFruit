@@ -214,6 +214,7 @@ pub fn rasterize_layer(
 #[cfg(test)]
 mod tests {
     use super::rasterize_layer;
+    use crate::encoders::registry::supported_output_formats;
     use crate::geometry::parse_triangles;
     use crate::types::SliceJobV3;
 
@@ -265,8 +266,13 @@ mod tests {
     }
 
     fn job_for_single_layer() -> SliceJobV3 {
+        let output_format = supported_output_formats()
+            .first()
+            .copied()
+            .unwrap_or(".placeholder");
+
         SliceJobV3 {
-            output_format: ".nanodlp".to_string(),
+            output_format: output_format.to_string(),
             source_width_px: 256,
             source_height_px: 256,
             width_px: 256,
