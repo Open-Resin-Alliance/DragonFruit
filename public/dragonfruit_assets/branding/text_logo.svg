@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 676 137" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
+    <g transform="matrix(2.716674,0,0,2.716674,-33.384062,-230.214731)">
+        <g transform="matrix(0.99,0,0,1,0.114854,0)">
+            <g transform="matrix(50,0,0,50,173.085437,121.456058)">
+            </g>
+            <text x="11.485px" y="121.456px" style="font-family:'FONTSPRINGDEMO-AntebasMediumRegular', 'FONTSPRING DEMO - Antebas Medium', sans-serif;font-weight:500;font-size:50px;fill:rgb(255,44,126);">D<tspan x="45.835px 62.535px 87.735px 116.135px 143.535px " y="121.456px 121.456px 121.456px 121.456px 121.456px ">ragon</tspan></text>
+        </g>
+    </g>
+    <g transform="matrix(2.405684,0,0,2.405684,397.654638,-192.443181)">
+        <g transform="matrix(50,0,0,50,113.935437,121.456058)">
+        </g>
+        <text x="11.485px" y="121.456px" style="font-family:'FONTSPRINGDEMO-AntebasMediumRegular', 'FONTSPRING DEMO - Antebas Medium', sans-serif;font-weight:500;font-size:50px;fill:white;">F<tspan x="38.985px 56.935px 85.735px 97.035px " y="121.456px 121.456px 121.456px 121.456px ">ruit</tspan></text>
+    </g>
+    <g transform="matrix(1.272956,0,0,1.272956,-168.046765,-5.422542)">
+        <g id="Layer2">
+            <ellipse cx="617.82" cy="20.195" rx="8.67" ry="8.535" style="fill:rgb(191,254,46);"/>
+        </g>
+    </g>
+</svg>
