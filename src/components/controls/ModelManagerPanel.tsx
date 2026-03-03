@@ -298,10 +298,10 @@ export function ModelManagerPanel({
             <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <label
                 htmlFor="models-card-mesh-input"
-                className="ui-button ui-button-primary inline-flex items-center justify-center gap-2 min-h-9"
+                className="ui-button ui-button-primary inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
               >
-                <Upload className="w-4 h-4" />
-                <span>Load Mesh</span>
+                <Upload className="w-3.5 h-3.5 shrink-0" />
+                <span className="whitespace-nowrap">Load Mesh</span>
               </label>
               <input
                 id="models-card-mesh-input"
@@ -316,10 +316,10 @@ export function ModelManagerPanel({
                 <>
                   <label
                     htmlFor="models-card-scene-input"
-                    className="ui-button ui-button-accent inline-flex items-center justify-center gap-2 min-h-9"
+                    className="ui-button ui-button-accent inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
                   >
-                    <FolderInput className="w-4 h-4" />
-                    <span>Import Scene</span>
+                    <FolderInput className="w-3.5 h-3.5 shrink-0" />
+                    <span className="whitespace-nowrap">Import Scene</span>
                   </label>
                   <input
                     id="models-card-scene-input"

@@ -777,7 +777,7 @@ export function SettingsModal({
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div className="min-w-0 flex-1">
                         <img
-                          src="/textonlyupdate.png"
+                          src="/dragonfruit_assets/branding/text_logo.svg"
                           alt="DragonFruit"
                           className="h-8 w-auto object-contain"
                         />

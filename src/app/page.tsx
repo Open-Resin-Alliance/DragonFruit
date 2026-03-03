@@ -454,12 +454,14 @@ export default function Home() {
   });
   const [printingLayerPreviewUrls, setPrintingLayerPreviewUrls] = React.useState<Array<string | null>>([]);
   const printingLayerPreviewLoadInFlightRef = React.useRef<Set<number>>(new Set());
+
   const [printingPreviewTotalLayers, setPrintingPreviewTotalLayers] = React.useState(0);
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
   const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
   const [isPrintingPngLoaded, setIsPrintingPngLoaded] = React.useState(false);
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
+  const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
   const [isPrintingSettledCanvasReady, setIsPrintingSettledCanvasReady] = React.useState(false);
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
@@ -6353,6 +6355,7 @@ export default function Home() {
         onViewTypeOverrideChange={setSessionShaderOverride}
         heatmapColors={scene.heatmapColors}
         onHeatmapColorChange={scene.onHeatmapColorChange}
+        isSlicingBusy={isSlicingBusy}
       />
 
       <FloatingPanelStack>
@@ -6687,6 +6690,7 @@ export default function Home() {
               onSliceTriggerRef={triggerSliceExportRef}
               shouldAutoSlice={shouldAutoSliceOnExportEntry}
               skipThumbnailCapture={shouldReturnToPrintingAfterSliceRef.current}
+              onSlicingBusyChange={setIsSlicingBusy}
             />
           </>
 

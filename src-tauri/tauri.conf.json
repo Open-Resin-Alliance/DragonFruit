@@ -16,11 +16,13 @@
         "title": "DragonFruit",
         "width": 1920,
         "height": 1080,
+        "decorations": false,
         "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": ["default"]
     }
   }
 }

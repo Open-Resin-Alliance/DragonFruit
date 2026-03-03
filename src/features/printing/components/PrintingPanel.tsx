@@ -1,6 +1,7 @@
 import React from 'react';
 import { Download, Printer } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
+import { hostname } from 'os';
 
 type PrintingPanelProps = {
   outputName: string | null;
@@ -36,7 +37,7 @@ export function PrintingPanel({
   const [isExpanded, setIsExpanded] = React.useState(true);
 
   return (
-    <Card className="w-80">
+    <Card className="w-72">
       <CardHeader
         left={(
           <>
@@ -66,25 +67,25 @@ export function PrintingPanel({
 
       {isExpanded && <div className="px-3 pb-3 space-y-2.5">
         <div className="rounded-md border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Printer</div>
-          <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{printerName}</div>
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Printer</div>
+          <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{printerName}</div>
 
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>Resin</div>
-          <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{resinName}</div>
+          <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Resin</div>
+          <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{resinName}</div>
 
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>Estimated print time</div>
-          <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
+          <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Estimated print time</div>
+          <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
 
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>Estimated volume</div>
-          <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
+          <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Estimated volume</div>
+          <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
         </div>
 
         <div className="rounded-md border p-2.5 space-y-1" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Generated file</div>
-          <div className="text-xs font-semibold truncate" title={outputName ?? 'No generated file yet'} style={{ color: 'var(--text-strong)' }}>
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Generated file</div>
+          <div className="text-sm font-semibold truncate" title={outputName ?? 'No generated file yet'} style={{ color: 'var(--text-strong)' }}>
             {outputName ?? 'No generated file yet'}
           </div>
-          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
             {outputFormat ?? '—'} • {outputSizeLabel}
           </div>
         </div>
@@ -98,7 +99,7 @@ export function PrintingPanel({
             title={canDownload ? 'Download generated print file' : 'Slice first to generate a print file'}
           >
             <Download className="h-4 w-4" />
-            Download print file
+            Export as {outputFormat ? `${outputFormat}` : 'file'}
           </Button>
 
           <Button
@@ -111,12 +112,12 @@ export function PrintingPanel({
               : 'Requires connected printer with supported upload capability and a generated print file'}
           >
             <Printer className="h-4 w-4" />
-            {sendBusy ? 'Sending…' : 'Send to printer'}
+            {sendBusy ? 'Sending…' : `Send to Printer`}
           </Button>
         </div>
 
         {sendStatusText && (
-          <div className="text-[11px] rounded border px-2 py-1" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+          <div className="text-xs rounded border px-2 py-1" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
             {sendStatusText}
           </div>
         )}
