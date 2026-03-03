@@ -431,6 +431,7 @@ export default function Home() {
   const lastPrintingLayerSyncPerfRef = React.useRef(0);
   const pendingPrintingSelectedLayerRef = React.useRef<number | null>(null);
   const printingSelectedLayerRafRef = React.useRef<number | null>(null);
+  const printingSelectedLayerRef = React.useRef(1);
   const printingPreviewZoomRef = React.useRef(1);
   const printingPreviewPanRef = React.useRef({ x: 0, y: 0 });
   const printingPreviewPanPendingRef = React.useRef({ x: 0, y: 0 });
@@ -1068,6 +1069,10 @@ export default function Home() {
   }, [printingPreviewPan]);
 
   React.useEffect(() => {
+    printingSelectedLayerRef.current = printingSelectedLayer;
+  }, [printingSelectedLayer]);
+
+  React.useEffect(() => {
     printingPreviewSettledRef.current = isPrintingPreviewSettled;
   }, [isPrintingPreviewSettled]);
 
@@ -1165,6 +1170,7 @@ export default function Home() {
   }, [scene]);
 
   const handleSliceRunStartedForPrinting = React.useCallback(() => {
+    setShouldAutoSliceOnExportEntry(false);
     clearPrintingLayerPreviewUrls();
     setPrintingPreviewTotalLayers(0);
     setPrintingSelectedLayer(1);
@@ -2569,7 +2575,14 @@ export default function Home() {
   }, [activePrinterProfile, printingReadyPlateId]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
+    if (!Number.isFinite(nextLayer)) return;
     const clamped = clampPrintingLayer(nextLayer);
+
+    const currentOrPending = pendingPrintingSelectedLayerRef.current ?? printingSelectedLayerRef.current;
+    if (currentOrPending === clamped) {
+      return;
+    }
+
     schedulePrintingPreviewSettle();
     pendingPrintingSelectedLayerRef.current = clamped;
 
@@ -3759,8 +3772,19 @@ export default function Home() {
 
     // Keep 3D cross-section in lock-step with selected PNG layer.
     // Use 1-based layer index here so layer 1 still produces a real cut plane.
-    slicing.setLayerIndex(Math.max(1, clamped));
-  }, [scene.mode, printingPreviewTotalLayers, printingSelectedLayer, slicing.setLayerIndex, isPrintingLayerScrubbing]);
+    const targetLayerIndex = Math.max(1, clamped);
+    if (slicing.layerIndex === targetLayerIndex) {
+      return;
+    }
+    slicing.setLayerIndex(targetLayerIndex);
+  }, [
+    scene.mode,
+    printingPreviewTotalLayers,
+    printingSelectedLayer,
+    slicing.layerIndex,
+    slicing.setLayerIndex,
+    isPrintingLayerScrubbing,
+  ]);
 
   // 4. Islands (needs geom & transform & layerHeight)
   const islands = useIslandManager({

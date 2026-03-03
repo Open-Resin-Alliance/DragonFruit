@@ -184,6 +184,9 @@ export function SlicingPanel({
     lastBackend: null,
   });
   const slicingAbortControllerRef = useRef<AbortController | null>(null);
+  const autoSliceTriggeredRef = useRef(false);
+  const autoSliceTimeoutRef = useRef<number | null>(null);
+  const handleSliceZipExportRef = useRef<(() => Promise<void>) | null>(null);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
@@ -705,6 +708,11 @@ export function SlicingPanel({
 
   // Populate the slice trigger ref so parent can call slice from outside
   useEffect(() => {
+    handleSliceZipExportRef.current = handleSliceZipExport;
+  }, [handleSliceZipExport]);
+
+  // Populate the slice trigger ref so parent can call slice from outside
+  useEffect(() => {
     if (onSliceTriggerRef) {
       onSliceTriggerRef.current = handleSliceZipExport;
     }
@@ -712,14 +720,34 @@ export function SlicingPanel({
 
   // Auto-trigger slice when shouldAutoSlice becomes true
   useEffect(() => {
-    if (shouldAutoSlice) {
-      // Use setTimeout to ensure DOM is ready and state is settled
-      const timeoutId = setTimeout(() => {
-        handleSliceZipExport();
-      }, 50);
-      return () => clearTimeout(timeoutId);
+    if (!shouldAutoSlice) {
+      if (autoSliceTimeoutRef.current !== null) {
+        window.clearTimeout(autoSliceTimeoutRef.current);
+        autoSliceTimeoutRef.current = null;
+      }
+      autoSliceTriggeredRef.current = false;
+      return;
     }
-  }, [shouldAutoSlice, handleSliceZipExport]);
+
+    if (autoSliceTriggeredRef.current || isSlicingZip || autoSliceTimeoutRef.current !== null) {
+      return;
+    }
+
+    // Use setTimeout to ensure DOM is ready and state is settled.
+    autoSliceTimeoutRef.current = window.setTimeout(() => {
+      autoSliceTimeoutRef.current = null;
+      if (autoSliceTriggeredRef.current) return;
+      autoSliceTriggeredRef.current = true;
+      void handleSliceZipExportRef.current?.();
+    }, 50);
+
+    return () => {
+      if (autoSliceTimeoutRef.current !== null) {
+        window.clearTimeout(autoSliceTimeoutRef.current);
+        autoSliceTimeoutRef.current = null;
+      }
+    };
+  }, [isSlicingZip, shouldAutoSlice]);
 
   const selectedLayerPreviewUrl = useMemo(() => {
     if (previewSelectedLayer < 1) return null;
