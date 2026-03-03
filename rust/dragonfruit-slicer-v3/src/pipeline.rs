@@ -11,7 +11,6 @@ use crate::metrics::SlicingPerfV3;
 use crate::raster::rasterize_layer_with_stats;
 use crate::types::{LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceJobV3};
 use rayon::prelude::*;
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -195,8 +194,9 @@ pub fn render_layers_bounded(
                 });
         });
 
-        let mut reorder: BTreeMap<u32, (Option<Vec<u8>>, Option<Vec<u8>>, LayerAreaStatsV3)> =
-            BTreeMap::new();
+        let mut pending: Vec<Option<(Option<Vec<u8>>, Option<Vec<u8>>, LayerAreaStatsV3)>> =
+            Vec::with_capacity(total_layers as usize);
+        pending.resize_with(total_layers as usize, || None);
         let mut next = 0u32;
         for msg in &rx {
             if pipeline_error.is_err() {
@@ -214,8 +214,11 @@ pub fn render_layers_bounded(
                         cb(done, total_layers);
                     }
 
-                    reorder.insert(layer, (png, raw_mask, stats));
-                    while let Some((png, raw_mask, stats)) = reorder.remove(&next) {
+                    pending[layer as usize] = Some((png, raw_mask, stats));
+                    while next < total_layers {
+                        let Some((png, raw_mask, stats)) = pending[next as usize].take() else {
+                            break;
+                        };
                         if let (Some(ref mut out), Some(png)) = (out_pngs.as_mut(), png) {
                             out[next as usize] = png;
                         }
