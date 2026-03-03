@@ -2387,21 +2387,28 @@ export default function Home() {
     setPrintingDeviceProcessingElapsedSec(0);
 
     try {
-      const bytes = printingArtifact.blob
-        ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
-        : (printingArtifact.nativeTempPath
-          ? await readPrintArtifactBytesFromPath(printingArtifact.nativeTempPath)
-          : null);
-      if (!bytes) {
-        throw new Error('No print artifact bytes available for printer upload.');
+      const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
+      let zipBase64: string | undefined;
+
+      // Prefer native temp-path handoff (avoids huge JS base64 payloads and intermittent truncation).
+      // Fall back to base64 only when we do not have a valid temp-path artifact.
+      if (!nativeTempPath) {
+        const bytes = printingArtifact.blob
+          ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
+          : null;
+
+        if (!bytes || bytes.length === 0) {
+          throw new Error('No print artifact payload available for printer upload.');
+        }
+
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const chunk = bytes.subarray(i, i + chunkSize);
+          binary += String.fromCharCode(...chunk);
+        }
+        zipBase64 = btoa(binary);
       }
-      let binary = '';
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.subarray(i, i + chunkSize);
-        binary += String.fromCharCode(...chunk);
-      }
-      const zipBase64 = btoa(binary);
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
 
@@ -2414,6 +2421,7 @@ export default function Home() {
           ipAddress: host,
           port,
           zipBase64,
+          zipFilePath: nativeTempPath || undefined,
           path: pathBase,
           profileId: selectedMaterialId,
         }),
