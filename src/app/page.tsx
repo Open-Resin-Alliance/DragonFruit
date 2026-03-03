@@ -277,6 +277,41 @@ type ExportThumbnailRenderOptions = {
   centerOnModel: boolean;
 };
 
+const EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY = 'dragonfruit.slicing.thumbnailRenderOptions';
+const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
+  includeGradient: false,
+  includeBuildPlate: true,
+  includeGrid: true,
+  centerOnModel: true,
+};
+
+function resolveInitialExportThumbnailRenderOptions(): ExportThumbnailRenderOptions {
+  if (typeof window === 'undefined') return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
+
+  try {
+    const raw = window.localStorage.getItem(EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY);
+    if (!raw) return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
+
+    const parsed = JSON.parse(raw) as Partial<ExportThumbnailRenderOptions>;
+    return {
+      includeGradient: typeof parsed.includeGradient === 'boolean'
+        ? parsed.includeGradient
+        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.includeGradient,
+      includeBuildPlate: typeof parsed.includeBuildPlate === 'boolean'
+        ? parsed.includeBuildPlate
+        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.includeBuildPlate,
+      includeGrid: typeof parsed.includeGrid === 'boolean'
+        ? parsed.includeGrid
+        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.includeGrid,
+      centerOnModel: typeof parsed.centerOnModel === 'boolean'
+        ? parsed.centerOnModel
+        : DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS.centerOnModel,
+    };
+  } catch {
+    return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
+  }
+}
+
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
@@ -293,6 +328,7 @@ export default function Home() {
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
   const exportThumbnailCaptureRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
+  const exportThumbnailCaptureRunnerRef = React.useRef<(() => Promise<Uint8Array | null>) | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
@@ -403,9 +439,9 @@ export default function Home() {
     }, []);
 
     const captureExportThumbnailPng = React.useCallback(async () => {
-      const capture = exportThumbnailCaptureRef.current;
-      if (!capture) return null;
-      return capture();
+      const runCapture = exportThumbnailCaptureRunnerRef.current;
+      if (!runCapture) return null;
+      return runCapture();
     }, []);
 
   const [isHistoryDebugOpen, setIsHistoryDebugOpen] = React.useState(false);
@@ -429,12 +465,7 @@ export default function Home() {
   const [printingPreviewZoom, setPrintingPreviewZoom] = React.useState(1);
   const [printingPreviewPan, setPrintingPreviewPan] = React.useState({ x: 0, y: 0 });
   const [isPrintingPreviewPanning, setIsPrintingPreviewPanning] = React.useState(false);
-  const [exportThumbnailRenderOptions, setExportThumbnailRenderOptions] = React.useState<ExportThumbnailRenderOptions>({
-    includeGradient: false,
-    includeBuildPlate: true,
-    includeGrid: true,
-    centerOnModel: true,
-  });
+  const [exportThumbnailRenderOptions, setExportThumbnailRenderOptions] = React.useState<ExportThumbnailRenderOptions>(resolveInitialExportThumbnailRenderOptions);
   const printingPreviewViewportRef = React.useRef<HTMLDivElement | null>(null);
   const printingPreviewCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const printingPreviewSettleTimeoutRef = React.useRef<number | null>(null);
@@ -504,6 +535,14 @@ export default function Home() {
   const [arrangeArrayGapY, setArrangeArrayGapY] = React.useState(5);
   const [arrangeArrayGapZ, setArrangeArrayGapZ] = React.useState(5);
   const [activeArrangeOperation, setActiveArrangeOperation] = React.useState<'standard' | 'high_precision' | 'array' | null>(null);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      EXPORT_THUMBNAIL_RENDER_OPTIONS_STORAGE_KEY,
+      JSON.stringify(exportThumbnailRenderOptions),
+    );
+  }, [exportThumbnailRenderOptions]);
   const [isAutoArranging, setIsAutoArranging] = React.useState(false);
   const [arrangeOverlayElapsedSec, setArrangeOverlayElapsedSec] = React.useState(0);
   const [arrangeOverlayModelCount, setArrangeOverlayModelCount] = React.useState<number | null>(null);
@@ -3656,6 +3695,81 @@ export default function Home() {
     hasGeometry: scene.models.length > 0,
     zRange: sceneZRange
   });
+
+  const runExportThumbnailCapture = React.useCallback(async () => {
+    const capture = exportThumbnailCaptureRef.current;
+    if (!capture) return null;
+
+    const previousLayerIndex = slicing.layerIndex;
+    const previousActiveModelId = scene.activeModelId;
+    const previousSelectedModelIds = scene.selectedModelIds;
+    const previousSelectAllActive = isSelectAllModelsActive;
+    const visibleModelIds = scene.models.filter((model) => model.visible).map((model) => model.id);
+    const forcedActiveModelId = visibleModelIds[0] ?? null;
+
+    const sameSelection = (
+      previousSelectedModelIds.length === visibleModelIds.length
+      && previousSelectedModelIds.every((id, index) => id === visibleModelIds[index])
+    );
+
+    const shouldResetLayer = previousLayerIndex !== 0;
+    const shouldSetSelection = visibleModelIds.length > 0 && !sameSelection;
+    const shouldSetActive = forcedActiveModelId !== previousActiveModelId;
+    const shouldSetSelectAllVisual = !previousSelectAllActive;
+
+    try {
+      // Ensure export thumbnail shows full geometry (no cross-section clipping)
+      // and equivalent to Ctrl+A model visibility context.
+      if (shouldResetLayer) {
+        slicing.setLayerIndex(0);
+      }
+
+      if (visibleModelIds.length > 0) {
+        if (shouldSetSelection) {
+          scene.setSelectedModelIds(visibleModelIds);
+        }
+        if (shouldSetActive) {
+          scene.setActiveModelId(forcedActiveModelId);
+        }
+        if (shouldSetSelectAllVisual) {
+          setIsSelectAllModelsActive(true);
+        }
+      }
+
+      if (shouldResetLayer || shouldSetSelection || shouldSetActive || shouldSetSelectAllVisual) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+
+      return await capture();
+    } finally {
+      if (shouldResetLayer) {
+        slicing.setLayerIndex(previousLayerIndex);
+      }
+      if (shouldSetSelection) {
+        scene.setSelectedModelIds(previousSelectedModelIds);
+      }
+      if (shouldSetActive) {
+        scene.setActiveModelId(previousActiveModelId);
+      }
+      if (shouldSetSelectAllVisual) {
+        setIsSelectAllModelsActive(previousSelectAllActive);
+      }
+    }
+  }, [
+    isSelectAllModelsActive,
+    scene.activeModelId,
+    scene.models,
+    scene.selectedModelIds,
+    scene.setActiveModelId,
+    scene.setSelectedModelIds,
+    slicing.layerIndex,
+    slicing.setLayerIndex,
+  ]);
+
+  React.useEffect(() => {
+    exportThumbnailCaptureRunnerRef.current = runExportThumbnailCapture;
+  }, [runExportThumbnailCapture]);
 
   React.useEffect(() => {
     const profileLayerHeightMm = Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
