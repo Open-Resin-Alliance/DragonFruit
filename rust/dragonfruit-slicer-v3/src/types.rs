@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::metrics::SlicingPerfV3;
 
 fn default_png_compression_strategy() -> String {
-    "fastest".to_string()
+    "balanced".to_string()
 }
 
 fn default_container_compression_level() -> u8 {
