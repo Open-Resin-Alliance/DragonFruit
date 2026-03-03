@@ -226,17 +226,17 @@ export function SlicingPanel({
     const phaseKind = resolveSlicingPhaseKind(currentPhase);
     switch (phaseKind) {
       case 'preparing':
-        return Math.max(layerProgress, 4);
+        return layerProgress;
       case 'staging':
-        return Math.max(layerProgress, 10);
+        return layerProgress;
       case 'slicing':
-        return Math.min(99, Math.max(layerProgress, 12));
+        return Math.min(99, layerProgress);
       case 'finalizing':
         return 99;
       case 'handoff':
         return 99;
       default:
-        return Math.min(99, Math.max(layerProgress, 8));
+        return Math.min(99, layerProgress);
     }
   }, [currentPhase, progressDone, progressTotal, slicingModalStage]);
 
@@ -1133,10 +1133,6 @@ export function SlicingPanel({
             </div>
 
             <div className="p-4 space-y-3">
-              <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-                {sliceStatus}
-              </div>
-
               <div className="grid grid-cols-2 gap-2.5">
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Pipeline Stage</div>
