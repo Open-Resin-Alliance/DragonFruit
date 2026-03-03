@@ -16,6 +16,14 @@ struct Segment {
     wind: i32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ActiveEdge {
+    x: f32,
+    dx_dy: f32,
+    wind: i32,
+    end_exclusive: usize,
+}
+
 #[inline]
 fn mm_to_pixel_x(x_mm: f32, min_x_mm: f32, build_width_mm: f32, width_px: u32) -> f32 {
     let t = (x_mm - min_x_mm) / build_width_mm;
@@ -235,6 +243,50 @@ fn aa_subpixel_steps(level: &str) -> u8 {
     }
 }
 
+fn build_scanline_segment_index(segments: &[Segment], height: usize) -> Vec<Vec<ActiveEdge>> {
+    let mut starts = vec![Vec::<usize>::new(); height];
+    let mut end_exclusive = vec![0usize; segments.len()];
+
+    for (idx, seg) in segments.iter().enumerate() {
+        // Segment is active for rows where:
+        //   y_sample = y + 0.5
+        //   y_sample >= seg.y_min && y_sample < seg.y_max
+        // => y in [ceil(y_min - 0.5), ceil(y_max - 0.5))
+        let start = (seg.y_min - 0.5).ceil() as i32;
+        let end = (seg.y_max - 0.5).ceil() as i32;
+
+        let clamped_start = start.clamp(0, height as i32) as usize;
+        let clamped_end = end.clamp(0, height as i32) as usize;
+
+        if clamped_start >= clamped_end || clamped_start >= height {
+            continue;
+        }
+
+        starts[clamped_start].push(idx);
+        end_exclusive[idx] = clamped_end;
+    }
+
+    let mut indexed = vec![Vec::<ActiveEdge>::new(); height];
+    for y in 0..height {
+        if starts[y].is_empty() {
+            continue;
+        }
+        let y_sample = y as f32 + 0.5;
+        for seg_idx in &starts[y] {
+            let seg = &segments[*seg_idx];
+            let x = seg.x1 + (y_sample - seg.y1) * seg.dx_dy;
+            indexed[y].push(ActiveEdge {
+                x,
+                dx_dy: seg.dx_dy,
+                wind: seg.wind,
+                end_exclusive: end_exclusive[*seg_idx],
+            });
+        }
+    }
+
+    indexed
+}
+
 #[inline]
 fn quantize_coverage(coverage: f32, steps: u8) -> f32 {
     if steps <= 1 {
@@ -262,6 +314,7 @@ pub fn rasterize_layer_with_stats(
     triangles: &[Triangle],
     layer_indices: &[usize],
     layer_index: u32,
+    compute_area_stats: bool,
 ) -> (Vec<u8>, LayerAreaStatsV3) {
     let width = job.source_width_px as usize;
     let height = job.source_height_px as usize;
@@ -277,12 +330,14 @@ pub fn rasterize_layer_with_stats(
         return (mask, stats);
     }
 
+    let scanline_starts = build_scanline_segment_index(&segments, height);
+
     let x_eps = 1e-6f32;
     let aa_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
     let aa_enabled = aa_steps > 0;
 
     // Keep area stats on a strict binary mask while allowing grayscale AA output.
-    let mut stats_mask = if aa_enabled {
+    let mut stats_mask = if compute_area_stats && aa_enabled {
         Some(vec![0u8; width * height])
     } else {
         None
@@ -296,17 +351,24 @@ pub fn rasterize_layer_with_stats(
     let mut max_x = i32::MIN;
     let mut max_y = i32::MIN;
 
-    for y in 0..height {
-        let y_sample = (y as f32) + 0.5;
-        let mut intersections: Vec<(f32, i32)> = Vec::with_capacity(64);
+    let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
+    let mut intersections: Vec<(f32, i32)> = Vec::with_capacity(128);
 
-        for seg in &segments {
-            if !(y_sample >= seg.y_min && y_sample < seg.y_max) {
-                continue;
-            }
-            let x = seg.x1 + (y_sample - seg.y1) * seg.dx_dy;
-            if x.is_finite() {
-                intersections.push((x, seg.wind));
+    for y in 0..height {
+        active_edges.retain(|edge| edge.end_exclusive > y);
+        if let Some(starting) = scanline_starts.get(y) {
+            active_edges.extend(starting.iter().copied());
+        }
+        if active_edges.is_empty() {
+            continue;
+        }
+        intersections.clear();
+
+        active_edges.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+
+        for edge in &active_edges {
+            if edge.x.is_finite() {
+                intersections.push((edge.x, edge.wind));
             }
         }
 
@@ -389,18 +451,24 @@ pub fn rasterize_layer_with_stats(
                     }
                 }
 
-                let filled = (clamped_end - clamped_start + 1) as u32;
-                stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+                if compute_area_stats {
+                    let filled = (clamped_end - clamped_start + 1) as u32;
+                    stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
 
-                min_x = min_x.min(clamped_start as i32);
-                max_x = max_x.max(clamped_end as i32);
-                min_y = min_y.min(y as i32);
-                max_y = max_y.max(y as i32);
+                    min_x = min_x.min(clamped_start as i32);
+                    max_x = max_x.max(clamped_end as i32);
+                    min_y = min_y.min(y as i32);
+                    max_y = max_y.max(y as i32);
+                }
             }
+        }
+
+        for edge in &mut active_edges {
+            edge.x += edge.dx_dy;
         }
     }
 
-    if stats.total_solid_pixels > 0 {
+    if compute_area_stats && stats.total_solid_pixels > 0 {
         let stats_source = stats_mask.as_deref().unwrap_or(&mask);
         let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
             compute_component_area_stats_8_connected(
@@ -436,7 +504,7 @@ pub fn rasterize_layer(
     layer_indices: &[usize],
     layer_index: u32,
 ) -> Vec<u8> {
-    rasterize_layer_with_stats(job, triangles, layer_indices, layer_index).0
+    rasterize_layer_with_stats(job, triangles, layer_indices, layer_index, false).0
 }
 
 #[cfg(test)]
@@ -595,7 +663,7 @@ mod tests {
 
         let triangles = parse_triangles(&flat);
         let indices: Vec<usize> = (0..triangles.len()).collect();
-        let (_mask, stats) = rasterize_layer_with_stats(&job, &triangles, &indices, 0);
+        let (_mask, stats) = rasterize_layer_with_stats(&job, &triangles, &indices, 0, true);
 
         assert_eq!(
             stats.area_count, 2,

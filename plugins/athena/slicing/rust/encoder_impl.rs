@@ -223,6 +223,10 @@ impl FormatEncoder for AthenaPluginEncoder {
         ".nanodlp"
     }
 
+    fn requires_area_stats(&self) -> bool {
+        true
+    }
+
     fn encode_container(
         &self,
         job: &SliceJobV3,

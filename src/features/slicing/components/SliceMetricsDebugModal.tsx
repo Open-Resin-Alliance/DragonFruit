@@ -27,6 +27,14 @@ function formatRate(value: number | null | undefined): string {
   return `${value.toFixed(2)} layers/s`;
 }
 
+function formatBytes(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const bytes = Math.max(0, value);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+}
+
 function formatPercent(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return `${value.toFixed(1)}%`;
@@ -64,6 +72,11 @@ export function SliceMetricsDebugModal({
   const coreVsNativePct = ratioPercent(benchmark.coreSlicingMs, benchmark.nativePerf.totalMs);
   const workerCpuAggregateMs = ((benchmark.nativePerf.renderCpuMs ?? 0) + (benchmark.nativePerf.pngEncodeCpuMs ?? 0)) || null;
   const workerCpuVsRenderWallPct = ratioPercent(workerCpuAggregateMs, benchmark.nativePerf.renderWallMs);
+  const meshPrepVsWallPct = ratioPercent(benchmark.meshPrepMs, benchmark.totalElapsedMs);
+  const coreVsWallPct = ratioPercent(benchmark.coreSlicingMs, benchmark.totalElapsedMs);
+  const trianglesPerLayer = benchmark.totalLayers && benchmark.totalLayers > 0
+    ? benchmark.jobConfig.triangleFloatCount / 9 / benchmark.totalLayers
+    : null;
 
   return (
     <div
@@ -131,6 +144,38 @@ export function SliceMetricsDebugModal({
           </div>
 
           <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Job Configuration</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs">
+              <RuntimeStat label="Output format" value={`${benchmark.jobConfig.outputDisplayName} (${benchmark.jobConfig.outputFormat})`} />
+              <RuntimeStat label="Source raster" value={`${benchmark.jobConfig.sourceWidthPx} × ${benchmark.jobConfig.sourceHeightPx}`} />
+              <RuntimeStat label="Logical output" value={`${benchmark.jobConfig.widthPx} × ${benchmark.jobConfig.heightPx}`} />
+              <RuntimeStat label="X packing mode" value={benchmark.jobConfig.xPackingMode} />
+              <RuntimeStat label="Compute backend" value={benchmark.jobConfig.computeBackend} />
+              <RuntimeStat label="PNG strategy" value={benchmark.jobConfig.pngCompressionStrategy} />
+              <RuntimeStat label="Container compression" value={String(benchmark.jobConfig.containerCompressionLevel)} />
+              <RuntimeStat label="BVH accel requested" value={benchmark.jobConfig.bvhAccelerationEnabled ? 'true' : 'false'} />
+              <RuntimeStat label="AA level" value={benchmark.jobConfig.antiAliasingLevel} />
+              <RuntimeStat label="AA on supports" value={benchmark.jobConfig.aaOnSupports ? 'true' : 'false'} />
+              <RuntimeStat label="Layer height" value={`${benchmark.jobConfig.layerHeightMm.toFixed(4)} mm`} />
+              <RuntimeStat label="Build area" value={`${benchmark.jobConfig.buildWidthMm.toFixed(2)} × ${benchmark.jobConfig.buildDepthMm.toFixed(2)} mm`} />
+            </div>
+          </div>
+
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Geometry / Payload</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs">
+              <RuntimeStat label="Model triangles" value={benchmark.jobConfig.modelTriangleCount.toLocaleString()} />
+              <RuntimeStat label="Triangle floats" value={benchmark.jobConfig.triangleFloatCount.toLocaleString()} />
+              <RuntimeStat label="Triangles per layer" value={trianglesPerLayer != null ? trianglesPerLayer.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'} />
+              <RuntimeStat label="Metadata JSON" value={formatBytes(benchmark.jobConfig.metadataJsonBytes)} />
+              <RuntimeStat label="Thumbnail provided" value={benchmark.jobConfig.exportThumbnailProvided ? 'true' : 'false'} />
+              <RuntimeStat label="Thumbnail bytes" value={formatBytes(benchmark.jobConfig.exportThumbnailBytes)} />
+              <RuntimeStat label="Mesh payload bytes" value={formatBytes(benchmark.nativePerf.meshBytesLen)} />
+              <RuntimeStat label="Bridge payload chars" value={benchmark.nativePerf.bridgePayloadChars != null ? benchmark.nativePerf.bridgePayloadChars.toLocaleString() : '—'} />
+            </div>
+          </div>
+
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text-strong)' }}>Native Stage Breakdown (wall clock)</div>
             <div className="space-y-2">
               <StageRow name="Index build" ms={benchmark.nativePerf.indexBuildMs} pct={indexPct} />
@@ -157,10 +202,13 @@ export function SliceMetricsDebugModal({
               <div className="space-y-1 text-xs">
                 <RuntimeStat label="Wall vs native total" value={formatPercent(wallVsNativePct)} />
                 <RuntimeStat label="Core vs native total" value={formatPercent(coreVsNativePct)} />
+                <RuntimeStat label="Core vs app wall" value={formatPercent(coreVsWallPct)} />
+                <RuntimeStat label="Mesh prep vs app wall" value={formatPercent(meshPrepVsWallPct)} />
                 <RuntimeStat label="Transport overhead" value={formatMs(benchmark.nativePerf.transportOverheadMs, 2)} />
                 <RuntimeStat label="Stage mesh IPC" value={formatMs(benchmark.nativePerf.stageMeshMs, 2)} />
                 <RuntimeStat label="Bridge payload build" value={formatMs(benchmark.nativePerf.bridgePayloadBuildMs, 2)} />
                 <RuntimeStat label="Bridge invoke roundtrip" value={formatMs(benchmark.nativePerf.bridgeInvokeRoundTripMs, 2)} />
+                <RuntimeStat label="Bridge total" value={formatMs(benchmark.nativePerf.bridgeTotalMs, 2)} />
                 <RuntimeStat label="Worker CPU aggregate" value={formatMs(workerCpuAggregateMs, 2)} />
                 <RuntimeStat label="CPU agg vs render wall" value={formatPercent(workerCpuVsRenderWallPct)} />
                 <RuntimeStat label="Mesh prep" value={formatMs(benchmark.meshPrepMs)} />

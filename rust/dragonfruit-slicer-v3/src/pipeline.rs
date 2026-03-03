@@ -30,6 +30,7 @@ pub fn render_layers_bounded(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_index: &[Vec<usize>],
+    compute_area_stats: bool,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(Vec<Vec<u8>>, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -68,6 +69,7 @@ pub fn render_layers_bounded(
                             triangles,
                             &layer_index[layer as usize],
                             layer,
+                            compute_area_stats,
                         );
                         raster_ns
                             .fetch_add(raster_start.elapsed().as_nanos() as u64, Ordering::Relaxed);

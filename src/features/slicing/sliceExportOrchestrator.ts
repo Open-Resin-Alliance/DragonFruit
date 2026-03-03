@@ -77,6 +77,30 @@ export type SliceExportResult = {
     coreSlicingMs: number | null;
     totalLayers: number | null;
     layersPerSecond: number | null;
+    jobConfig: {
+      outputFormat: string;
+      outputDisplayName: string;
+      sourceWidthPx: number;
+      sourceHeightPx: number;
+      widthPx: number;
+      heightPx: number;
+      xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
+      computeBackend: 'auto' | 'cpu' | 'gpu';
+      pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
+      containerCompressionLevel: number;
+      bvhAccelerationEnabled: boolean;
+      antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
+      aaOnSupports: boolean;
+      modelTriangleCount: number;
+      triangleFloatCount: number;
+      buildWidthMm: number;
+      buildDepthMm: number;
+      layerHeightMm: number;
+      totalLayers: number;
+      metadataJsonBytes: number;
+      exportThumbnailProvided: boolean;
+      exportThumbnailBytes: number;
+    };
     nativePerf: {
       perf: NativeSlicerPerfMetrics | null;
       runtime: NativeSlicerRuntimeMetrics | null;
@@ -234,6 +258,30 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       coreSlicingMs,
       totalLayers: solidMesh.totalLayers,
       layersPerSecond,
+      jobConfig: {
+        outputFormat: format.outputFormat,
+        outputDisplayName: format.displayName,
+        sourceWidthPx: nativeJob.sourceWidthPx,
+        sourceHeightPx: nativeJob.sourceHeightPx,
+        widthPx: nativeJob.widthPx,
+        heightPx: nativeJob.heightPx,
+        xPackingMode: nativeJob.xPackingMode,
+        computeBackend: nativeJob.computeBackend,
+        pngCompressionStrategy: nativeJob.pngCompressionStrategy,
+        containerCompressionLevel: nativeJob.containerCompressionLevel,
+        bvhAccelerationEnabled: nativeJob.bvhAccelerationEnabled,
+        antiAliasingLevel: nativeJob.antiAliasingLevel,
+        aaOnSupports: nativeJob.aaOnSupports,
+        modelTriangleCount: nativeJob.modelTriangleCount,
+        triangleFloatCount: nativeJob.trianglesXYZ.length,
+        buildWidthMm: nativeJob.buildWidthMm,
+        buildDepthMm: nativeJob.buildDepthMm,
+        layerHeightMm: nativeJob.layerHeightMm,
+        totalLayers: nativeJob.totalLayers,
+        metadataJsonBytes: nativeJob.metadataJson.length,
+        exportThumbnailProvided: Boolean(options.exportThumbnailPng && options.exportThumbnailPng.length > 0),
+        exportThumbnailBytes: options.exportThumbnailPng?.length ?? 0,
+      },
       nativePerf: {
         perf: encodedArtifact.perf,
         runtime: encodedArtifact.runtime,

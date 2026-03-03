@@ -79,9 +79,18 @@ pub fn slice_with_progress_v3(
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<SliceArtifactV3, SlicerV3Error> {
+    let Some(encoder) = find_encoder(&job.output_format) else {
+        return Err(SlicerV3Error::UnsupportedOutput(format!(
+            "{} (supported: {})",
+            job.output_format,
+            supported_output_formats().join(", ")
+        )));
+    };
+    let requires_area_stats = encoder.requires_area_stats();
+
     let total_start = std::time::Instant::now();
     let (layer_pngs, layer_area_stats, mut perf) =
-        slice_and_rasterize_v3(job, on_progress, cancel_flag)?;
+        slice_and_rasterize_v3(job, requires_area_stats, on_progress, cancel_flag)?;
 
     let encode_start = std::time::Instant::now();
     let bytes = dispatch_encode_by_format(job, &layer_pngs, &layer_area_stats)?;
@@ -95,6 +104,7 @@ pub fn slice_with_progress_v3(
 /// Format-agnostic geometry/index/raster stage that outputs layer PNG bytes.
 pub fn slice_and_rasterize_v3(
     job: &SliceJobV3,
+    requires_area_stats: bool,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(Vec<Vec<u8>>, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -105,8 +115,14 @@ pub fn slice_and_rasterize_v3(
     let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
     let index_ns = index_start.elapsed().as_nanos() as u64;
 
-    let (layer_pngs, layer_area_stats, mut perf) =
-        render_layers_bounded(job, &triangles, &layer_index, on_progress, cancel_flag)?;
+    let (layer_pngs, layer_area_stats, mut perf) = render_layers_bounded(
+        job,
+        &triangles,
+        &layer_index,
+        requires_area_stats,
+        on_progress,
+        cancel_flag,
+    )?;
     perf.index_build_ns = index_ns;
 
     Ok((layer_pngs, layer_area_stats, perf))

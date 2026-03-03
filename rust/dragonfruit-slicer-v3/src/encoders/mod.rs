@@ -15,6 +15,14 @@ pub trait FormatEncoder: Send + Sync {
     /// Canonical output extension handled by this encoder.
     fn output_format(&self) -> &'static str;
 
+    /// Whether this encoder requires per-layer connected-component area stats.
+    ///
+    /// Keep false by default to avoid paying component-analysis overhead for
+    /// formats that don't consume these metrics.
+    fn requires_area_stats(&self) -> bool {
+        false
+    }
+
     /// Encode final archive/container bytes from rendered layer PNGs.
     fn encode_container(
         &self,
