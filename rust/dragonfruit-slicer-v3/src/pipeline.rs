@@ -7,8 +7,8 @@ use crate::encode::encode_grayscale_png;
 use crate::engine::SlicerV3Error;
 use crate::geometry::Triangle;
 use crate::metrics::SlicingPerfV3;
-use crate::raster::rasterize_layer;
-use crate::types::{ProgressCallbackV3, SliceJobV3};
+use crate::raster::rasterize_layer_with_stats;
+use crate::types::{LayerAreaStatsV3, ProgressCallbackV3, SliceJobV3};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -32,7 +32,7 @@ pub fn render_layers_bounded(
     layer_index: &[Vec<usize>],
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
-) -> Result<(Vec<Vec<u8>>, SlicingPerfV3), SlicerV3Error> {
+) -> Result<(Vec<Vec<u8>>, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     let render_wall_start = std::time::Instant::now();
     let total_layers = job.total_layers;
     let max_concurrent = choose_max_concurrent();
@@ -43,7 +43,10 @@ pub fn render_layers_bounded(
     let png_ns = AtomicU64::new(0);
 
     let mut out = vec![Vec::<u8>::new(); total_layers as usize];
-    let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(u32, Vec<u8>), SlicerV3Error>>(buffer);
+    let mut area_stats = vec![LayerAreaStatsV3::default(); total_layers as usize];
+    let (tx, rx) = std::sync::mpsc::sync_channel::<
+        Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error>,
+    >(buffer);
 
     let mut pipeline_error: Result<(), SlicerV3Error> = Ok(());
     rayon::in_place_scope(|s| {
@@ -51,7 +54,7 @@ pub fn render_layers_bounded(
             (0..total_layers)
                 .into_par_iter()
                 .for_each_with(tx, |tx, layer| {
-                    let result = (|| -> Result<(u32, Vec<u8>), SlicerV3Error> {
+                    let result = (|| -> Result<(u32, Vec<u8>, LayerAreaStatsV3), SlicerV3Error> {
                         if cancel_flag
                             .map(|flag| flag.load(Ordering::Relaxed))
                             .unwrap_or(false)
@@ -60,8 +63,12 @@ pub fn render_layers_bounded(
                         }
 
                         let raster_start = std::time::Instant::now();
-                        let mask =
-                            rasterize_layer(job, triangles, &layer_index[layer as usize], layer);
+                        let (mask, stats) = rasterize_layer_with_stats(
+                            job,
+                            triangles,
+                            &layer_index[layer as usize],
+                            layer,
+                        );
                         raster_ns
                             .fetch_add(raster_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
@@ -73,13 +80,13 @@ pub fn render_layers_bounded(
                             &job.png_compression_strategy,
                         )?;
                         png_ns.fetch_add(png_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                        Ok((layer, png))
+                        Ok((layer, png, stats))
                     })();
                     let _ = tx.send(result);
                 });
         });
 
-        let mut reorder: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+        let mut reorder: BTreeMap<u32, (Vec<u8>, LayerAreaStatsV3)> = BTreeMap::new();
         let mut next = 0u32;
         for msg in &rx {
             if pipeline_error.is_err() {
@@ -87,7 +94,7 @@ pub fn render_layers_bounded(
             }
             match msg {
                 Err(e) => pipeline_error = Err(e),
-                Ok((layer, png)) => {
+                Ok((layer, png, stats)) => {
                     // Report progress on completed layers as they arrive, not when
                     // they are later drained in-order from the reorder buffer.
                     // This prevents large UI jumps when many out-of-order layers
@@ -97,9 +104,10 @@ pub fn render_layers_bounded(
                         cb(done, total_layers);
                     }
 
-                    reorder.insert(layer, png);
-                    while let Some(p) = reorder.remove(&next) {
-                        out[next as usize] = p;
+                    reorder.insert(layer, (png, stats));
+                    while let Some((png, stats)) = reorder.remove(&next) {
+                        out[next as usize] = png;
+                        area_stats[next as usize] = stats;
                         if cancel_flag
                             .map(|flag| flag.load(Ordering::Relaxed))
                             .unwrap_or(false)
@@ -125,5 +133,5 @@ pub fn render_layers_bounded(
         ..Default::default()
     };
 
-    Ok((out, perf))
+    Ok((out, area_stats, perf))
 }

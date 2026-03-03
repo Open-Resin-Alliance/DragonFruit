@@ -92,7 +92,7 @@ function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   if (lower.includes('preparing')) return 'preparing';
   if (lower.includes('staging mesh') || lower.includes('transferring mesh')) return 'staging';
   if (lower.includes('slicing layer') || lower.includes('raster')) return 'slicing';
-  if (lower.includes('finalizing') || lower.includes('encoding') || lower.includes('compression') || lower.includes('packaging')) return 'finalizing';
+  if (lower.includes('finalizing') || lower.includes('encoding') || lower.includes('metadata') || lower.includes('compression') || lower.includes('packaging')) return 'finalizing';
   if (lower.includes('opening printing') || lower.includes('handoff') || lower.includes('ready')) return 'handoff';
   return 'other';
 }

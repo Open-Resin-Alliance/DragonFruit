@@ -188,7 +188,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     options.onProgress?.(
       done,
       total,
-      done >= total ? `Compression (${nativeJob.pngCompressionStrategy})` : 'Slicing',
+      done >= total ? `Packaging (${nativeJob.pngCompressionStrategy})` : 'Slicing',
     );
   };
 
@@ -201,7 +201,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   logDebug('Native slicing completed', { coreSlicingMs });
 
   throwIfAborted(options.abortSignal);
-  options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Encoding');
+  options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Finalizing Package');
 
   const outputExt = format.outputFormat.replace(/^\./, '') || 'slice';
   const outputName = `${safeFilenameBase(options.filenameBase)}.${outputExt}`;

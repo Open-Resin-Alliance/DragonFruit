@@ -8,7 +8,7 @@ pub mod athena_plugin;
 pub mod registry;
 
 use crate::engine::SlicerV3Error;
-use crate::types::SliceJobV3;
+use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
 /// Trait implemented by concrete output format encoders.
 pub trait FormatEncoder: Send + Sync {
@@ -20,5 +20,6 @@ pub trait FormatEncoder: Send + Sync {
         &self,
         job: &SliceJobV3,
         layer_pngs: &[Vec<u8>],
+        layer_area_stats: &[LayerAreaStatsV3],
     ) -> Result<Vec<u8>, SlicerV3Error>;
 }

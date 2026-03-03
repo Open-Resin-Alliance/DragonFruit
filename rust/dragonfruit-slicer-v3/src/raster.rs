@@ -4,7 +4,7 @@
 //! solids and avoid spurious bridge/void artifacts.
 
 use crate::geometry::{Triangle, Vec3};
-use crate::types::SliceJobV3;
+use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
 #[derive(Debug, Clone, Copy)]
 struct Segment {
@@ -129,27 +129,108 @@ fn build_segments_for_layer(
     segments
 }
 
+fn compute_component_area_stats_8_connected(
+    mask: &[u8],
+    width: usize,
+    height: usize,
+    pixel_area_mm2: f64,
+) -> (u32, f64, f64, u32) {
+    let mut visited = vec![0u8; mask.len()];
+    let mut stack = Vec::<usize>::new();
+
+    let mut total_solid_pixels = 0u32;
+    let mut largest_area_mm2 = 0.0f64;
+    let mut smallest_area_mm2 = f64::INFINITY;
+    let mut area_count = 0u32;
+
+    for idx in 0..mask.len() {
+        if mask[idx] == 0 || visited[idx] != 0 {
+            continue;
+        }
+
+        area_count = area_count.saturating_add(1);
+        let mut component_pixels = 0u32;
+
+        visited[idx] = 1;
+        stack.push(idx);
+
+        while let Some(cur) = stack.pop() {
+            component_pixels = component_pixels.saturating_add(1);
+
+            let y = cur / width;
+            let x = cur - (y * width);
+
+            let y0 = y.saturating_sub(1);
+            let y1 = (y + 1).min(height - 1);
+            let x0 = x.saturating_sub(1);
+            let x1 = (x + 1).min(width - 1);
+
+            for ny in y0..=y1 {
+                for nx in x0..=x1 {
+                    if nx == x && ny == y {
+                        continue;
+                    }
+                    let nidx = ny * width + nx;
+                    if mask[nidx] == 0 || visited[nidx] != 0 {
+                        continue;
+                    }
+                    visited[nidx] = 1;
+                    stack.push(nidx);
+                }
+            }
+        }
+
+        total_solid_pixels = total_solid_pixels.saturating_add(component_pixels);
+        let area_mm2 = (component_pixels as f64) * pixel_area_mm2;
+        if area_mm2 > largest_area_mm2 {
+            largest_area_mm2 = area_mm2;
+        }
+        if area_mm2 < smallest_area_mm2 {
+            smallest_area_mm2 = area_mm2;
+        }
+    }
+
+    if area_count == 0 {
+        (0, 0.0, 0.0, 0)
+    } else {
+        (
+            total_solid_pixels,
+            largest_area_mm2,
+            smallest_area_mm2,
+            area_count,
+        )
+    }
+}
+
 /// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`).
-pub fn rasterize_layer(
+pub fn rasterize_layer_with_stats(
     job: &SliceJobV3,
     triangles: &[Triangle],
     layer_indices: &[usize],
     layer_index: u32,
-) -> Vec<u8> {
+) -> (Vec<u8>, LayerAreaStatsV3) {
     let width = job.source_width_px as usize;
     let height = job.source_height_px as usize;
     let mut mask = vec![0u8; width * height];
+    let mut stats = LayerAreaStatsV3::default();
 
     if layer_indices.is_empty() {
-        return mask;
+        return (mask, stats);
     }
 
     let segments = build_segments_for_layer(job, triangles, layer_indices, layer_index);
     if segments.is_empty() {
-        return mask;
+        return (mask, stats);
     }
 
     let x_eps = 1e-6f32;
+    let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
+        * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
+
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
 
     for y in 0..height {
         let y_sample = (y as f32) + 0.5;
@@ -204,16 +285,49 @@ pub fn rasterize_layer(
             let clamped_end = ((end_px - 1).min(width as i32 - 1)) as usize;
             if clamped_end >= clamped_start {
                 row[clamped_start..=clamped_end].fill(255);
+                let filled = (clamped_end - clamped_start + 1) as u32;
+                stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+
+                min_x = min_x.min(clamped_start as i32);
+                max_x = max_x.max(clamped_end as i32);
+                min_y = min_y.min(y as i32);
+                max_y = max_y.max(y as i32);
             }
         }
     }
 
-    mask
+    if stats.total_solid_pixels > 0 {
+        let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+            compute_component_area_stats_8_connected(&mask, width, height, pixel_area_mm2);
+
+        stats.total_solid_pixels = total_pixels;
+        let total_area = (total_pixels as f64) * pixel_area_mm2;
+        stats.total_solid_area_mm2 = total_area;
+        stats.largest_area_mm2 = largest_area_mm2;
+        stats.smallest_area_mm2 = smallest_area_mm2;
+        stats.min_x = min_x;
+        stats.min_y = min_y;
+        stats.max_x = max_x;
+        stats.max_y = max_y;
+        stats.area_count = area_count;
+    }
+
+    (mask, stats)
+}
+
+/// Rasterize one layer into an 8-bit grayscale mask (`0` or `255`).
+pub fn rasterize_layer(
+    job: &SliceJobV3,
+    triangles: &[Triangle],
+    layer_indices: &[usize],
+    layer_index: u32,
+) -> Vec<u8> {
+    rasterize_layer_with_stats(job, triangles, layer_indices, layer_index).0
 }
 
 #[cfg(test)]
 mod tests {
-    use super::rasterize_layer;
+    use super::{rasterize_layer, rasterize_layer_with_stats};
     use crate::encoders::registry::supported_output_formats;
     use crate::geometry::parse_triangles;
     use crate::types::SliceJobV3;
@@ -350,6 +464,35 @@ mod tests {
             run_count(row),
             2,
             "disjoint solids should remain separated with no connector span"
+        );
+    }
+
+    #[test]
+    fn disconnected_islands_report_component_stats() {
+        let job = job_for_single_layer();
+
+        let mut flat = Vec::<f32>::new();
+        // Large island
+        push_box_triangles(&mut flat, -20.0, 0.0, 0.0, 1.0, 18.0, 18.0);
+        // Smaller, disconnected island
+        push_box_triangles(&mut flat, 20.0, 0.0, 0.0, 1.0, 8.0, 8.0);
+
+        let triangles = parse_triangles(&flat);
+        let indices: Vec<usize> = (0..triangles.len()).collect();
+        let (_mask, stats) = rasterize_layer_with_stats(&job, &triangles, &indices, 0);
+
+        assert_eq!(
+            stats.area_count, 2,
+            "disconnected solids should produce two 8-connected components"
+        );
+        assert!(
+            stats.largest_area_mm2 > stats.smallest_area_mm2,
+            "largest area should exceed smallest area for differently sized disconnected islands"
+        );
+        assert!(
+            (stats.total_solid_area_mm2 - (stats.largest_area_mm2 + stats.smallest_area_mm2)).abs()
+                < 1e-6,
+            "total area should equal the sum of component areas"
         );
     }
 }

@@ -5,7 +5,7 @@ use crate::geometry::parse_triangles;
 use crate::index::build_layer_index;
 use crate::metrics::SlicingPerfV3;
 use crate::pipeline::render_layers_bounded;
-use crate::types::{ProgressCallbackV3, SliceArtifactV3, SliceJobV3};
+use crate::types::{LayerAreaStatsV3, ProgressCallbackV3, SliceArtifactV3, SliceJobV3};
 use std::sync::atomic::AtomicBool;
 use thiserror::Error;
 
@@ -80,10 +80,11 @@ pub fn slice_with_progress_v3(
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<SliceArtifactV3, SlicerV3Error> {
     let total_start = std::time::Instant::now();
-    let (layer_pngs, mut perf) = slice_and_rasterize_v3(job, on_progress, cancel_flag)?;
+    let (layer_pngs, layer_area_stats, mut perf) =
+        slice_and_rasterize_v3(job, on_progress, cancel_flag)?;
 
     let encode_start = std::time::Instant::now();
-    let bytes = dispatch_encode_by_format(job, &layer_pngs)?;
+    let bytes = dispatch_encode_by_format(job, &layer_pngs, &layer_area_stats)?;
     perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
     perf.total_ns = total_start.elapsed().as_nanos() as u64;
     perf.layers = job.total_layers;
@@ -96,7 +97,7 @@ pub fn slice_and_rasterize_v3(
     job: &SliceJobV3,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
-) -> Result<(Vec<Vec<u8>>, SlicingPerfV3), SlicerV3Error> {
+) -> Result<(Vec<Vec<u8>>, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     validate_job(job)?;
 
     let triangles = parse_triangles(&job.triangles_xyz);
@@ -104,17 +105,18 @@ pub fn slice_and_rasterize_v3(
     let layer_index = build_layer_index(&triangles, job.total_layers, job.layer_height_mm);
     let index_ns = index_start.elapsed().as_nanos() as u64;
 
-    let (layer_pngs, mut perf) =
+    let (layer_pngs, layer_area_stats, mut perf) =
         render_layers_bounded(job, &triangles, &layer_index, on_progress, cancel_flag)?;
     perf.index_build_ns = index_ns;
 
-    Ok((layer_pngs, perf))
+    Ok((layer_pngs, layer_area_stats, perf))
 }
 
 /// Encode rendered layers through a registered format encoder.
 pub fn dispatch_encode_by_format(
     job: &SliceJobV3,
     layer_pngs: &[Vec<u8>],
+    layer_area_stats: &[LayerAreaStatsV3],
 ) -> Result<Vec<u8>, SlicerV3Error> {
     let Some(encoder) = find_encoder(&job.output_format) else {
         return Err(SlicerV3Error::UnsupportedOutput(format!(
@@ -123,7 +125,7 @@ pub fn dispatch_encode_by_format(
             supported_output_formats().join(", ")
         )));
     };
-    encoder.encode_container(job, layer_pngs)
+    encoder.encode_container(job, layer_pngs, layer_area_stats)
 }
 
 impl From<png::EncodingError> for SlicerV3Error {

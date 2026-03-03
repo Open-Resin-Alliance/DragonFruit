@@ -52,5 +52,22 @@ pub struct SliceArtifactV3 {
     pub perf: SlicingPerfV3,
 }
 
+/// Per-layer solid area metrics computed during rasterization.
+///
+/// Values are kept lightweight to enable near-zero-overhead aggregation in the
+/// hot scanline fill path.
+#[derive(Debug, Clone, Default)]
+pub struct LayerAreaStatsV3 {
+    pub total_solid_pixels: u32,
+    pub total_solid_area_mm2: f64,
+    pub largest_area_mm2: f64,
+    pub smallest_area_mm2: f64,
+    pub min_x: i32,
+    pub min_y: i32,
+    pub max_x: i32,
+    pub max_y: i32,
+    pub area_count: u32,
+}
+
 /// Progress callback signature `(done_layers, total_layers)`.
 pub type ProgressCallbackV3 = Box<dyn Fn(u32, u32) + Send + Sync>;
