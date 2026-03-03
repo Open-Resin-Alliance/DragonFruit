@@ -1,4 +1,5 @@
 import os from 'os';
+import { readFile } from 'fs/promises';
 import {
   buildNanoDlpBaseUrl,
   fetchNanoDlpStatus,
@@ -752,8 +753,9 @@ async function handleNanoDlpJobImport(payload: unknown): Promise<HandlerResult> 
 
   const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
   const zipBase64 = typeof (payload as any)?.zipBase64 === 'string' ? (payload as any).zipBase64.trim() : '';
-  if (!zipBase64) {
-    return { status: 400, body: { ok: false, error: 'zipBase64 payload is required' } };
+  const zipFilePath = typeof (payload as any)?.zipFilePath === 'string' ? (payload as any).zipFilePath.trim() : '';
+  if (!zipBase64 && !zipFilePath) {
+    return { status: 400, body: { ok: false, error: 'zipBase64 payload or zipFilePath is required' } };
   }
 
   const pathRaw = typeof (payload as any)?.path === 'string' ? (payload as any).path.trim() : '';
@@ -768,7 +770,23 @@ async function handleNanoDlpJobImport(payload: unknown): Promise<HandlerResult> 
   const usbFilePath = typeof (payload as any)?.usbFilePath === 'string' ? (payload as any).usbFilePath.trim() : '';
 
   try {
-    const zipBytes = Buffer.from(zipBase64, 'base64');
+    let zipBytes: Buffer | null = null;
+
+    if (zipFilePath) {
+      try {
+        zipBytes = await readFile(zipFilePath);
+      } catch (fileError) {
+        if (!zipBase64) {
+          const reason = fileError instanceof Error ? fileError.message : 'Unknown file read error';
+          return { status: 400, body: { ok: false, error: `Failed to read zipFilePath: ${reason}` } };
+        }
+      }
+    }
+
+    if (!zipBytes && zipBase64) {
+      zipBytes = Buffer.from(zipBase64, 'base64');
+    }
+
     if (!zipBytes || zipBytes.length === 0) {
       return { status: 400, body: { ok: false, error: 'Decoded job payload is empty' } };
     }
@@ -780,7 +798,8 @@ async function handleNanoDlpJobImport(payload: unknown): Promise<HandlerResult> 
     if (isLocalhost && usbFilePath) {
       form.set('USBFile', usbFilePath);
     } else {
-      form.set('ZipFile', new Blob([zipBytes], { type: 'application/octet-stream' }), `${path}.nanodlp`);
+      const zipArrayBuffer = Uint8Array.from(zipBytes).buffer;
+      form.set('ZipFile', new Blob([zipArrayBuffer], { type: 'application/octet-stream' }), `${path}.nanodlp`);
     }
 
     const response = await fetch(`${buildNanoDlpBaseUrl(parsedHost.host, port)}/plate/add`, {
@@ -790,7 +809,7 @@ async function handleNanoDlpJobImport(payload: unknown): Promise<HandlerResult> 
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
       redirect: 'manual',
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(300_000),
     });
 
     const responseText = await response.text().catch(() => '');

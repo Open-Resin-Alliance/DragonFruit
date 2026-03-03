@@ -53,7 +53,7 @@ function ensureSyncedWithPrimarySelection() {
 
     const syncFromPrimarySelection = () => {
         const selectedId = getSelectedId();
-        const selectedCategory = getSelectedCategory();
+        const selectedCategory = getSelectedCategory() ?? null;
 
         if (selectedId === lastPrimarySelectedId && selectedCategory === lastPrimarySelectedCategory) {
             return;

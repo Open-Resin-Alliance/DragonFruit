@@ -14,11 +14,15 @@ export function labelComponents(maskData: Uint8Array, width: number, height: num
       const idx = y * width + x;
       if (!maskData[idx] || labelsArr[idx] !== 0) continue;
       let head = 0, tail = 0, area = 0;
+      let centroidSumX = 0;
+      let centroidSumY = 0;
       qx[tail] = x; qy[tail] = y; tail++;
       labelsArr[idx] = nextId;
       while (head < tail) {
         const cx = qx[head]; const cy = qy[head]; head++;
         area++;
+        centroidSumX += cx;
+        centroidSumY += cy;
         for (const d of dirs) {
           const nx = cx + d[0]; const ny = cy + d[1];
           if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
@@ -28,7 +32,14 @@ export function labelComponents(maskData: Uint8Array, width: number, height: num
           qx[tail] = nx; qy[tail] = ny; tail++;
         }
       }
-      components.push({ id: nextId, label: nextId, area_px: area, size: area });
+      components.push({
+        id: nextId,
+        label: nextId,
+        area_px: area,
+        size: area,
+        centroidSumX,
+        centroidSumY,
+      });
       nextId++;
     }
   }

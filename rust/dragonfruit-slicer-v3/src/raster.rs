@@ -6,6 +6,75 @@
 use crate::geometry::{Triangle, Vec3};
 use crate::types::{LayerAreaStatsV3, SliceJobV3};
 
+#[inline]
+fn edge_x_cmp(a: f32, b: f32) -> std::cmp::Ordering {
+    match (a.is_finite(), b.is_finite()) {
+        (true, true) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => std::cmp::Ordering::Equal,
+    }
+}
+
+#[inline]
+fn active_edge_cmp(a: &ActiveEdge, b: &ActiveEdge) -> std::cmp::Ordering {
+    edge_x_cmp(a.x, b.x)
+}
+
+#[inline]
+fn merge_active_edges_sorted(
+    active_edges: &mut Vec<ActiveEdge>,
+    starting: &[ActiveEdge],
+    scratch: &mut Vec<ActiveEdge>,
+) {
+    if starting.is_empty() {
+        return;
+    }
+
+    scratch.clear();
+    scratch.reserve(active_edges.len() + starting.len());
+
+    let mut i = 0usize;
+    let mut j = 0usize;
+
+    while i < active_edges.len() && j < starting.len() {
+        if active_edge_cmp(&active_edges[i], &starting[j]).is_gt() {
+            scratch.push(starting[j]);
+            j += 1;
+        } else {
+            scratch.push(active_edges[i]);
+            i += 1;
+        }
+    }
+
+    if i < active_edges.len() {
+        scratch.extend_from_slice(&active_edges[i..]);
+    }
+    if j < starting.len() {
+        scratch.extend_from_slice(&starting[j..]);
+    }
+
+    std::mem::swap(active_edges, scratch);
+}
+
+#[inline]
+fn restore_active_edges_sorted(active_edges: &mut [ActiveEdge]) {
+    if active_edges.len() < 2 {
+        return;
+    }
+
+    // Insertion sort is ideal here because scanline updates are small (
+    // each edge only moves by dx/dy for one row), so the slice stays nearly
+    // sorted from one scanline to the next.
+    for i in 1..active_edges.len() {
+        let mut j = i;
+        while j > 0 && active_edge_cmp(&active_edges[j], &active_edges[j - 1]).is_lt() {
+            active_edges.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Segment {
     x1: f32,
@@ -300,6 +369,7 @@ fn build_scanline_segment_index(
                 end_exclusive: end_exclusive[*seg_idx],
             });
         }
+        indexed[y].sort_unstable_by(active_edge_cmp);
     }
 
     Some(ScanlineSegmentIndex {
@@ -379,50 +449,54 @@ pub fn rasterize_layer_with_stats(
     let mut max_y = i32::MIN;
 
     let mut active_edges: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
-    let mut intersections: Vec<(f32, i32)> = Vec::with_capacity(128);
+    let mut merge_scratch: Vec<ActiveEdge> = Vec::with_capacity(segments.len().min(256));
 
     for y in y_start..y_end_exclusive {
         active_edges.retain(|edge| edge.end_exclusive > y);
         if let Some(starting) = scanline_starts.get(y) {
-            active_edges.extend(starting.iter().copied());
+            if !starting.is_empty() {
+                merge_active_edges_sorted(&mut active_edges, starting, &mut merge_scratch);
+            }
         }
         if active_edges.is_empty() {
             continue;
         }
-        intersections.clear();
-
-        active_edges.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
-
-        for edge in &active_edges {
-            if edge.x.is_finite() {
-                intersections.push((edge.x, edge.wind));
-            }
-        }
-
-        if intersections.is_empty() {
-            continue;
-        }
-
-        intersections.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
         let row_start = y * width;
         let row = &mut mask[row_start..row_start + width];
 
         let mut winding = 0i32;
         let mut i = 0usize;
-        while i < intersections.len() {
-            let x0 = intersections[i].0;
+        while i < active_edges.len() {
+            let x0 = active_edges[i].x;
+            if !x0.is_finite() {
+                break;
+            }
+
             let mut delta = 0i32;
-            while i < intersections.len() && (intersections[i].0 - x0).abs() <= x_eps {
-                delta += intersections[i].1;
+            while i < active_edges.len() {
+                let xi = active_edges[i].x;
+                if !xi.is_finite() || (xi - x0).abs() > x_eps {
+                    break;
+                }
+                delta += active_edges[i].wind;
                 i += 1;
             }
+
             winding += delta;
-            if winding == 0 || i >= intersections.len() {
+            if winding == 0 {
                 continue;
             }
 
-            let x1 = intersections[i].0;
+            if i >= active_edges.len() {
+                break;
+            }
+
+            let x1 = active_edges[i].x;
+            if !x1.is_finite() {
+                break;
+            }
+
             let a = x0.min(x1).max(0.0);
             let b = x0.max(x1).min(width as f32);
             if b <= a {
@@ -493,6 +567,7 @@ pub fn rasterize_layer_with_stats(
         for edge in &mut active_edges {
             edge.x += edge.dx_dy;
         }
+        restore_active_edges_sorted(&mut active_edges);
     }
 
     if compute_area_stats && stats.total_solid_pixels > 0 {

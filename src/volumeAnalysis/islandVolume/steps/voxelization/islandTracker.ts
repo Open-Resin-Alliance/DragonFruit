@@ -177,7 +177,8 @@ export class IslandTracker {
                     this.updateIsland(this.BODY_ID, layerIndex, areaMm2, component);
                 } else {
                     // 4. Connected to Exactly One Island (and it's not Body) -> Propagate
-                    assignedId = prevIds.values().next().value;
+                    const propagatedId = prevIds.values().next().value;
+                    assignedId = propagatedId ?? this.BODY_ID;
                     this.updateIsland(assignedId, layerIndex, areaMm2, component);
                 }
 

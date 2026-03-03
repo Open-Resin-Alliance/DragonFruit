@@ -79,9 +79,10 @@ export async function GET(
   }
 
   const isPluginAsset = safeAssetPath[0] === 'plugins';
+  const relativeAssetPath = isPluginAsset ? safeAssetPath.slice(1) : safeAssetPath;
   const requestedPath = isPluginAsset
-    ? path.resolve(process.cwd(), ...safeAssetPath)
-    : path.resolve(PROFILE_ROOT, ...safeAssetPath);
+    ? path.resolve(PLUGIN_ROOT, ...relativeAssetPath)
+    : path.resolve(PROFILE_ROOT, ...relativeAssetPath);
 
   if (isPluginAsset) {
     if (!isPathInsidePluginRoot(requestedPath)) {

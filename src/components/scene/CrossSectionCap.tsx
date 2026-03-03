@@ -19,9 +19,9 @@ function computeLoopsAtZ(geometry: THREE.BufferGeometry, z: number, transformMat
   const EPS = 1e-9;
 
   for (let i = 0; i < pos.count; i += 3) {
-    let v0 = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-    let v1 = new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
-    let v2 = new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
+    const v0 = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+    const v1 = new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
+    const v2 = new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
 
     // Apply transform to get world-space coordinates
     if (transformMatrix) {
@@ -114,17 +114,152 @@ function computeLoopsAtZFromObject(sourceObject: THREE.Object3D, z: number): THR
   return loops;
 }
 
+type LoopGroup = {
+  outer: THREE.Vector2[];
+  holes: THREE.Vector2[][];
+};
+
+function polygonSignedArea(loop: THREE.Vector2[]): number {
+  let area = 0;
+  for (let i = 0; i < loop.length; i += 1) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    area += (a.x * b.y) - (b.x * a.y);
+  }
+  return area * 0.5;
+}
+
+function isPointOnSegment2D(p: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2, eps = 1e-7): boolean {
+  const abX = b.x - a.x;
+  const abY = b.y - a.y;
+  const apX = p.x - a.x;
+  const apY = p.y - a.y;
+  const cross = (abX * apY) - (abY * apX);
+  if (Math.abs(cross) > eps) return false;
+
+  const dot = (apX * abX) + (apY * abY);
+  if (dot < -eps) return false;
+  const lenSq = (abX * abX) + (abY * abY);
+  if (dot - lenSq > eps) return false;
+  return true;
+}
+
+function isPointOnPolygonBoundary2D(p: THREE.Vector2, loop: THREE.Vector2[], eps = 1e-7): boolean {
+  for (let i = 0; i < loop.length; i += 1) {
+    if (isPointOnSegment2D(p, loop[i], loop[(i + 1) % loop.length], eps)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPointInPolygon2D(point: THREE.Vector2, loop: THREE.Vector2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = loop.length - 1; i < loop.length; j = i, i += 1) {
+    const xi = loop[i].x;
+    const yi = loop[i].y;
+    const xj = loop[j].x;
+    const yj = loop[j].y;
+    const intersects = ((yi > point.y) !== (yj > point.y))
+      && (point.x < ((xj - xi) * (point.y - yi)) / ((yj - yi) || 1e-20) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function normalizeLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
+  if (loop.length < 3) return [];
+  const normalized = loop.map((p) => new THREE.Vector2(p.x, p.y));
+  if (normalized.length >= 3 && normalized[0].distanceTo(normalized[normalized.length - 1]) < 1e-6) {
+    normalized.pop();
+  }
+  return normalized;
+}
+
+function orientLoop(loop: THREE.Vector2[], clockwise: boolean): THREE.Vector2[] {
+  const oriented = loop.map((p) => new THREE.Vector2(p.x, p.y));
+  const isClockwise = THREE.ShapeUtils.isClockWise(oriented);
+  if (isClockwise !== clockwise) {
+    oriented.reverse();
+  }
+  return oriented;
+}
+
+function buildLoopGroups(loops: THREE.Vector2[][]): LoopGroup[] {
+  const normalizedLoops = loops
+    .map(normalizeLoop)
+    .filter((loop) => loop.length >= 3 && Math.abs(polygonSignedArea(loop)) > 1e-8);
+
+  if (normalizedLoops.length === 0) return [];
+
+  const absAreas = normalizedLoops.map((loop) => Math.abs(polygonSignedArea(loop)));
+  const parent = new Array<number>(normalizedLoops.length).fill(-1);
+
+  for (let i = 0; i < normalizedLoops.length; i += 1) {
+    let bestParent = -1;
+    let bestParentArea = Infinity;
+
+    for (let j = 0; j < normalizedLoops.length; j += 1) {
+      if (i === j) continue;
+      if (absAreas[j] <= absAreas[i]) continue;
+
+      const candidatePoint = normalizedLoops[i].find((p) => !isPointOnPolygonBoundary2D(p, normalizedLoops[j]));
+      if (!candidatePoint) continue;
+      if (!isPointInPolygon2D(candidatePoint, normalizedLoops[j])) continue;
+
+      if (absAreas[j] < bestParentArea) {
+        bestParentArea = absAreas[j];
+        bestParent = j;
+      }
+    }
+
+    parent[i] = bestParent;
+  }
+
+  const depthMemo = new Array<number>(normalizedLoops.length).fill(-1);
+  const getDepth = (index: number): number => {
+    if (depthMemo[index] >= 0) return depthMemo[index];
+    const p = parent[index];
+    const depth = p < 0 ? 0 : getDepth(p) + 1;
+    depthMemo[index] = depth;
+    return depth;
+  };
+
+  const groupsByOuterIndex = new Map<number, LoopGroup>();
+
+  for (let i = 0; i < normalizedLoops.length; i += 1) {
+    const depth = getDepth(i);
+    if (depth % 2 === 0) {
+      groupsByOuterIndex.set(i, {
+        outer: orientLoop(normalizedLoops[i], false),
+        holes: [],
+      });
+    }
+  }
+
+  for (let i = 0; i < normalizedLoops.length; i += 1) {
+    const depth = getDepth(i);
+    if (depth % 2 !== 1) continue;
+    const p = parent[i];
+    if (p < 0) continue;
+    const owner = groupsByOuterIndex.get(p);
+    if (!owner) continue;
+    owner.holes.push(orientLoop(normalizedLoops[i], true));
+  }
+
+  return Array.from(groupsByOuterIndex.values());
+}
+
 // Rasterize loops into a pixel grid
-function rasterizeLoops(loops: THREE.Vector2[][], pxMm: number, bbox: { minX: number; maxX: number; minY: number; maxY: number }): { grid: Uint8Array; width: number; height: number; originX: number; originY: number } {
+function rasterizeLoops(groups: LoopGroup[], pxMm: number, bbox: { minX: number; maxX: number; minY: number; maxY: number }): { grid: Uint8Array; width: number; height: number; originX: number; originY: number } {
   const width = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) / pxMm));
   const height = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) / pxMm));
-  const grid = new Uint8Array(width * height);
+  const winding = new Int16Array(width * height);
   const originX = bbox.minX + pxMm * 0.5;
   const originY = bbox.minY + pxMm * 0.5;
 
-  // Rasterize each loop
-  for (const loop of loops) {
-    if (loop.length < 3) continue;
+  const rasterizeLoopWithDelta = (loop: THREE.Vector2[], delta: number) => {
+    if (loop.length < 3) return;
 
     // Scanline rasterization
     for (let row = 0; row < height; row++) {
@@ -153,10 +288,22 @@ function rasterizeLoops(loops: THREE.Vector2[][], pxMm: number, bbox: { minX: nu
         const endCol = Math.floor((endX - bbox.minX) / pxMm);
 
         for (let col = Math.max(0, startCol); col <= Math.min(width - 1, endCol); col++) {
-          grid[row * width + col] = 1;
+          winding[row * width + col] += delta;
         }
       }
     }
+  };
+
+  for (const group of groups) {
+    rasterizeLoopWithDelta(group.outer, 1);
+    for (const hole of group.holes) {
+      rasterizeLoopWithDelta(hole, -1);
+    }
+  }
+
+  const grid = new Uint8Array(width * height);
+  for (let i = 0; i < winding.length; i += 1) {
+    grid[i] = winding[i] !== 0 ? 1 : 0;
   }
 
   return { grid, width, height, originX, originY };
@@ -277,33 +424,40 @@ export function CrossSectionCap({
 
     if (loops.length === 0) return null;
 
+    const loopGroups = buildLoopGroups(loops);
+    if (loopGroups.length === 0) return null;
+
     const group = new THREE.Group();
     group.renderOrder = 990;
 
     if (mode === 'rasterized') {
-      // Calculate bounding box of all loops
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const loop of loops) {
-        for (const pt of loop) {
-          if (pt.x < minX) minX = pt.x;
-          if (pt.x > maxX) maxX = pt.x;
-          if (pt.y < minY) minY = pt.y;
-          if (pt.y > maxY) maxY = pt.y;
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+
+      for (const loopGroup of loopGroups) {
+        const allLoops = [loopGroup.outer, ...loopGroup.holes];
+        for (const loop of allLoops) {
+          for (const pt of loop) {
+            if (pt.x < minX) minX = pt.x;
+            if (pt.x > maxX) maxX = pt.x;
+            if (pt.y < minY) minY = pt.y;
+            if (pt.y > maxY) maxY = pt.y;
+          }
         }
       }
 
       if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY)) {
-        const { grid, width, height, originX, originY } = rasterizeLoops(loops, pxMm, { minX, maxX, minY, maxY });
+        const { grid, width, height, originX, originY } = rasterizeLoops(loopGroups, pxMm, { minX, maxX, minY, maxY });
 
-        // Count active pixels
         let pixelCount = 0;
-        for (let i = 0; i < grid.length; i++) {
-          if (grid[i] === 1) pixelCount++;
+        for (let i = 0; i < grid.length; i += 1) {
+          if (grid[i] === 1) pixelCount += 1;
         }
 
         if (pixelCount > 0) {
-          // Use InstancedMesh for massive performance improvement
-          const pixelSize = pxMm * 0.95; // Slightly smaller to show grid lines
+          const pixelSize = pxMm * 0.95;
           const pixelGeom = new THREE.PlaneGeometry(pixelSize, pixelSize);
           const mat = new THREE.MeshBasicMaterial({
             color,
@@ -314,20 +468,21 @@ export function CrossSectionCap({
             side: THREE.FrontSide,
             polygonOffset: true,
             polygonOffsetFactor: -1,
-            polygonOffsetUnits: -1
+            polygonOffsetUnits: -1,
           });
 
           const instancedMesh = new THREE.InstancedMesh(pixelGeom, mat, pixelCount);
           const matrix = new THREE.Matrix4();
           let instanceIndex = 0;
 
-          for (let row = 0; row < height; row++) {
-            for (let col = 0; col < width; col++) {
+          for (let row = 0; row < height; row += 1) {
+            for (let col = 0; col < width; col += 1) {
               if (grid[row * width + col] === 1) {
                 const worldX = originX + col * pxMm;
                 const worldY = originY + row * pxMm;
                 matrix.setPosition(worldX, worldY, effectiveY + 1e-4);
-                instancedMesh.setMatrixAt(instanceIndex++, matrix);
+                instancedMesh.setMatrixAt(instanceIndex, matrix);
+                instanceIndex += 1;
               }
             }
           }
@@ -337,26 +492,30 @@ export function CrossSectionCap({
         }
       }
     } else {
-      // Smooth mode - original behavior
-      for (const loop of loops) {
-        const shape = new THREE.Shape(loop);
-        const shapeGeom = new THREE.ShapeGeometry(shape);
-        shapeGeom.translate(0, 0, effectiveY + 1e-4);
+      const shapes = loopGroups.map((loopGroup) => {
+        const shape = new THREE.Shape(loopGroup.outer);
+        for (const hole of loopGroup.holes) {
+          shape.holes.push(new THREE.Path(hole));
+        }
+        return shape;
+      });
 
-        const mat = new THREE.MeshBasicMaterial({
-          color,
-          depthWrite: true,
-          depthTest: true,
-          transparent: false,
-          opacity: 1.0,
-          side: THREE.FrontSide,
-          polygonOffset: true,
-          polygonOffsetFactor: -1,
-          polygonOffsetUnits: -1
-        });
-        const m = new THREE.Mesh(shapeGeom, mat);
-        group.add(m);
-      }
+      const shapeGeom = new THREE.ShapeGeometry(shapes);
+      shapeGeom.translate(0, 0, effectiveY + 1e-4);
+
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        depthWrite: true,
+        depthTest: true,
+        transparent: false,
+        opacity: 1.0,
+        side: THREE.FrontSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      });
+      const m = new THREE.Mesh(shapeGeom, mat);
+      group.add(m);
     }
 
     return group;

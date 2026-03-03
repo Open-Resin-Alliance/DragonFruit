@@ -5,7 +5,7 @@
   "identifier": "org.openresinalliance.dragonfruit",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:tauri",
     "devUrl": "http://localhost:3005",
     "frontendDist": "../.next"
   },
@@ -14,13 +14,15 @@
       {
         "label": "main",
         "title": "DragonFruit",
-        "width": 1600,
-        "height": 980,
+        "width": 1920,
+        "height": 1080,
+        "decorations": false,
         "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": ["default"]
     }
   }
 }

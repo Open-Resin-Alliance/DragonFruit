@@ -116,7 +116,7 @@ export function BezierGizmoManager() {
                                 // Match offset from curveUtils.ts
                                 const rPos = root.transform.pos;
                                 const diskHeight = 0.5;
-                                const coneHeight = root.height || 1.5;
+                                const coneHeight = root.coneHeight || 1.5;
 
                                 bottomJoint = {
                                     id: root.id,

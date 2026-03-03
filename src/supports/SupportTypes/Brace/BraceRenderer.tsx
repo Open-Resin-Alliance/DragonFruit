@@ -73,7 +73,8 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const endVec = useMemo(() => new THREE.Vector3(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z), [endKnot.pos.x, endKnot.pos.y, endKnot.pos.z]);
 
     const uniformBraceDiameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
-    const isBezierBrace = brace.curve?.type === 'bezier';
+    const bezierCurve = brace.curve?.type === 'bezier' ? brace.curve : null;
+    const isBezierBrace = !!bezierCurve;
 
     const batchedStraightShafts: InstancedShaft[] = useMemo(() => {
         if (isSelected || isBezierBrace || deferStraightShaftToSceneBatch) return [];
@@ -154,12 +155,12 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             id={segmentId}
                             start={startKnot.pos}
                             end={endKnot.pos}
-                            control1={brace.curve.controlPoint1}
-                            control2={brace.curve.controlPoint2}
+                            control1={bezierCurve!.controlPoint1}
+                            control2={bezierCurve!.controlPoint2}
                             diameter={brace.profile?.diameter ?? 1.0}
                             diameterStart={uniformBraceDiameter}
                             diameterEnd={uniformBraceDiameter}
-                            resolution={brace.curve.resolution}
+                            resolution={bezierCurve!.resolution}
                             color={isSelected ? '#ff00ff' : shaftColor}
                             emissive={visuals.emissive}
                             emissiveIntensity={visuals.emissiveIntensity}

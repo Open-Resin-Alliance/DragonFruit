@@ -8,7 +8,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { Lock, Printer } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Lock, Maximize2, Minimize2, Printer, Square, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -69,6 +69,7 @@ interface TopBarProps {
   onViewTypeOverrideChange: (value: MeshShaderType | null) => void;
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
+  isSlicingBusy?: boolean;
 }
 
 export function TopBar({
@@ -112,18 +113,30 @@ export function TopBar({
   onViewTypeOverrideChange,
   heatmapColors,
   onHeatmapColorChange,
+  isSlicingBusy = false,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
+  const [isDesktopWindow, setIsDesktopWindow] = useState(false);
+  const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
+  const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
   const [windowMetrics, setWindowMetrics] = useState(() => ({
     innerWidth: 0,
     innerHeight: 0,
-    screenAvailWidth: 0,
-    screenAvailHeight: 0,
-    isLikelyMaximized: true,
   }));
+  const MIN_GOOD_WIDTH = 1920;
+  const MIN_GOOD_HEIGHT = 1080;
+  const showLayoutWarning =
+    windowMetrics.innerWidth > 0
+    && (windowMetrics.innerWidth < MIN_GOOD_WIDTH || windowMetrics.innerHeight < MIN_GOOD_HEIGHT);
+  const layoutMetricsLabel =
+    windowMetrics.innerWidth > 0
+      ? `${windowMetrics.innerWidth}×${windowMetrics.innerHeight}`
+      : 'detecting…';
+  const layoutWarningTitle = `Layout tip: Current window ${layoutMetricsLabel}. For full panel comfort use ≥ ${MIN_GOOD_WIDTH}×${MIN_GOOD_HEIGHT} and maximize the app window.`;
+  const topbarActionsDisabled = isSlicingBusy;
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -137,6 +150,124 @@ export function TopBar({
 
     applyThemeCustomColors(getSavedThemeCustomColors());
   }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let cancelled = false;
+
+    const hydrateDesktopWindowState = async () => {
+      const isLikelyDesktopRuntime =
+        window.location.protocol === 'tauri:'
+        || window.location.protocol === 'file:'
+        || window.location.hostname === 'tauri.localhost'
+        || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+
+      if (!isLikelyDesktopRuntime) {
+        if (!cancelled) {
+          setIsDesktopWindow(false);
+        }
+        return;
+      }
+
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const currentWindow = getCurrentWindow();
+        const maximized = await currentWindow.isMaximized();
+        if (!cancelled) {
+          setIsDesktopWindow(true);
+          setIsDesktopWindowMaximized(maximized);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsDesktopWindow(false);
+        }
+      }
+    };
+
+    void hydrateDesktopWindowState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateMetrics = () => {
+      setWindowMetrics({
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+      });
+    };
+
+    updateMetrics();
+    window.addEventListener('resize', updateMetrics);
+    window.addEventListener('orientationchange', updateMetrics);
+
+    return () => {
+      window.removeEventListener('resize', updateMetrics);
+      window.removeEventListener('orientationchange', updateMetrics);
+    };
+  }, []);
+
+  const handleDesktopWindowMinimize = React.useCallback(async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().minimize();
+    } catch {
+      // no-op in web runtime or restricted capability mode
+    }
+  }, []);
+
+  const handleDesktopWindowToggleMaximize = React.useCallback(async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const currentWindow = getCurrentWindow();
+      await currentWindow.toggleMaximize();
+      const maximized = await currentWindow.isMaximized();
+      setIsDesktopWindowMaximized(maximized);
+    } catch {
+      // no-op in web runtime or restricted capability mode
+    }
+  }, []);
+
+  const handleDesktopWindowClose = React.useCallback(async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().close();
+    } catch {
+      // no-op in web runtime or restricted capability mode
+    }
+  }, []);
+
+  const handleTopBarPointerDown = React.useCallback(async (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDesktopWindow) return;
+    if (event.button !== 0) return;
+
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+
+    const interactiveSelector = [
+      'button',
+      'a',
+      'input',
+      'textarea',
+      'select',
+      '[role="button"]',
+      '[data-no-window-drag="true"]',
+    ].join(',');
+
+    if (target.closest(interactiveSelector)) return;
+
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().startDragging();
+    } catch {
+      // no-op if not available in current runtime/capability
+    }
+  }, [isDesktopWindow]);
 
   React.useEffect(() => {
     hydrateProfilesFromStorage();
@@ -172,48 +303,10 @@ export function TopBar({
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
   React.useEffect(() => {
-    if (typeof window === 'undefined') return;
+    setPrinterThumbnailFailed(false);
+  }, [activePrinterProfile?.id, activePrinterProfile?.imageDataUrl]);
 
-    const updateMetrics = () => {
-      const innerWidth = window.innerWidth;
-      const innerHeight = window.innerHeight;
-      const screenAvailWidth = window.screen?.availWidth ?? innerWidth;
-      const screenAvailHeight = window.screen?.availHeight ?? innerHeight;
-
-      const widthGap = Math.abs(screenAvailWidth - innerWidth);
-      const heightGap = Math.abs(screenAvailHeight - innerHeight);
-      const isLikelyMaximized = widthGap <= 24 && heightGap <= 96;
-
-      setWindowMetrics({
-        innerWidth,
-        innerHeight,
-        screenAvailWidth,
-        screenAvailHeight,
-        isLikelyMaximized,
-      });
-    };
-
-    updateMetrics();
-    window.addEventListener('resize', updateMetrics);
-    window.addEventListener('orientationchange', updateMetrics);
-
-    return () => {
-      window.removeEventListener('resize', updateMetrics);
-      window.removeEventListener('orientationchange', updateMetrics);
-    };
-  }, []);
-
-  const MIN_GOOD_WIDTH = 1920;
-  const MIN_GOOD_HEIGHT = 1080;
-  const isUnderRecommendedViewport =
-    windowMetrics.innerWidth > 0 &&
-    (windowMetrics.innerWidth < MIN_GOOD_WIDTH || windowMetrics.innerHeight < MIN_GOOD_HEIGHT);
-  const showLayoutWarning = isUnderRecommendedViewport;
-
-  const metricsLabel =
-    windowMetrics.innerWidth > 0
-      ? `${windowMetrics.innerWidth}×${windowMetrics.innerHeight}`
-      : 'detecting…';
+  const activePrinterThumbnailSrc = printerThumbnailFailed ? undefined : activePrinterProfile?.imageDataUrl;
 
   const steps: Array<{
     mode: SupportMode;
@@ -260,26 +353,83 @@ export function TopBar({
   ];
 
   return (
-    <div className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative">
-      <div className="flex w-[280px] items-center gap-2.5 pl-2 pr-4 py-1.5">
+    <div
+      className="ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative"
+      onMouseDownCapture={handleTopBarPointerDown}
+    >
+      <div
+        className={`flex w-[430px] items-center gap-2.5 pl-0 pr-4 py-1.5 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}
+        data-no-window-drag="true"
+        aria-disabled={topbarActionsDisabled}
+      >
         <img
-          src="/textonlyupdate.png"
-          alt="DragonFruit Slicer"
-          className="h-8 w-auto object-contain translate-y-px"
+          src="/dragonfruit_assets/branding/simple_icon.svg"
+          alt="DragonFruit"
+          className="h-7 w-7 object-contain"
+          draggable={false}
         />
+
+        <div
+          className="h-6 w-px mx-0.5 shrink-0"
+          style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 24%)' }}
+          aria-hidden="true"
+        />
+
+        <button
+          type="button"
+          disabled={topbarActionsDisabled}
+          onClick={() => {
+            setProfileModalTab('printer');
+            setIsProfileModalOpen(true);
+          }}
+          className="group inline-flex h-10 max-w-[300px] items-center gap-2 rounded-md px-2 transition-colors"
+          style={{
+            background: 'transparent',
+          }}
+          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile'}
+          aria-label={activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile'}
+          data-no-window-drag="true"
+        >
+          <div className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-sm shrink-0">
+            {activePrinterThumbnailSrc ? (
+              <img
+                src={activePrinterThumbnailSrc}
+                alt={activePrinterProfile?.name ?? 'Selected printer'}
+                className="h-full w-full object-cover"
+                draggable={false}
+                onError={() => setPrinterThumbnailFailed(true)}
+              />
+            ) : (
+              <Printer className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
+            )}
+          </div>
+          <span className="min-w-0 flex flex-col items-start leading-none gap-[2px]">
+            <span className="text-[9px] uppercase tracking-[0.11em]" style={{ color: 'var(--text-muted)' }}>
+              Printer
+            </span>
+            <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+              {activePrinterProfile?.name ?? 'Select Printer'}
+            </span>
+          </span>
+          <ChevronDown className="h-3.5 w-3.5 ml-auto shrink-0" style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
+        </button>
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 flex justify-center px-2">
-        <div className="relative w-full max-w-[760px]">
+        <div
+          className={`relative w-full max-w-[760px] transition-opacity ${topbarActionsDisabled ? 'opacity-45' : ''}`}
+          aria-disabled={topbarActionsDisabled}
+        >
           <div
             className="absolute left-6 right-6 top-1/2 -translate-y-1/2 h-px"
             style={{ background: 'color-mix(in srgb, var(--border-subtle), transparent 10%)' }}
           />
 
-          <div className="relative grid grid-cols-5 gap-2 pointer-events-auto">
+          <div className={`relative grid grid-cols-5 gap-2 ${topbarActionsDisabled ? 'pointer-events-none' : 'pointer-events-auto'}`}>
             {steps.map((item) => {
               const active = mode === item.mode;
               const locked = item.locked;
+              const disabled = locked || topbarActionsDisabled;
               const printingLocked = item.mode === 'printing' && locked;
 
               return (
@@ -287,15 +437,15 @@ export function TopBar({
                   key={item.mode}
                   type="button"
                   onClick={() => {
-                    if (locked) return;
+                    if (disabled) return;
                     onModeChange(item.mode);
                   }}
-                  disabled={locked}
+                  disabled={disabled}
                   className={`group relative flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-180 ${
                     active
                       ? 'shadow-[0_6px_16px_rgba(0,0,0,0.25)]'
                       : 'hover:-translate-y-[1px] hover:shadow-[0_6px_14px_rgba(0,0,0,0.18)]'
-                  } ${locked ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''} ${printingLocked ? 'grayscale saturate-0' : ''}`}
+                  } ${disabled ? 'opacity-45 cursor-not-allowed hover:translate-y-0 hover:shadow-none' : ''} ${printingLocked ? 'grayscale saturate-0' : ''}`}
                   style={active
                     ? {
                       borderColor: 'color-mix(in srgb, var(--accent), white 8%)',
@@ -310,7 +460,9 @@ export function TopBar({
                           : 'color-mix(in srgb, var(--surface-1), transparent 4%)',
                       }
                   }
-                  title={locked
+                  title={topbarActionsDisabled
+                    ? 'Slicing in progress. Topbar actions are temporarily disabled.'
+                    : locked
                     ? (item.mode === 'printing'
                       ? 'Run slicing in Export to unlock Printing preview'
                       : 'Load a model in Prepare to unlock this stage')
@@ -349,59 +501,121 @@ export function TopBar({
         </div>
       </div>
 
-      <div className="ml-auto flex w-[420px] items-center justify-end gap-2">
-        {showLayoutWarning && (
-          <div
-            className="pointer-events-none hidden md:flex items-center rounded-md border px-2 py-1 text-[10px] leading-tight"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
-              background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
-              color: 'var(--text-muted)',
-            }}
-            title={`Current window: ${metricsLabel}. Recommended for full panel comfort: >= ${MIN_GOOD_WIDTH}x${MIN_GOOD_HEIGHT} and maximized.`}
-          >
-            <span className="font-semibold mr-1" style={{ color: 'var(--text-strong)' }}>Layout tip:</span>
-            <span>{metricsLabel} • for best fit use ≥ {MIN_GOOD_WIDTH}×{MIN_GOOD_HEIGHT} maximized</span>
+      <div className="ml-auto flex w-[320px] items-center justify-end gap-2 pr-2">
+        <div className={`flex items-center gap-2 transition-opacity ${topbarActionsDisabled ? 'opacity-45 pointer-events-none' : ''}`}>
+          {showLayoutWarning && (
+            <div className="relative group" data-no-window-drag="true">
+              <Button
+                type="button"
+                variant="secondary"
+                className="!p-2"
+                aria-label="Layout tip"
+                data-no-window-drag="true"
+              >
+                <AlertTriangle
+                  className="w-4 h-4"
+                  style={{ color: 'color-mix(in srgb, #ff6b6b, white 8%)' }}
+                />
+              </Button>
+
+              <div
+                className="pointer-events-none absolute right-0 top-full mt-2 z-[70] w-[300px] rounded-md border px-2.5 py-2 text-[10px] leading-tight opacity-0 -translate-y-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0"
+                style={{
+                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
+                  background: 'color-mix(in srgb, var(--surface-0), black 10%)',
+                  color: 'var(--text-muted)',
+                  boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                }}
+                role="tooltip"
+                aria-hidden="true"
+              >
+                <div className="font-semibold mb-0.5" style={{ color: 'var(--text-strong)' }}>
+                  Layout tip
+                </div>
+                <div>
+                  Current window: {layoutMetricsLabel}. For full panel comfort use ≥ {MIN_GOOD_WIDTH}×{MIN_GOOD_HEIGHT} and maximize the app window.
+                </div>
+              </div>
+            </div>
+          )}
+          <ViewTypeDropdown
+            value={viewTypeOverride}
+            onChange={onViewTypeOverrideChange}
+            iconOnly
+            title="View mode"
+            className="[&>button]:!h-8 [&>button]:!w-8 [&>button]:!p-0"
+          />
+            <Button
+              type="button"
+              variant="secondary"
+              className="!p-2"
+            onClick={() => setIsSettingsOpen(true)}
+            disabled={topbarActionsDisabled}
+            title="Settings"
+            aria-label="Settings"
+              data-no-window-drag="true"
+            >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            </Button>
+        </div>
+        {isDesktopWindow && (
+          <div className="ml-1 flex items-center gap-1" aria-label="Window controls">
+            <button
+              type="button"
+              onClick={handleDesktopWindowMinimize}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              style={{
+                borderColor: 'color-mix(in srgb, #f4bf4f, var(--border-subtle) 55%)',
+                background: 'color-mix(in srgb, #f4bf4f, transparent 86%)',
+                color: 'color-mix(in srgb, #f4bf4f, white 16%)',
+              }}
+              title="Minimize"
+              aria-label="Minimize window"
+            >
+              <Minimize2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleDesktopWindowToggleMaximize}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              style={{
+                borderColor: 'color-mix(in srgb, #40c463, var(--border-subtle) 55%)',
+                background: 'color-mix(in srgb, #40c463, transparent 86%)',
+                color: 'color-mix(in srgb, #40c463, white 16%)',
+              }}
+              title={isDesktopWindowMaximized ? 'Restore' : 'Maximize'}
+              aria-label={isDesktopWindowMaximized ? 'Restore window' : 'Maximize window'}
+            >
+              {isDesktopWindowMaximized ? (
+                <Square className="h-3.5 w-3.5" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={handleDesktopWindowClose}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors"
+              style={{
+                borderColor: 'color-mix(in srgb, #ff6b6b, var(--border-subtle) 55%)',
+                background: 'color-mix(in srgb, #ff6b6b, transparent 88%)',
+                color: 'color-mix(in srgb, #ff6b6b, white 18%)',
+              }}
+              title="Close"
+              aria-label="Close window"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
-        <Button
-          onClick={() => {
-            setProfileModalTab('printer');
-            setIsProfileModalOpen(true);
-          }}
-          variant="secondary"
-          className="!h-8 !px-2.5 !py-0 max-w-[200px] inline-flex items-center gap-1.5"
-          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile'}
-          aria-label={activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile'}
-        >
-          <Printer className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate text-[11px] font-semibold leading-none">
-            {activePrinterProfile?.name ?? 'Select Printer'}
-          </span>
-        </Button>
-        <ViewTypeDropdown
-          value={viewTypeOverride}
-          onChange={onViewTypeOverrideChange}
-          iconOnly
-          title="Camera view mode"
-        />
-        <Button
-          onClick={() => setIsSettingsOpen(true)}
-          variant="secondary"
-          className="!p-2"
-          title="Settings"
-          aria-label="Settings"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-            />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </Button>
       </div>
 
       <SettingsModal

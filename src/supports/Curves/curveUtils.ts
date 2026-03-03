@@ -37,7 +37,7 @@ function getSegmentEndPoints(trunk: Trunk, seg: Segment, root: Roots): { start: 
     } else if (trunk.segments[0].id === seg.id) {
         // Root
         const rPos = root.transform.pos;
-        const rHeight = root.height || 0;
+        const rHeight = root.coneHeight || 0;
         start = { x: rPos.x, y: rPos.y, z: rPos.z + rHeight + 0.5 };
     } else {
         // Should be connected to previous segment top joint?
@@ -227,7 +227,7 @@ export function updateCurvesAtJoint(trunk: Trunk, jointId: string, root: Roots, 
                 if (!root) return null;
                 const rPos = root.transform.pos;
                 const diskHeight = 0.5;
-                const coneHeight = root.height || 1.5;
+                const coneHeight = root.coneHeight || 1.5;
                 return { x: rPos.x, y: rPos.y, z: rPos.z + diskHeight + coneHeight };
             }
             return null;

@@ -6,8 +6,8 @@ use serde::Serialize;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::Emitter;
 use tauri::ipc::{InvokeBody, Response};
+use tauri::Emitter;
 
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
@@ -82,28 +82,6 @@ fn sweep_all_temp_artifacts() -> u32 {
     }
 
     removed
-}
-
-fn write_temp_artifact_resilient(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    // Routine hygiene: trim older artifacts before creating a new one.
-    let _ = sweep_stale_temp_artifacts(24 * 60 * 60);
-
-    match std::fs::write(path, bytes) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            if err.kind() == std::io::ErrorKind::StorageFull {
-                // Emergency path: reclaim all DragonFruit temp artifacts and retry once.
-                let removed = sweep_all_temp_artifacts();
-                std::fs::write(path, bytes).map_err(|retry_err| {
-                    format!(
-                        "Failed writing temp artifact after emergency cleanup (removed {removed} files): {retry_err}"
-                    )
-                })
-            } else {
-                Err(format!("Failed writing temp artifact: {err}"))
-            }
-        }
-    }
 }
 
 static SLICER_POOL: OnceLock<ThreadPool> = OnceLock::new();
@@ -241,10 +219,7 @@ fn v3_runtime_metrics() -> NativeSlicerRuntimeMetrics {
 }
 
 #[tauri::command]
-async fn slice_solid_native(
-    window: tauri::Window,
-    job_json: String,
-) -> Result<Response, String> {
+async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<Response, String> {
     let flag = cancel_flag().clone();
     flag.store(false, Ordering::SeqCst);
 
@@ -339,34 +314,39 @@ async fn slice_solid_native_to_temp_path(
 
         slicer_pool().install(
             || -> Result<(String, u64, NativeSlicerPerfMetrics, NativeSlicerRuntimeMetrics), String> {
-            let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
-                &job,
-                Some(progress_cb),
-                Some(flag.as_ref()),
-            )
-            .map_err(|err| format!("V3 slicing failed: {err}"))?;
-
-            let perf = NativeSlicerPerfMetrics {
-                total_ns: artifact.perf.total_ns,
-                index_build_ns: artifact.perf.index_build_ns,
-                render_wall_ns: artifact.perf.render_wall_ns,
-                render_ns: artifact.perf.render_ns,
-                png_encode_ns: artifact.perf.png_encode_ns,
-                archive_encode_ns: artifact.perf.archive_encode_ns,
-                layers: artifact.perf.layers,
-            };
-            let runtime = v3_runtime_metrics();
-
             let ext = if job.output_format.trim().is_empty() {
                 "nanodlp"
             } else {
                 job.output_format.trim_start_matches('.')
             };
             let path = temp_artifact_path(ext);
-            write_temp_artifact_resilient(&path, &artifact.bytes)?;
+
+            let perf_raw = dragonfruit_slicer_v3::engine::slice_with_progress_v3_to_path(
+                &job,
+                &path,
+                Some(progress_cb),
+                Some(flag.as_ref()),
+            )
+            .map_err(|err| format!("V3 slicing failed: {err}"))?;
+
+            let perf = NativeSlicerPerfMetrics {
+                total_ns: perf_raw.total_ns,
+                index_build_ns: perf_raw.index_build_ns,
+                render_wall_ns: perf_raw.render_wall_ns,
+                render_ns: perf_raw.render_ns,
+                png_encode_ns: perf_raw.png_encode_ns,
+                archive_encode_ns: perf_raw.archive_encode_ns,
+                layers: perf_raw.layers,
+            };
+            let runtime = v3_runtime_metrics();
+
+            let byte_len = std::fs::metadata(&path)
+                .map_err(|err| format!("Failed reading temp artifact metadata: {err}"))?
+                .len();
+
             Ok((
                 path.to_string_lossy().to_string(),
-                artifact.bytes.len() as u64,
+                byte_len,
                 perf,
                 runtime,
             ))

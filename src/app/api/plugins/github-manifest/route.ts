@@ -8,6 +8,8 @@ type GithubRepoRef = {
 
 const MAX_PRINTER_PRESETS = 128;
 const MAX_MATERIAL_TEMPLATES = 512;
+const MAX_INLINE_ASSET_BYTES = 2_500_000;
+const MAX_INLINE_ASSET_BUDGET_BYTES = 20_000_000;
 
 function boundedString(value: unknown, max = 120): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -168,7 +170,75 @@ function resolveAssetPath(baseRawDir: string, inputPath?: string): string | unde
   return `${baseRawDir}/${normalized}`;
 }
 
-function sanitizeManifest(manifest: any, baseRawDir: string) {
+function guessImageMimeFromUrl(assetUrl: string): string {
+  const lower = assetUrl.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.avif')) return 'image/avif';
+  return 'application/octet-stream';
+}
+
+function normalizeImageMime(contentTypeHeader: string | null, assetUrl: string): string {
+  const raw = (contentTypeHeader ?? '').split(';')[0]?.trim().toLowerCase();
+  if (raw && raw.startsWith('image/')) return raw;
+  return guessImageMimeFromUrl(assetUrl);
+}
+
+async function inlinePrinterPresetAssets<T extends { imageAssetPath?: string }>(
+  presets: T[],
+): Promise<T[]> {
+  let budgetRemaining = MAX_INLINE_ASSET_BUDGET_BYTES;
+
+  const transformed: T[] = [];
+  for (const preset of presets) {
+    const imageAssetPath = preset.imageAssetPath;
+    if (!imageAssetPath || !/^https?:\/\//i.test(imageAssetPath)) {
+      transformed.push(preset);
+      continue;
+    }
+
+    if (budgetRemaining <= 0) {
+      transformed.push(preset);
+      continue;
+    }
+
+    try {
+      const response = await fetch(imageAssetPath, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!response.ok) {
+        transformed.push(preset);
+        continue;
+      }
+
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length === 0 || bytes.length > MAX_INLINE_ASSET_BYTES || bytes.length > budgetRemaining) {
+        transformed.push(preset);
+        continue;
+      }
+
+      const mime = normalizeImageMime(response.headers.get('content-type'), imageAssetPath);
+      const encoded = Buffer.from(bytes).toString('base64');
+      budgetRemaining -= bytes.length;
+
+      transformed.push({
+        ...preset,
+        imageAssetPath: `data:${mime};base64,${encoded}`,
+      });
+    } catch {
+      transformed.push(preset);
+    }
+  }
+
+  return transformed;
+}
+
+async function sanitizeManifest(manifest: any, baseRawDir: string) {
   const value = (manifest ?? {}) as any;
 
   const sanitizedPrinterPresets = Array.isArray(value.printerPresets)
@@ -177,6 +247,8 @@ function sanitizeManifest(manifest: any, baseRawDir: string) {
       .map((preset: unknown) => sanitizePrinterPreset(preset, baseRawDir))
       .filter((preset: ReturnType<typeof sanitizePrinterPreset>): preset is NonNullable<ReturnType<typeof sanitizePrinterPreset>> => preset !== null)
     : [];
+
+  const offlineReadyPrinterPresets = await inlinePrinterPresetAssets(sanitizedPrinterPresets);
 
   const sanitizedMaterialTemplates = Array.isArray(value.materialTemplates)
     ? value.materialTemplates
@@ -193,7 +265,7 @@ function sanitizeManifest(manifest: any, baseRawDir: string) {
     description: boundedString(value.description, 500) || undefined,
     author: boundedString(value.author, 120) || undefined,
     homepage: optionalHttpUrl(value.homepage),
-    printerPresets: sanitizedPrinterPresets,
+    printerPresets: offlineReadyPrinterPresets,
     materialTemplates: sanitizedMaterialTemplates,
   };
 
@@ -252,7 +324,7 @@ export async function POST(request: Request) {
     }
 
     const baseRawDir = rawManifestUrl.slice(0, rawManifestUrl.lastIndexOf('/'));
-    const manifest = sanitizeManifest(manifestPayload, baseRawDir);
+    const manifest = await sanitizeManifest(manifestPayload, baseRawDir);
 
     if (!manifest) {
       return NextResponse.json({ ok: false, error: 'Manifest missing required fields: id, name, version', rawManifestUrl }, { status: 400 });

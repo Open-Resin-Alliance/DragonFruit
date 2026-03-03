@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Cpu, Gauge, Layers3, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
@@ -21,6 +22,14 @@ interface SlicingPanelProps {
   activeModel: LoadedModel | null;
   estimatedVolumeLabelOverride?: string | null;
   captureSceneThumbnailPng?: () => Promise<Uint8Array | null>;
+  thumbnailIncludeGradient?: boolean;
+  thumbnailIncludeBuildPlate?: boolean;
+  thumbnailIncludeGrid?: boolean;
+  onThumbnailRenderOptionsChange?: (next: {
+    includeGradient?: boolean;
+    includeBuildPlate?: boolean;
+    includeGrid?: boolean;
+  }) => void;
   onSliceRunStarted?: () => void;
   onLayerPreviewGenerated?: (payload: {
     layerIndex: number;
@@ -35,6 +44,7 @@ interface SlicingPanelProps {
   onSliceTriggerRef?: React.MutableRefObject<(() => void) | null>;
   shouldAutoSlice?: boolean;
   skipThumbnailCapture?: boolean;
+  onSlicingBusyChange?: (busy: boolean) => void;
 }
 
 type LifetimeTelemetry = {
@@ -123,12 +133,14 @@ function formatElapsedClock(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-const SLICING_AA_LEVEL_SESSION_KEY = 'dragonfruit.slicing.aaLevel';
+const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
+const SLICING_AA_ON_SUPPORTS_STORAGE_KEY = 'dragonfruit.slicing.aaOnSupports';
 
 function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   if (typeof window === 'undefined') return 'Off';
 
-  const stored = window.sessionStorage.getItem(SLICING_AA_LEVEL_SESSION_KEY);
+  const stored = window.localStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY);
   if (stored === 'Off' || stored === '2x' || stored === '4x' || stored === '8x' || stored === '16x') {
     return stored;
   }
@@ -136,11 +148,26 @@ function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   return 'Off';
 }
 
+function resolveInitialAaOnSupports(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  const stored = window.localStorage.getItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY);
+
+  if (stored === 'true') return true;
+  if (stored === 'false') return false;
+  return false;
+}
+
 export function SlicingPanel({
   models,
   activeModel,
   estimatedVolumeLabelOverride,
   captureSceneThumbnailPng,
+  thumbnailIncludeGradient = false,
+  thumbnailIncludeBuildPlate = true,
+  thumbnailIncludeGrid = true,
+  onThumbnailRenderOptionsChange,
   onSliceRunStarted,
   onLayerPreviewGenerated,
   onSlicingFinished,
@@ -149,6 +176,7 @@ export function SlicingPanel({
   onSliceTriggerRef,
   shouldAutoSlice,
   skipThumbnailCapture,
+  onSlicingBusyChange,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
@@ -166,7 +194,7 @@ export function SlicingPanel({
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
-  const [aaOnSupports, setAaOnSupports] = useState(false);
+  const [aaOnSupports, setAaOnSupports] = useState(resolveInitialAaOnSupports);
   const [isLiveStatusExpanded, setIsLiveStatusExpanded] = useState(false);
   const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
   const [isLoadingNanodlpMaterial, setIsLoadingNanodlpMaterial] = useState(false);
@@ -184,6 +212,9 @@ export function SlicingPanel({
     lastBackend: null,
   });
   const slicingAbortControllerRef = useRef<AbortController | null>(null);
+  const autoSliceTriggeredRef = useRef(false);
+  const autoSliceTimeoutRef = useRef<number | null>(null);
+  const handleSliceZipExportRef = useRef<(() => Promise<void>) | null>(null);
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
@@ -226,17 +257,17 @@ export function SlicingPanel({
     const phaseKind = resolveSlicingPhaseKind(currentPhase);
     switch (phaseKind) {
       case 'preparing':
-        return Math.max(layerProgress, 4);
+        return layerProgress;
       case 'staging':
-        return Math.max(layerProgress, 10);
+        return layerProgress;
       case 'slicing':
-        return Math.min(99, Math.max(layerProgress, 12));
+        return Math.min(99, layerProgress);
       case 'finalizing':
         return 99;
       case 'handoff':
         return 99;
       default:
-        return Math.min(99, Math.max(layerProgress, 8));
+        return Math.min(99, layerProgress);
     }
   }, [currentPhase, progressDone, progressTotal, slicingModalStage]);
 
@@ -315,8 +346,17 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.sessionStorage.setItem(SLICING_AA_LEVEL_SESSION_KEY, antiAliasingLevel);
+    window.localStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, antiAliasingLevel);
+    // Backward compatibility for same-session reads from existing logic paths.
+    window.sessionStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, antiAliasingLevel);
   }, [antiAliasingLevel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = aaOnSupports ? 'true' : 'false';
+    window.localStorage.setItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY, serialized);
+  }, [aaOnSupports]);
 
   const resolvedMaterialLabel = useMemo(() => {
     if (isNanodlpConnected && selectedNanodlpMaterialId) {
@@ -381,8 +421,9 @@ export function SlicingPanel({
     return () => {
       slicingAbortControllerRef.current?.abort();
       clearLayerPreviewUrls();
+      onSlicingBusyChange?.(false);
     };
-  }, [clearLayerPreviewUrls]);
+  }, [clearLayerPreviewUrls, onSlicingBusyChange]);
 
   useEffect(() => {
     if (!isSlicingZip) {
@@ -489,6 +530,7 @@ export function SlicingPanel({
     smoothedMetricsRef.current = { layersPerSec: 0, remainingMs: 0 };
     setShowSlicingModal(true);
     setSlicingModalStage('running');
+    onSlicingBusyChange?.(true);
     clearLayerPreviewUrls();
     setPreviewTotalLayers(0);
     setPreviewSelectedLayer(1);
@@ -688,6 +730,7 @@ export function SlicingPanel({
         slicingAbortControllerRef.current = null;
       }
       setIsSlicingZip(false);
+      onSlicingBusyChange?.(false);
       if (slicingSucceeded) {
         setCurrentPhase('Opening');
         setSliceStatus('Opening');
@@ -705,6 +748,11 @@ export function SlicingPanel({
 
   // Populate the slice trigger ref so parent can call slice from outside
   useEffect(() => {
+    handleSliceZipExportRef.current = handleSliceZipExport;
+  }, [handleSliceZipExport]);
+
+  // Populate the slice trigger ref so parent can call slice from outside
+  useEffect(() => {
     if (onSliceTriggerRef) {
       onSliceTriggerRef.current = handleSliceZipExport;
     }
@@ -712,14 +760,34 @@ export function SlicingPanel({
 
   // Auto-trigger slice when shouldAutoSlice becomes true
   useEffect(() => {
-    if (shouldAutoSlice) {
-      // Use setTimeout to ensure DOM is ready and state is settled
-      const timeoutId = setTimeout(() => {
-        handleSliceZipExport();
-      }, 50);
-      return () => clearTimeout(timeoutId);
+    if (!shouldAutoSlice) {
+      if (autoSliceTimeoutRef.current !== null) {
+        window.clearTimeout(autoSliceTimeoutRef.current);
+        autoSliceTimeoutRef.current = null;
+      }
+      autoSliceTriggeredRef.current = false;
+      return;
     }
-  }, [shouldAutoSlice, handleSliceZipExport]);
+
+    if (autoSliceTriggeredRef.current || isSlicingZip || autoSliceTimeoutRef.current !== null) {
+      return;
+    }
+
+    // Use setTimeout to ensure DOM is ready and state is settled.
+    autoSliceTimeoutRef.current = window.setTimeout(() => {
+      autoSliceTimeoutRef.current = null;
+      if (autoSliceTriggeredRef.current) return;
+      autoSliceTriggeredRef.current = true;
+      void handleSliceZipExportRef.current?.();
+    }, 50);
+
+    return () => {
+      if (autoSliceTimeoutRef.current !== null) {
+        window.clearTimeout(autoSliceTimeoutRef.current);
+        autoSliceTimeoutRef.current = null;
+      }
+    };
+  }, [isSlicingZip, shouldAutoSlice]);
 
   const selectedLayerPreviewUrl = useMemo(() => {
     if (previewSelectedLayer < 1) return null;
@@ -821,7 +889,7 @@ export function SlicingPanel({
               />
             </div>
 
-            <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
               Visible models: {visibleModels.length}
             </div>
           </div>
@@ -834,44 +902,44 @@ export function SlicingPanel({
 
             <div className="grid grid-cols-2 gap-1.5">
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Printer</div>
-                <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Printer</div>
+                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={activePrinterProfile?.name ?? 'No printer selected'}>
                   {activePrinterProfile?.name ?? 'No printer selected'}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Material</div>
-                <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Material</div>
+                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={resolvedMaterialLabel}>
                   {resolvedMaterialLabel}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Output</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Output</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   {activeMaterialProfile ? `${activeMaterialProfile.layerHeightMm.toFixed(3)} mm` : '—'}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Est. Volume</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Volume</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedVolumeLabel}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Est. Print Time</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Print Time</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedPrintTimeLabel}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Est. Layers</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Est. Layers</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{estimatedLayerCount > 0 ? estimatedLayerCount : '—'}</div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Engine</div>
-                <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Engine</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                   Slicer V3
                 </div>
               </div>
@@ -885,7 +953,7 @@ export function SlicingPanel({
             </div>
 
             <div className="space-y-1">
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
               <div className="grid grid-cols-5 gap-1">
                 {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
                   const active = antiAliasingLevel === level;
@@ -894,7 +962,7 @@ export function SlicingPanel({
                       key={level}
                       type="button"
                       disabled={!antiAliasingAvailable}
-                      className="rounded border px-1.5 py-1 text-[11px] font-medium transition-colors"
+                      className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
                       style={!antiAliasingAvailable
                         ? {
                             borderColor: 'var(--border-subtle)',
@@ -922,7 +990,7 @@ export function SlicingPanel({
                 })}
               </div>
               {!antiAliasingAvailable && (
-                <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                   Unavailable for the active printer profile.
                 </div>
               )}
@@ -932,7 +1000,7 @@ export function SlicingPanel({
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>AA on Supports</div>
-                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Apply anti-aliasing to generated supports</div>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Apply anti-aliasing to generated supports</div>
                 </div>
                 <button
                   type="button"
@@ -955,6 +1023,76 @@ export function SlicingPanel({
                 </button>
               </div>
             </div>
+
+            <div className="mt-1 rounded-md border px-2.5 py-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+              <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>Export Thumbnail</div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs" style={{ color: 'var(--text-strong)' }}>Background gradient</div>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Scene mood overlay in thumbnail</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={thumbnailIncludeGradient}
+                  onClick={() => onThumbnailRenderOptionsChange?.({ includeGradient: !thumbnailIncludeGradient })}
+                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                  style={{
+                    background: thumbnailIncludeGradient ? 'var(--accent)' : 'var(--surface-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeGradient ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs" style={{ color: 'var(--text-strong)' }}>Build plate</div>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Render build plate in thumbnail</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={thumbnailIncludeBuildPlate}
+                  onClick={() => onThumbnailRenderOptionsChange?.({ includeBuildPlate: !thumbnailIncludeBuildPlate })}
+                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                  style={{
+                    background: thumbnailIncludeBuildPlate ? 'var(--accent)' : 'var(--surface-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeBuildPlate ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs" style={{ color: 'var(--text-strong)' }}>Grid</div>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Render build grid in thumbnail</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={thumbnailIncludeGrid}
+                  onClick={() => onThumbnailRenderOptionsChange?.({ includeGrid: !thumbnailIncludeGrid })}
+                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
+                  style={{
+                    background: thumbnailIncludeGrid ? 'var(--accent)' : 'var(--surface-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${thumbnailIncludeGrid ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -969,7 +1107,7 @@ export function SlicingPanel({
                 <Timer className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
                 <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Live Status</span>
                 <div
-                  className="rounded px-2 py-0.5 text-[10px] font-semibold"
+                  className="rounded px-2 py-0.5 text-xs font-semibold"
                   style={{
                     background: isSlicingZip
                       ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
@@ -1003,7 +1141,7 @@ export function SlicingPanel({
             </button>
 
             {!isLiveStatusExpanded && (
-              <div className="rounded border px-2 py-1.5 text-[11px]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
+              <div className="rounded border px-2 py-1.5 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
                 <span className="font-medium" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</span>
                 {' · '}
                 <span className="truncate" title={currentPhase}>{currentPhase}</span>
@@ -1016,39 +1154,39 @@ export function SlicingPanel({
               <>
                 <div className="grid grid-cols-2 gap-1.5">
                   <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Phase</div>
-                    <div className="text-[11px] font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Phase</div>
+                    <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
                   </div>
                   <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Progress</div>
-                    <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Progress</div>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</div>
                   </div>
                   <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
-                    <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{slicingElapsedLabel}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{slicingElapsedLabel}</div>
                   </div>
                   <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Layers</div>
-                    <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>{formatProgressLayerLabel(progressDone, progressTotal)}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layers</div>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{formatProgressLayerLabel(progressDone, progressTotal)}</div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-1.5">
                   <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Rasterizer</div>
-                    <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineRasterizerLabel}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Rasterizer</div>
+                    <div className="text-sm font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineRasterizerLabel}</div>
                   </div>
                   <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Container</div>
-                    <div className="text-[11px] font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineContainerBackendLabel}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Container</div>
+                    <div className="text-sm font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineContainerBackendLabel}</div>
                   </div>
                 </div>
 
-                <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
+                <div className="rounded border px-2 py-1.5 text-xs leading-snug" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
                   {sliceStatus}
                 </div>
                 {lastNativeError && (
-                  <div className="rounded border px-2 py-1.5 text-[11px] leading-snug" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)', color: 'var(--status-warning, #f59e0b)', background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)' }}>
+                  <div className="rounded border px-2 py-1.5 text-xs leading-snug" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)', color: 'var(--status-warning, #f59e0b)', background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)' }}>
                     Last native backend warning: {lastNativeError}
                   </div>
                 )}
@@ -1068,8 +1206,8 @@ export function SlicingPanel({
         </div>
       )}
 
-      {showSlicingModal && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3">
+      {showSlicingModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed left-0 right-0 top-[var(--topbar-height)] bottom-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3">
           <div
             className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
             style={{
@@ -1094,7 +1232,7 @@ export function SlicingPanel({
                   <Layers3 className="h-4 w-4" />
                 </span>
                 <div className="min-w-0">
-                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                     Background Pipeline
                   </div>
                   <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -1103,7 +1241,7 @@ export function SlicingPanel({
                 </div>
               </div>
               <div
-                className="rounded-md border px-2.5 py-1 text-[11px] font-medium"
+                className="rounded-md border px-2.5 py-1 text-xs font-medium"
                 style={{
                   borderColor: slicingModalStage === 'failed'
                     ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)'
@@ -1133,28 +1271,24 @@ export function SlicingPanel({
             </div>
 
             <div className="p-4 space-y-3">
-              <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-                {sliceStatus}
-              </div>
-
               <div className="grid grid-cols-2 gap-2.5">
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Pipeline Stage</div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Pipeline Stage</div>
                   <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Sliced Layers</div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Sliced Layers</div>
                   <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
                     {formatProgressLayerLabel(progressDone, progressTotal)}
                   </div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Progress</div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Progress</div>
                   <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{Math.round(displayProgressPercent)}%</div>
                 </div>
                 {slicingModalStage === 'running' && liveLayersPerSec != null && (
                   <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                    <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
+                    <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
                     <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>{formatLayerRate(liveLayersPerSec)}</div>
                   </div>
                 )}
@@ -1162,7 +1296,7 @@ export function SlicingPanel({
 
               {slicingModalStage === 'finished' && previewTotalLayers > 0 && (
                 <div className="rounded-lg border p-2.5 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     Plate preview · Layer {previewSelectedLayer}/{previewTotalLayers}
                   </div>
                   <input
@@ -1181,7 +1315,7 @@ export function SlicingPanel({
                       className="w-full h-36 rounded object-contain"
                     />
                   ) : (
-                    <div className="h-36 rounded border border-dashed flex items-center justify-center text-[11px]" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)' }}>
+                    <div className="h-36 rounded border border-dashed flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)' }}>
                       Preview for this layer is not available.
                     </div>
                   )}
@@ -1196,7 +1330,7 @@ export function SlicingPanel({
               </div>
 
               <div className="pt-1 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <Timer className="h-3.5 w-3.5" />
                   <span>Elapsed {slicingElapsedLabel}</span>
                 </div>
@@ -1225,7 +1359,8 @@ export function SlicingPanel({
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </Card>
   );

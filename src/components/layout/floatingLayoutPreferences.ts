@@ -43,10 +43,10 @@ export function clearSavedFloatingLayout() {
 }
 
 export function isDebugPrimitivesPanelVisibleEnabled(): boolean {
-  if (typeof window === 'undefined') return true;
+  if (typeof window === 'undefined') return false;
 
   const raw = window.localStorage.getItem(DEBUG_PRIMITIVES_PANEL_VISIBILITY_STORAGE_KEY);
-  if (raw == null) return true;
+  if (raw == null) return false;
   return raw !== 'false';
 }
 

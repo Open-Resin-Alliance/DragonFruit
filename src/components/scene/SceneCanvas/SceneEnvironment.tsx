@@ -133,14 +133,20 @@ export function Helpers({
   originMinX,
   originMinY,
   buildPlateOpacity,
+  showGrid,
+  showBuildPlate,
 }: {
   gridWidthMm?: number;
   gridDepthMm?: number;
   originMinX?: number;
   originMinY?: number;
   buildPlateOpacity?: number;
+  showGrid?: boolean;
+  showBuildPlate?: boolean;
 }) {
   const nullRaycast = () => null;
+  const shouldShowGrid = showGrid ?? true;
+  const shouldShowBuildPlate = showBuildPlate ?? true;
 
   const width = Number.isFinite(gridWidthMm) && (gridWidthMm as number) > 0 ? (gridWidthMm as number) : 200;
   const depth = Number.isFinite(gridDepthMm) && (gridDepthMm as number) > 0 ? (gridDepthMm as number) : 200;
@@ -180,6 +186,14 @@ export function Helpers({
   const axisHeadRadius = 1.3;
   const axisHeadLength = 1.9;
   const axisLabelLift = 1.0;
+  const plateLogoAspect = 404 / 88;
+  const plateLogoBaseWidth = Math.max(16, Math.min(42, width * 0.2));
+  const plateLogoWidth = plateLogoBaseWidth * 1.08;
+  const plateLogoHeight = (plateLogoBaseWidth / plateLogoAspect) * 0.96;
+  const plateLogoInset = 1.6;
+  const plateLogoX = resolvedOriginMinX + width - plateLogoInset - plateLogoWidth * 0.5;
+  const plateLogoY = resolvedOriginMinY + plateLogoInset + plateLogoHeight * 0.5;
+  const plateLogoZ = 0.012;
   // Seat marker over the front tab so it reads as part of the build plate geometry.
   const frontMarkerY = -buildPlateDepth * 0.5 - frontTabDepth * 0.1;
 
@@ -275,6 +289,18 @@ export function Helpers({
     return texture;
   }, []);
 
+  const plateLogoTexture = React.useMemo(() => {
+    const texture = new THREE.TextureLoader().load('/dragonfruit_assets/branding/text_logo.svg');
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    return texture;
+  }, []);
+
   React.useEffect(() => {
     return () => {
       frontTexture?.dispose();
@@ -288,6 +314,12 @@ export function Helpers({
       zAxisGradient?.dispose();
     };
   }, [xAxisGradient, yAxisGradient, zAxisGradient]);
+
+  React.useEffect(() => {
+    return () => {
+      plateLogoTexture.dispose();
+    };
+  }, [plateLogoTexture]);
 
   const buildPlateGeometry = React.useMemo(() => {
     const halfW = buildPlateWidth * 0.5;
@@ -345,7 +377,8 @@ export function Helpers({
       <mesh
         position={[buildVolumeCenterX, buildVolumeCenterY, buildPlateCenterZ]}
         raycast={nullRaycast}
-        visible={clampedBuildPlateOpacity > 0.001}
+        visible={shouldShowBuildPlate && clampedBuildPlateOpacity > 0.001}
+        userData={{ thumbnailHelperType: 'buildPlate' }}
       >
         <primitive object={buildPlateGeometry} attach="geometry" />
         <meshStandardMaterial
@@ -358,15 +391,42 @@ export function Helpers({
       </mesh>
 
       {/* Grid on XY plane (horizontal) - rotate 90° around X */}
-      <gridHelper
-        args={[baseSize, divisions, gridMajorColor, gridMinorColor]}
-        position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
-        rotation={[Math.PI / 2, 0, 0]}
-        scale={[scaleX, 1, scaleZ]}
-        raycast={nullRaycast}
-      />
+      {shouldShowGrid && (
+        <gridHelper
+          args={[baseSize, divisions, gridMajorColor, gridMinorColor]}
+          position={[buildVolumeCenterX, buildVolumeCenterY, -0.01]}
+          rotation={[Math.PI / 2, 0, 0]}
+          scale={[scaleX, 1, scaleZ]}
+          raycast={nullRaycast}
+          userData={{ thumbnailHelperType: 'grid' }}
+        />
+      )}
+
+      {shouldShowGrid && shouldShowBuildPlate && (
+        <group
+          position={[0, 0, plateLogoZ]}
+          userData={{ thumbnailHelperType: 'grid' }}
+        >
+          <mesh position={[plateLogoX, plateLogoY, 0]} raycast={nullRaycast}>
+            <planeGeometry args={[plateLogoWidth, plateLogoHeight]} />
+            <meshBasicMaterial
+              map={plateLogoTexture}
+              transparent
+              opacity={0.4}
+              depthWrite={false}
+              polygonOffset
+              polygonOffsetFactor={-2}
+              polygonOffsetUnits={-2}
+              side={THREE.DoubleSide}
+              toneMapped={false}
+            />
+          </mesh>
+        </group>
+      )}
+
       {/* Axes: short, thicker arrows hovering slightly above Z0 to avoid grid clipping */}
-      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]}>
+      {shouldShowGrid && (
+      <group position={[resolvedOriginMinX, resolvedOriginMinY, axisBaseZ]} userData={{ thumbnailHelperType: 'grid' }}>
         {/* X axis */}
         <mesh position={[axisLength * 0.5, 0, 0]} rotation={[0, 0, -Math.PI * 0.5]} raycast={nullRaycast}>
           <cylinderGeometry args={[axisShaftRadius, axisShaftRadius, axisLength, 12]} />
@@ -401,9 +461,11 @@ export function Helpers({
           <AxisLabels size={axisLength + 6} />
         </group>
       </group>
+      )}
 
       {/* FRONT orientation marker locked to grid front edge and constrained within build plate bounds */}
-      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]}>
+      {shouldShowBuildPlate && (
+      <group position={[buildVolumeCenterX, buildVolumeCenterY + frontMarkerY, 0.001]} userData={{ thumbnailHelperType: 'buildPlate' }}>
         {frontTexture && (
           <mesh raycast={nullRaycast}>
             <planeGeometry args={[frontMarkerWidth, frontMarkerDepth]} />
@@ -421,6 +483,7 @@ export function Helpers({
           </mesh>
         )}
       </group>
+      )}
     </>
   );
 }

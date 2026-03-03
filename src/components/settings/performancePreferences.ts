@@ -15,7 +15,7 @@ const SLICING_PERFORMANCE_SETTINGS_EVENT = 'app-slicing-performance-settings-cha
 export const DEFAULT_SLICING_PERFORMANCE_SETTINGS: SlicingPerformanceSettings = {
   computeBackend: 'auto',
   cpuProfile: 'max',
-  pngCompressionStrategy: 'fastest',
+  pngCompressionStrategy: 'balanced',
   bvhAccelerationEnabled: true,
 };
 
@@ -37,7 +37,7 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
     candidate.pngCompressionStrategy === 'smallest' ||
     candidate.pngCompressionStrategy === 'optimal'
       ? candidate.pngCompressionStrategy
-      : 'fastest';
+      : 'balanced';
 
   const bvhAccelerationEnabled = candidate.bvhAccelerationEnabled !== false;
 

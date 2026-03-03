@@ -103,6 +103,13 @@ const EXPORT_THUMBNAIL_WIDTH = 1600;
 const EXPORT_THUMBNAIL_HEIGHT = 960;
 const EXPORT_THUMBNAIL_MARGIN = 1.1;
 
+export type ExportThumbnailRenderOptions = {
+  includeGradient?: boolean;
+  includeBuildPlate?: boolean;
+  includeGrid?: boolean;
+  centerOnModel?: boolean;
+};
+
 function getBoxCorners(bounds: THREE.Box3): THREE.Vector3[] {
   const { min, max } = bounds;
   return [
@@ -393,6 +400,21 @@ function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
       detail: { modelId: null, category: 'raft' },
     }));
   }, [enabled, hit.category]);
+
+  return null;
+}
+
+function CrossSectionScrubFpsMonitor({
+  enabled,
+  onFrame,
+}: {
+  enabled: boolean;
+  onFrame: (deltaSeconds: number) => void;
+}) {
+  useFrame((_, delta) => {
+    if (!enabled) return;
+    onFrame(delta);
+  });
 
   return null;
 }
@@ -858,6 +880,7 @@ export function SceneCanvas({
   historyTransformResyncToken = 0,
   isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
+  exportThumbnailRenderOptions,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -993,6 +1016,7 @@ export function SceneCanvas({
   historyTransformResyncToken?: number;
   isLayerScrubbing?: boolean;
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
+  exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -2844,12 +2868,72 @@ export function SceneCanvas({
   ]);
 
   const crossSectionInteractive = Boolean(isLayerScrubbing);
-  const crossSectionModeForRender: 'smooth' | 'rasterized' = crossSectionInteractive
-    ? 'rasterized'
-    : (crossSectionMode ?? 'smooth');
-  const crossSectionPxMmForRender = crossSectionInteractive
-    ? Math.max(pxMm ?? 0.1, 0.35)
+  const requestedCrossSectionMode: 'smooth' | 'rasterized' = crossSectionMode ?? 'smooth';
+  const [crossSectionAutoFallbackRasterized, setCrossSectionAutoFallbackRasterized] = React.useState(false);
+  const crossSectionFpsEmaRef = React.useRef<number | null>(null);
+  const crossSectionLowFpsSinceRef = React.useRef<number | null>(null);
+  const crossSectionHighFpsSinceRef = React.useRef<number | null>(null);
+
+  const crossSectionAutoFallbackEnabled = crossSectionInteractive && requestedCrossSectionMode === 'smooth';
+
+  const handleCrossSectionFpsFrame = React.useCallback((delta: number) => {
+    const dt = Math.max(0.0001, delta);
+    const fps = 1 / dt;
+    const alpha = 0.12;
+    const prev = crossSectionFpsEmaRef.current;
+    const ema = prev == null ? fps : (prev * (1 - alpha) + fps * alpha);
+    crossSectionFpsEmaRef.current = ema;
+
+    const now = performance.now();
+    const dropThresholdFps = 24;
+    const recoverThresholdFps = 33;
+    const dropHoldMs = 400;
+    const recoverHoldMs = 900;
+
+    if (!crossSectionAutoFallbackRasterized) {
+      if (ema < dropThresholdFps) {
+        if (crossSectionLowFpsSinceRef.current == null) {
+          crossSectionLowFpsSinceRef.current = now;
+        } else if ((now - crossSectionLowFpsSinceRef.current) >= dropHoldMs) {
+          setCrossSectionAutoFallbackRasterized(true);
+          crossSectionHighFpsSinceRef.current = null;
+        }
+      } else {
+        crossSectionLowFpsSinceRef.current = null;
+      }
+      return;
+    }
+
+    if (ema > recoverThresholdFps) {
+      if (crossSectionHighFpsSinceRef.current == null) {
+        crossSectionHighFpsSinceRef.current = now;
+      } else if ((now - crossSectionHighFpsSinceRef.current) >= recoverHoldMs) {
+        setCrossSectionAutoFallbackRasterized(false);
+        crossSectionLowFpsSinceRef.current = null;
+      }
+    } else {
+      crossSectionHighFpsSinceRef.current = null;
+    }
+  }, [crossSectionAutoFallbackRasterized]);
+
+  React.useEffect(() => {
+    if (crossSectionAutoFallbackEnabled) return;
+    setCrossSectionAutoFallbackRasterized(false);
+    crossSectionFpsEmaRef.current = null;
+    crossSectionLowFpsSinceRef.current = null;
+    crossSectionHighFpsSinceRef.current = null;
+  }, [crossSectionAutoFallbackEnabled]);
+
+  const crossSectionModeForRender: 'smooth' | 'rasterized' = (
+    crossSectionAutoFallbackEnabled && crossSectionAutoFallbackRasterized
+      ? 'rasterized'
+      : requestedCrossSectionMode
+  );
+
+  const crossSectionPxMmForRender = crossSectionModeForRender === 'rasterized'
+    ? Math.max(pxMm ?? 0.1, 0.25)
     : pxMm;
+  const crossSectionInteractiveStepMm = Math.max(0.001, layerHeightMm ?? 0.05);
 
   const introControllerBounds = introBoundsSnapshot;
 
@@ -3864,7 +3948,82 @@ export function SceneCanvas({
       boundsUnion.union(visibleBounds[i]);
     }
 
+    const sampledModelPoints: THREE.Vector3[] = [];
+    const MAX_SAMPLED_POINTS_TOTAL = 3600;
+    const MAX_SAMPLED_POINTS_PER_MODEL = 720;
+    const sampledPoint = new THREE.Vector3();
+    const sampleMatrix = new THREE.Matrix4();
+    const sampleQuaternion = new THREE.Quaternion();
+
+    for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
+      if (sampledModelPoints.length >= MAX_SAMPLED_POINTS_TOTAL) break;
+
+      const model = models[modelIndex];
+      if (!model.visible) continue;
+
+      const effectiveTransform =
+        (model.id === activeTransformOverrideModelId && transform)
+          ? transform
+          : model.transform;
+
+      sampleMatrix.compose(
+        effectiveTransform.position,
+        sampleQuaternion.copy(quaternionFromGlobalEuler(effectiveTransform.rotation)),
+        effectiveTransform.scale,
+      );
+
+      const positionAttr = model.geometry.geometry.getAttribute('position');
+      if (!positionAttr || positionAttr.count <= 0) continue;
+
+      const remainingBudget = MAX_SAMPLED_POINTS_TOTAL - sampledModelPoints.length;
+      const sampleBudget = Math.min(MAX_SAMPLED_POINTS_PER_MODEL, remainingBudget);
+      const stride = Math.max(1, Math.floor(positionAttr.count / Math.max(1, sampleBudget)));
+
+      const center = model.geometry.center;
+      let collected = 0;
+      for (let vertexIndex = 0; vertexIndex < positionAttr.count && collected < sampleBudget; vertexIndex += stride) {
+        sampledPoint
+          .set(positionAttr.getX(vertexIndex), positionAttr.getY(vertexIndex), positionAttr.getZ(vertexIndex))
+          .sub(center)
+          .applyMatrix4(sampleMatrix);
+        sampledModelPoints.push(sampledPoint.clone());
+        collected += 1;
+      }
+    }
+
     const target = boundsUnion.getCenter(new THREE.Vector3());
+    const focusBounds = boundsUnion.clone();
+    const centerOnModel = exportThumbnailRenderOptions?.centerOnModel ?? true;
+    if (centerOnModel) {
+      const visibleModelGeometryBounds = models
+        .filter((model) => model.visible)
+        .map((model) => {
+          const effectiveTransform =
+            (model.id === activeTransformOverrideModelId && transform)
+              ? transform
+              : model.transform;
+          return computeApproxModelWorldBounds(model.geometry, effectiveTransform);
+        })
+        .filter((box): box is THREE.Box3 => !!box && !box.isEmpty());
+
+      if (visibleModelGeometryBounds.length > 0) {
+        const geometryUnion = visibleModelGeometryBounds[0].clone();
+        for (let i = 1; i < visibleModelGeometryBounds.length; i += 1) {
+          geometryUnion.union(visibleModelGeometryBounds[i]);
+        }
+        focusBounds.copy(geometryUnion);
+        const geometryCenter = geometryUnion.getCenter(new THREE.Vector3());
+        const fullSize = boundsUnion.getSize(new THREE.Vector3());
+        const geometrySize = geometryUnion.getSize(new THREE.Vector3());
+        const fullHeight = Math.max(1e-6, fullSize.z);
+        const nonModelHeight = Math.max(0, fullSize.z - geometrySize.z);
+        // When supports/rafts extend far below models, avoid hard snapping to
+        // model center; keep a blended center so full print stays framed.
+        const nonModelInfluence = THREE.MathUtils.clamp(nonModelHeight / fullHeight, 0, 1);
+        const modelCenterBias = THREE.MathUtils.lerp(0.82, 0.28, nonModelInfluence);
+        target.lerp(geometryCenter, modelCenterBias);
+      }
+    }
 
     const orbitTarget = orbitControlsRef.current?.target;
     const introDirection = orbitTarget
@@ -3891,7 +4050,8 @@ export function SceneCanvas({
     viewRight.normalize();
     const viewUp = new THREE.Vector3().crossVectors(viewForward, viewRight).normalize();
 
-    const corners = getBoxCorners(boundsUnion);
+    const fitCorners = getBoxCorners(boundsUnion);
+    const focusCorners = getBoxCorners(focusBounds);
 
     const prevRenderTarget = renderer.getRenderTarget();
     const prevPixelRatio = renderer.getPixelRatio();
@@ -3900,6 +4060,7 @@ export function SceneCanvas({
     const prevScissor = renderer.getScissor(new THREE.Vector4());
     const prevScissorTest = renderer.getScissorTest();
     const prevBuildVolumeOverlayVisible = buildVolumeBoundsOverlayRef.current?.visible ?? null;
+    const visibilityRestores: Array<{ node: THREE.Object3D; visible: boolean }> = [];
 
     const restoreCamera = () => {
       renderer.setRenderTarget(prevRenderTarget);
@@ -3910,6 +4071,10 @@ export function SceneCanvas({
       renderer.setScissorTest(prevScissorTest);
       if (buildVolumeBoundsOverlayRef.current && prevBuildVolumeOverlayVisible != null) {
         buildVolumeBoundsOverlayRef.current.visible = prevBuildVolumeOverlayVisible;
+      }
+      for (let i = visibilityRestores.length - 1; i >= 0; i -= 1) {
+        const entry = visibilityRestores[i];
+        entry.node.visible = entry.visible;
       }
     };
 
@@ -3930,8 +4095,8 @@ export function SceneCanvas({
         const tanHalfH = Math.tan(halfH);
 
         let requiredDistance = 0;
-        for (let i = 0; i < corners.length; i += 1) {
-          const offset = corners[i].clone().sub(target);
+        for (let i = 0; i < fitCorners.length; i += 1) {
+          const offset = fitCorners[i].clone().sub(target);
           const x = Math.abs(offset.dot(viewRight));
           const y = Math.abs(offset.dot(viewUp));
           const zForward = offset.dot(viewForward);
@@ -3952,8 +4117,8 @@ export function SceneCanvas({
 
         let halfWidth = 0;
         let halfHeight = 0;
-        for (let i = 0; i < corners.length; i += 1) {
-          const offset = corners[i].clone().sub(target);
+        for (let i = 0; i < fitCorners.length; i += 1) {
+          const offset = fitCorners[i].clone().sub(target);
           halfWidth = Math.max(halfWidth, Math.abs(offset.dot(viewRight)));
           halfHeight = Math.max(halfHeight, Math.abs(offset.dot(viewUp)));
         }
@@ -3978,6 +4143,169 @@ export function SceneCanvas({
         captureCamera = fallback;
       }
 
+      // Recenter the capture camera in screen-space so the model lands truly
+      // centered by rendered shape (sampled points), not AABB perspective.
+      const centerNdcBounds = {
+        minX: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+      };
+
+      const centerPoints = sampledModelPoints.length > 0 ? sampledModelPoints : fitCorners;
+
+      for (let i = 0; i < centerPoints.length; i += 1) {
+        const ndc = centerPoints[i].clone().project(captureCamera);
+        if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) continue;
+        centerNdcBounds.minX = Math.min(centerNdcBounds.minX, ndc.x);
+        centerNdcBounds.maxX = Math.max(centerNdcBounds.maxX, ndc.x);
+        centerNdcBounds.minY = Math.min(centerNdcBounds.minY, ndc.y);
+        centerNdcBounds.maxY = Math.max(centerNdcBounds.maxY, ndc.y);
+      }
+
+      if (
+        Number.isFinite(centerNdcBounds.minX)
+        && Number.isFinite(centerNdcBounds.maxX)
+        && Number.isFinite(centerNdcBounds.minY)
+        && Number.isFinite(centerNdcBounds.maxY)
+      ) {
+        const ndcCenterX = (centerNdcBounds.minX + centerNdcBounds.maxX) * 0.5;
+        const ndcCenterY = (centerNdcBounds.minY + centerNdcBounds.maxY) * 0.5;
+
+        if (Math.abs(ndcCenterX) > 1e-4 || Math.abs(ndcCenterY) > 1e-4) {
+          const recenterOffset = new THREE.Vector3();
+
+          if (captureCamera instanceof THREE.PerspectiveCamera) {
+            const targetDistance = Math.max(1e-6, captureCamera.position.distanceTo(target));
+            const halfV = Math.max(1e-6, THREE.MathUtils.degToRad(captureCamera.fov) * 0.5);
+            const halfHeight = Math.tan(halfV) * targetDistance;
+            const halfWidth = halfHeight * captureCamera.aspect;
+            recenterOffset
+              .addScaledVector(viewRight, ndcCenterX * halfWidth)
+              .addScaledVector(viewUp, ndcCenterY * halfHeight);
+          } else if (captureCamera instanceof THREE.OrthographicCamera) {
+            const halfWidth = (captureCamera.right - captureCamera.left) / Math.max(1e-6, captureCamera.zoom) * 0.5;
+            const halfHeight = (captureCamera.top - captureCamera.bottom) / Math.max(1e-6, captureCamera.zoom) * 0.5;
+            recenterOffset
+              .addScaledVector(viewRight, ndcCenterX * halfWidth)
+              .addScaledVector(viewUp, ndcCenterY * halfHeight);
+          }
+
+          if (recenterOffset.lengthSq() > 1e-10) {
+            target.add(recenterOffset);
+            captureCamera.position.add(recenterOffset);
+            captureCamera.lookAt(target);
+            if (captureCamera instanceof THREE.PerspectiveCamera || captureCamera instanceof THREE.OrthographicCamera) {
+              captureCamera.updateProjectionMatrix();
+            }
+            captureCamera.updateMatrixWorld(true);
+          }
+        }
+      }
+
+      // Final normalize pass: keep subject filling the frame by rendered model shape.
+      const fitNdcBounds = {
+        minX: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+      };
+
+      const fitPoints = sampledModelPoints.length > 0 ? sampledModelPoints : fitCorners;
+      for (let i = 0; i < fitPoints.length; i += 1) {
+        const ndc = fitPoints[i].clone().project(captureCamera);
+        if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) continue;
+        fitNdcBounds.minX = Math.min(fitNdcBounds.minX, ndc.x);
+        fitNdcBounds.maxX = Math.max(fitNdcBounds.maxX, ndc.x);
+        fitNdcBounds.minY = Math.min(fitNdcBounds.minY, ndc.y);
+        fitNdcBounds.maxY = Math.max(fitNdcBounds.maxY, ndc.y);
+      }
+
+      if (
+        Number.isFinite(fitNdcBounds.minX)
+        && Number.isFinite(fitNdcBounds.maxX)
+        && Number.isFinite(fitNdcBounds.minY)
+        && Number.isFinite(fitNdcBounds.maxY)
+      ) {
+        const halfW = Math.max(1e-6, (fitNdcBounds.maxX - fitNdcBounds.minX) * 0.5);
+        const halfH = Math.max(1e-6, (fitNdcBounds.maxY - fitNdcBounds.minY) * 0.5);
+        const currentFill = Math.max(halfW, halfH);
+        const desiredFill = 0.9;
+
+        if (currentFill > 1e-4 && Math.abs(currentFill - desiredFill) > 0.03) {
+          if (captureCamera instanceof THREE.PerspectiveCamera) {
+            const scale = THREE.MathUtils.clamp(currentFill / desiredFill, 0.45, 2.2);
+            const currentDistance = Math.max(1e-6, captureCamera.position.distanceTo(target));
+            const nextDistance = Math.max(10, currentDistance * scale);
+            captureCamera.position.copy(target.clone().addScaledVector(introDirection, nextDistance));
+            captureCamera.lookAt(target);
+            captureCamera.updateProjectionMatrix();
+            captureCamera.updateMatrixWorld(true);
+          } else if (captureCamera instanceof THREE.OrthographicCamera) {
+            const zoomScale = THREE.MathUtils.clamp(desiredFill / currentFill, 0.45, 2.2);
+            captureCamera.zoom = Math.max(0.0001, captureCamera.zoom * zoomScale);
+            captureCamera.updateProjectionMatrix();
+            captureCamera.updateMatrixWorld(true);
+          }
+        }
+      }
+
+      // Safety pass: prevent severe clipping of full print/support bounds.
+      // NOTE: AABB corner projection can overestimate silhouette in perspective,
+      // so only apply this when overflow is clearly hard.
+      const safetyNdcBounds = {
+        minX: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+      };
+
+      for (let i = 0; i < fitCorners.length; i += 1) {
+        const ndc = fitCorners[i].clone().project(captureCamera);
+        if (!Number.isFinite(ndc.x) || !Number.isFinite(ndc.y)) continue;
+        safetyNdcBounds.minX = Math.min(safetyNdcBounds.minX, ndc.x);
+        safetyNdcBounds.maxX = Math.max(safetyNdcBounds.maxX, ndc.x);
+        safetyNdcBounds.minY = Math.min(safetyNdcBounds.minY, ndc.y);
+        safetyNdcBounds.maxY = Math.max(safetyNdcBounds.maxY, ndc.y);
+      }
+
+      if (
+        Number.isFinite(safetyNdcBounds.minX)
+        && Number.isFinite(safetyNdcBounds.maxX)
+        && Number.isFinite(safetyNdcBounds.minY)
+        && Number.isFinite(safetyNdcBounds.maxY)
+      ) {
+        const OVERFLOW_TRIGGER = 1.22;
+        const hasHardOverflow = (
+          safetyNdcBounds.minX < -OVERFLOW_TRIGGER
+          || safetyNdcBounds.maxX > OVERFLOW_TRIGGER
+          || safetyNdcBounds.minY < -OVERFLOW_TRIGGER
+          || safetyNdcBounds.maxY > OVERFLOW_TRIGGER
+        );
+
+        if (hasHardOverflow) {
+          const safetyHalfW = Math.max(1e-6, (safetyNdcBounds.maxX - safetyNdcBounds.minX) * 0.5);
+          const safetyHalfH = Math.max(1e-6, (safetyNdcBounds.maxY - safetyNdcBounds.minY) * 0.5);
+          const safetyFill = Math.max(safetyHalfW, safetyHalfH);
+          const maxAllowedFill = sampledModelPoints.length > 0 ? 1.02 : 0.99;
+
+          if (captureCamera instanceof THREE.PerspectiveCamera) {
+            const scaleOut = THREE.MathUtils.clamp(safetyFill / maxAllowedFill, 1.0, 1.75);
+            const currentDistance = Math.max(1e-6, captureCamera.position.distanceTo(target));
+            const nextDistance = Math.max(10, currentDistance * scaleOut);
+            captureCamera.position.copy(target.clone().addScaledVector(introDirection, nextDistance));
+            captureCamera.lookAt(target);
+            captureCamera.updateProjectionMatrix();
+            captureCamera.updateMatrixWorld(true);
+          } else if (captureCamera instanceof THREE.OrthographicCamera) {
+            const zoomOutScale = THREE.MathUtils.clamp(maxAllowedFill / safetyFill, 0.58, 1.0);
+            captureCamera.zoom = Math.max(0.0001, captureCamera.zoom * zoomOutScale);
+            captureCamera.updateProjectionMatrix();
+            captureCamera.updateMatrixWorld(true);
+          }
+        }
+      }
+
       // Thumbnail rendering bypasses R3F's frame loop, so camera-follow lights
       // (like the headlight) may be stale unless we synchronize them manually.
       sceneGraph.traverse((node) => {
@@ -3989,10 +4317,105 @@ export function SceneCanvas({
         light.updateMatrixWorld(true);
       });
 
+      const includeBuildPlate = exportThumbnailRenderOptions?.includeBuildPlate ?? true;
+      const includeGrid = exportThumbnailRenderOptions?.includeGrid ?? true;
+
+      // Force helper/overlay visibility for thumbnail capture independent of
+      // React render timing so toggles are always honored.
+      sceneGraph.traverse((node) => {
+        const helperType = (node.userData as Record<string, unknown> | undefined)?.thumbnailHelperType;
+        if (helperType === 'buildPlate' && !includeBuildPlate) {
+          visibilityRestores.push({ node, visible: node.visible });
+          node.visible = false;
+          return;
+        }
+        if (helperType === 'grid' && !includeGrid) {
+          visibilityRestores.push({ node, visible: node.visible });
+          node.visible = false;
+          return;
+        }
+        if (helperType === 'buildVolumeOverlay') {
+          visibilityRestores.push({ node, visible: node.visible });
+          node.visible = false;
+        }
+      });
+
       // Ensure build-volume boundary lines are hidden in exported thumbnails.
       if (buildVolumeBoundsOverlayRef.current) {
         buildVolumeBoundsOverlayRef.current.visible = false;
       }
+
+      const syncCaptureCameraLights = () => {
+        sceneGraph.traverse((node) => {
+          if ((node as any).isLight !== true) return;
+          const light = node as THREE.Light;
+          const followCaptureCamera = Boolean((light.userData as Record<string, unknown> | undefined)?.followCaptureCamera);
+          if (!followCaptureCamera) return;
+          light.position.copy(captureCamera.position);
+          light.updateMatrixWorld(true);
+        });
+      };
+
+      const analysisCanvas = document.createElement('canvas');
+      analysisCanvas.width = EXPORT_THUMBNAIL_WIDTH;
+      analysisCanvas.height = EXPORT_THUMBNAIL_HEIGHT;
+      const analysisContext = analysisCanvas.getContext('2d', { willReadFrequently: true });
+
+      const measureRenderedSubjectNdcBounds = () => {
+        if (!analysisContext) return null;
+
+        analysisContext.clearRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+        analysisContext.drawImage(renderer.domElement, 0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+        const imageData = analysisContext.getImageData(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+        const pixels = imageData.data;
+
+        const width = EXPORT_THUMBNAIL_WIDTH;
+        const height = EXPORT_THUMBNAIL_HEIGHT;
+        const topLeft = 0;
+        const topRight = (width - 1) * 4;
+        const bottomLeft = ((height - 1) * width) * 4;
+        const bottomRight = (((height - 1) * width) + (width - 1)) * 4;
+        const bgR = Math.round((pixels[topLeft] + pixels[topRight] + pixels[bottomLeft] + pixels[bottomRight]) * 0.25);
+        const bgG = Math.round((pixels[topLeft + 1] + pixels[topRight + 1] + pixels[bottomLeft + 1] + pixels[bottomRight + 1]) * 0.25);
+        const bgB = Math.round((pixels[topLeft + 2] + pixels[topRight + 2] + pixels[bottomLeft + 2] + pixels[bottomRight + 2]) * 0.25);
+
+        let minX = width;
+        let minY = height;
+        let maxX = -1;
+        let maxY = -1;
+
+        const colorDeltaThreshold = 30;
+        for (let y = 0; y < height; y += 1) {
+          const rowOffset = y * width * 4;
+          for (let x = 0; x < width; x += 1) {
+            const i = rowOffset + (x * 4);
+            const r = pixels[i];
+            const g = pixels[i + 1];
+            const b = pixels[i + 2];
+            const delta = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+            if (delta <= colorDeltaThreshold) continue;
+
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+
+        if (maxX < minX || maxY < minY) return null;
+
+        const ndcMinX = ((minX / width) * 2) - 1;
+        const ndcMaxX = (((maxX + 1) / width) * 2) - 1;
+        const ndcMaxY = 1 - ((minY / height) * 2);
+        const ndcMinY = 1 - (((maxY + 1) / height) * 2);
+
+        return {
+          minX: ndcMinX,
+          maxX: ndcMaxX,
+          minY: ndcMinY,
+          maxY: ndcMaxY,
+        };
+      };
 
       // Render directly to the main framebuffer at export resolution to preserve
       // the same viewport tone-mapping/color pipeline, then copy into PNG canvas.
@@ -4001,6 +4424,76 @@ export function SceneCanvas({
       renderer.setSize(EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT, false);
       renderer.setViewport(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
       renderer.setScissorTest(false);
+      
+      const DESIRED_SCREEN_FILL = 0.93;
+      for (let pass = 0; pass < 2; pass += 1) {
+        syncCaptureCameraLights();
+        renderer.clear(true, true, true);
+        renderer.render(sceneGraph, captureCamera);
+
+        const ndcBounds = measureRenderedSubjectNdcBounds();
+        if (!ndcBounds) break;
+
+        const ndcCenterX = (ndcBounds.minX + ndcBounds.maxX) * 0.5;
+        const ndcCenterY = (ndcBounds.minY + ndcBounds.maxY) * 0.5;
+        const halfW = Math.max(1e-6, (ndcBounds.maxX - ndcBounds.minX) * 0.5);
+        const halfH = Math.max(1e-6, (ndcBounds.maxY - ndcBounds.minY) * 0.5);
+        const currentFill = Math.max(halfW, halfH);
+
+        let changed = false;
+
+        if (Math.abs(ndcCenterX) > 0.01 || Math.abs(ndcCenterY) > 0.01) {
+          const recenterOffset = new THREE.Vector3();
+          if (captureCamera instanceof THREE.PerspectiveCamera) {
+            const targetDistance = Math.max(1e-6, captureCamera.position.distanceTo(target));
+            const halfV = Math.max(1e-6, THREE.MathUtils.degToRad(captureCamera.fov) * 0.5);
+            const viewHalfHeight = Math.tan(halfV) * targetDistance;
+            const viewHalfWidth = viewHalfHeight * captureCamera.aspect;
+            recenterOffset
+              .addScaledVector(viewRight, ndcCenterX * viewHalfWidth)
+              .addScaledVector(viewUp, ndcCenterY * viewHalfHeight);
+          } else if (captureCamera instanceof THREE.OrthographicCamera) {
+            const viewHalfWidth = (captureCamera.right - captureCamera.left) / Math.max(1e-6, captureCamera.zoom) * 0.5;
+            const viewHalfHeight = (captureCamera.top - captureCamera.bottom) / Math.max(1e-6, captureCamera.zoom) * 0.5;
+            recenterOffset
+              .addScaledVector(viewRight, ndcCenterX * viewHalfWidth)
+              .addScaledVector(viewUp, ndcCenterY * viewHalfHeight);
+          }
+
+          if (recenterOffset.lengthSq() > 1e-10) {
+            target.add(recenterOffset);
+            captureCamera.position.add(recenterOffset);
+            captureCamera.lookAt(target);
+            if (captureCamera instanceof THREE.PerspectiveCamera || captureCamera instanceof THREE.OrthographicCamera) {
+              captureCamera.updateProjectionMatrix();
+            }
+            captureCamera.updateMatrixWorld(true);
+            changed = true;
+          }
+        }
+
+        if (currentFill > 1e-4 && Math.abs(currentFill - DESIRED_SCREEN_FILL) > 0.025) {
+          if (captureCamera instanceof THREE.PerspectiveCamera) {
+            const scale = THREE.MathUtils.clamp(currentFill / DESIRED_SCREEN_FILL, 0.5, 2.1);
+            const currentDistance = Math.max(1e-6, captureCamera.position.distanceTo(target));
+            captureCamera.position.copy(target.clone().addScaledVector(introDirection, Math.max(10, currentDistance * scale)));
+            captureCamera.lookAt(target);
+            captureCamera.updateProjectionMatrix();
+            captureCamera.updateMatrixWorld(true);
+            changed = true;
+          } else if (captureCamera instanceof THREE.OrthographicCamera) {
+            const zoomScale = THREE.MathUtils.clamp(DESIRED_SCREEN_FILL / currentFill, 0.5, 2.1);
+            captureCamera.zoom = Math.max(0.0001, captureCamera.zoom * zoomScale);
+            captureCamera.updateProjectionMatrix();
+            captureCamera.updateMatrixWorld(true);
+            changed = true;
+          }
+        }
+
+        if (!changed) break;
+      }
+
+      syncCaptureCameraLights();
       renderer.clear(true, true, true);
       renderer.render(sceneGraph, captureCamera);
 
@@ -4014,37 +4507,40 @@ export function SceneCanvas({
 
       context.drawImage(renderer.domElement, 0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
 
-      // Approximate SceneMoodOverlay so exported thumbnail keeps viewport ambience.
-      const rootStyles = getComputedStyle(document.documentElement);
-      const radialColor = rootStyles.getPropertyValue('--scene-gradient-radial').trim() || '#ff37aa';
-      const linearStartColor = rootStyles.getPropertyValue('--scene-gradient-linear-start').trim() || '#ff37aa';
-      const linearMidColor = rootStyles.getPropertyValue('--scene-gradient-linear-mid').trim() || '#6f33ff';
+      const includeGradient = exportThumbnailRenderOptions?.includeGradient ?? false;
+      if (includeGradient) {
+        // Approximate SceneMoodOverlay so exported thumbnail keeps viewport ambience.
+        const rootStyles = getComputedStyle(document.documentElement);
+        const radialColor = rootStyles.getPropertyValue('--scene-gradient-radial').trim() || '#ff37aa';
+        const linearStartColor = rootStyles.getPropertyValue('--scene-gradient-linear-start').trim() || '#ff37aa';
+        const linearMidColor = rootStyles.getPropertyValue('--scene-gradient-linear-mid').trim() || '#6f33ff';
 
-      context.save();
-      context.globalCompositeOperation = 'screen';
+        context.save();
+        context.globalCompositeOperation = 'screen';
 
-      const radialGradient = context.createRadialGradient(
-        EXPORT_THUMBNAIL_WIDTH * 0.5,
-        EXPORT_THUMBNAIL_HEIGHT * 0.46,
-        0,
-        EXPORT_THUMBNAIL_WIDTH * 0.5,
-        EXPORT_THUMBNAIL_HEIGHT * 0.46,
-        Math.max(EXPORT_THUMBNAIL_WIDTH * 0.72, EXPORT_THUMBNAIL_HEIGHT * 0.72),
-      );
-      radialGradient.addColorStop(0.56, 'rgba(0, 0, 0, 0)');
-      radialGradient.addColorStop(1, radialColor);
-      context.globalAlpha = 0.14;
-      context.fillStyle = radialGradient;
-      context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+        const radialGradient = context.createRadialGradient(
+          EXPORT_THUMBNAIL_WIDTH * 0.5,
+          EXPORT_THUMBNAIL_HEIGHT * 0.46,
+          0,
+          EXPORT_THUMBNAIL_WIDTH * 0.5,
+          EXPORT_THUMBNAIL_HEIGHT * 0.46,
+          Math.max(EXPORT_THUMBNAIL_WIDTH * 0.72, EXPORT_THUMBNAIL_HEIGHT * 0.72),
+        );
+        radialGradient.addColorStop(0.56, 'rgba(0, 0, 0, 0)');
+        radialGradient.addColorStop(1, radialColor);
+        context.globalAlpha = 0.14;
+        context.fillStyle = radialGradient;
+        context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
 
-      const linearGradient = context.createLinearGradient(0, 0, 0, EXPORT_THUMBNAIL_HEIGHT);
-      linearGradient.addColorStop(0, linearStartColor);
-      linearGradient.addColorStop(0.4, linearMidColor);
-      linearGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      context.globalAlpha = 0.08;
-      context.fillStyle = linearGradient;
-      context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
-      context.restore();
+        const linearGradient = context.createLinearGradient(0, 0, 0, EXPORT_THUMBNAIL_HEIGHT);
+        linearGradient.addColorStop(0, linearStartColor);
+        linearGradient.addColorStop(0.4, linearMidColor);
+        linearGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        context.globalAlpha = 0.08;
+        context.fillStyle = linearGradient;
+        context.fillRect(0, 0, EXPORT_THUMBNAIL_WIDTH, EXPORT_THUMBNAIL_HEIGHT);
+        context.restore();
+      }
 
       const blob = await new Promise<Blob | null>((resolve) => {
         canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
@@ -4059,13 +4555,20 @@ export function SceneCanvas({
       setThumbnailCaptureActive(false);
     }
   }, [
+    activeTransformOverrideModelId,
     buildVolumeBounds,
+    computeApproxModelWorldBounds,
     computeModelWorldBounds,
     defaultCamera.position,
     defaultCamera.up,
+    exportThumbnailRenderOptions,
     modelWorldBounds,
     models,
+    transform,
   ]);
+
+  const includeHelpersGridDuringCapture = exportThumbnailRenderOptions?.includeGrid ?? true;
+  const includeBuildPlateDuringCapture = exportThumbnailRenderOptions?.includeBuildPlate ?? true;
 
   React.useEffect(() => {
     if (!onRegisterExportThumbnailCapture) return;
@@ -4207,6 +4710,10 @@ export function SceneCanvas({
         onPointerMissed={handleScenePointerMissed}
       >
         <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
+        <CrossSectionScrubFpsMonitor
+          enabled={crossSectionAutoFallbackEnabled}
+          onFrame={handleCrossSectionFpsFrame}
+        />
         <LoggingHelper mode={mode} />
         <Lights
           ambientIntensity={ambientIntensity ?? 1.2}
@@ -4218,7 +4725,9 @@ export function SceneCanvas({
           gridDepthMm={activeBuildVolumeSettings?.enabled ? activeBuildVolumeSettings.depthMm : undefined}
           originMinX={buildVolumeBounds?.min.x}
           originMinY={buildVolumeBounds?.min.y}
-          buildPlateOpacity={buildPlateOpacity}
+          buildPlateOpacity={(!thumbnailCaptureActive || includeBuildPlateDuringCapture) ? buildPlateOpacity : 0}
+          showGrid={!thumbnailCaptureActive || includeHelpersGridDuringCapture}
+          showBuildPlate={!thumbnailCaptureActive || includeBuildPlateDuringCapture}
         />
         <EnableLocalClipping enabled={clipLower != null || clipUpper != null} />
         <CameraProvider cameraRef={cameraRef} />
@@ -4597,7 +5106,7 @@ export function SceneCanvas({
                 ))
                 : null}
 
-              {dragCornerCageModelIds.length > 0
+              {!thumbnailCaptureActive && dragCornerCageModelIds.length > 0
                 ? dragCornerCageModelIds.map((modelId) => (
                     <lineSegments
                       key={`drag-corner-cage-${modelId}`}
@@ -4629,6 +5138,7 @@ export function SceneCanvas({
               {!thumbnailCaptureActive && activeBuildVolumeSettings?.enabled && buildVolumeBoxGeometry && buildVolumeEdgeGeometry && (
                 <group
                   ref={buildVolumeBoundsOverlayRef}
+                  userData={{ thumbnailHelperType: 'buildVolumeOverlay' }}
                   position={[
                     (buildVolumeBounds!.min.x + buildVolumeBounds!.max.x) * 0.5,
                     (buildVolumeBounds!.min.y + buildVolumeBounds!.max.y) * 0.5,
@@ -4697,7 +5207,7 @@ export function SceneCanvas({
                   mode={crossSectionModeForRender}
                   pxMm={crossSectionPxMmForRender}
                   interactive={crossSectionInteractive}
-                  interactiveZStepMm={0.4}
+                  interactiveZStepMm={crossSectionInteractiveStepMm}
                   preferProjectedOnlyDuringInteractive
                   visible={!hideCrossSectionCap && clipUpper != null}
                 />

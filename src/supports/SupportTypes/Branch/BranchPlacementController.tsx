@@ -93,7 +93,7 @@ export function BranchPlacementController() {
             if (!root || trunk.segments.length === 0) continue;
 
             const diskHeight = 0.5;
-            const coneHeight = root.height || 1.5;
+            const coneHeight = root.coneHeight || 1.5;
             const startZOffset = diskHeight + coneHeight;
 
             const rootPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);

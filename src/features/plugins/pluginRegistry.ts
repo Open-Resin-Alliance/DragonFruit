@@ -33,6 +33,19 @@ const STORAGE_VERSION = 1;
 const MAX_PRINTER_PRESETS = 128;
 const MAX_MATERIAL_TEMPLATES = 512;
 
+function shouldUseBundledAssetPaths(): boolean {
+  if (typeof window === 'undefined') return false;
+  const protocol = window.location?.protocol ?? '';
+  const hostname = window.location?.hostname ?? '';
+  return protocol === 'file:' || protocol === 'tauri:' || hostname === 'tauri.localhost';
+}
+
+function resolveRuntimeAssetPath(value: string): string {
+  if (!value.startsWith('/api/profile-assets/')) return value;
+  if (!shouldUseBundledAssetPaths()) return value;
+  return `/${value.slice('/api/profile-assets/'.length)}`;
+}
+
 function boundedString(value: unknown, max = 120): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
@@ -60,7 +73,7 @@ function sanitizeImageAssetPath(value: unknown): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
 
-  if (trimmed.startsWith('/api/profile-assets/')) return trimmed;
+  if (trimmed.startsWith('/api/profile-assets/')) return resolveRuntimeAssetPath(trimmed);
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   if (trimmed.startsWith('data:')) return undefined;
 
@@ -328,6 +341,14 @@ export function getRuntimePrinterPresets(basePresets: PrinterPreset[]): PrinterP
   [...basePresets, ...pluginPresets]
     .forEach((preset) => {
       if (!preset?.presetId) return;
+      const nextImageAssetPath = sanitizeImageAssetPath(preset.imageAssetPath);
+      if (nextImageAssetPath !== preset.imageAssetPath) {
+        byId.set(preset.presetId, {
+          ...preset,
+          imageAssetPath: nextImageAssetPath,
+        });
+        return;
+      }
       byId.set(preset.presetId, preset);
     });
 

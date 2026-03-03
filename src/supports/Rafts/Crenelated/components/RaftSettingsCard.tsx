@@ -14,7 +14,8 @@ export function RaftSettingsCard({
   settings,
   onSettingsChange
 }: RaftSettingsCardProps) {
-  const [expanded, setExpanded] = useState(settings.enabled);
+  const raftEnabled = settings.bottomMode !== 'off';
+  const [expanded, setExpanded] = useState(raftEnabled);
   
   // Uncontrolled input refs and edit flags to allow free typing
   const thicknessRef = useRef<HTMLInputElement>(null);
@@ -80,8 +81,8 @@ export function RaftSettingsCard({
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
-            checked={settings.enabled}
-            onChange={(e) => updateSetting('enabled', e.target.checked)}
+            checked={raftEnabled}
+            onChange={(e) => updateSetting('bottomMode', e.target.checked ? 'solid' : 'off')}
             className="w-4 h-4 rounded border-neutral-600 bg-neutral-700 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0"
           />
           <span className="text-xs text-neutral-400">Enabled</span>
