@@ -131,17 +131,30 @@ function formatElapsedClock(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-const SLICING_AA_LEVEL_SESSION_KEY = 'dragonfruit.slicing.aaLevel';
+const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
+const SLICING_AA_ON_SUPPORTS_STORAGE_KEY = 'dragonfruit.slicing.aaOnSupports';
 
 function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   if (typeof window === 'undefined') return 'Off';
 
-  const stored = window.sessionStorage.getItem(SLICING_AA_LEVEL_SESSION_KEY);
+  const stored = window.localStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_LEVEL_STORAGE_KEY);
   if (stored === 'Off' || stored === '2x' || stored === '4x' || stored === '8x' || stored === '16x') {
     return stored;
   }
 
   return 'Off';
+}
+
+function resolveInitialAaOnSupports(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  const stored = window.localStorage.getItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY);
+
+  if (stored === 'true') return true;
+  if (stored === 'false') return false;
+  return false;
 }
 
 export function SlicingPanel({
@@ -178,7 +191,7 @@ export function SlicingPanel({
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
-  const [aaOnSupports, setAaOnSupports] = useState(false);
+  const [aaOnSupports, setAaOnSupports] = useState(resolveInitialAaOnSupports);
   const [isLiveStatusExpanded, setIsLiveStatusExpanded] = useState(false);
   const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
   const [isLoadingNanodlpMaterial, setIsLoadingNanodlpMaterial] = useState(false);
@@ -330,8 +343,17 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.sessionStorage.setItem(SLICING_AA_LEVEL_SESSION_KEY, antiAliasingLevel);
+    window.localStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, antiAliasingLevel);
+    // Backward compatibility for same-session reads from existing logic paths.
+    window.sessionStorage.setItem(SLICING_AA_LEVEL_STORAGE_KEY, antiAliasingLevel);
   }, [antiAliasingLevel]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = aaOnSupports ? 'true' : 'false';
+    window.localStorage.setItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY, serialized);
+  }, [aaOnSupports]);
 
   const resolvedMaterialLabel = useMemo(() => {
     if (isNanodlpConnected && selectedNanodlpMaterialId) {
