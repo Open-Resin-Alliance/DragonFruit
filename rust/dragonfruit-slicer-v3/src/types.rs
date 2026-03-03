@@ -62,6 +62,27 @@ pub struct SliceArtifactV3 {
     pub perf: SlicingPerfV3,
 }
 
+/// Rendered layer payloads produced by the raster/encode stage.
+///
+/// Encoders can request either PNG layers, raw mask layers, or both.
+#[derive(Debug, Clone, Default)]
+pub struct RenderedLayersV3 {
+    /// Optional grayscale PNG bytes per layer.
+    pub png_layers: Option<Vec<Vec<u8>>>,
+    /// Optional raw 8-bit grayscale raster masks per layer.
+    pub raw_mask_layers: Option<Vec<Vec<u8>>>,
+}
+
+impl RenderedLayersV3 {
+    pub fn layer_count(&self) -> usize {
+        self.png_layers
+            .as_ref()
+            .map(|v| v.len())
+            .or_else(|| self.raw_mask_layers.as_ref().map(|v| v.len()))
+            .unwrap_or(0)
+    }
+}
+
 /// Per-layer solid area metrics computed during rasterization.
 ///
 /// Values are kept lightweight to enable near-zero-overhead aggregation in the
