@@ -125,11 +125,11 @@ function formatElapsedClock(ms: number): string {
 
 const SLICING_AA_LEVEL_SESSION_KEY = 'dragonfruit.slicing.aaLevel';
 
-function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' {
+function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   if (typeof window === 'undefined') return 'Off';
 
   const stored = window.sessionStorage.getItem(SLICING_AA_LEVEL_SESSION_KEY);
-  if (stored === 'Off' || stored === '2x' || stored === '4x' || stored === '8x') {
+  if (stored === 'Off' || stored === '2x' || stored === '4x' || stored === '8x' || stored === '16x') {
     return stored;
   }
 
@@ -165,7 +165,7 @@ export function SlicingPanel({
   const [showSlicingModal, setShowSlicingModal] = useState(false);
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
-  const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x'>(resolveInitialAaLevel);
+  const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
   const [aaOnSupports, setAaOnSupports] = useState(false);
   const [isLiveStatusExpanded, setIsLiveStatusExpanded] = useState(false);
   const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
@@ -886,8 +886,8 @@ export function SlicingPanel({
 
             <div className="space-y-1">
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>Anti-Aliasing</div>
-              <div className="grid grid-cols-4 gap-1">
-                {(['Off', '2x', '4x', '8x'] as const).map((level) => {
+              <div className="grid grid-cols-5 gap-1">
+                {(['Off', '2x', '4x', '8x', '16x'] as const).map((level) => {
                   const active = antiAliasingLevel === level;
                   return (
                     <button

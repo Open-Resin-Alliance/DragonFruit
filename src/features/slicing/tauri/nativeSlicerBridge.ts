@@ -16,7 +16,7 @@ export type NativeSolidSliceJobEnvelope = {
   computeBackend?: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
-  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x';
+  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
   aaOnSupports: boolean;
   modelTriangleCount: number;
   containerCompressionLevel?: number;
@@ -39,7 +39,7 @@ type NativeSolidSlicePayload = {
   compute_backend: 'auto' | 'cpu' | 'gpu';
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvh_acceleration_enabled: boolean;
-  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x';
+  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
   model_triangle_count: number;
   container_compression_level: number;
@@ -60,7 +60,7 @@ type NativeSolidSliceMetadataPayload = {
   width_px: number;
   height_px: number;
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
-  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x';
+  anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
   container_compression_level: number;
   build_width_mm: number;

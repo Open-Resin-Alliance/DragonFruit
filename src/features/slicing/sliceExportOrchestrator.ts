@@ -21,7 +21,7 @@ export type SliceExportOrchestratorOptions = {
   printerProfile: PrinterProfile;
   materialProfile: MaterialProfile;
   filenameBase: string;
-  antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x';
+  antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
   aaOnSupports?: boolean;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;

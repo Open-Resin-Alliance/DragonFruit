@@ -230,6 +230,7 @@ fn aa_subpixel_steps(level: &str) -> u8 {
         "2x" => 2,
         "4x" => 4,
         "8x" => 8,
+        "16x" => 16,
         _ => 0,
     }
 }
