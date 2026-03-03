@@ -397,6 +397,21 @@ function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
   return null;
 }
 
+function CrossSectionScrubFpsMonitor({
+  enabled,
+  onFrame,
+}: {
+  enabled: boolean;
+  onFrame: (deltaSeconds: number) => void;
+}) {
+  useFrame((_, delta) => {
+    if (!enabled) return;
+    onFrame(delta);
+  });
+
+  return null;
+}
+
 function CameraModeEntryFramingController({
   runId,
   restoreRunId,
@@ -2844,12 +2859,72 @@ export function SceneCanvas({
   ]);
 
   const crossSectionInteractive = Boolean(isLayerScrubbing);
-  const crossSectionModeForRender: 'smooth' | 'rasterized' = crossSectionInteractive
-    ? 'rasterized'
-    : (crossSectionMode ?? 'smooth');
-  const crossSectionPxMmForRender = crossSectionInteractive
-    ? Math.max(pxMm ?? 0.1, 0.35)
+  const requestedCrossSectionMode: 'smooth' | 'rasterized' = crossSectionMode ?? 'smooth';
+  const [crossSectionAutoFallbackRasterized, setCrossSectionAutoFallbackRasterized] = React.useState(false);
+  const crossSectionFpsEmaRef = React.useRef<number | null>(null);
+  const crossSectionLowFpsSinceRef = React.useRef<number | null>(null);
+  const crossSectionHighFpsSinceRef = React.useRef<number | null>(null);
+
+  const crossSectionAutoFallbackEnabled = crossSectionInteractive && requestedCrossSectionMode === 'smooth';
+
+  const handleCrossSectionFpsFrame = React.useCallback((delta: number) => {
+    const dt = Math.max(0.0001, delta);
+    const fps = 1 / dt;
+    const alpha = 0.12;
+    const prev = crossSectionFpsEmaRef.current;
+    const ema = prev == null ? fps : (prev * (1 - alpha) + fps * alpha);
+    crossSectionFpsEmaRef.current = ema;
+
+    const now = performance.now();
+    const dropThresholdFps = 24;
+    const recoverThresholdFps = 33;
+    const dropHoldMs = 400;
+    const recoverHoldMs = 900;
+
+    if (!crossSectionAutoFallbackRasterized) {
+      if (ema < dropThresholdFps) {
+        if (crossSectionLowFpsSinceRef.current == null) {
+          crossSectionLowFpsSinceRef.current = now;
+        } else if ((now - crossSectionLowFpsSinceRef.current) >= dropHoldMs) {
+          setCrossSectionAutoFallbackRasterized(true);
+          crossSectionHighFpsSinceRef.current = null;
+        }
+      } else {
+        crossSectionLowFpsSinceRef.current = null;
+      }
+      return;
+    }
+
+    if (ema > recoverThresholdFps) {
+      if (crossSectionHighFpsSinceRef.current == null) {
+        crossSectionHighFpsSinceRef.current = now;
+      } else if ((now - crossSectionHighFpsSinceRef.current) >= recoverHoldMs) {
+        setCrossSectionAutoFallbackRasterized(false);
+        crossSectionLowFpsSinceRef.current = null;
+      }
+    } else {
+      crossSectionHighFpsSinceRef.current = null;
+    }
+  }, [crossSectionAutoFallbackRasterized]);
+
+  React.useEffect(() => {
+    if (crossSectionAutoFallbackEnabled) return;
+    setCrossSectionAutoFallbackRasterized(false);
+    crossSectionFpsEmaRef.current = null;
+    crossSectionLowFpsSinceRef.current = null;
+    crossSectionHighFpsSinceRef.current = null;
+  }, [crossSectionAutoFallbackEnabled]);
+
+  const crossSectionModeForRender: 'smooth' | 'rasterized' = (
+    crossSectionAutoFallbackEnabled && crossSectionAutoFallbackRasterized
+      ? 'rasterized'
+      : requestedCrossSectionMode
+  );
+
+  const crossSectionPxMmForRender = crossSectionModeForRender === 'rasterized'
+    ? Math.max(pxMm ?? 0.1, 0.25)
     : pxMm;
+  const crossSectionInteractiveStepMm = Math.max(0.001, layerHeightMm ?? 0.05);
 
   const introControllerBounds = introBoundsSnapshot;
 
@@ -4207,6 +4282,10 @@ export function SceneCanvas({
         onPointerMissed={handleScenePointerMissed}
       >
         <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
+        <CrossSectionScrubFpsMonitor
+          enabled={crossSectionAutoFallbackEnabled}
+          onFrame={handleCrossSectionFpsFrame}
+        />
         <LoggingHelper mode={mode} />
         <Lights
           ambientIntensity={ambientIntensity ?? 1.2}
@@ -4697,7 +4776,7 @@ export function SceneCanvas({
                   mode={crossSectionModeForRender}
                   pxMm={crossSectionPxMmForRender}
                   interactive={crossSectionInteractive}
-                  interactiveZStepMm={0.4}
+                  interactiveZStepMm={crossSectionInteractiveStepMm}
                   preferProjectedOnlyDuringInteractive
                   visible={!hideCrossSectionCap && clipUpper != null}
                 />
