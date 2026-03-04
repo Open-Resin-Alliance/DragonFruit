@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { getSettings, getGridSettings } from '../Settings/state';
 import { checkShaftCollision } from '../PlacementLogic/CollisionUtils';
 import { buildSupportBraceData } from '../SupportTypes/SupportBrace/supportBraceBuilder';
 import { snapToGridIndex } from '../PlacementLogic/Grid/gridMath';
@@ -9,7 +8,7 @@ import { AUTO_BRACING_HARD_RULES, type AutoBracingSettings } from './settings';
 import { getAllMeshEntriesForAutoBrace } from './meshGeometryStore';
 import { getTrunkSegmentEndpoints } from '../SupportPrimitives/Knot/knotUtils';
 
-const MIN_HEIGHT_FOR_MANDATORY_BRACING_MM = 25.0; // Reverted back to 25.0
+const MIN_HEIGHT_FOR_MANDATORY_BRACING_MM = 15.0;
 const DROP_COLLISION_SAMPLES = 20;
 
 function createVector3(v: Vec3) {
@@ -36,17 +35,100 @@ export function generateRequiredSupportBraces(
     snapshot: SupportState,
     supportBraceState: SupportBraceState,
     settings: AutoBracingSettings,
-    existingBraceEdges: Array<{ a: string; b: string; angleRad: number }>
+    existingBraceEdges: Array<{ a: string; b: string; angleRad: number }>,
+    gridSettings: { enabled: boolean; spacingMm: number },
 ): SupportBraceBuildResult[] {
     const meshEntries = getAllMeshEntriesForAutoBrace();
-    const globalSettings = getSettings();
-    const gridSettings = getGridSettings();
     const generatedSupportBraces: SupportBraceBuildResult[] = [];
 
     // The maximum horizontal run a brace can physically reach based on the 3D max length setting
     const maxHorizontalRun = settings.maxBraceLengthMm / Math.SQRT2;
     // We want the new support brace to generate well within the max run so it definitely connects.
     const GENERATION_DISTANCE_MM = Math.min(5.0, maxHorizontalRun * 0.8);
+
+    const occupiedRootPositions: Vec3[] = [
+        ...Object.values(snapshot.roots).map((root) => ({
+            x: root.transform.pos.x,
+            y: root.transform.pos.y,
+            z: root.transform.pos.z,
+        })),
+        ...Object.values(supportBraceState.roots).map((root) => ({
+            x: root.transform.pos.x,
+            y: root.transform.pos.y,
+            z: root.transform.pos.z,
+        })),
+    ];
+
+    const isGridEnabled = gridSettings.enabled && gridSettings.spacingMm > 0;
+    const occupiedWorldKeys = new Set<string>();
+    const worldKey = (x: number, y: number) => `${x.toFixed(4)},${y.toFixed(4)}`;
+    if (isGridEnabled) {
+        for (const root of occupiedRootPositions) {
+            occupiedWorldKeys.add(worldKey(root.x, root.y));
+        }
+    }
+
+    const snapToGridWithOrigin = (valueMm: number, spacingMm: number, originMm: number): number => {
+        const idx = snapToGridIndex((valueMm - originMm) / spacingMm, 1);
+        return originMm + idx * spacingMm;
+    };
+
+    const findNearestAvailableGridPoint = (
+        x: number,
+        y: number,
+        originX: number,
+        originY: number,
+    ): { x: number; y: number } | null => {
+        if (!isGridEnabled) return { x, y };
+
+        const spacing = gridSettings.spacingMm;
+        const centerGx = snapToGridIndex((x - originX) / spacing, 1);
+        const centerGy = snapToGridIndex((y - originY) / spacing, 1);
+        const maxRing = Math.max(1, Math.ceil(maxHorizontalRun / spacing) + 2);
+
+        for (let ring = 0; ring <= maxRing; ring += 1) {
+            let best: { gx: number; gy: number; distSq: number } | null = null;
+
+            for (let dx = -ring; dx <= ring; dx += 1) {
+                for (let dy = -ring; dy <= ring; dy += 1) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+
+                    const gx = centerGx + dx;
+                    const gy = centerGy + dy;
+
+                    const worldX = originX + gx * spacing;
+                    const worldY = originY + gy * spacing;
+                    if (occupiedWorldKeys.has(worldKey(worldX, worldY))) continue;
+
+                    const ddx = worldX - x;
+                    const ddy = worldY - y;
+                    const distSq = ddx * ddx + ddy * ddy;
+
+                    if (!best || distSq < best.distSq) {
+                        best = { gx, gy, distSq };
+                    }
+                }
+            }
+
+            if (best) {
+                return {
+                    x: originX + best.gx * spacing,
+                    y: originY + best.gy * spacing,
+                };
+            }
+        }
+
+        return null;
+    };
+
+    const toCanonicalGridPoint = (x: number, y: number, originX: number, originY: number): { x: number; y: number } => {
+        const snappedX = snapToGridWithOrigin(x, gridSettings.spacingMm, originX);
+        const snappedY = snapToGridWithOrigin(y, gridSettings.spacingMm, originY);
+        return {
+            x: snappedX,
+            y: snappedY,
+        };
+    };
 
     const segmentOwnerTrunkId = new Map<string, string>();
     for (const trunk of Object.values(snapshot.trunks)) {
@@ -147,6 +229,26 @@ export function generateRequiredSupportBraces(
         const trunkHeight = maxZ - root.transform.pos.z;
         if (trunkHeight < MIN_HEIGHT_FOR_MANDATORY_BRACING_MM) continue;
 
+        // Support-brace generation is strict fallback for isolated trunks only.
+        // If another trunk is already within physical brace reach, Voronoi pairing should handle it.
+        let hasReachableTrunkNeighbor = false;
+        for (const otherTrunk of Object.values(snapshot.trunks)) {
+            if (otherTrunk.id === trunk.id) continue;
+            if (otherTrunk.modelId !== trunk.modelId) continue;
+
+            const otherRoot = snapshot.roots[otherTrunk.rootId];
+            if (!otherRoot) continue;
+
+            const dx = otherRoot.transform.pos.x - root.transform.pos.x;
+            const dy = otherRoot.transform.pos.y - root.transform.pos.y;
+            const hDist = Math.sqrt(dx * dx + dy * dy);
+            if (hDist <= maxHorizontalRun + 0.000001) {
+                hasReachableTrunkNeighbor = true;
+                break;
+            }
+        }
+        if (hasReachableTrunkNeighbor) continue;
+
         const axes = axesByTrunkId.get(trunk.id) || [];
         let hasTwoAxis = false;
 
@@ -171,6 +273,8 @@ export function generateRequiredSupportBraces(
         candidateAnchors.sort((a, b) => b.pos.z - a.pos.z);
 
         const rootPos = root.transform.pos;
+        const gridOriginX = rootPos.x;
+        const gridOriginY = rootPos.y;
         let existingAxis = axes.length > 0 ? axes[0] : 0;
         const braceRadius = settings.braceDiameterMm / 2;
 
@@ -203,11 +307,12 @@ export function generateRequiredSupportBraces(
                     let candidateRootX = topAnchorX - trunkDx;
                     let candidateRootY = topAnchorY - trunkDy;
 
-                    if (gridSettings.enabled) {
-                        const gx = snapToGridIndex(candidateRootX, gridSettings.spacingMm);
-                        const gy = snapToGridIndex(candidateRootY, gridSettings.spacingMm);
-                        candidateRootX = gx * gridSettings.spacingMm;
-                        candidateRootY = gy * gridSettings.spacingMm;
+                    if (isGridEnabled) {
+                        const snapped = findNearestAvailableGridPoint(candidateRootX, candidateRootY, gridOriginX, gridOriginY);
+                        if (!snapped) continue;
+                        const canonical = toCanonicalGridPoint(snapped.x, snapped.y, gridOriginX, gridOriginY);
+                        candidateRootX = canonical.x;
+                        candidateRootY = canonical.y;
                     }
 
                     const candidateRootPos = {
@@ -255,6 +360,10 @@ export function generateRequiredSupportBraces(
                 try {
                     const result = buildSupportBraceData(buildInput);
                     generatedSupportBraces.push(result);
+
+                    if (isGridEnabled) {
+                        occupiedWorldKeys.add(worldKey(finalRootPos.x, finalRootPos.y));
+                    }
                     
                     const actualAngle = normalizeAxisAngleRad(Math.atan2(finalRootPos.y - rootPos.y, finalRootPos.x - rootPos.x));
                     axes.push(actualAngle);

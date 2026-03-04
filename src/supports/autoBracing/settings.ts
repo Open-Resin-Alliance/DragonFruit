@@ -10,6 +10,7 @@ export interface AutoBracingSettings {
     seedJitterMm: number;
     maxBraceLengthMm: number;
     debugSectionColorsEnabled: boolean;
+    debugVoronoiSeedsEnabled: boolean;
 }
 
 type NumericConstraint = {
@@ -102,6 +103,7 @@ export function createDefaultAutoBracingSettings(): AutoBracingSettings {
         seedJitterMm: AUTO_BRACING_CONSTRAINTS.seedJitterMm.defaultValue,
         maxBraceLengthMm: AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.defaultValue,
         debugSectionColorsEnabled: false,
+        debugVoronoiSeedsEnabled: false,
     };
 }
 
@@ -119,6 +121,7 @@ export function normalizeAutoBracingSettings(input?: Partial<AutoBracingSettings
         seedJitterMm: clampNumeric(source.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm),
         maxBraceLengthMm: clampNumeric(source.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm),
         debugSectionColorsEnabled: normalizeBoolean(source.debugSectionColorsEnabled, defaults.debugSectionColorsEnabled),
+        debugVoronoiSeedsEnabled: normalizeBoolean(source.debugVoronoiSeedsEnabled, defaults.debugVoronoiSeedsEnabled),
     };
 }
 

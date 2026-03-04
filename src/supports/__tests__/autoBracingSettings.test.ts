@@ -20,6 +20,7 @@ test('auto-bracing defaults are created from the SSOT constraint defaults', () =
     assert.equal(settings.initialPattern, 'singleDiagonal');
     assert.equal(settings.repeatingPattern, 'singleDiagonal');
     assert.equal(settings.debugSectionColorsEnabled, false);
+    assert.equal(settings.debugVoronoiSeedsEnabled, false);
 });
 
 test('normalizeAutoBracingSettings clamps numeric values and restores invalid patterns', () => {
@@ -33,6 +34,7 @@ test('normalizeAutoBracingSettings clamps numeric values and restores invalid pa
         initialPattern: 'invalid-pattern' as any,
         repeatingPattern: 'crossDiagonal',
         debugSectionColorsEnabled: 'yes' as any,
+        debugVoronoiSeedsEnabled: 'yes' as any,
     });
 
     assert.equal(normalized.braceDiameterMm, AUTO_BRACING_CONSTRAINTS.braceDiameterMm.min);
@@ -44,6 +46,7 @@ test('normalizeAutoBracingSettings clamps numeric values and restores invalid pa
     assert.equal(normalized.initialPattern, 'singleDiagonal');
     assert.equal(normalized.repeatingPattern, 'crossDiagonal');
     assert.equal(normalized.debugSectionColorsEnabled, false);
+    assert.equal(normalized.debugVoronoiSeedsEnabled, false);
 });
 
 test('applyAutoBracingSettingsPatch keeps untouched fields and normalizes patched values', () => {
@@ -52,11 +55,13 @@ test('applyAutoBracingSettingsPatch keeps untouched fields and normalizes patche
         seedSpacingMm: 8.6,
         initialPattern: 'crossDiagonal',
         debugSectionColorsEnabled: true,
+        debugVoronoiSeedsEnabled: true,
     });
 
     assert.equal(patched.seedSpacingMm, 8.5);
     assert.equal(patched.initialPattern, 'crossDiagonal');
     assert.equal(patched.debugSectionColorsEnabled, true);
+    assert.equal(patched.debugVoronoiSeedsEnabled, true);
     assert.equal(patched.repeatingPattern, base.repeatingPattern);
     assert.equal(patched.braceDiameterMm, base.braceDiameterMm);
 });

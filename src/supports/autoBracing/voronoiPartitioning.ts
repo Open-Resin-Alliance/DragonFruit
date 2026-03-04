@@ -1,5 +1,3 @@
-import { AUTO_BRACING_HARD_RULES } from './settings';
-
 type Vec2 = { x: number; y: number };
 
 export type VoronoiSupportNode = {
@@ -13,6 +11,36 @@ export type VoronoiPartitionSettings = {
     seedJitterMm: number;
     maxNeighborDistanceMm: number;
 };
+
+export type VoronoiSeedMarker = {
+    supportId: string;
+    modelId: string;
+    point: Vec2;
+};
+
+export type VoronoiSeedDebugMarker = {
+    id: string;
+    modelId: string;
+    pos: { x: number; y: number; z: number };
+};
+
+let lastVoronoiSeedMarkers: VoronoiSeedMarker[] = [];
+
+export function getLastVoronoiSeedMarkers(): VoronoiSeedMarker[] {
+    return lastVoronoiSeedMarkers;
+}
+
+export function getVoronoiSeedDebugMarkers(): VoronoiSeedDebugMarker[] {
+    return lastVoronoiSeedMarkers.map((seed) => ({
+        id: `${seed.modelId}:${seed.supportId}`,
+        modelId: seed.modelId,
+        pos: {
+            x: seed.point.x,
+            y: seed.point.y,
+            z: -0.35,
+        },
+    }));
+}
 
 const EPS = 0.000001;
 
@@ -227,75 +255,46 @@ function multiSourceClaim(
 
     if (claimedBySupportId.size === nodes.length) return claimedBySupportId;
 
-    const claimedNodes = nodes.filter((node) => claimedBySupportId.has(node.supportId));
+    const stranded = new Set<string>();
     for (const node of nodes) {
-        if (claimedBySupportId.has(node.supportId)) continue;
-        const nearestClaimed = nearestNodeId(node.point, claimedNodes);
-        if (nearestClaimed) {
-            const centerId = claimedBySupportId.get(nearestClaimed);
-            if (centerId) {
-                claimedBySupportId.set(node.supportId, centerId);
-                continue;
+        if (!claimedBySupportId.has(node.supportId)) stranded.add(node.supportId);
+    }
+
+    let progress = true;
+    while (progress && stranded.size > 0) {
+        progress = false;
+        for (const supportId of [...stranded]) {
+            const neighbors = adjacency.get(supportId) ?? [];
+            let attachedCenter: string | null = null;
+            for (const neighborId of neighbors) {
+                const center = claimedBySupportId.get(neighborId);
+                if (center) {
+                    attachedCenter = center;
+                    break;
+                }
             }
+
+            if (!attachedCenter) continue;
+            claimedBySupportId.set(supportId, attachedCenter);
+            stranded.delete(supportId);
+            progress = true;
         }
-        claimedBySupportId.set(node.supportId, node.supportId);
+    }
+
+    for (const supportId of stranded) {
+        claimedBySupportId.set(supportId, supportId);
     }
 
     return claimedBySupportId;
-}
-
-function mergeSmallGroups(
-    groups: string[][],
-    nodeById: Map<string, VoronoiSupportNode>,
-    minGroupSize: number,
-): string[][] {
-    if (groups.length <= 1) return groups;
-
-    const finalGroups = groups.map((g) => [...g]);
-
-    for (let i = 0; i < finalGroups.length; i += 1) {
-        const group = finalGroups[i];
-        if (group.length >= minGroupSize) continue;
-        if (group.length === 0) continue;
-
-        let bestGroupIndex = -1;
-        let bestDistSq = Infinity;
-
-        for (let j = 0; j < finalGroups.length; j += 1) {
-            if (i === j) continue;
-            const other = finalGroups[j];
-            if (other.length === 0) continue;
-
-            for (const idA of group) {
-                const nodeA = nodeById.get(idA);
-                if (!nodeA) continue;
-                for (const idB of other) {
-                    const nodeB = nodeById.get(idB);
-                    if (!nodeB) continue;
-                    const distSq = squaredDistance(nodeA.point, nodeB.point);
-                    if (distSq < bestDistSq) {
-                        bestDistSq = distSq;
-                        bestGroupIndex = j;
-                    }
-                }
-            }
-        }
-
-        if (bestGroupIndex === -1) continue;
-        finalGroups[bestGroupIndex].push(...group);
-        finalGroups[i] = [];
-    }
-
-    return finalGroups.filter((group) => group.length >= minGroupSize);
 }
 
 export function partitionSupportsWithVoronoi(
     supports: VoronoiSupportNode[],
     settings: VoronoiPartitionSettings,
 ): string[][] {
+    lastVoronoiSeedMarkers = [];
     if (supports.length === 0) return [];
 
-    const minGroupSize = AUTO_BRACING_HARD_RULES.minGroupSize;
     const byModel = new Map<string, VoronoiSupportNode[]>();
     for (const support of supports) {
         const list = byModel.get(support.modelId) ?? [];
@@ -306,17 +305,32 @@ export function partitionSupportsWithVoronoi(
     const groupsAcrossModels: string[][] = [];
 
     for (const modelSupports of byModel.values()) {
-        if (modelSupports.length < minGroupSize) continue;
-
-        const nodeById = new Map(modelSupports.map((node) => [node.supportId, node]));
         const adjacency = buildAdjacency(modelSupports, settings.maxNeighborDistanceMm);
+        const nodeById = new Map(modelSupports.map((node) => [node.supportId, node]));
         const islands = findConnectedIslands(modelSupports, adjacency);
 
         const seeds = buildSeeds(modelSupports, settings);
         applyIslandFallbackSeeds(islands, nodeById, seeds);
 
+        for (const island of islands) {
+            if (island.length === 0) continue;
+            const hasSeed = island.some((id) => seeds.has(id));
+            if (hasSeed) continue;
+            seeds.add(island[0]);
+        }
+
         if (seeds.size === 0 && modelSupports.length > 0) {
             seeds.add(modelSupports[0].supportId);
+        }
+
+        for (const seedId of seeds) {
+            const node = nodeById.get(seedId);
+            if (!node) continue;
+            lastVoronoiSeedMarkers.push({
+                supportId: node.supportId,
+                modelId: node.modelId,
+                point: { x: node.point.x, y: node.point.y },
+            });
         }
 
         const claimedBySupportId = multiSourceClaim(modelSupports, adjacency, seeds);
@@ -330,8 +344,7 @@ export function partitionSupportsWithVoronoi(
             groupsByCenter.set(centerId, list);
         }
 
-        const merged = mergeSmallGroups([...groupsByCenter.values()], nodeById, minGroupSize);
-        for (const group of merged) {
+        for (const group of groupsByCenter.values()) {
             groupsAcrossModels.push(group.sort());
         }
     }

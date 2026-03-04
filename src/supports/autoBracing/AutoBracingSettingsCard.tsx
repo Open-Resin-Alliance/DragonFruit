@@ -70,7 +70,7 @@ export function AutoBracingSettingsCard({
                         />
                     </label>
                     <label className="space-y-1 min-w-0">
-                        <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Seed spacing (mm)</div>
+                        <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Seed spacing (grid cells)</div>
                         <NumberInput
                             value={settings.seedSpacingMm}
                             onChange={(value) => onChange({ seedSpacingMm: value })}
@@ -110,7 +110,7 @@ export function AutoBracingSettingsCard({
                 {/* Tuning Settings */}
                 <div className="grid grid-cols-2 gap-1.5">
                     <label className="space-y-1 min-w-0">
-                        <div className="text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Seed jitter (mm) - Voronoi</div>
+                        <div className="text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>Seed jitter (grid cells) - Voronoi</div>
                         <NumberInput
                             value={settings.seedJitterMm}
                             onChange={(value) => onChange({ seedJitterMm: value })}
@@ -134,6 +134,16 @@ export function AutoBracingSettingsCard({
                     type="checkbox"
                     checked={settings.debugSectionColorsEnabled}
                     onChange={(event) => onChange({ debugSectionColorsEnabled: event.target.checked })}
+                    className="ui-checkbox"
+                />
+            </label>
+
+            <label className="flex items-center justify-between rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-0), transparent 8%)' }}>
+                <span className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Show Voronoi seed markers</span>
+                <input
+                    type="checkbox"
+                    checked={settings.debugVoronoiSeedsEnabled}
+                    onChange={(event) => onChange({ debugVoronoiSeedsEnabled: event.target.checked })}
                     className="ui-checkbox"
                 />
             </label>

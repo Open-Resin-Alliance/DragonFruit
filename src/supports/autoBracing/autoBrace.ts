@@ -12,6 +12,7 @@ import {
     getTrunkSegmentEndpoints,
     getBranchSegmentEndpoints,
 } from '../SupportPrimitives/Knot/knotUtils';
+import { snapToGridIndex } from '../PlacementLogic/Grid/gridMath';
 import { JOINT_DIAMETER_OFFSET_MM } from '../constants';
 import { getSupportBraceSnapshot, setSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
 import type { SupportBraceState } from '../SupportTypes/SupportBrace/types';
@@ -27,11 +28,13 @@ import type {
 import {
     AUTO_BRACING_HARD_RULES,
     normalizeAutoBracingSettings,
-    type AutoBracingPattern,
     type AutoBracingSettings,
 } from './settings';
 import { generateRequiredSupportBraces } from './generativeBracing';
 import { partitionSupportsWithVoronoi } from './voronoiPartitioning';
+import { applyInitialPattern } from './initialPattern';
+import { applyRepeatingPattern } from './repeatingPattern';
+import { buildBraceProfile } from './braceDiameter';
 
 const EPS = 0.000001;
 const SQRT2 = Math.SQRT2;
@@ -311,17 +314,64 @@ function horizontalDistanceAtZ(a: SupportSample, b: SupportSample, z: number): {
     return { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
 }
 
-function buildGroupPairs(group: SupportSample[], maxLen: number): Edge[] {
+function getSupportBottomAnchor(support: SupportSample): Vec3 {
+    let bottomPoint: Vec3 | null = null;
+
+    for (const segment of support.segments) {
+        for (const point of [segment.start, segment.end]) {
+            if (!bottomPoint || point.z < bottomPoint.z) bottomPoint = point;
+        }
+    }
+
+    return bottomPoint ?? support.sortAnchor;
+}
+
+function getGridCorrelatedPoint(
+    support: SupportSample,
+    gridSettings?: { enabled: boolean; spacingMm: number },
+): { x: number; y: number } {
+    const base = getSupportBottomAnchor(support);
+    if (!gridSettings?.enabled || gridSettings.spacingMm <= 0) {
+        return { x: base.x, y: base.y };
+    }
+
+    const gx = snapToGridIndex(base.x, gridSettings.spacingMm);
+    const gy = snapToGridIndex(base.y, gridSettings.spacingMm);
+    return {
+        x: gx * gridSettings.spacingMm,
+        y: gy * gridSettings.spacingMm,
+    };
+}
+
+function isCardinalDelta(dx: number, dy: number, spacingMm: number): boolean {
+    const axisToleranceMm = Math.max(0.1, spacingMm * 0.05);
+    return Math.abs(dx) <= axisToleranceMm || Math.abs(dy) <= axisToleranceMm;
+}
+
+function buildGroupPairs(
+    group: SupportSample[],
+    maxLen: number,
+    gridSettings?: { enabled: boolean; spacingMm: number },
+): Edge[] {
     if (group.length < 2) return [];
 
     const maxRun = maxHorizontalRunFromBraceLen(maxLen);
+    const gridCardinalOnly = Boolean(gridSettings?.enabled);
+    const axisToleranceMm = Math.max(0.1, (gridSettings?.spacingMm ?? 1) * 0.05);
 
     const edges: Edge[] = [];
     for (let i = 0; i < group.length; i++) {
         for (let j = i + 1; j < group.length; j++) {
             const a = group[i], b = group[j];
-            const dx = b.sortAnchor.x - a.sortAnchor.x;
-            const dy = b.sortAnchor.y - a.sortAnchor.y;
+            const aPoint = getGridCorrelatedPoint(a, gridSettings);
+            const bPoint = getGridCorrelatedPoint(b, gridSettings);
+            const dx = bPoint.x - aPoint.x;
+            const dy = bPoint.y - aPoint.y;
+
+            if (gridCardinalOnly && Math.abs(dx) > axisToleranceMm && Math.abs(dy) > axisToleranceMm) {
+                continue;
+            }
+
             const hDist = Math.sqrt(dx * dx + dy * dy);
             if (hDist < 0.001 || hDist > maxRun) continue;
             edges.push({ a, b, hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) });
@@ -407,37 +457,50 @@ function buildGroupPairs(group: SupportSample[], maxLen: number): Edge[] {
 
 export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: AutoBracingSettings): BuildSnapshotResult {
     const settings = normalizeAutoBracingSettings(inputSettings);
+    const activeGridSettings = getSettings().grid;
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
     const trunkSamples = buildSupportSamples(snapshot).filter(s => s.supportKind === 'trunk');
 
     let supportBraceState = getSupportBraceSnapshot();
 
-    // -- PRELIMINARY PAIRING PASS (To detect trunks needing generative fallback) --
-    const tempByModel = new Map<string, SupportSample[]>();
-    for (const s of trunkSamples) {
-        if (!tempByModel.has(s.modelId)) tempByModel.set(s.modelId, []);
-        tempByModel.get(s.modelId)!.push(s);
+    // -- PRELIMINARY BRACING SNAPSHOT (To detect trunks needing generative fallback) --
+    // Use actually existing brace geometry only. Candidate proximity pairs can over-estimate
+    // coverage and incorrectly suppress support-brace generation for under-braced tall trunks.
+    const trunkIdBySegmentId = new Map<string, string>();
+    for (const trunk of Object.values(snapshot.trunks)) {
+        for (const seg of trunk.segments) trunkIdBySegmentId.set(seg.id, trunk.id);
     }
-    
+
     const existingTrunkEdges: Array<{ a: string; b: string; angleRad: number }> = [];
-    for (const list of tempByModel.values()) {
-        // Evaluate physical pairing across the ENTIRE model first.
-        // If a trunk can physically reach another trunk, it is not "isolated", 
-        // even if it ultimately gets placed in a different group later.
-        const pairs = buildGroupPairs(list, settings.maxBraceLengthMm);
-        for (const edge of pairs) {
-            existingTrunkEdges.push({
-                a: edge.a.supportId,
-                b: edge.b.supportId,
-                angleRad: edge.angleRad
-            });
-        }
+    for (const brace of Object.values(snapshot.braces)) {
+        const startKnot = snapshot.knots[brace.startKnotId];
+        const endKnot = snapshot.knots[brace.endKnotId];
+        if (!startKnot || !endKnot) continue;
+
+        const aTrunkId = trunkIdBySegmentId.get(startKnot.parentShaftId) ?? null;
+        const bTrunkId = trunkIdBySegmentId.get(endKnot.parentShaftId) ?? null;
+        if (!aTrunkId || !bTrunkId || aTrunkId === bTrunkId) continue;
+
+        const angleRad = normalizeAxisAngleRad(
+            Math.atan2(endKnot.pos.y - startKnot.pos.y, endKnot.pos.x - startKnot.pos.x),
+        );
+        existingTrunkEdges.push({
+            a: aTrunkId,
+            b: bTrunkId,
+            angleRad,
+        });
     }
 
     // -- GENERATIVE PHASE --
     // Only generate Support Braces if a tall trunk failed to find 2-axis bracing
     // amongst the existing trunks in the preliminary pass.
-    const generatedSupportBraces = generateRequiredSupportBraces(snapshot, supportBraceState, settings, existingTrunkEdges);
+    const generatedSupportBraces = generateRequiredSupportBraces(
+        snapshot,
+        supportBraceState,
+        settings,
+        existingTrunkEdges,
+        activeGridSettings,
+    );
     
     let generatedSupportBraceCount = 0;
     if (generatedSupportBraces.length > 0) {
@@ -509,41 +572,41 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         supportBracesByTrunkId.set(assignedTrunkId, list);
     }
 
-    const byModel = new Map<string, SupportSample[]>();
-    for (const s of trunkSamples) {
-        if (!byModel.has(s.modelId)) byModel.set(s.modelId, []);
-        byModel.get(s.modelId)!.push(s);
-    }
+    const trunkById = new Map(trunkSamples.map((trunk) => [trunk.supportId, trunk]));
+    const seedUnitMm = activeGridSettings.spacingMm > 0
+        ? activeGridSettings.spacingMm
+        : 1;
+    const effectiveSeedSpacingMm = settings.seedSpacingMm * seedUnitMm;
+    const effectiveSeedJitterMm = settings.seedJitterMm * seedUnitMm;
 
-    const groupedSupports: SupportSample[][] = [];
-    for (const list of byModel.values()) {
-        const trunkById = new Map(list.map((trunk) => [trunk.supportId, trunk]));
-        const trunkGroupIds = partitionSupportsWithVoronoi(
-            list.map((trunk) => ({
+    const trunkGroupIds = partitionSupportsWithVoronoi(
+        trunkSamples.map((trunk) => {
+            const base = getGridCorrelatedPoint(trunk, activeGridSettings);
+            return {
                 supportId: trunk.supportId,
                 modelId: trunk.modelId,
-                point: { x: trunk.sortAnchor.x, y: trunk.sortAnchor.y },
-            })),
-            {
-                seedSpacingMm: settings.seedSpacingMm,
-                seedJitterMm: settings.seedJitterMm,
-                maxNeighborDistanceMm: maxRun,
-            },
-        );
+                point: { x: base.x, y: base.y },
+            };
+        }),
+        {
+            seedSpacingMm: effectiveSeedSpacingMm,
+            seedJitterMm: effectiveSeedJitterMm,
+            maxNeighborDistanceMm: maxRun,
+        },
+    );
 
-        for (const groupIds of trunkGroupIds) {
-            const g = groupIds
-                .map((id) => trunkById.get(id))
-                .filter((trunk): trunk is SupportSample => Boolean(trunk));
-            if (g.length < AUTO_BRACING_HARD_RULES.minGroupSize) continue;
+    const groupedSupports: SupportSample[][] = [];
+    for (const groupIds of trunkGroupIds) {
+        const g = groupIds
+            .map((id) => trunkById.get(id))
+            .filter((trunk): trunk is SupportSample => Boolean(trunk));
 
-            const members: SupportSample[] = [...g];
-            for (const trunk of g) {
-                const sbs = supportBracesByTrunkId.get(trunk.supportId);
-                if (sbs && sbs.length > 0) members.push(...sbs);
-            }
-            groupedSupports.push(members);
+        const members: SupportSample[] = [...g];
+        for (const trunk of g) {
+            const sbs = supportBracesByTrunkId.get(trunk.supportId);
+            if (sbs && sbs.length > 0) members.push(...sbs);
         }
+        groupedSupports.push(members);
     }
 
     const groupedIds = new Set<string>();
@@ -571,14 +634,31 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     for (let groupIndex = 0; groupIndex < groupedSupports.length; groupIndex += 1) {
         const groupMembers = groupedSupports[groupIndex];
         const groupTrunks = groupMembers.filter((s) => s.supportKind === 'trunk');
-        const pairs = buildGroupPairs(groupTrunks, settings.maxBraceLengthMm);
+        const pairs = buildGroupPairs(groupTrunks, settings.maxBraceLengthMm, activeGridSettings);
+        const braceProfile = buildBraceProfile(settings.braceDiameterMm);
         const extra = groupMembers.filter((s) => s.supportKind === 'supportBrace');
         if (extra.length > 0 && groupTrunks.length > 0) {
             const supportBraceCandidateEdges: Edge[] = [];
             for (const sb of extra) {
                 for (const trunk of groupTrunks) {
-                    const zRef = referenceZForDistance(trunk, sb);
-                    const d = horizontalDistanceAtZ(trunk, sb, zRef);
+                    let d: { hDist: number; angleRad: number } | null = null;
+
+                    if (activeGridSettings.enabled) {
+                        const aBase = getGridCorrelatedPoint(trunk, activeGridSettings);
+                        const bBase = getGridCorrelatedPoint(sb, activeGridSettings);
+                        const dx = bBase.x - aBase.x;
+                        const dy = bBase.y - aBase.y;
+                        if (!isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
+
+                        const hDist = Math.sqrt(dx * dx + dy * dy);
+                        if (hDist < 0.000001) continue;
+                        d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                    } else {
+                        const zRef = referenceZForDistance(trunk, sb);
+                        d = horizontalDistanceAtZ(trunk, sb, zRef);
+                        if (!d) continue;
+                    }
+
                     if (!d) continue;
                     if (d.hDist > maxRun + EPS) continue;
                     supportBraceCandidateEdges.push({
@@ -595,8 +675,24 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 for (let j = i + 1; j < extra.length; j++) {
                     const sb1 = extra[i];
                     const sb2 = extra[j];
-                    const zRef = referenceZForDistance(sb1, sb2);
-                    const d = horizontalDistanceAtZ(sb1, sb2, zRef);
+                    let d: { hDist: number; angleRad: number } | null = null;
+
+                    if (activeGridSettings.enabled) {
+                        const aBase = getGridCorrelatedPoint(sb1, activeGridSettings);
+                        const bBase = getGridCorrelatedPoint(sb2, activeGridSettings);
+                        const dx = bBase.x - aBase.x;
+                        const dy = bBase.y - aBase.y;
+                        if (!isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
+
+                        const hDist = Math.sqrt(dx * dx + dy * dy);
+                        if (hDist < 0.000001) continue;
+                        d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                    } else {
+                        const zRef = referenceZForDistance(sb1, sb2);
+                        d = horizontalDistanceAtZ(sb1, sb2, zRef);
+                        if (!d) continue;
+                    }
+
                     if (!d) continue;
                     if (d.hDist > maxRun + EPS) continue;
                     // For the sake of the graph, we inject this as an edge, keeping the structure generic
@@ -742,59 +838,65 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         ladder.forEach((anchorZ, tierIndex) => {
             const isInitial = tierIndex === 0;
             const pattern = isInitial ? settings.initialPattern : settings.repeatingPattern;
-            for (const edge of pairs) {
-                const place = (lowS: SupportSample, highS: SupportSample, section: 'initial' | 'repeating') => {
-                    const lowAnchor = resolveAnchorAtZ(lowS, anchorZ);
-                    if (!lowAnchor) return;
+            const place = (lowS: SupportSample, highS: SupportSample, section: 'initial' | 'repeating') => {
+                const lowAnchor = resolveAnchorAtZ(lowS, anchorZ);
+                if (!lowAnchor) return;
 
-                    const sameTierAnchor = resolveAnchorAtZ(highS, anchorZ);
-                    if (!sameTierAnchor) return;
+                const sameTierAnchor = resolveAnchorAtZ(highS, anchorZ);
+                if (!sameTierAnchor) return;
 
-                    let dzGuess = Math.sqrt(
-                        (sameTierAnchor.pos.x - lowAnchor.pos.x) ** 2
-                        + (sameTierAnchor.pos.y - lowAnchor.pos.y) ** 2,
-                    );
-                    if (dzGuess < EPS) return;
+                let dzGuess = Math.sqrt(
+                    (sameTierAnchor.pos.x - lowAnchor.pos.x) ** 2
+                    + (sameTierAnchor.pos.y - lowAnchor.pos.y) ** 2,
+                );
+                if (dzGuess < EPS) return;
 
-                    let highAnchor: AnchorPoint | null = null;
-                    for (let iter = 0; iter < 3; iter++) {
-                        highAnchor = resolveAnchorAtZ(highS, anchorZ + dzGuess);
-                        if (!highAnchor) return;
-                        const hDist = Math.sqrt(
-                            (highAnchor.pos.x - lowAnchor.pos.x) ** 2
-                            + (highAnchor.pos.y - lowAnchor.pos.y) ** 2,
-                        );
-                        if (Math.abs(hDist - dzGuess) < 0.01) {
-                            dzGuess = hDist;
-                            break;
-                        }
-                        dzGuess = hDist;
-                        if (dzGuess < EPS) return;
-                    }
-
-                    if (dzGuess > maxRun + EPS) return;
-
-                    if (anchorZ + dzGuess >= lowS.topReferenceZ - 0.1 || anchorZ + dzGuess >= highS.topReferenceZ - 0.1) return;
-
+                let highAnchor: AnchorPoint | null = null;
+                for (let iter = 0; iter < 3; iter++) {
                     highAnchor = resolveAnchorAtZ(highS, anchorZ + dzGuess);
                     if (!highAnchor) return;
+                    const hDist = Math.sqrt(
+                        (highAnchor.pos.x - lowAnchor.pos.x) ** 2
+                        + (highAnchor.pos.y - lowAnchor.pos.y) ** 2,
+                    );
+                    if (Math.abs(hDist - dzGuess) < 0.01) {
+                        dzGuess = hDist;
+                        break;
+                    }
+                    dzGuess = hDist;
+                    if (dzGuess < EPS) return;
+                }
 
-                    const dx = highAnchor.pos.x - lowAnchor.pos.x;
-                    const dy = highAnchor.pos.y - lowAnchor.pos.y;
-                    const dz = highAnchor.pos.z - lowAnchor.pos.z;
-                    const braceLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                    if (braceLen > settings.maxBraceLengthMm + EPS) return;
+                if (dzGuess > maxRun + EPS) return;
 
-                    if (!bracePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, settings.braceDiameterMm)) return;
+                if (anchorZ + dzGuess >= lowS.topReferenceZ - 0.1 || anchorZ + dzGuess >= highS.topReferenceZ - 0.1) return;
 
-                    const sId = createKnotId(), eId = createKnotId(), bId = createBraceId();
-                    generatedKnots[sId] = { id: sId, parentShaftId: lowAnchor.segmentId, t: lowAnchor.t, pos: lowAnchor.pos, diameter: lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
-                    generatedKnots[eId] = { id: eId, parentShaftId: highAnchor.segmentId, t: highAnchor.t, pos: highAnchor.pos, diameter: highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
-                    generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: sId, endKnotId: eId, profile: { diameter: settings.braceDiameterMm }, debugSection: section };
-                };
+                highAnchor = resolveAnchorAtZ(highS, anchorZ + dzGuess);
+                if (!highAnchor) return;
 
-                place(edge.a, edge.b, isInitial ? 'initial' : 'repeating');
-                if (pattern === 'crossDiagonal') place(edge.b, edge.a, isInitial ? 'initial' : 'repeating');
+                const dx = highAnchor.pos.x - lowAnchor.pos.x;
+                const dy = highAnchor.pos.y - lowAnchor.pos.y;
+                const dz = highAnchor.pos.z - lowAnchor.pos.z;
+
+                if (activeGridSettings.enabled) {
+                    if (!isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) return;
+                }
+
+                const braceLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (braceLen > settings.maxBraceLengthMm + EPS) return;
+
+                if (!bracePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, settings.braceDiameterMm)) return;
+
+                const sId = createKnotId(), eId = createKnotId(), bId = createBraceId();
+                generatedKnots[sId] = { id: sId, parentShaftId: lowAnchor.segmentId, t: lowAnchor.t, pos: lowAnchor.pos, diameter: lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
+                generatedKnots[eId] = { id: eId, parentShaftId: highAnchor.segmentId, t: highAnchor.t, pos: highAnchor.pos, diameter: highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
+                generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: sId, endKnotId: eId, profile: braceProfile, debugSection: section };
+            };
+
+            if (isInitial) {
+                applyInitialPattern(pairs, pattern, place);
+            } else {
+                applyRepeatingPattern(pairs, pattern, place);
             }
         });
     }
