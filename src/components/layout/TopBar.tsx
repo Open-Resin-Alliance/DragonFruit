@@ -248,6 +248,19 @@ export function TopBar({
 
     const target = event.target as HTMLElement | null;
     if (!target) return;
+    const topbarRoot = event.currentTarget;
+    const topbarRect = topbarRoot.getBoundingClientRect();
+
+    // Guardrail: only allow drag starts from the visible topbar strip itself.
+    // This prevents nested modals/menus rendered under TopBar from dragging the app window.
+    if (
+      event.clientX < topbarRect.left
+      || event.clientX > topbarRect.right
+      || event.clientY < topbarRect.top
+      || event.clientY > topbarRect.bottom
+    ) {
+      return;
+    }
 
     const interactiveSelector = [
       'button',
@@ -259,7 +272,11 @@ export function TopBar({
       '[data-no-window-drag="true"]',
     ].join(',');
 
-    if (target.closest(interactiveSelector)) return;
+    let node: HTMLElement | null = target;
+    while (node && node !== topbarRoot) {
+      if (node.matches(interactiveSelector)) return;
+      node = node.parentElement;
+    }
 
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
