@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod network;
+mod plugin_registry;
+
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Deserialize;
 use serde::Serialize;
@@ -315,7 +318,9 @@ async fn slice_solid_native_to_temp_path(
         slicer_pool().install(
             || -> Result<(String, u64, NativeSlicerPerfMetrics, NativeSlicerRuntimeMetrics), String> {
             let ext = if job.output_format.trim().is_empty() {
-                "nanodlp"
+                let format_provider = plugin_registry::get_format_provider()
+                    .unwrap_or_else(|_| plugin_registry::get_default_format_provider());
+                format_provider.default_export_format()
             } else {
                 job.output_format.trim_start_matches('.')
             };
@@ -390,7 +395,9 @@ async fn save_print_file(args: SavePrintFileArgs) -> Result<String, String> {
         let suggested_name = {
             let trimmed = args.default_filename.trim();
             if trimmed.is_empty() {
-                "slice_export.nanodlp".to_string()
+                let format_provider = plugin_registry::get_format_provider()
+                    .unwrap_or_else(|_| plugin_registry::get_default_format_provider());
+                format_provider.default_export_filename()
             } else {
                 trimmed.to_string()
             }
@@ -421,7 +428,9 @@ async fn save_print_file_from_path(args: SavePrintFileFromPathArgs) -> Result<St
         let suggested_name = {
             let trimmed = args.default_filename.trim();
             if trimmed.is_empty() {
-                "slice_export.nanodlp".to_string()
+                let format_provider = plugin_registry::get_format_provider()
+                    .unwrap_or_else(|_| plugin_registry::get_default_format_provider());
+                format_provider.default_export_filename()
             } else {
                 trimmed.to_string()
             }
@@ -541,6 +550,9 @@ fn main() {
     // Sweep week-old stale temp artifacts on app startup.
     let _ = sweep_stale_temp_artifacts(7 * 24 * 60 * 60);
 
+    // Initialize plugin registry and register built-in plugins
+    let _ = plugin_registry::initialize_plugins();
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
@@ -553,7 +565,8 @@ fn main() {
             read_print_layer_png,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,
-            cleanup_all_print_temp_files
+            cleanup_all_print_temp_files,
+            network::plugin_network_request
         ])
         .run(tauri::generate_context!())
         .expect("error while running DragonFruit desktop app");

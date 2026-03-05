@@ -33,6 +33,7 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
     candidate.cpuProfile === 'balanced' ? 'balanced' : 'max';
 
   const pngCompressionStrategy: PngCompressionStrategy =
+    candidate.pngCompressionStrategy === 'fastest' ||
     candidate.pngCompressionStrategy === 'balanced' ||
     candidate.pngCompressionStrategy === 'smallest' ||
     candidate.pngCompressionStrategy === 'optimal'

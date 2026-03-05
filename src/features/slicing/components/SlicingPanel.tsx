@@ -16,6 +16,8 @@ import {
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
 import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
+import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 interface SlicingPanelProps {
   models: LoadedModel[];
@@ -453,15 +455,11 @@ export function SlicingPanel({
 
     void (async () => {
       try {
-        const response = await fetch('/api/network/plugin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pluginId: 'athena',
-            operation: 'nanodlp/materials',
-            ipAddress: nanodlpHost,
-            port: nanodlpPort,
-          }),
+        const response = await pluginNetworkFetch({
+          pluginId: 'athena',
+          operation: 'nanodlp/materials',
+          ipAddress: nanodlpHost,
+          port: nanodlpPort,
         });
 
         const payload = await response.json().catch(() => ({} as Record<string, unknown>));
@@ -548,6 +546,12 @@ export function SlicingPanel({
     let completedTotalLayersFromResult = 0;
 
     try {
+      // Proactively clean stale temp files (older than 1 hour) before starting new slice
+      // to prevent disk space exhaustion from repeated auto-slicing.
+      await cleanupStalePrintTempArtifacts(60 * 60).catch((err) => {
+        console.warn('[Slicing] Failed to cleanup stale temp artifacts before slice:', err);
+      });
+
       if (captureSceneThumbnailPng && !skipThumbnailCapture) {
         try {
           exportThumbnailPng = await captureSceneThumbnailPng();
@@ -720,10 +724,24 @@ export function SlicingPanel({
       } else {
         console.error('Slice ZIP export failed:', error);
         const message = error instanceof Error ? error.message : 'Unknown slicing error.';
+        
+        // If disk space error, aggressively clean ALL temp files to recover space
+        if (message.includes('not enough space') || message.includes('os error 112') || message.includes('disk full')) {
+          console.warn('[Slicing] Disk space error detected — cleaning ALL temp artifacts.');
+          await cleanupAllPrintTempArtifacts().then((removed) => {
+            console.info(`[Slicing] Emergency cleanup removed ${removed} temp file(s).`);
+            alert(`Disk space error! Cleaned ${removed} temporary slice files. Please free up disk space or slice at lower resolution.`);
+          }).catch((cleanupErr) => {
+            console.error('[Slicing] Emergency cleanup failed:', cleanupErr);
+            alert(`Slice ZIP export failed: ${message}\n\nFailed to clean temp files. Please manually delete files in %TEMP% matching "dragonfruit-slice-*"`);
+          });
+        } else {
+          alert(`Slice ZIP export failed: ${message}`);
+        }
+        
         setCurrentPhase('Failed');
         setSliceStatus('Failed');
         setSlicingModalStage('failed');
-        alert(`Slice ZIP export failed: ${message}`);
       }
     } finally {
       if (slicingAbortControllerRef.current === abortController) {
@@ -774,12 +792,13 @@ export function SlicingPanel({
     }
 
     // Use setTimeout to ensure DOM is ready and state is settled.
+    // Increased from 50ms to 500ms to reduce excessive temp file creation during rapid changes.
     autoSliceTimeoutRef.current = window.setTimeout(() => {
       autoSliceTimeoutRef.current = null;
       if (autoSliceTriggeredRef.current) return;
       autoSliceTriggeredRef.current = true;
       void handleSliceZipExportRef.current?.();
-    }, 50);
+    }, 500);
 
     return () => {
       if (autoSliceTimeoutRef.current !== null) {

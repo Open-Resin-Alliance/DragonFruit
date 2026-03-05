@@ -129,6 +129,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
+import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 interface ShaftHoverDebugDetail {
   segmentId: string | null;
@@ -2466,19 +2467,15 @@ export default function Home() {
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
 
-      const response = await fetch('/api/network/plugin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pluginId: 'athena',
-          operation: 'nanodlp/job/import',
-          ipAddress: host,
-          port,
-          zipBase64,
-          zipFilePath: nativeTempPath || undefined,
-          path: pathBase,
-          profileId: selectedMaterialId,
-        }),
+      const response = await pluginNetworkFetch({
+        pluginId: 'athena',
+        operation: 'nanodlp/job/import',
+        ipAddress: host,
+        port,
+        zipBase64,
+        zipFilePath: nativeTempPath || undefined,
+        path: pathBase,
+        profileId: selectedMaterialId,
       });
 
       const payload = await response.json().catch(() => ({} as any));
@@ -2508,17 +2505,13 @@ export default function Home() {
 
       while ((Date.now() - startedAt) < timeoutMs) {
         try {
-          const responseReady = await fetch('/api/network/plugin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              pluginId: 'athena',
-              operation: 'nanodlp/plates/list/json',
-              ipAddress: host,
-              port,
-              plateId: resolvedPlateId,
-              jobName: pathBase,
-            }),
+          const responseReady = await pluginNetworkFetch({
+            pluginId: 'athena',
+            operation: 'nanodlp/plates/list/json',
+            ipAddress: host,
+            port,
+            plateId: resolvedPlateId,
+            jobName: pathBase,
           });
 
           const readyPayload = await responseReady.json().catch(() => ({} as any));
@@ -2603,16 +2596,12 @@ export default function Home() {
     setPrintingDeviceProcessingStartedAtMs(null);
 
     try {
-      const response = await fetch('/api/network/plugin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pluginId: 'athena',
-          operation: 'nanodlp/printer/start',
-          ipAddress: host,
-          port,
-          plateId: printingReadyPlateId,
-        }),
+      const response = await pluginNetworkFetch({
+        pluginId: 'athena',
+        operation: 'nanodlp/printer/start',
+        ipAddress: host,
+        port,
+        plateId: printingReadyPlateId,
       });
 
       const payload = await response.json().catch(() => ({} as any));
@@ -6313,7 +6302,7 @@ export default function Home() {
   }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
 
   return (
-    <div className="ui-shell relative h-screen w-screen overflow-hidden">
+    <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
       <TopBar
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}

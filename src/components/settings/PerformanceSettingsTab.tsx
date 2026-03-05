@@ -1,8 +1,9 @@
 'use client';
 
 import React from 'react';
-import { Cpu, Gauge, Sparkles, Zap } from 'lucide-react';
+import { Cpu, Gauge, Sparkles, Zap, Trash2 } from 'lucide-react';
 import type { SlicingPerformanceSettings, PngCompressionStrategy } from '@/components/settings/performancePreferences';
+import { cleanupAllPrintTempArtifacts, cleanupStalePrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 interface PerformanceSettingsTabProps {
   settings: SlicingPerformanceSettings;
@@ -252,6 +253,88 @@ export function PerformanceSettingsTab({
               {settings.bvhAccelerationEnabled ? 'On' : 'Off'}
             </button>
           </div>
+        </div>
+      </section>
+
+      {/* Temp File Cleanup Section */}
+      <section
+        className="rounded-lg border p-3"
+        style={{
+          background: 'var(--surface-1)',
+          borderColor: 'var(--border-subtle)',
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+            }}
+          >
+            <Trash2 className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+          </span>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Temp File Cleanup
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Free disk space by removing temporary slice files.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const removed = await cleanupStalePrintTempArtifacts(60 * 60);
+                alert(`Cleaned ${removed} temp file(s) older than 1 hour.`);
+              } catch (error) {
+                console.error('[Cleanup] Failed:', error);
+                alert('Cleanup failed. See console for details.');
+              }
+            }}
+            className="w-full rounded-md border p-2.5 text-left transition-all hover:border-[var(--accent)] hover:bg-[color-mix(in_srgb,var(--accent),var(--surface-0)_92%)]"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'var(--surface-0)',
+            }}
+          >
+            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Clean Stale Files
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Remove temp files older than 1 hour
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={async () => {
+              if (!confirm('Delete ALL temporary slice files? This cannot be undone.')) return;
+              try {
+                const removed = await cleanupAllPrintTempArtifacts();
+                alert(`Cleaned ${removed} temp file(s).`);
+              } catch (error) {
+                console.error('[Cleanup] Failed:', error);
+                alert('Cleanup failed. See console for details.');
+              }
+            }}
+            className="w-full rounded-md border p-2.5 text-left transition-all hover:border-red-500/50 hover:bg-red-500/5"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: 'var(--surface-0)',
+            }}
+          >
+            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Clean All Files
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Emergency cleanup: delete all temp slices
+            </div>
+          </button>
         </div>
       </section>
     </div>

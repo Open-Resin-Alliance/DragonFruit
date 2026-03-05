@@ -25,19 +25,10 @@ import {
   type PrinterProfile,
 } from '@/features/profiles/profileStore';
 import {
-  NANODLP_ADVANCED_SECTIONS,
-  NANODLP_BASIC_SECTIONS,
-  NANODLP_PRIMARY_EDIT_FIELDS,
-  denormalizeNanodlpEditDraftForBackend,
-  getNanoDlpFieldHelpText,
-  isNanoDlpDynamicWaitEnabled,
-  resolveNanodlpEditDraftFromMeta,
-  resolveNanoDlpAdvancedSectionId,
-  resolveNanodlpMaterialProcessValues,
-  type NanoDlpAdvancedSectionDef,
-  type NanoDlpBasicSection,
-  type NanoDlpPrimaryEditField,
-} from '../../../plugins/athena/nanodlpProfilePlugin';
+  getDefaultProfileNetworkUiAdapter,
+  getProfileNetworkUiAdapter,
+} from '@/features/plugins/pluginRegistry';
+import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 type ProfileSettingsModalProps = {
   isOpen: boolean;
@@ -84,8 +75,16 @@ function isLikelyNumericNanoDlpField(key: string, value: string): boolean {
   );
 }
 
-function buildNanoDlpMaterialChips(material: NanoDlpMaterial): string[] {
-  const processValues = resolveNanodlpMaterialProcessValues(material.meta ?? {});
+function buildNanoDlpMaterialChips(
+  material: NanoDlpMaterial,
+  resolveMaterialProcessValues: (meta: Record<string, unknown>) => {
+    layerHeightMm?: number;
+    normalExposureSec?: number;
+    bottomExposureSec?: number;
+    bottomLayerCount?: number;
+  },
+): string[] {
+  const processValues = resolveMaterialProcessValues(material.meta ?? {});
   const parts: string[] = [];
 
   if (processValues.bottomLayerCount != null) {
@@ -405,12 +404,20 @@ export function ProfileSettingsModal({
   }, [filteredMaterialProfiles, selectedMaterialId]);
 
   const selectedPrinterSupportsNetworkSettings = Boolean(selectedPrinter?.networkSupport);
-  const isNanodlpPrinter = selectedPrinter?.networkSupport === 'nanodlp';
-  const selectedNetworkModeLabel = selectedPrinter?.networkSupport === 'nanodlp' ? 'NanoDLP' : 'Unknown';
+  const networkUiAdapter = React.useMemo(
+    () => getProfileNetworkUiAdapter(selectedPrinter?.networkSupport),
+    [selectedPrinter?.networkSupport],
+  );
+  const effectiveNetworkUiAdapter = React.useMemo(
+    () => networkUiAdapter ?? getDefaultProfileNetworkUiAdapter(),
+    [networkUiAdapter],
+  );
+  const isNanodlpPrinter = Boolean(networkUiAdapter);
+  const selectedNetworkModeLabel = networkUiAdapter?.displayName ?? 'Unknown';
   const shouldUseNanodlpOnDeviceMaterials = Boolean(
-    selectedPrinter?.networkSupport === 'nanodlp'
-    && selectedPrinter.networkConnection?.connected
-    && (selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress),
+    Boolean(networkUiAdapter)
+    && selectedPrinter?.networkConnection?.connected
+    && (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress),
   );
   const shouldShowNanodlpConnectInfo = Boolean(isNanodlpPrinter && !shouldUseNanodlpOnDeviceMaterials);
 
@@ -431,18 +438,22 @@ export function ProfileSettingsModal({
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
   const selectedNanodlpHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
 
+  const primaryEditFields = effectiveNetworkUiAdapter.primaryEditFields;
+  const basicEditSections = effectiveNetworkUiAdapter.basicSections;
+  const advancedEditSectionsDefs = effectiveNetworkUiAdapter.advancedSections;
+
   const nanodlpPrimaryFieldByKey = React.useMemo(() => {
-    const map = new Map<string, NanoDlpPrimaryEditField>();
-    NANODLP_PRIMARY_EDIT_FIELDS.forEach((field) => {
+    const map = new Map<string, (typeof primaryEditFields)[number]>();
+    primaryEditFields.forEach((field) => {
       map.set(field.key, field);
     });
     return map;
-  }, []);
+  }, [primaryEditFields]);
 
   const sortedNanodlpDraftEntries = React.useMemo(() => {
     const entries = Object.entries(nanodlpEditDraft);
     const primaryOrder = new Map<string, number>();
-    NANODLP_PRIMARY_EDIT_FIELDS.forEach((field, index) => {
+    primaryEditFields.forEach((field, index) => {
       primaryOrder.set(field.key, index);
     });
 
@@ -458,17 +469,17 @@ export function ProfileSettingsModal({
       if (isPrimaryB) return 1;
       return keyA.localeCompare(keyB);
     });
-  }, [nanodlpEditDraft]);
+  }, [nanodlpEditDraft, primaryEditFields]);
 
   const basicNanodlpDraftEntries = React.useMemo(() => {
-    return NANODLP_PRIMARY_EDIT_FIELDS
+    return primaryEditFields
       .map((field) => [field.key, nanodlpEditDraft[field.key]] as const)
       .filter(([, value]) => typeof value === 'string');
-  }, [nanodlpEditDraft]);
+  }, [nanodlpEditDraft, primaryEditFields]);
 
   const basicNanodlpSections = React.useMemo(() => {
     const entryMap = new Map(basicNanodlpDraftEntries);
-    return NANODLP_BASIC_SECTIONS
+    return basicEditSections
       .map((section) => ({
         ...section,
         entries: section.keys
@@ -476,7 +487,7 @@ export function ProfileSettingsModal({
           .filter(([, value]) => typeof value === 'string') as Array<readonly [string, string]>,
       }))
       .filter((section) => section.entries.length > 0);
-  }, [basicNanodlpDraftEntries]);
+  }, [basicEditSections, basicNanodlpDraftEntries]);
 
   const advancedNanodlpDraftEntries = React.useMemo(() => {
     return sortedNanodlpDraftEntries
@@ -485,13 +496,13 @@ export function ProfileSettingsModal({
 
   const advancedNanodlpSections = React.useMemo(() => {
     const sectionTitleById = new Map<string, string>([
-      ...NANODLP_ADVANCED_SECTIONS.map((section) => [section.id, section.title] as const),
+      ...advancedEditSectionsDefs.map((section) => [section.id, section.title] as const),
       ['other', 'Other Advanced Controls'] as const,
     ]);
 
     const grouped = new Map<string, Array<readonly [string, string]>>();
     for (const entry of advancedNanodlpDraftEntries) {
-      const sectionId = resolveNanoDlpAdvancedSectionId(entry[0]);
+      const sectionId = effectiveNetworkUiAdapter.resolveAdvancedSectionId(entry[0]);
       const current = grouped.get(sectionId);
       if (current) {
         current.push(entry);
@@ -500,7 +511,7 @@ export function ProfileSettingsModal({
       }
     }
 
-    const orderedIds = [...NANODLP_ADVANCED_SECTIONS.map((section) => section.id), 'other'];
+    const orderedIds = [...advancedEditSectionsDefs.map((section) => section.id), 'other'];
     return orderedIds
       .map((id) => ({
         id,
@@ -508,11 +519,11 @@ export function ProfileSettingsModal({
         entries: grouped.get(id) ?? [],
       }))
       .filter((section) => section.entries.length > 0);
-  }, [advancedNanodlpDraftEntries]);
+  }, [advancedEditSectionsDefs, advancedNanodlpDraftEntries, effectiveNetworkUiAdapter]);
 
   const isNanodlpDynamicWaitEnabledState = React.useMemo(() => {
-    return isNanoDlpDynamicWaitEnabled(nanodlpEditDraft);
-  }, [nanodlpEditDraft]);
+    return effectiveNetworkUiAdapter.isDynamicWaitEnabled(nanodlpEditDraft);
+  }, [nanodlpEditDraft, effectiveNetworkUiAdapter]);
 
   React.useLayoutEffect(() => {
     if (!isOpen) {
@@ -650,7 +661,7 @@ export function ProfileSettingsModal({
 
   const loadNanodlpMaterials = React.useCallback(async () => {
     if (!selectedPrinterResolvedId) return;
-    if (selectedPrinterNetworkSupportMode !== 'nanodlp') return;
+    if (!networkUiAdapter) return;
 
     const host = selectedNanodlpHost;
     if (!host) {
@@ -663,16 +674,10 @@ export function ProfileSettingsModal({
     setNanodlpMaterialsError(null);
 
     try {
-      const response = await fetch('/api/network/plugin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          pluginId: 'athena',
-          operation: 'nanodlp/materials',
-          host,
-        }),
+      const response = await pluginNetworkFetch({
+        pluginId: networkUiAdapter.pluginId,
+        operation: networkUiAdapter.operations.materials,
+        host,
       });
 
       const payload = await response.json().catch(() => null) as any;
@@ -689,7 +694,7 @@ export function ProfileSettingsModal({
         ?? null;
 
       if (nextSelected) {
-        const processValues = resolveNanodlpMaterialProcessValues((nextSelected as NanoDlpMaterial).meta ?? {});
+        const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues((nextSelected as NanoDlpMaterial).meta ?? {});
         setSelectedNanodlpMaterialId(nextSelected.id);
         updatePrinterNetworkConnectionStatus(selectedPrinterResolvedId, {
           selectedMaterialId: nextSelected.id,
@@ -714,7 +719,7 @@ export function ProfileSettingsModal({
     } finally {
       setIsLoadingNanodlpMaterials(false);
     }
-  }, [selectedNanodlpHost, selectedPrinterNetworkSupportMode, selectedPrinterResolvedId]);
+  }, [effectiveNetworkUiAdapter, networkUiAdapter, selectedNanodlpHost, selectedPrinterResolvedId]);
 
   React.useEffect(() => {
     if (!shouldUseNanodlpOnDeviceMaterials || !selectedPrinterResolvedId) {
@@ -730,7 +735,7 @@ export function ProfileSettingsModal({
 
   const handleSelectNanodlpMaterial = React.useCallback((material: NanoDlpMaterial) => {
     if (!selectedPrinter) return;
-    const processValues = resolveNanodlpMaterialProcessValues(material.meta ?? {});
+    const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues(material.meta ?? {});
     setSelectedNanodlpMaterialId(material.id);
     updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
       selectedMaterialId: material.id,
@@ -740,18 +745,19 @@ export function ProfileSettingsModal({
       selectedMaterialBottomExposureSec: processValues.bottomExposureSec,
       selectedMaterialBottomLayerCount: processValues.bottomLayerCount,
     });
-  }, [selectedPrinter]);
+  }, [effectiveNetworkUiAdapter, selectedPrinter]);
 
   const openNanodlpEditDialog = React.useCallback(() => {
     if (!selectedNanodlpMaterial) return;
-    setNanodlpEditDraft(resolveNanodlpEditDraftFromMeta(selectedNanodlpMaterial.meta ?? {}));
+    setNanodlpEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(selectedNanodlpMaterial.meta ?? {}));
     setNanodlpEditTab('basic');
     setIsNanodlpEditDialogOpen(true);
-  }, [selectedNanodlpMaterial]);
+  }, [effectiveNetworkUiAdapter, selectedNanodlpMaterial]);
 
   const handleSaveNanodlpEdits = React.useCallback(async () => {
     if (!selectedPrinter) return;
     if (!selectedNanodlpMaterial) return;
+    if (!networkUiAdapter) return;
 
     const host = (selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress || '').trim();
     const profileId = Number(selectedNanodlpMaterial.id);
@@ -761,18 +767,12 @@ export function ProfileSettingsModal({
     setNanodlpMaterialsError(null);
 
     try {
-      const response = await fetch('/api/network/plugin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          pluginId: 'athena',
-          operation: 'nanodlp/materials/edit',
-          host,
-          profileId,
-          fields: denormalizeNanodlpEditDraftForBackend(nanodlpEditDraft),
-        }),
+      const response = await pluginNetworkFetch({
+        pluginId: networkUiAdapter.pluginId,
+        operation: networkUiAdapter.operations.materialsEdit,
+        host,
+        profileId,
+        fields: effectiveNetworkUiAdapter.denormalizeEditDraftForBackend(nanodlpEditDraft),
       });
 
       const payload = await response.json().catch(() => null) as any;
@@ -790,7 +790,7 @@ export function ProfileSettingsModal({
     } finally {
       setIsSavingNanodlpEdit(false);
     }
-  }, [loadNanodlpMaterials, nanodlpEditDraft, selectedNanodlpMaterial, selectedPrinter]);
+  }, [effectiveNetworkUiAdapter, loadNanodlpMaterials, nanodlpEditDraft, networkUiAdapter, selectedNanodlpMaterial, selectedPrinter]);
 
   React.useEffect(() => {
     if (isNetworkSettingsOpen) {
@@ -801,7 +801,7 @@ export function ProfileSettingsModal({
   const handleRunNetworkDiscovery = React.useCallback(async () => {
     if (!selectedPrinter) return;
     if (!networkDiscoveryEnabled) return;
-    if (selectedPrinter.networkSupport !== 'nanodlp') return;
+    if (!networkUiAdapter) return;
 
     setIsNetworkScanning(true);
     setNetworkScanPhaseLabel('Resolving friendly .local hostnames…');
@@ -813,16 +813,10 @@ export function ProfileSettingsModal({
       const seedDevices: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
 
       if (configuredHost.length > 0) {
-        const connectResponse = await fetch('/api/network/plugin', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            pluginId: 'athena',
-            operation: 'nanodlp/connect',
-            host: configuredHost,
-          }),
+        const connectResponse = await pluginNetworkFetch({
+          pluginId: networkUiAdapter.pluginId,
+          operation: networkUiAdapter.operations.connect,
+          host: configuredHost,
         });
 
         const connectPayload = await connectResponse.json().catch(() => null) as any;
@@ -840,28 +834,19 @@ export function ProfileSettingsModal({
       }
 
       const localHostnameCandidates = Array.from(new Set([
-        'nanodlp.local',
-        'athena.local',
-        'printer.local',
-        'resin.local',
+        ...effectiveNetworkUiAdapter.defaultLocalHostnames,
         (selectedPrinter.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') + '.local',
         configuredHost.toLowerCase().endsWith('.local') ? configuredHost.toLowerCase() : '',
       ].filter((value) => value && value.endsWith('.local'))));
 
-      const localResponse = await fetch('/api/network/plugin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          pluginId: 'athena',
-          operation: 'nanodlp/discover',
-          mode: 'nanodlp',
-          scanScope: 'local-hostnames',
-          host: networkIpAddress.trim() || undefined,
-          localHostnames: localHostnameCandidates,
-          ports: [80, 8080],
-        }),
+      const localResponse = await pluginNetworkFetch({
+        pluginId: networkUiAdapter.pluginId,
+        operation: networkUiAdapter.operations.discover,
+        mode: selectedPrinter.networkSupport,
+        scanScope: 'local-hostnames',
+        host: networkIpAddress.trim() || undefined,
+        localHostnames: localHostnameCandidates,
+        ports: [80, 8080],
       });
 
       const localPayload = await localResponse.json().catch(() => null) as any;
@@ -897,26 +882,20 @@ export function ProfileSettingsModal({
       let subnetScannedEndpoints = 0;
 
       while (true) {
-        const response = await fetch('/api/network/plugin', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            pluginId: 'athena',
-            operation: 'nanodlp/discover',
-            mode: 'nanodlp',
-            scanScope: 'subnet',
-            progressive: true,
-            batchStart: subnetBatchStart,
-            batchSize: 96,
-            probeTimeoutMs: 1200,
-            subnetConcurrency: 84,
-            host: networkIpAddress.trim() || undefined,
-            excludeHosts: localDiscovered.map((item) => item.ipAddress),
-            seedIps: localDiscovered.map((item) => item.ipAddress),
-            ports: [80, 8080],
-          }),
+        const response = await pluginNetworkFetch({
+          pluginId: networkUiAdapter.pluginId,
+          operation: networkUiAdapter.operations.discover,
+          mode: selectedPrinter.networkSupport,
+          scanScope: 'subnet',
+          progressive: true,
+          batchStart: subnetBatchStart,
+          batchSize: 96,
+          probeTimeoutMs: 1200,
+          subnetConcurrency: 84,
+          host: networkIpAddress.trim() || undefined,
+          excludeHosts: localDiscovered.map((item) => item.ipAddress),
+          seedIps: localDiscovered.map((item) => item.ipAddress),
+          ports: [80, 8080],
         });
 
         const payload = await response.json().catch(() => null) as any;
@@ -1000,17 +979,17 @@ export function ProfileSettingsModal({
         setNetworkScanPhaseLabel('');
       }, 500);
     }
-  }, [networkDiscoveryEnabled, networkIpAddress, selectedPrinter]);
+  }, [effectiveNetworkUiAdapter, networkDiscoveryEnabled, networkIpAddress, networkUiAdapter, selectedPrinter]);
 
   const handleConnectNetworkPrinter = React.useCallback(async (options?: { host?: string; closeOnSuccess?: boolean }) => {
-    if (!selectedPrinter || selectedPrinter.networkSupport !== 'nanodlp') return;
+    if (!selectedPrinter || !networkUiAdapter) return;
 
     const host = (options?.host ?? networkIpAddress).trim();
     if (!host) {
       const now = new Date().toISOString();
       setNetworkConnectionMessage('Enter a printer IP address or host first.');
       updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
-        mode: 'nanodlp',
+        mode: selectedPrinter.networkSupport,
         connected: false,
         hostName: '',
         ipAddress: '',
@@ -1025,16 +1004,10 @@ export function ProfileSettingsModal({
     setNetworkConnectionMessage('Connecting to NanoDLP host…');
 
     try {
-      const response = await fetch('/api/network/plugin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          pluginId: 'athena',
-          operation: 'nanodlp/connect',
-          host,
-        }),
+      const response = await pluginNetworkFetch({
+        pluginId: effectiveNetworkUiAdapter.pluginId,
+        operation: effectiveNetworkUiAdapter.operations.connect,
+        host,
       });
 
       const payload = await response.json().catch(() => null) as any;
@@ -1052,7 +1025,7 @@ export function ProfileSettingsModal({
         setNetworkIpAddress(typeof payload.ipAddress === 'string' ? payload.ipAddress : host);
 
         updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
-          mode: 'nanodlp',
+          mode: selectedPrinter.networkSupport,
           connected: true,
           hostName: resolvedHostName,
           ipAddress: typeof payload.ipAddress === 'string' ? payload.ipAddress : host,
@@ -1072,7 +1045,7 @@ export function ProfileSettingsModal({
           : 'NanoDLP host unreachable.';
 
         updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
-          mode: 'nanodlp',
+          mode: selectedPrinter.networkSupport,
           connected: false,
           hostName: '',
           ipAddress: host,
@@ -1089,7 +1062,7 @@ export function ProfileSettingsModal({
       const statusText = error instanceof Error ? error.message : 'Connection failed';
 
       updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
-        mode: 'nanodlp',
+        mode: selectedPrinter.networkSupport,
         connected: false,
         hostName: '',
         ipAddress: host,
@@ -1103,12 +1076,12 @@ export function ProfileSettingsModal({
     } finally {
       setIsNetworkConnecting(false);
     }
-  }, [networkDiscoveryEnabled, networkIpAddress, selectedPrinter]);
+  }, [effectiveNetworkUiAdapter, networkDiscoveryEnabled, networkIpAddress, networkUiAdapter, selectedPrinter]);
 
   React.useEffect(() => {
     if (!isNetworkSettingsOpen) return;
     if (!selectedPrinterSupportsNetworkSettings) return;
-    if (selectedPrinter?.networkSupport !== 'nanodlp') return;
+    if (!networkUiAdapter) return;
     if (!networkDiscoveryEnabled) return;
     if (isNetworkScanning) return;
     if (hasAutoScannedOnOpen) return;
@@ -1121,6 +1094,7 @@ export function ProfileSettingsModal({
     isNetworkScanning,
     isNetworkSettingsOpen,
     networkDiscoveryEnabled,
+    networkUiAdapter,
     selectedPrinter?.networkSupport,
     selectedPrinterSupportsNetworkSettings,
   ]);
@@ -1931,7 +1905,7 @@ export function ProfileSettingsModal({
                       ) : (
                         nanodlpMaterials.map((material) => {
                           const active = selectedNanodlpMaterialId === material.id;
-                          const chips = buildNanoDlpMaterialChips(material);
+                          const chips = buildNanoDlpMaterialChips(material, effectiveNetworkUiAdapter.resolveMaterialProcessValues);
                           return (
                             <button
                               key={material.id}
@@ -2754,7 +2728,7 @@ export function ProfileSettingsModal({
                                   <LabeledNumberInput
                                     key={key}
                                     label={formatNanoDlpMetaLabel(key)}
-                                    helpText={getNanoDlpFieldHelpText(key)}
+                                    helpText={effectiveNetworkUiAdapter.getFieldHelpText(key)}
                                     value={Number.isFinite(numericValue) ? numericValue : 0}
                                     onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: String(next) }))}
                                   />
@@ -2765,7 +2739,7 @@ export function ProfileSettingsModal({
                                 <LabeledInput
                                   key={key}
                                   label={formatNanoDlpMetaLabel(key)}
-                                  helpText={getNanoDlpFieldHelpText(key)}
+                                  helpText={effectiveNetworkUiAdapter.getFieldHelpText(key)}
                                   value={value}
                                   onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: next }))}
                                 />

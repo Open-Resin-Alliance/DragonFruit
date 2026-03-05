@@ -1,0 +1,91 @@
+/**
+ * Cross-platform Tauri bundle orchestrator
+ * 
+ * ⚠️  NOTE: For cross-platform builds, GitHub Actions (in .github/workflows/tauri-bundle.yml)
+ * is the recommended approach. This script requires:
+ * - Rust toolchains installed for all targets (via rustup)
+ * - Platform-specific native dependencies and build tools
+ * - Signing certificates for macOS (if creating production bundles)
+ * 
+ * Usage:
+ *   npm run tauri:bundle                          # Build all targets (requires full setup)
+ *   npm run tauri:bundle -- --dry-run             # Preview targets without building
+ *   npm run tauri:bundle:windows                  # Windows only (fastest locally)
+ *   npm run tauri:bundle:linux                    # Linux only
+ *   npm run tauri:bundle:macos                    # macOS x64 only
+ *   npm run tauri:bundle:macos:arm64              # macOS arm64 only
+ * 
+ * For most use cases, push to main/create a tag to trigger GitHub Actions workflows.
+ */
+
+import { spawnSync } from "node:child_process";
+
+const args = process.argv.slice(2);
+const dryRun = args.includes("--dry-run");
+
+const defaultTargets = [
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+];
+
+const onlyArg = args.find((arg) => arg.startsWith("--only="));
+const targets = onlyArg
+      ? onlyArg
+            .slice("--only=".length)
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean)
+      : defaultTargets;
+
+if (targets.length === 0) {
+      console.error("No targets selected. Use --only=<triple1,triple2,...>.");
+      process.exit(1);
+}
+
+console.log("DragonFruit Tauri bundle orchestrator");
+console.log(`Targets: ${targets.join(", ")}`);
+if (dryRun) {
+      console.log("Dry run enabled — no builds will be executed.");
+}
+
+const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
+const failures = [];
+
+for (const target of targets) {
+      const cmdArgs = ["tauri", "build", "--bundles", "app", "--target", target];
+      console.log(`\n=== Building target: ${target} ===`);
+      console.log(`${npxCmd} ${cmdArgs.join(" ")}`);
+
+      if (dryRun) {
+            continue;
+      }
+
+      const result = spawnSync(npxCmd, cmdArgs, {
+            stdio: "inherit",
+            env: process.env,
+      });
+
+      if (result.status !== 0) {
+            failures.push({ target, code: result.status ?? 1 });
+      }
+}
+
+if (dryRun) {
+      console.log("\nDry run complete.");
+      process.exit(0);
+}
+
+if (failures.length > 0) {
+      console.error("\nBundle build completed with failures:");
+      for (const failure of failures) {
+            console.error(`- ${failure.target} (exit code ${failure.code})`);
+      }
+      console.error(
+            "\nNote: Cross-platform Tauri bundling requires target-specific Rust toolchains and native system dependencies/signing setup for each target."
+      );
+      process.exit(1);
+}
+
+console.log("\nAll bundle targets built successfully.");
