@@ -21,16 +21,16 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: --target aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles app,dmg
             artifactName: dragonfruit-macos-arm64
           - platform: macos-latest
-            args: --target x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles app,dmg
             artifactName: dragonfruit-macos-x64
           - platform: ubuntu-22.04
-            args: ""
+            args: --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage
             artifactName: dragonfruit-linux-x64
           - platform: windows-latest
-            args: ""
+            args: --target x86_64-pc-windows-msvc --bundles msi,nsis
             artifactName: dragonfruit-windows-x64
 
     runs-on: ${{ matrix.platform }}
