@@ -1,266 +1,98 @@
-# DragonFruit
+# DragonFruit: The Resin Slicer &nbsp;&nbsp;&nbsp; [![Discord Link](https://discordapp.com/api/guilds/1281738817417777204/widget.png?style=shield)](https://discord.gg/beFeTaPH6v)
 
-**DragonFruit is a 3D Printing slicer prototype**
+[![GitHub release](https://img.shields.io/github/release/Open-Resin-Alliance/DragonFruit.svg?style=for-the-badge)](https://github.com/Open-Resin-Alliance/DragonFruit/releases)
+[![GitHub issues](https://img.shields.io/github/issues/Open-Resin-Alliance/DragonFruit.svg?style=for-the-badge)](https://github.com/Open-Resin-Alliance/DragonFruit/issues)
 
-## Desktop Runtime Direction (Tauri v2)
+DragonFruit is an open-source resin slicer and support-generation environment built by the Open Resin Alliance. It combines a modern Next.js + React frontend with native Rust slicing backends and a Tauri desktop runtime.
 
-DragonFruit is being migrated to a **Tauri v2 desktop app** with a **native Rust slicer backend**.
+> :warning: **DragonFruit is under active development. Please exercise caution for production print workflows, validate outputs, and avoid unattended printing on first use.**
 
-- Native command path lives in `src-tauri/`.
-- Slicing orchestration now targets native Rust backend invocation from the frontend.
-- Legacy JS/WebGPU slicing routes are deprecated and no longer part of the primary slicing path.
+## Table of Contents
 
-## STL Slicer POC — Project Documentation
+- [About DragonFruit](#about-dragonfruit)
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Variant 1: Frontend Development (Next.js)](#variant-1-frontend-development-nextjs)
+  - [Variant 2: Desktop Development (Tauri + Rust)](#variant-2-desktop-development-tauri--rust)
+  - [Variant 3: Production Build & Bundling](#variant-3-production-build--bundling)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
+- [Contact](#contact)
 
-### Tech Stack
+## About DragonFruit
 
-- Frontend framework: Next.js (App Router), TypeScript
-- Desktop shell/runtime: Tauri v2
-- UI/styling: TailwindCSS + custom CSS in `globals.css`
-- 3D rendering: three.js via react-three-fiber (Canvas) and drei (OrbitControls)
-- STL loading: three/examples STLLoader
-- State/logic: React client components and custom hooks
+DragonFruit focuses on practical resin-print preparation workflows, including model inspection, island analysis, transform tooling, support authoring, and native slicing integration. It is designed as a desktop-first toolchain while keeping the frontend highly iterative for rapid feature development.
 
-## Coordinate System
+## Features
 
-The application uses a **Z-up coordinate system** throughout:
+DragonFruit currently includes a growing set of capabilities for resin 3D printing:
 
-- **Z-axis**: Vertical (height) - points upward
-- **Y-axis**: Forward/backward (depth)
-- **X-axis**: Side-to-side (width)
+- **Interactive 3D Workspace:** High-performance model visualization and manipulation using `three.js` + `react-three-fiber`.
+- **Advanced Transform Tooling:** Move/Rotate/Scale workflows with precision controls and viewport gizmos.
+- **Island Analysis & Volume Tools:** Layer-aware unsupported-region detection and analysis workflows.
+- **Support Authoring Systems:** Branch/grid/raft support workflows with rendering and snapping infrastructure.
+- **Desktop Runtime via Tauri:** Native desktop app pipeline with Rust backend integration.
+- **Extensible Architecture:** Plugin and profile systems for materials, printers, and ecosystem integrations.
 
-### Implementation Details
+## Getting Started
 
-- **Camera**: Configured with `up` vector set to `[0, 0, 1]` to make Z globally vertical
-- **Mesh positioning**: Models load in native orientation with bottom at Z=0, centered in X and Y
-- **Grid helper**: Rotated 90° around X-axis to lie on the XY plane (horizontal ground)
-- **Axes helper**: X=red, Y=green, Z=blue (pointing up)
-- **Clipping planes**: Operate in world space along the Z-axis
-- **Cross-section slicing**: Slices geometry at Z heights, creates horizontal XY plane shapes
-- **Layer calculations**: All layer heights and positions use Z-axis coordinates
+To get started with DragonFruit, follow one of these variants depending on your workflow.
 
-This ensures consistent vertical orientation across all visualization, slicing, and measurement operations.
+### Variant 1: Frontend Development (Next.js)
 
-## Programming Ideology
+For UI and interaction development only (without full desktop packaging):
 
-- Build features as small, focused modules.
-- Co-locate all code with its parent component or system (no scattered `hooks/` or `utils/` folders).
-- Prefer composition over large monolithic components.
-- Keep files short, readable, and single-purpose to enable testing and refactoring.
-- Split large files into multiple smaller files with clear responsibilities.
+1. **Prerequisites:** Install Node.js (LTS recommended) and npm.
+2. **Install Dependencies:** From the repository root, install packages with `npm install`.
+3. **Run Dev Server:** Start the app with `npm run dev`.
+4. **Open in Browser:** Visit `http://localhost:3005`.
 
-## Code Organization (Important)
+### Variant 2: Desktop Development (Tauri + Rust)
 
-This project is organized by **component/feature**, not by shared technical categories. Avoid generic folders like `hooks/`, `utils/`, or `helpers/` at the root level. Instead, co-locate all code with the component or system it belongs to.
+For full desktop development with native backend wiring:
 
-### Core Principle: Component-First Organization
+1. **Prerequisites:** Install Node.js, Rust toolchain, and Tauri system dependencies for your platform.
+2. **Install JS Dependencies:** Run `npm install` in the project root.
+3. **Run Desktop Dev Mode:** Launch with `npm run tauri:dev`.
+4. **Iterate Across Stacks:** Frontend and Rust backend changes can be tested through the same Tauri dev workflow.
 
-Each system or feature gets its own folder containing ALL of its logic:
+### Variant 3: Production Build & Bundling
 
-- Types and interfaces
-- State management
-- Hooks (specific to that system)
-- Utilities (specific to that system)
-- Rendering components
-- Tests
+For release-style builds and bundles:
 
-**Example structure for a new system (GPUPicking):**
+1. **Frontend Build:** Run `npm run build` (or `npm run build:tauri` for prepared Tauri frontend artifacts).
+2. **Desktop Build:** Build desktop binaries with `npm run tauri:build`.
+3. **Bundle Targets:** Use `npm run tauri:bundle` or platform-specific scripts:
+   - `npm run tauri:bundle:windows`
+   - `npm run tauri:bundle:linux`
+   - `npm run tauri:bundle:macos`
+   - `npm run tauri:bundle:macos:arm64`
 
-```
-src/components/picking/
-├── PickingContext.tsx      # React context providing pointerHit
-├── PickingRenderer.tsx     # Offscreen render pass
-├── PickingProvider.tsx     # Provider component wrapping the scene
-├── pickingUtils.ts         # ID encoding, majority vote logic
-├── types.ts                # Pickable types, hit result interface
-├── constants.ts            # Update rates, buffer sizes
-└── hooks/
-    └── usePickingSubscription.ts  # Hook for components to subscribe
-```
+## Project Structure
 
-### File Size Guidelines
+High-level layout of key project areas:
 
-- **Avoid large monolithic files.** Split code into logical sections across multiple files.
-- Each file should have a single, clear responsibility.
-- If a file exceeds ~200-500 lines, consider splitting it.
+- `src/` — Next.js app, React components, scene controls, support systems, hooks, and utilities.
+- `src-tauri/` — Tauri desktop host and native integration points.
+- `rust/dragonfruit-slicer-v3/` — Rust slicer backend workspace.
+- `plugins/` — Plugin architecture and ecosystem integrations.
+- `profiles/` — Printer and material profile definitions.
+- `docs/` and `1_Documentation/` — Architecture notes, implementation guides, and domain documentation.
 
-### Domain Structure
+## Contributing
 
-Major feature domains live under `src/` with their own namespace:
+We welcome and appreciate contributions to DragonFruit! If you'd like to contribute:
 
-- `src/supports/` — Support generation (trunks, branches, leaves, joints, rafts)
-- `src/components/` — Shared UI and scene components, each in its own subfolder
-- `src/modules/` — Standalone systems (e.g., island detection)
+1. **Fork the Repository:** Create a personal fork and branch for your feature/fix.
+2. **Implement Changes:** Keep changes focused and aligned with project conventions.
+3. **Run Checks:** Validate with `npm run lint` and `npm run test` where applicable.
+4. **Submit a Pull Request:** Open a PR with a clear summary, rationale, and validation notes.
 
-Within each domain, organize by feature:
+## License
 
-```
-src/supports/
-├── BranchSupports/
-│   ├── placement/
-│   ├── snapping/
-│   ├── constraints/
-│   └── rendering/
-├── Joints/
-│   ├── types.ts
-│   ├── raycasting.ts
-│   └── ...
-└── Rafts/
-    └── Crenelated/
-        ├── rendering/
-        └── ...
-```
+DragonFruit licensing details are currently being finalized in-repo. Until a top-level license file is published, please coordinate usage and redistribution questions with the maintainers via the Open Resin Alliance channels.
 
-### What Goes Where
+## Contact
 
-- **Domain-specific code** → Inside the domain folder (e.g., `src/supports/hooks/`)
-- **Shared scene components** → `src/components/<ComponentName>/` (each component gets a folder)
-- **Truly generic utilities** → Only if used by 3+ unrelated systems; otherwise keep co-located
-- **Global hooks** → `src/hooks/` only for app-wide hooks not tied to any domain (rare)
-
-### Modularity and Safety
-
-- Build features as small focused files.
-- Gate work-in-progress behind feature flags.
-- Keep ownership clear—avoid placing domain code in generic directories.
-
-Following this structure ensures clean boundaries, safer refactors, and easier collaboration as the codebase grows.
-
-## What the app does
-
-- Loads STL files (assumed millimeters), renders the model in a 3D scene with orbit controls.
-- Provides transform controls for moving, rotating, and scaling the model in 3D space.
-- Provides a vertical slider (track/rail with thumb/handle) to move a slicing plane from bottom to top.
-- Visualizes the current cross-section as a filled white cap at the slice height that follows model transforms.
-- Supports two display modes internally (currently using cumulative reveal by default):
-  - Cumulative (active): shows the model from the bottom up to the current slice, hiding everything above.
-  - Single-slice (band) capability is implemented in the scene and page logic (clipLower/clipUpper), ready to be toggled when exposed.
-- Detects and visualizes unsupported regions (islands) in the model with configurable scanning parameters.
-- Provides 3D volume visualization of detected islands with multiple color schemes.
-
-## Island Definition (CRITICAL CONCEPT)
-
-**An island is NOT just the unsupported pixels/polygons at a single layer.**
-
-**An island IS the entire 3D volume of model material** that sits atop unsupported regions, extending vertically upward until it merges with another island or the scan completes.
-
-### How Islands Work
-
-1. **Detection trigger**: Unsupported pixels are detected at a layer when current layer geometry is not sufficiently covered by the dilated previous layer (support buffer).
-
-2. **Volume propagation**: Once triggered, the island includes **all CONNECTED model geometry** vertically above those unsupported pixels, even if those upper layers would be "supported" by the island material below them. The geometry must be contiguous - physically connected through the layers.
-
-3. **Vertical extent**: An island continues upward through layers, tracking its 3D volume as it grows, shrinks, or changes shape.
-
-4. **Termination**: An island ends when it merges with another island (becoming a child of the larger parent island) or when the scan completes.
-
-### Example
-
-If a small unsupported base (e.g., a cone tip starting from a mathematical point) grows into a large cone above it:
-
-- The **entire cone is the island**
-- Not just the tiny unsupported base pixels
-- The volume includes all layers from first detection through the full vertical extent
-
-This distinction is critical for accurate volume calculations and visualization.
-
-## How it works (high level)
-
-- STL load and normalization
-  - `useStlGeometry`: loads STL, computes normals, centers X and Y, and sets the model's bottom to Z=0 for a stable coordinate frame.
-  - Bounding box and size are derived for layer and slider calculations.
-
-- Slicing/clipping
-  - The scene uses material clipping planes to hide geometry above the current slice height (cumulative reveal). Planes operate in world space along the Z-axis.
-  - Clipping shows everything from Z=0 (bottom) up to the current layer height.
-
-- Transform controls
-  - `useModelTransform`: Custom hook managing position, rotation, and scale state with stable callbacks.
-  - `TransformToolbar`: Vertical toolbar with mode selection (Select, Move, Rotate, Scale).
-  - Mode-specific control cards provide precise numeric inputs and utility functions:
-    - **Move**: XYZ position inputs, Center, On Platform, Arrange All, Auto-lift on import with configurable distance.
-    - **Rotate**: XYZ rotation inputs (degrees), Reset Rotation.
-    - **Scale**: XYZ scale inputs (mm/%), Uniform Scaling toggle, Reset Scale.
-  - **Custom Transform Gizmo**: Modular 3D viewport gizmo with visual polish and advanced features:
-    - **Screen-space sizing**: Gizmo maintains constant visual size regardless of camera zoom.
-    - **Gradient color system**: Pure colors (Red #ff0000, Green #0ce300, Blue #0000ff) at center transitioning to secondary colors (Orange #ff9900, Yellow #ffcc00, Bright Blue #1596ff) at ends.
-    - **Move arrows**: Gradient cylinders (0.02 radius) with pure color for first 1/3, fade over remaining 2/3, camera-relative flipping.
-    - **Center disc**: Flat XY-plane circle with 50% transparency when idle, white border ring, XY-only movement restriction.
-    - **Rotation rings**: Tube geometry arcs (0.02 radius) with gradient, double-cone handles, camera-facing billboarding.
-    - **Scale cubes**: Dynamic camera-facing edge rendering (only front edges visible), edges use 30% darker color for contrast.
-    - **Rendering**: All elements use `toneMapped={false}` for vibrant colors, `depthTest={false}` to render on top of scene.
-  - Geometry centering: Original geometry preserved, mesh offset in group for proper gizmo pivot at center of mass.
-  - All features (cross-sections, island scans, clipping) work correctly with transformed geometry.
-
-- Cross-section cap (filled surface)
-  - `CrossSectionCap` intersects mesh triangles with plane Z = current slice height in **world space**.
-  - Applies transform matrix to geometry vertices before slicing to handle rotated/scaled models.
-  - Builds 2D segments in XY plane, assembles closed loops, converts to ShapeGeometry, positions at the correct XYZ coordinates.
-  - Renders with proper depth testing (FrontSide only) so it's only visible from above and respects 3D occlusion.
-  - Updates in real-time as model is transformed.
-
-- Slider and UI
-  - Custom vertical slider (not the native `<input type="range">`) with editable input field for direct layer entry.
-  - Thumb stays centered on the track; input field allows typing layer numbers with live updates and max value enforcement.
-  - Track and label use neutral grey accents for a clean dark UI.
-  - Left sidebar contains collapsible control cards (Island Scan, Island Overlay, Island Volumes) with eye icon toggles.
-  - Model info overlay card in lower-left of canvas shows real-time stats (height, layer count, islands, etc.).
-
-## Current implementation details
-
-- Files of note
-  - `src/hooks/useStlGeometry.ts`: STL load, normalization (center X/Y, set bottom to Z=0), bounding box and size.
-  - `src/hooks/useModelTransform.ts`: Transform state management with position, rotation, scale, and utility functions (center, reset, platform placement).
-  - `src/components/scene/SceneCanvas.tsx`: R3F Canvas with Z-up camera, lighting, helpers, Z-axis clipping planes, group-based mesh structure for transforms, transform matrix calculation.
-  - `src/components/gizmo/TransformGizmo.tsx`: Custom modular transform gizmo with move/rotate/scale operations, screen-space sizing, camera-relative flipping, and gradient color system.
-  - `src/components/gizmo/move/GizmoAxis.tsx`: Move arrows with gradient cylinders (pure color at center → secondary at tip), camera-facing orientation, and color-matched outlines.
-  - `src/components/gizmo/move/GizmoCenter.tsx`: XY-plane movement disc with transparency states and white border ring.
-  - `src/components/gizmo/rotate/GizmoRotationRing.tsx`: Rotation rings with gradient tube arcs, double-cone handles, camera-facing billboarding.
-  - `src/components/gizmo/scale/GizmoScaleHexagon.tsx`: Scale cubes with dynamic camera-facing edge rendering and color-matched darker edges.
-  - `src/components/gizmo/constants.ts`: Centralized gizmo sizing, colors (pure + secondary gradients), and lighting configuration.
-  - `src/components/scene/CrossSectionCap.tsx`: Cross-section polygon extraction at Z heights with transform matrix support, creates horizontal XY plane shapes with proper positioning and depth testing.
-  - `src/components/controls/TransformToolbar.tsx`: Vertical toolbar overlay with Select, Move, Rotate, Scale mode buttons.
-  - `src/components/controls/MoveControls.tsx`: Move mode settings card with XYZ inputs, positioning utilities, auto-lift configuration.
-  - `src/components/controls/RotateControls.tsx`: Rotate mode settings card with XYZ rotation inputs (degrees) and reset.
-  - `src/components/controls/ScaleControls.tsx`: Scale mode settings card with XYZ scale inputs (mm/%), uniform scaling toggle, reset.
-  - `src/components/controls/LayerSlider.tsx`: Custom vertical slider with thumb + attached label; keyboard and mouse wheel nudging; track click/drag; live input editing.
-  - `src/components/controls/IslandOverlayControls.tsx`: Collapsible card for island overlay visualization with eye icon toggle and feature controls.
-  - `src/components/controls/IslandVolumeControls.tsx`: Collapsible card for 3D island volume visualization with selection, filtering, and color scheme options.
-  - `src/utils/scanPositioning.ts`: Centralized helper for scan-based visualization positioning (world-space scan Z + X/Y-only group translation for voxels/overlays).
-  - `src/app/page.tsx`: UI composition, file input, layer height input, layer index state, transform state integration, mapping from index to Z-height, scene wiring, and model info overlay.
-  - `src/app/globals.css`: Dark theme defaults and custom slider styles (track dimensions, thumb size, etc.).
-
-- Units and layers
-  - Model units are treated as millimeters.
-  - Layer height is entered in microns; converted to millimeters for calculations.
-  - Number of layers is `ceil(model_height_mm / layer_height_mm)`.
-  - Layer index 0 = Home (full model). 1..N = increasing slice height.
-
-- Visual defaults
-  - Dark UI (neutral greys), grid on XY plane, Z-up axes (X=red, Y=green, Z=blue), orbit controls.
-  - White cross-section cap positioned at slice Z-height with proper depth testing.
-  - Collapsible control cards with eye icon indicators (blue when enabled, grey when disabled).
-
-## What has been done so far
-
-- Scaffolded Next.js + Tailwind + R3F/drei project and set default dark theme.
-- **Established Z-up coordinate system** throughout the application with proper camera configuration, mesh positioning, and helper alignment.
-- Implemented STL load and geometry normalization (center X/Y, bottom at Z=0).
-- Built 3D viewer with Z-up orientation, lighting, horizontal grid on XY plane, and orbit controls.
-- **Implemented complete transform system**:
-  - Mode-based toolbar (Select, Move, Rotate, Scale) with visual feedback.
-  - Mode-specific control cards with numeric inputs and utility functions.
-  - **Custom modular transform gizmo** with gradient color system, screen-space sizing, and camera-relative behaviors.
-  - Gradient vertex colors using `THREE.BufferAttribute` for smooth pure→secondary color transitions.
-  - Dynamic camera-facing features: axis flipping, edge visibility, handle billboarding.
-  - Group-based mesh structure preserving vertex colors while centering pivot at center of mass.
-  - Auto-lift functionality with persistent settings (localStorage).
-  - Transform matrix integration for all downstream features.
-- Implemented cumulative slicing with Z-axis clipping planes operating in world space.
-- Added cross-section cap computation at Z heights with **transform-aware world-space slicing**.
-- Built custom vertical slider with editable input field, live updates, max value enforcement, and error indicators.
-- Created collapsible control cards (Island Scan, Island Overlay, Island Volumes) with eye icon toggles for expand/collapse.
-- Added model info overlay card in canvas lower-left corner showing real-time statistics.
-- Integrated island detection system with pixel-based scanning, cross-layer tracking, and 3D volume visualization.
-- Fixed island volume calculations with proper parent-child relationship handling.
-- Refactored into modular components with clear separation of concerns.
+If you have questions, feedback, or ideas, join us on the [Open Resin Alliance Discord](https://discord.gg/beFeTaPH6v).
