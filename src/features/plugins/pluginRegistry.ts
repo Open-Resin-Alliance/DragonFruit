@@ -1,5 +1,19 @@
 import type { MaterialProfile, PrinterPreset } from '@/features/profiles/profileStore';
 import { ATHENA_PLUGIN_MANIFEST } from '../../../plugins/athena/pluginManifest';
+import {
+  NANODLP_ADVANCED_SECTIONS,
+  NANODLP_BASIC_SECTIONS,
+  NANODLP_PRIMARY_EDIT_FIELDS,
+  denormalizeNanodlpEditDraftForBackend,
+  getNanoDlpFieldHelpText,
+  isNanoDlpDynamicWaitEnabled,
+  resolveNanodlpEditDraftFromMeta,
+  resolveNanoDlpAdvancedSectionId,
+  resolveNanodlpMaterialProcessValues,
+  type NanoDlpAdvancedSectionDef,
+  type NanoDlpBasicSection,
+  type NanoDlpPrimaryEditField,
+} from '../../../plugins/athena/nanodlpProfilePlugin';
 
 export type PluginSource = 'builtin' | 'github';
 
@@ -14,6 +28,70 @@ export type PluginManifest = {
   printerPresets?: PrinterPreset[];
   materialTemplates?: Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
 };
+
+export type ProfileNetworkUiAdapter = {
+  mode: string;
+  pluginId: string;
+  displayName: string;
+  operationNamespace: string;
+  operations: {
+    connect: string;
+    discover: string;
+    materials: string;
+    materialsEdit: string;
+  };
+  defaultLocalHostnames: string[];
+  primaryEditFields: NanoDlpPrimaryEditField[];
+  basicSections: NanoDlpBasicSection[];
+  advancedSections: NanoDlpAdvancedSectionDef[];
+  resolveEditDraftFromMeta: (meta: Record<string, unknown>) => Record<string, string>;
+  resolveMaterialProcessValues: (meta: Record<string, unknown>) => {
+    layerHeightMm?: number;
+    normalExposureSec?: number;
+    bottomExposureSec?: number;
+    bottomLayerCount?: number;
+  };
+  denormalizeEditDraftForBackend: (draft: Record<string, string>) => Record<string, string>;
+  resolveAdvancedSectionId: (fieldKey: string) => string;
+  getFieldHelpText: (fieldKey: string) => string;
+  isDynamicWaitEnabled: (draft: Record<string, string>) => boolean;
+};
+
+const ATHENA_NANODLP_NETWORK_ADAPTER: ProfileNetworkUiAdapter = {
+  mode: 'nanodlp',
+  pluginId: 'athena',
+  displayName: 'NanoDLP',
+  operationNamespace: 'nanodlp',
+  operations: {
+    connect: 'nanodlp/connect',
+    discover: 'nanodlp/discover',
+    materials: 'nanodlp/materials',
+    materialsEdit: 'nanodlp/materials/edit',
+  },
+  defaultLocalHostnames: ['nanodlp.local', 'athena.local', 'printer.local', 'resin.local'],
+  primaryEditFields: NANODLP_PRIMARY_EDIT_FIELDS,
+  basicSections: NANODLP_BASIC_SECTIONS,
+  advancedSections: NANODLP_ADVANCED_SECTIONS,
+  resolveEditDraftFromMeta: resolveNanodlpEditDraftFromMeta,
+  resolveMaterialProcessValues: resolveNanodlpMaterialProcessValues,
+  denormalizeEditDraftForBackend: denormalizeNanodlpEditDraftForBackend,
+  resolveAdvancedSectionId: resolveNanoDlpAdvancedSectionId,
+  getFieldHelpText: getNanoDlpFieldHelpText,
+  isDynamicWaitEnabled: isNanoDlpDynamicWaitEnabled,
+};
+
+const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>([
+  [ATHENA_NANODLP_NETWORK_ADAPTER.mode, ATHENA_NANODLP_NETWORK_ADAPTER],
+]);
+
+export function getProfileNetworkUiAdapter(mode: string | null | undefined): ProfileNetworkUiAdapter | null {
+  if (!mode || typeof mode !== 'string') return null;
+  return NETWORK_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? null;
+}
+
+export function getDefaultProfileNetworkUiAdapter(): ProfileNetworkUiAdapter {
+  return ATHENA_NANODLP_NETWORK_ADAPTER;
+}
 
 export type InstalledProfilePlugin = {
   manifest: PluginManifest;
