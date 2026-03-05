@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
+          node-version: "20.18.0"
           cache: "npm"
 
       - name: Setup Rust
@@ -52,7 +52,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
+          node-version: "20.18.0"
           cache: "npm"
 
       - name: Install system dependencies
@@ -86,7 +86,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
+          node-version: "20.18.0"
           cache: "npm"
 
       - name: Setup Rust
@@ -115,7 +115,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: ".nvmrc"
+          node-version: "20.18.0"
           cache: "npm"
 
       - name: Setup Rust
