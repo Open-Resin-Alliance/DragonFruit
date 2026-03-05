@@ -54,7 +54,7 @@ const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const failures = [];
 
 for (const target of targets) {
-      const cmdArgs = ["tauri", "build", "--bundles", "app", "--target", target];
+      const cmdArgs = ["tauri", "build", "--target", target];
       console.log(`\n=== Building target: ${target} ===`);
       console.log(`${npxCmd} ${cmdArgs.join(" ")}`);
 
