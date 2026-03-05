@@ -30,6 +30,13 @@ const defaultTargets = [
       "aarch64-apple-darwin",
 ];
 
+const bundlesByTarget = {
+      "x86_64-pc-windows-msvc": "msi,nsis",
+      "x86_64-unknown-linux-gnu": "deb,rpm,appimage",
+      "x86_64-apple-darwin": "app,dmg",
+      "aarch64-apple-darwin": "app,dmg",
+};
+
 const onlyArg = args.find((arg) => arg.startsWith("--only="));
 const targets = onlyArg
       ? onlyArg
@@ -54,7 +61,10 @@ const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
 const failures = [];
 
 for (const target of targets) {
-      const cmdArgs = ["tauri", "build", "--bundles", "app", "--target", target];
+      const bundleArg = bundlesByTarget[target];
+      const cmdArgs = bundleArg
+            ? ["tauri", "build", "--target", target, "--bundles", bundleArg]
+            : ["tauri", "build", "--target", target];
       console.log(`\n=== Building target: ${target} ===`);
       console.log(`${npxCmd} ${cmdArgs.join(" ")}`);
 
