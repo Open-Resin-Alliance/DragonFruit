@@ -692,8 +692,20 @@ fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str
 
 fn focus_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
+        let is_visible = window.is_visible().unwrap_or(true);
+        if !is_visible {
+            let _ = window.show();
+        }
+
+        let is_minimized = window.is_minimized().unwrap_or(false);
+        if is_minimized {
+            let _ = window.unminimize();
+        }
+
+        let is_focused = window.is_focused().unwrap_or(false);
+        if !is_focused {
+            let _ = window.set_focus();
+        }
     }
 }
 
@@ -805,8 +817,15 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
             emit_scene_file_handoff(app, &argv, "single-instance");
-            focus_main_window(app);
+
+            // Only force foreground when this second launch is handing off a scene file.
+            // Avoiding unconditional focus here reduces Windows "error" chimes when users
+            // launch the app again while it's already running.
+            if has_scene_files {
+                focus_main_window(app);
+            }
         }))
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
