@@ -286,7 +286,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   centerOnModel: true,
 };
 
-const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.lys']);
+const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys']);
 
 function getFileExtension(name: string): string {
   const trimmed = name.trim().toLowerCase();
@@ -308,6 +308,7 @@ function isSupportedPrepareDropName(name: string): boolean {
 function getDroppedFileMimeType(name: string): string {
   const ext = getFileExtension(name);
   if (ext === '.stl') return 'model/stl';
+  if (ext === '.3mf') return 'model/3mf';
   if (ext === '.lys') return 'application/octet-stream';
   return 'application/octet-stream';
 }
@@ -2826,7 +2827,7 @@ export default function Home() {
 
     const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
     if (supportedFiles.length === 0) {
-      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .lys');
+      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .3mf, .lys');
       return;
     }
 
@@ -2840,7 +2841,10 @@ export default function Home() {
     }
     lastPrepareDropRef.current = { signature, atMs: nowMs };
 
-    const meshFiles = supportedFiles.filter((file) => getFileExtension(file.name) === '.stl');
+    const meshFiles = supportedFiles.filter((file) => {
+      const ext = getFileExtension(file.name);
+      return ext === '.stl' || ext === '.3mf';
+    });
     const sceneFiles = supportedFiles.filter((file) => getFileExtension(file.name) === '.lys');
 
     const buildSyntheticFileChangeEvent = (nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {

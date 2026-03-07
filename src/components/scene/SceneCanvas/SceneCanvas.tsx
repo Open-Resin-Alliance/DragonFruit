@@ -3052,7 +3052,7 @@ export function SceneCanvas({
 
       knownModelIdsRef.current.add(model.id);
 
-      const isMeshFile = model.fileUrl.startsWith('blob:') || /\.stl$/i.test(model.name);
+      const isMeshFile = model.fileUrl.startsWith('blob:') || /\.(stl|3mf)$/i.test(model.name);
       if (!isMeshFile) continue;
 
       const dropFrom = Math.max(16, Math.min(64, model.geometry.size.z * 0.45));

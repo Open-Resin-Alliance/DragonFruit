@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
@@ -486,6 +486,13 @@ type ModelClipboardEntry = {
 };
 
 export function useSceneCollectionManager() {
+  const getMeshExtension = useCallback((name: string): '.stl' | '.3mf' | null => {
+    const normalized = name.trim().toLowerCase();
+    if (normalized.endsWith('.stl')) return '.stl';
+    if (normalized.endsWith('.3mf')) return '.3mf';
+    return null;
+  }, []);
+
   const waitForUiYield = useCallback(
     () => new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
@@ -1115,7 +1122,7 @@ export function useSceneCollectionManager() {
 
   // File handling - support multiple files
   const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
-    const files = Array.from(filesInput);
+    const files = Array.from(filesInput).filter((file) => getMeshExtension(file.name) !== null);
 
     if (files.length === 0) {
       return;
@@ -1169,7 +1176,7 @@ export function useSceneCollectionManager() {
 
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
-          const geom = await loadStlGeometry(url);
+          const geom = await loadMeshGeometry(url, file.name);
 
           // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
           const color = preferredMeshColor;
@@ -1272,7 +1279,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
