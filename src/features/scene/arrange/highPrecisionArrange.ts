@@ -761,8 +761,11 @@ export function computeHighPrecisionArrangeUpdates(input: HighPrecisionArrangeIn
           for (const c of contactRaw) addCandidate(c.x, c.y);
         }
 
-        const pitchX = Math.max(1, (h.localMaxX - h.localMinX) + minSpacing);
-        const pitchY = Math.max(1, (h.localMaxY - h.localMinY) + minSpacing);
+        // Use a fixed lattice pitch based on model dimensions, not spacing.
+        // Adding minSpacing to the pitch caused smaller spacing to create finer grids
+        // which were then sampled more sparsely, missing tight placements.
+        const pitchX = Math.max(1, (h.localMaxX - h.localMinX) * 1.2);
+        const pitchY = Math.max(1, (h.localMaxY - h.localMinY) * 1.2);
         const colsX = Math.ceil((maxCenterX - minCenterX) / pitchX) + 1;
         const rowsY = Math.ceil((maxCenterY - minCenterY) / pitchY) + 1;
         const totalLatticeCells = (colsX + 1) * (rowsY + 1) * 1.5;
