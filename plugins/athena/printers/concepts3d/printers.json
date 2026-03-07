@@ -6,9 +6,9 @@
     "name": "Athena 8K",
     "platformBadge": { "text": "NanoDLP", "color": "#00AEEF" },
     "imageAssetPath": "./assets/athena-12k.png",
-    "pixelSize": { "x": 19, "y": 24 },
+    "pixelSize": { "x": 28.5, "y": 28.5 },
     "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
-    "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "display": { "resolutionX": 7680, "resolutionY": 4320, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp"
