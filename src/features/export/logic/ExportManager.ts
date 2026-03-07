@@ -111,7 +111,9 @@ export class ExportManager {
       throw new Error('SHA-256 hashing is unavailable in this environment.');
     }
 
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    const digestInput = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(digestInput).set(bytes);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', digestInput);
     const digestBytes = new Uint8Array(digest);
     let hex = '';
     for (let i = 0; i < digestBytes.length; i += 1) {
@@ -635,7 +637,9 @@ export class ExportManager {
       console.warn('[ExportManager] Native save dialog unavailable/failed, falling back to browser download.', error);
     }
 
-    const blob = new Blob([data instanceof DataView ? bytes : data], { type: mimeType });
+    // Create a clean copy with explicit ArrayBuffer for Blob compatibility
+    const blobData = typeof data === 'string' ? data : new Uint8Array(bytes);
+    const blob = new Blob([blobData], { type: mimeType });
 
     const url = URL.createObjectURL(blob);
     try {

@@ -503,7 +503,9 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     throw new Error('SHA-256 hashing is unavailable in this environment.');
   }
 
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  const digestInput = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(digestInput).set(bytes);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', digestInput);
   const digestBytes = new Uint8Array(digest);
   let hex = '';
   for (let i = 0; i < digestBytes.length; i += 1) {
@@ -2549,7 +2551,9 @@ export function useSceneCollectionManager() {
 
           const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
           const mimeType = meshRef.mimeType?.trim() || 'model/stl';
-          const blob = new Blob([bytes], { type: mimeType });
+          // Create a clean copy with explicit ArrayBuffer for Blob compatibility
+          const blobData = new Uint8Array(bytes);
+          const blob = new Blob([blobData], { type: mimeType });
           url = URL.createObjectURL(blob);
 
           const geometry = await loadMeshGeometry(url, embeddedName);

@@ -316,6 +316,21 @@ function getDroppedFileMimeType(name: string): string {
   return 'application/octet-stream';
 }
 
+function isSceneFileName(name: string): boolean {
+  const ext = getFileExtension(name);
+  return ext === '.voxl' || ext === '.lys';
+}
+
+type LaunchSceneFileEntry = {
+  path: string;
+  name: string;
+};
+
+type SceneFileHandoffPayload = {
+  paths?: string[];
+  source?: string;
+};
+
 function extractTauriDroppedPaths(payload: unknown): string[] {
   const isStringArray = (value: unknown): value is string[] => (
     Array.isArray(value) && value.every((item) => typeof item === 'string')
@@ -728,6 +743,7 @@ export default function Home() {
     operationLabel: string;
   } | null>(null);
   const dragDepthRef = React.useRef(0);
+  const launchSceneFilesHandledRef = React.useRef(false);
   const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
     signature: '',
     atMs: 0,
@@ -2626,6 +2642,116 @@ export default function Home() {
     if (webFiles.length === 0) return;
     scene.onImportLysChange(buildSyntheticFileChangeEvent([webFiles[0]]));
   }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+
+  const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
+    if (!entries || entries.length === 0) return false;
+
+    const sceneEntry = entries.find((entry) => {
+      const name = (entry.name || getFileNameFromPath(entry.path)).trim();
+      return isSceneFileName(name);
+    });
+
+    if (!sceneEntry) return false;
+
+    const core = await import('@tauri-apps/api/core');
+    const sourcePath = sceneEntry.path.trim();
+    if (!sourcePath) return false;
+
+    const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+    const name = sceneEntry.name || getFileNameFromPath(sourcePath);
+    const file = new File([new Uint8Array(bytes)], name, {
+      type: getDroppedFileMimeType(name),
+      lastModified: Date.now(),
+    });
+
+    scene.onImportLysChange(buildSyntheticFileChangeEvent([file]));
+    return true;
+  }, [buildSyntheticFileChangeEvent, scene]);
+
+  const importSceneFromPaths = React.useCallback(async (paths: string[]): Promise<boolean> => {
+    if (!paths || paths.length === 0) return false;
+
+    const entries: LaunchSceneFileEntry[] = paths
+      .map((path) => {
+        const trimmed = path.trim();
+        if (!trimmed) return null;
+        return {
+          path: trimmed,
+          name: getFileNameFromPath(trimmed),
+        } satisfies LaunchSceneFileEntry;
+      })
+      .filter((entry): entry is LaunchSceneFileEntry => Boolean(entry));
+
+    return importSceneFromLaunchEntries(entries);
+  }, [importSceneFromLaunchEntries]);
+
+  React.useEffect(() => {
+    if (launchSceneFilesHandledRef.current) return;
+    launchSceneFilesHandledRef.current = true;
+
+    if (!isDesktopRuntime()) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const core = await import('@tauri-apps/api/core');
+        const launchEntries = await core.invoke<LaunchSceneFileEntry[]>('get_launch_scene_files');
+        if (cancelled || !launchEntries || launchEntries.length === 0) return;
+
+        const imported = await importSceneFromLaunchEntries(launchEntries);
+        if (!imported) {
+          console.warn('[LaunchOpen] App launched with file arguments, but no supported scene file (.voxl/.lys) was found.');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[LaunchOpen] Failed handling launch scene file arguments.', error);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [importSceneFromLaunchEntries, isDesktopRuntime]);
+
+  React.useEffect(() => {
+    if (!isDesktopRuntime()) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+
+        unlisten = await listen<SceneFileHandoffPayload>('dragonfruit://scene-file-handoff', (event) => {
+          if (disposed) return;
+          const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : [];
+          if (paths.length === 0) return;
+
+          void importSceneFromPaths(paths).catch((error) => {
+            console.warn('[LaunchOpen] Failed importing handed-off scene file(s).', error);
+          });
+        });
+      } catch (error) {
+        if (!disposed) {
+          console.warn('[LaunchOpen] Failed subscribing to scene-file handoff events.', error);
+        }
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        try {
+          unlisten();
+        } catch {
+          // noop
+        }
+      }
+    };
+  }, [importSceneFromPaths, isDesktopRuntime]);
 
   const handleTopBarOpenScene = React.useCallback(() => {
     void handleOpenSceneDialog();
