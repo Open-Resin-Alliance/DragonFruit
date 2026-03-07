@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { loadStlGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
@@ -10,7 +11,7 @@ import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory, registerHistoryHandler } from '@/history/historyStore';
 import type { HistoryAction, HistoryDirection } from '@/history/types';
 import type { ModelTransform } from '@/hooks/useModelTransform';
-import type { SupportMode, SupportState } from '@/supports/types';
+import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
@@ -429,6 +430,138 @@ function generateRecentEntryId(): string {
   return generateUuid();
 }
 
+function decodeBase64ToUint8Array(base64: string): Uint8Array {
+  if (typeof atob !== 'function') {
+    throw new Error('Base64 decoding is unavailable in this environment.');
+  }
+
+  const normalized = base64.replace(/\s+/g, '');
+  const binary = atob(normalized);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function decodeRleU8(encoded: Uint8Array, expectedSize: number): Uint8Array {
+  if (!Number.isFinite(expectedSize) || expectedSize <= 0 || !Number.isInteger(expectedSize)) {
+    throw new Error('Invalid VOXL RLE expected size.');
+  }
+
+  if (encoded.length % 2 !== 0) {
+    throw new Error('Invalid VOXL RLE payload: expected count/value byte pairs.');
+  }
+
+  const out = new Uint8Array(expectedSize);
+  let outIndex = 0;
+
+  for (let i = 0; i < encoded.length; i += 2) {
+    const count = encoded[i];
+    const value = encoded[i + 1];
+    if (count <= 0) {
+      throw new Error('Invalid VOXL RLE payload: zero-length run.');
+    }
+
+    const next = outIndex + count;
+    if (next > expectedSize) {
+      throw new Error('Invalid VOXL RLE payload: run length exceeds expected output size.');
+    }
+
+    out.fill(value, outIndex, next);
+    outIndex = next;
+  }
+
+  if (outIndex !== expectedSize) {
+    throw new Error('Invalid VOXL RLE payload: decoded size mismatch.');
+  }
+
+  return out;
+}
+
+function decodeVoxlEmbeddedMeshBytes(meshRef: VoxlMeshRef): Uint8Array {
+  if (!meshRef.dataBase64) {
+    throw new Error('VOXL embedded mesh is missing dataBase64.');
+  }
+
+  const encoded = decodeBase64ToUint8Array(meshRef.dataBase64);
+  const dataEncoding = meshRef.dataEncoding ?? 'base64-raw';
+
+  if (dataEncoding === 'base64-raw') {
+    return encoded;
+  }
+
+  if (dataEncoding === 'base64-rle-u8') {
+    return decodeRleU8(encoded, meshRef.uncompressedSizeBytes ?? 0);
+  }
+
+  throw new Error(`Unsupported VOXL embedded mesh encoding: ${String(dataEncoding)}`);
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('SHA-256 hashing is unavailable in this environment.');
+  }
+
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  const digestBytes = new Uint8Array(digest);
+  let hex = '';
+  for (let i = 0; i < digestBytes.length; i += 1) {
+    hex += digestBytes[i].toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
+function remapModelIdsInPayload<T>(value: T, idMap: Map<string, string>): T {
+  const visit = (input: unknown, key?: string): unknown => {
+    if (Array.isArray(input)) {
+      return input.map((item) => visit(item));
+    }
+
+    if (!input || typeof input !== 'object') {
+      if (key === 'modelId' && typeof input === 'string') {
+        return idMap.get(input) ?? input;
+      }
+      return input;
+    }
+
+    const source = input as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [childKey, childValue] of Object.entries(source)) {
+      out[childKey] = visit(childValue, childKey);
+    }
+    return out;
+  };
+
+  return visit(value) as T;
+}
+
+function voxlSupportsContainData(document: VoxlDocumentV1): boolean {
+  const supports = document.supports;
+  return supports.roots.length > 0
+    || supports.trunks.length > 0
+    || supports.branches.length > 0
+    || supports.leaves.length > 0
+    || (supports.twigs?.length ?? 0) > 0
+    || (supports.sticks?.length ?? 0) > 0
+    || supports.braces.length > 0
+    || supports.knots.length > 0
+    || (supports.supportBraces?.length ?? 0) > 0;
+}
+
+function countSupportEntries(payload: DragonfruitImportFormat | null | undefined): number {
+  if (!payload) return 0;
+  return payload.roots.length
+    + payload.trunks.length
+    + payload.branches.length
+    + payload.leaves.length
+    + (payload.twigs?.length ?? 0)
+    + (payload.sticks?.length ?? 0)
+    + payload.braces.length
+    + payload.knots.length
+    + (payload.supportBraces?.length ?? 0);
+}
+
 export interface LoadedModel {
   id: string;
   name: string;
@@ -474,6 +607,14 @@ type ImportProgressState = {
   progress: number | null;
 };
 
+type SceneImportReportTone = 'success' | 'warning' | 'error';
+
+type SceneImportReport = {
+  id: number;
+  text: string;
+  tone: SceneImportReportTone;
+};
+
 type ModelClipboardEntry = {
   sourceId: string;
   name: string;
@@ -486,6 +627,20 @@ type ModelClipboardEntry = {
 };
 
 export function useSceneCollectionManager() {
+  const getMeshExtension = useCallback((name: string): '.stl' | '.3mf' | null => {
+    const normalized = name.trim().toLowerCase();
+    if (normalized.endsWith('.stl')) return '.stl';
+    if (normalized.endsWith('.3mf')) return '.3mf';
+    return null;
+  }, []);
+
+  const getSceneExtension = useCallback((name: string): '.lys' | '.voxl' | null => {
+    const normalized = name.trim().toLowerCase();
+    if (normalized.endsWith('.lys')) return '.lys';
+    if (normalized.endsWith('.voxl')) return '.voxl';
+    return null;
+  }, []);
+
   const waitForUiYield = useCallback(
     () => new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
@@ -511,6 +666,8 @@ export function useSceneCollectionManager() {
     detail: '',
     progress: null,
   });
+  const [sceneImportReport, setSceneImportReport] = useState<SceneImportReport | null>(null);
+  const sceneImportReportTimeoutRef = useRef<number | null>(null);
 
   const isDebugModelName = useCallback((name: string) => name.startsWith('[Debug]'), []);
   const deferredAccelerationQueueRef = useRef<THREE.BufferGeometry[]>([]);
@@ -527,6 +684,30 @@ export function useSceneCollectionManager() {
       URL.revokeObjectURL(url);
     } catch {
       // Ignore invalid URLs
+    }
+  }, []);
+
+  const emitSceneImportReport = useCallback((text: string, tone: SceneImportReportTone = 'success') => {
+    setSceneImportReport({ id: Date.now(), text, tone });
+
+    if (typeof window !== 'undefined') {
+      if (sceneImportReportTimeoutRef.current !== null) {
+        window.clearTimeout(sceneImportReportTimeoutRef.current);
+      }
+
+      sceneImportReportTimeoutRef.current = window.setTimeout(() => {
+        setSceneImportReport(null);
+        sceneImportReportTimeoutRef.current = null;
+      }, 4200);
+    }
+  }, []);
+
+  const clearSceneImportReport = useCallback(() => {
+    setSceneImportReport(null);
+
+    if (typeof window !== 'undefined' && sceneImportReportTimeoutRef.current !== null) {
+      window.clearTimeout(sceneImportReportTimeoutRef.current);
+      sceneImportReportTimeoutRef.current = null;
     }
   }, []);
 
@@ -1115,7 +1296,7 @@ export function useSceneCollectionManager() {
 
   // File handling - support multiple files
   const loadFiles = useCallback(async (filesInput: FileList | File[]) => {
-    const files = Array.from(filesInput);
+    const files = Array.from(filesInput).filter((file) => getMeshExtension(file.name) !== null);
 
     if (files.length === 0) {
       return;
@@ -1169,7 +1350,7 @@ export function useSceneCollectionManager() {
 
         try {
           console.log(`[SceneCollection] Loading ${file.name}...`);
-          const geom = await loadStlGeometry(url);
+          const geom = await loadMeshGeometry(url, file.name);
 
           // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
           const color = preferredMeshColor;
@@ -1272,7 +1453,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -2267,18 +2448,28 @@ export function useSceneCollectionManager() {
           }
         }
 
+        const supportCount = countSupportEntries(supportData ?? null);
+        emitSceneImportReport(
+          supportCount > 0
+            ? `Imported LYS scene: 1 model, ${supportCount} supports.`
+            : 'Imported LYS scene: 1 model.',
+          'success',
+        );
+
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
       } else {
         const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
         console.error('[SceneCollection] LYS import failed:', errorMessage);
+        emitSceneImportReport(`LYS import failed: ${errorMessage}`, 'error');
         if (typeof window !== 'undefined') {
           window.alert(`Import Scene failed:\n${errorMessage}`);
         }
       }
     } catch (err) {
       console.error("[SceneCollection] Failed to process LYS geometry:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      emitSceneImportReport(`LYS import failed: ${msg}`, 'error');
       if (typeof window !== 'undefined') {
-        const msg = err instanceof Error ? err.message : String(err);
         window.alert(`Import Scene failed:\n${msg}`);
       }
     } finally {
@@ -2290,14 +2481,195 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield, emitSceneImportReport]);
+
+  const handleImportVoxlFile = useCallback(async (file: File) => {
+    trackRecentOpenedFiles([file], 'scene');
+
+    setImportProgress({
+      active: true,
+      type: 'scene',
+      label: 'Importing VOXL scene…',
+      detail: file.name,
+      progress: null,
+    });
+
+    await waitForUiYield();
+
+    try {
+      const text = await file.text();
+      const document = parseVoxlDocument(text);
+
+      const existingIds = new Set(modelsRef.current.map((model) => model.id));
+      const idMap = new Map<string, string>();
+      const importedModels: LoadedModel[] = [];
+      let skippedModels = 0;
+
+      for (let i = 0; i < document.models.length; i += 1) {
+        const model = document.models[i];
+        const meshRef = model.mesh;
+
+        if (!meshRef) {
+          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing mesh descriptor.`);
+          skippedModels += 1;
+          continue;
+        }
+
+        setImportProgress({
+          active: true,
+          type: 'scene',
+          label: 'Importing VOXL scene…',
+          detail: `Model ${i + 1}/${document.models.length}: ${model.name}`,
+          progress: null,
+        });
+
+        if (meshRef.mode !== 'embedded-file') {
+          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": mesh mode \"${meshRef.mode}\" is not importable without embedded mesh data.`);
+          skippedModels += 1;
+          continue;
+        }
+
+        if (!meshRef.dataBase64) {
+          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
+          skippedModels += 1;
+          continue;
+        }
+
+        let url = '';
+        try {
+          const bytes = decodeVoxlEmbeddedMeshBytes(meshRef);
+
+          if (typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0) {
+            const expected = meshRef.sha256.trim().toLowerCase();
+            const actual = await sha256Hex(bytes);
+            if (actual !== expected) {
+              throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
+            }
+          }
+
+          const embeddedName = meshRef.fileName?.trim() || `${model.name || 'model'}.stl`;
+          const mimeType = meshRef.mimeType?.trim() || 'model/stl';
+          const blob = new Blob([bytes], { type: mimeType });
+          url = URL.createObjectURL(blob);
+
+          const geometry = await loadMeshGeometry(url, embeddedName);
+
+          let resolvedId = model.id;
+          if (!resolvedId || existingIds.has(resolvedId)) {
+            resolvedId = generateId();
+          }
+          existingIds.add(resolvedId);
+          idMap.set(model.id, resolvedId);
+
+          const polygonCount = geometry.geometry.getAttribute('position').count / 3;
+          const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
+
+          importedModels.push({
+            id: resolvedId,
+            name: model.name,
+            fileUrl: '',
+            fileSizeBytes: model.fileSizeBytes,
+            geometry,
+            transform: {
+              position: new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
+              rotation: new THREE.Euler(model.transform.rotation.x, model.transform.rotation.y, model.transform.rotation.z),
+              scale: new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z),
+            },
+            visible: model.visible,
+            color,
+            polygonCount,
+            ignoreAutoLift: true,
+          });
+        } catch (error) {
+          console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);
+          skippedModels += 1;
+        } finally {
+          if (url) {
+            URL.revokeObjectURL(url);
+          }
+        }
+      }
+
+      if (importedModels.length > 0) {
+        setModels((prev) => [...prev, ...importedModels]);
+
+        const mappedActiveId = (document.scene.activeModelId && idMap.get(document.scene.activeModelId))
+          || importedModels[0]?.id
+          || null;
+
+        const mappedSelectedIds = document.scene.selectedModelIds
+          .map((id) => idMap.get(id))
+          .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+        const finalSelected = mappedSelectedIds.length > 0
+          ? mappedSelectedIds
+          : (mappedActiveId ? [mappedActiveId] : []);
+
+        setActiveModelId(mappedActiveId);
+        setSelectedModelIds(finalSelected);
+      }
+
+      if (voxlSupportsContainData(document)) {
+        const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
+        loadFromLychee(remappedSupports);
+      }
+
+      const importedSupportCount = countSupportEntries(document.supports);
+      const importedModelCount = importedModels.length;
+      const modelNoun = importedModelCount === 1 ? 'model' : 'models';
+      const skippedNoun = skippedModels === 1 ? 'model' : 'models';
+      const supportsClause = importedSupportCount > 0 ? `, ${importedSupportCount} supports` : '';
+      const skippedClause = skippedModels > 0 ? `, skipped ${skippedModels} ${skippedNoun}` : '';
+
+      if (importedModelCount > 0) {
+        emitSceneImportReport(
+          `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
+          skippedModels > 0 ? 'warning' : 'success',
+        );
+      }
+
+      if (importedModels.length === 0) {
+        console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-file meshes).');
+        emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+      }
+    } catch (error) {
+      console.error('[SceneCollection] VOXL import failed:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
+      if (typeof window !== 'undefined') {
+        window.alert(`Import VOXL failed:\n${message}`);
+      }
+    } finally {
+      setImportProgress({
+        active: false,
+        type: null,
+        label: '',
+        detail: '',
+        progress: null,
+      });
+    }
+  }, [generateId, trackRecentOpenedFiles, waitForUiYield, emitSceneImportReport]);
+
+  const importSceneFile = useCallback(async (file: File) => {
+    const extension = getSceneExtension(file.name);
+    if (extension === '.voxl') {
+      await handleImportVoxlFile(file);
+      return;
+    }
+    if (extension === '.lys') {
+      await handleImportLysFile(file);
+      return;
+    }
+
+    console.warn(`[SceneCollection] Unsupported scene file: ${file.name}`);
+  }, [getSceneExtension, handleImportLysFile, handleImportVoxlFile]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      handleImportLysFile(e.target.files[0]);
+      void importSceneFile(e.target.files[0]);
       e.target.value = '';
     }
-  }, [handleImportLysFile]);
+  }, [importSceneFile]);
 
   const reopenRecentOpenedFile = useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
@@ -2310,13 +2682,13 @@ export function useSceneCollectionManager() {
     }
 
     if (entry.kind === 'scene') {
-      await handleImportLysFile(file);
+      await importSceneFile(file);
       return true;
     }
 
     await loadFiles([file]);
     return true;
-  }, [handleImportLysFile, loadFiles, recentOpenedFiles]);
+  }, [importSceneFile, loadFiles, recentOpenedFiles]);
 
   // Legacy Lychee loader wrapper
   const handleLoadLychee = async () => {
@@ -2511,6 +2883,11 @@ export function useSceneCollectionManager() {
 
   useEffect(() => {
     return () => {
+      if (typeof window !== 'undefined' && sceneImportReportTimeoutRef.current !== null) {
+        window.clearTimeout(sceneImportReportTimeoutRef.current);
+        sceneImportReportTimeoutRef.current = null;
+      }
+
       models.forEach(m => tryRevokeObjectUrl(m.fileUrl));
 
       const tracked = trackedGeometriesRef.current;
@@ -2592,6 +2969,8 @@ export function useSceneCollectionManager() {
     // Scene context
     sceneBounds,
     importProgress,
+    sceneImportReport,
+    clearSceneImportReport,
     recentOpenedFiles,
     reopenRecentOpenedFile,
     view3dSettings,

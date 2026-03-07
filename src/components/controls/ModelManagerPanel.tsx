@@ -40,7 +40,9 @@ interface ModelManagerPanelProps {
   onOpenSupportsInfo?: (id: string) => void;
   onDelete: (id: string) => void;
   onVisibilityChange: (id: string, visible: boolean) => void;
+  onLoadMeshClick?: () => void;
   onLoadMeshChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onImportSceneClick?: () => void;
   onImportSceneChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   dimmed?: boolean;
   bottomClearancePx?: number;
@@ -81,7 +83,9 @@ export function ModelManagerPanel({
   onOpenSupportsInfo,
   onDelete,
   onVisibilityChange,
+  onLoadMeshClick,
   onLoadMeshChange,
+  onImportSceneClick,
   onImportSceneChange,
   dimmed = false,
   bottomClearancePx = 220,
@@ -234,6 +238,28 @@ export function ModelManagerPanel({
     };
   }, [contextMenu]);
 
+  const triggerMeshPicker = React.useCallback(() => {
+    if (onLoadMeshClick) {
+      onLoadMeshClick();
+      return;
+    }
+
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('models-card-mesh-input') as HTMLInputElement | null;
+    input?.click();
+  }, [onLoadMeshClick]);
+
+  const triggerScenePicker = React.useCallback(() => {
+    if (onImportSceneClick) {
+      onImportSceneClick();
+      return;
+    }
+
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('models-card-scene-input') as HTMLInputElement | null;
+    input?.click();
+  }, [onImportSceneClick]);
+
   return (
     <Card
       className={panelClassName}
@@ -296,17 +322,18 @@ export function ModelManagerPanel({
             </div>
 
             <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              <label
-                htmlFor="models-card-mesh-input"
+              <button
+                type="button"
+                onClick={triggerMeshPicker}
                 className="ui-button ui-button-primary inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
               >
                 <Upload className="w-3.5 h-3.5 shrink-0" />
                 <span className="whitespace-nowrap">Load Mesh</span>
-              </label>
+              </button>
               <input
                 id="models-card-mesh-input"
                 type="file"
-                accept=".stl"
+                accept=".stl,.3mf"
                 multiple
                 onChange={onLoadMeshChange}
                 className="hidden"
@@ -314,17 +341,18 @@ export function ModelManagerPanel({
 
               {onImportSceneChange && (
                 <>
-                  <label
-                    htmlFor="models-card-scene-input"
+                  <button
+                    type="button"
+                    onClick={triggerScenePicker}
                     className="ui-button ui-button-accent inline-flex min-w-0 items-center justify-center gap-1.5 min-h-9 !px-2 text-[11px] leading-none"
                   >
                     <FolderInput className="w-3.5 h-3.5 shrink-0" />
                     <span className="whitespace-nowrap">Import Scene</span>
-                  </label>
+                  </button>
                   <input
                     id="models-card-scene-input"
                     type="file"
-                    accept=".lys"
+                    accept=".voxl,.lys"
                     onChange={onImportSceneChange}
                     className="hidden"
                   />
@@ -334,11 +362,11 @@ export function ModelManagerPanel({
 
             <div className={`mt-1.5 grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
               <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                STL now • 3MF soon
+                Mesh Files (.stl, .3mf)
               </div>
               {onImportSceneChange && (
                 <div className="text-[10px] text-center" style={{ color: 'var(--text-muted)' }}>
-                  LYS now • VOXL soon
+                  Scene Files (.voxl, .lys)
                 </div>
               )}
             </div>

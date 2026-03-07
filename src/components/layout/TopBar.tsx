@@ -8,7 +8,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { AlertTriangle, ChevronDown, Lock, Maximize2, Minimize2, Printer, Square, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -70,6 +70,9 @@ interface TopBarProps {
   heatmapColors: string[];
   onHeatmapColorChange: (index: number, color: string) => void;
   isSlicingBusy?: boolean;
+  onSaveScene?: () => void;
+  onOpenScene?: () => void;
+  onCloseProgram?: () => void;
 }
 
 export function TopBar({
@@ -114,6 +117,9 @@ export function TopBar({
   heatmapColors,
   onHeatmapColorChange,
   isSlicingBusy = false,
+  onSaveScene,
+  onOpenScene,
+  onCloseProgram,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -137,6 +143,9 @@ export function TopBar({
       : 'detecting…';
   const layoutWarningTitle = `Layout tip: Current window ${layoutMetricsLabel}. For full panel comfort use ≥ ${MIN_GOOD_WIDTH}×${MIN_GOOD_HEIGHT} and maximize the app window.`;
   const topbarActionsDisabled = isSlicingBusy;
+  const [isAppMenuOpen, setIsAppMenuOpen] = useState(false);
+  const [appMenuPosition, setAppMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const appMenuButtonRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -241,6 +250,56 @@ export function TopBar({
       // no-op in web runtime or restricted capability mode
     }
   }, []);
+
+  const handleCloseProgram = React.useCallback(async () => {
+    if (onCloseProgram) {
+      onCloseProgram();
+      return;
+    }
+    await handleDesktopWindowClose();
+  }, [handleDesktopWindowClose, onCloseProgram]);
+
+  const openAppMenu = React.useCallback(() => {
+    const button = appMenuButtonRef.current;
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+    setAppMenuPosition({ x: rect.left, y: rect.bottom + 6 });
+    setIsAppMenuOpen(true);
+  }, []);
+
+  const closeAppMenu = React.useCallback(() => {
+    setIsAppMenuOpen(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isAppMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+
+      const appMenuNode = document.querySelector('[data-app-menu="true"]');
+      const appMenuButtonNode = appMenuButtonRef.current;
+
+      if (appMenuNode?.contains(target)) return;
+      if (appMenuButtonNode?.contains(target)) return;
+      closeAppMenu();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeAppMenu();
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [closeAppMenu, isAppMenuOpen]);
 
   const handleTopBarPointerDown = React.useCallback(async (event: React.MouseEvent<HTMLDivElement>) => {
     if (!isDesktopWindow) return;
@@ -379,12 +438,35 @@ export function TopBar({
         data-no-window-drag="true"
         aria-disabled={topbarActionsDisabled}
       >
-        <img
-          src="/dragonfruit_assets/branding/simple_icon.svg"
-          alt="DragonFruit"
-          className="h-7 w-7 object-contain"
-          draggable={false}
-        />
+        <button
+          ref={appMenuButtonRef}
+          type="button"
+          disabled={topbarActionsDisabled}
+          onClick={() => {
+            if (isAppMenuOpen) {
+              closeAppMenu();
+            } else {
+              openAppMenu();
+            }
+          }}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md border transition-colors"
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: isAppMenuOpen
+              ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
+              : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+          }}
+          title="DragonFruit menu"
+          aria-label="Open DragonFruit menu"
+          data-no-window-drag="true"
+        >
+          <img
+            src="/dragonfruit_assets/branding/simple_icon.svg"
+            alt="DragonFruit"
+            className="h-6 w-6 object-contain"
+            draggable={false}
+          />
+        </button>
 
         <div
           className="h-6 w-px mx-0.5 shrink-0"
@@ -431,6 +513,82 @@ export function TopBar({
           <ChevronDown className="h-3.5 w-3.5 ml-auto shrink-0" style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
         </button>
       </div>
+
+      {isAppMenuOpen && appMenuPosition && (
+        <div
+          data-app-menu="true"
+          className="fixed z-[120] w-44 rounded-lg border p-1.5 shadow-xl backdrop-blur-sm"
+          style={{
+            left: appMenuPosition.x,
+            top: appMenuPosition.y,
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
+          }}
+          role="menu"
+          aria-label="DragonFruit app menu"
+        >
+          <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+            DragonFruit
+          </div>
+          <div className="space-y-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                closeAppMenu();
+                onSaveScene?.();
+              }}
+              disabled={topbarActionsDisabled || !onSaveScene}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
+              style={{
+                color: (topbarActionsDisabled || !onSaveScene) ? 'var(--text-muted)' : 'var(--text-strong)',
+                opacity: (topbarActionsDisabled || !onSaveScene) ? 0.55 : 1,
+              }}
+              role="menuitem"
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <Save className="h-3.5 w-3.5" />
+              </span>
+              <span>Save Scene</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                closeAppMenu();
+                onOpenScene?.();
+              }}
+              disabled={topbarActionsDisabled || !onOpenScene}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
+              style={{
+                color: (topbarActionsDisabled || !onOpenScene) ? 'var(--text-muted)' : 'var(--text-strong)',
+                opacity: (topbarActionsDisabled || !onOpenScene) ? 0.55 : 1,
+              }}
+              role="menuitem"
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <FolderOpen className="h-3.5 w-3.5" />
+              </span>
+              <span>Open Scene…</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                closeAppMenu();
+                void handleCloseProgram();
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium transition-colors"
+              style={{ color: 'var(--text-strong)' }}
+              role="menuitem"
+            >
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded border" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <Power className="h-3.5 w-3.5" />
+              </span>
+              <span>Close Program</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="pointer-events-none absolute inset-x-0 flex justify-center px-2">
         <div

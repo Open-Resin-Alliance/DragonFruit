@@ -1,13 +1,15 @@
 "use client";
 
 import React from 'react';
-import { FolderInput, Loader2, Sparkles, Upload, Printer, Wrench } from 'lucide-react';
+import { FolderInput, Loader2, Upload, Printer, Wrench } from 'lucide-react';
 import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionManager';
 
 type EmptySceneStateProps = {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onLoadMeshClick?: () => void;
   onImportSceneChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onDropMeshFiles?: (files: File[]) => void;
+  onImportSceneClick?: () => void;
+  onDropMeshFiles?: (files: File[]) => void | Promise<void>;
   recentOpenedFiles?: RecentOpenedFileEntry[];
   onReopenRecentFile?: (entryId: string) => Promise<boolean> | boolean;
   isLoading?: boolean;
@@ -56,7 +58,9 @@ function formatBytes(bytes?: number): string | null {
 
 export function EmptySceneState({
   onFileChange,
+  onLoadMeshClick,
   onImportSceneChange,
+  onImportSceneClick,
   onDropMeshFiles,
   recentOpenedFiles = [],
   onReopenRecentFile,
@@ -71,11 +75,22 @@ export function EmptySceneState({
   const [reopeningEntryId, setReopeningEntryId] = React.useState<string | null>(null);
   const [reopenError, setReopenError] = React.useState<string | null>(null);
 
+  const isLikelyFileDrag = React.useCallback((dataTransfer: DataTransfer | null) => {
+    if (!dataTransfer) return false;
+    if ((dataTransfer.files?.length ?? 0) > 0) return true;
+    if (Array.from(dataTransfer.items ?? []).some((item) => item.kind === 'file')) return true;
+    if (Array.from(dataTransfer.types ?? []).includes('Files')) return true;
+    // Some desktop runtimes (including certain Tauri/webview combos) expose file payloads
+    // late in the drag lifecycle; allow the drag to proceed optimistically.
+    return true;
+  }, []);
+
   const handleDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!isLikelyFileDrag(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     setIsDropActive(true);
-  }, []);
+  }, [isLikelyFileDrag]);
 
   const handleDragLeave = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -91,7 +106,7 @@ export function EmptySceneState({
     if (!onDropMeshFiles) return;
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
-    onDropMeshFiles(files);
+    void onDropMeshFiles(files);
   }, [onDropMeshFiles]);
 
   const handleReopenRecentFile = React.useCallback(async (entryId: string) => {
@@ -112,39 +127,50 @@ export function EmptySceneState({
     }
   }, [onReopenRecentFile]);
 
+  const triggerMeshPicker = React.useCallback(() => {
+    if (onLoadMeshClick) {
+      onLoadMeshClick();
+      return;
+    }
+
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('empty-state-stl-file-input') as HTMLInputElement | null;
+    input?.click();
+  }, [onLoadMeshClick]);
+
+  const triggerScenePicker = React.useCallback(() => {
+    if (onImportSceneClick) {
+      onImportSceneClick();
+      return;
+    }
+
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('empty-state-scene-file-input') as HTMLInputElement | null;
+    input?.click();
+  }, [onImportSceneClick]);
+
   const shouldShowFirstTimeOnboarding = showFirstTimeOnboarding && !isLoading;
 
   return (
     <div className="absolute inset-0 top-14 z-30 flex items-center justify-center pointer-events-none">
       <div className="ui-empty-state pointer-events-auto">
-        <div className="mb-4 flex items-center justify-center">
-          <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold"
-            style={{
-              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 65%)',
-              background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
-              color: 'var(--text-strong)',
-            }}
-          >
-            <Sparkles className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} />
-            <span>DragonFruit Slicer</span>
-          </div>
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: 'var(--text-muted)' }}>
+          Empty workspace
         </div>
-
         <h1 className="ui-empty-title">Ready for your next adventure?</h1>
-        <p className="ui-empty-text">
+        <p className="ui-empty-text" style={{ maxWidth: 560, marginLeft: 'auto', marginRight: 'auto' }}>
           Bring in a mesh or scene to start preparing, analyzing, supporting, and exporting your print.
         </p>
 
         {isLoading ? (
           <div
-            className="rounded-md border px-4 py-5"
+            className="rounded-lg border px-4 py-4 text-left"
             style={{
               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 65%)',
               background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
             }}
           >
-            <div className="flex items-center justify-center gap-2 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+            <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
               <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent)' }} />
               <span>{loadingLabel ?? 'Importing your file…'}</span>
             </div>
@@ -163,97 +189,137 @@ export function EmptySceneState({
           </div>
         ) : shouldShowFirstTimeOnboarding ? (
           <>
-            <div className="grid gap-3 grid-cols-1">
-              <button
-                type="button"
-                onClick={onAddPrinter}
-                className="group rounded-md border px-3 py-3 text-left transition-colors"
-                style={{
-                  background: 'var(--primary-button-surface)',
-                  borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
-                  color: 'var(--accent-contrast)',
-                }}
-              >
-                <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
-                  <Printer className="w-4 h-4" />
-                  <span>Add Printer</span>
-                </div>
-                <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                  Open printer library and add one now.
-                </div>
-              </button>
+            <div
+              className="rounded-lg border p-3 text-left"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 8%)',
+                background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
+              }}
+            >
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Get started
+              </div>
+              <div className="grid gap-2 grid-cols-1">
+                <button
+                  type="button"
+                  onClick={onAddPrinter}
+                  className="group rounded-md border px-3 py-3 text-left transition-colors"
+                  style={{
+                    background: 'var(--primary-button-surface)',
+                    borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
+                    color: 'var(--accent-contrast)',
+                  }}
+                >
+                  <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
+                    <Printer className="w-4 h-4" />
+                    <span>Add Printer</span>
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
+                    Open printer library and add one now.
+                  </div>
+                </button>
 
-              <button
-                type="button"
-                onClick={onUseWithoutPrinter}
-                className="group rounded-md border px-3 py-3 text-left transition-colors"
-                style={{
-                  background: 'var(--secondary-button-surface)',
-                  borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
-                  color: 'var(--accent-secondary-contrast)',
-                }}
-              >
-                <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
-                  <Wrench className="w-4 h-4" />
-                  <span>Use without Printer</span>
-                </div>
-                <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
-                  Keep going without a printer. You can add one later.
-                </div>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={onUseWithoutPrinter}
+                  className="group rounded-md border px-3 py-3 text-left transition-colors"
+                  style={{
+                    background: 'var(--secondary-button-surface)',
+                    borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
+                    color: 'var(--accent-secondary-contrast)',
+                  }}
+                >
+                  <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold">
+                    <Wrench className="w-4 h-4" />
+                    <span>Use without Printer</span>
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
+                    Keep going without a printer. You can add one later.
+                  </div>
+                </button>
+              </div>
 
-            <div className="mt-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Add or switch printer anytime from the top bar.
+              <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Add or switch printer anytime from the top bar.
+              </div>
             </div>
           </>
         ) : (
           <>
-            <div className={`grid gap-3 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              <label
-                htmlFor="empty-state-stl-file-input"
-                className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
-                style={{
-                  background: 'var(--primary-button-surface)',
-                  borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
-                }}
-              >
-                <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-contrast)' }}>
-                  <Upload className="w-4 h-4" />
-                  <span>Load Mesh</span>
-                </div>
-                <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                  STL now • 3MF coming soon
-                </div>
-              </label>
-
-              {onImportSceneChange && (
-                <label
-                  htmlFor="empty-state-scene-file-input"
+            <div
+              className="rounded-lg border p-3 text-left"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 8%)',
+                background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
+              }}
+            >
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                Import
+              </div>
+              <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                <button
+                  type="button"
+                  onClick={triggerMeshPicker}
                   className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
                   style={{
-                    background: 'var(--secondary-button-surface)',
-                    borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
+                    background: 'var(--primary-button-surface)',
+                    borderColor: 'color-mix(in srgb, var(--primary-button-surface), white 16%)',
                   }}
                 >
-                  <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-secondary-contrast)' }}>
-                    <FolderInput className="w-4 h-4" />
-                    <span>Import Scene</span>
+                  <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-contrast)' }}>
+                    <Upload className="w-4 h-4" />
+                    <span>Load Mesh</span>
                   </div>
-                  <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
-                    LYS now • VOXL coming soon
+                  <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
+                    Mesh Files (.stl, .3mf)
                   </div>
-                </label>
-              )}
+                </button>
+
+                {onImportSceneChange && (
+                  <button
+                    type="button"
+                    onClick={triggerScenePicker}
+                    className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
+                    style={{
+                      background: 'var(--secondary-button-surface)',
+                      borderColor: 'color-mix(in srgb, var(--secondary-button-surface), white 16%)',
+                    }}
+                  >
+                    <div className="mb-1 inline-flex items-center gap-1.5 text-sm font-semibold" style={{ color: 'var(--accent-secondary-contrast)' }}>
+                      <FolderInput className="w-4 h-4" />
+                      <span>Import Scene</span>
+                    </div>
+                    <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
+                      Scene Files (.voxl, .lys)
+                    </div>
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Tip: Start with <span style={{ color: 'var(--text-strong)' }}>Load Mesh</span> for clean prints, or <span style={{ color: 'var(--text-strong)' }}>Import Scene</span> to continue an existing setup.
+              </div>
             </div>
 
-            <div className="mt-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Tip: Start with <span style={{ color: 'var(--text-strong)' }}>Load Mesh</span> for clean prints, or <span style={{ color: 'var(--text-strong)' }}>Import Scene</span> to continue an existing setup.
-            </div>
-
-            <div className="mt-3">
-              <div className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Recently opened:
+            <div
+              className="mt-2 rounded-lg border p-3 text-left"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 8%)',
+                background: 'color-mix(in srgb, var(--surface-1), transparent 6%)',
+              }}
+            >
+              <div className="flex items-center justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                <span className="font-semibold uppercase tracking-wide">Recent files</span>
+                <span
+                  className="inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+                  style={{
+                    color: 'var(--text-muted)',
+                    background: 'color-mix(in srgb, var(--surface-2), transparent 26%)',
+                    border: '1px solid color-mix(in srgb, var(--border-subtle), transparent 20%)',
+                  }}
+                >
+                  {Math.min(recentOpenedFiles.length, 6)}
+                </span>
               </div>
 
               {recentOpenedFiles.length === 0 ? (
@@ -261,21 +327,11 @@ export function EmptySceneState({
                   No recent files yet.
                 </div>
               ) : (
-                <div className="mt-1 grid grid-cols-2 gap-1.5">
-                  {recentOpenedFiles.slice().reverse().slice(0, 10).map((entry) => {
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  {recentOpenedFiles.slice().reverse().slice(0, 6).map((entry) => {
                     const sizeLabel = formatBytes(entry.sizeBytes);
                     const isBusy = reopeningEntryId === entry.id;
-                    const kindChipStyle = entry.kind === 'scene'
-                      ? {
-                          color: 'color-mix(in srgb, #fb923c, white 10%)',
-                          background: 'color-mix(in srgb, #fb923c, var(--surface-0) 88%)',
-                          border: '1px solid color-mix(in srgb, #fb923c, var(--border-subtle) 46%)',
-                        }
-                      : {
-                          color: 'color-mix(in srgb, #a78bfa, white 14%)',
-                          background: 'color-mix(in srgb, #a78bfa, var(--surface-0) 88%)',
-                          border: '1px solid color-mix(in srgb, #a78bfa, var(--border-subtle) 46%)',
-                        };
+                    const kindAccent = entry.kind === 'scene' ? '#fb923c' : '#a78bfa';
 
                     return (
                       <button
@@ -283,11 +339,11 @@ export function EmptySceneState({
                         type="button"
                         onClick={() => { void handleReopenRecentFile(entry.id); }}
                         disabled={isBusy || isLoading || !onReopenRecentFile}
-                        className="flex w-full items-center justify-between gap-2 rounded-full border px-2 py-1 text-[10px] text-left transition-colors disabled:cursor-not-allowed"
+                        className="flex w-full items-center justify-between gap-2 rounded-md border px-2 py-1.5 text-[10px] text-left transition-colors disabled:cursor-not-allowed"
                         style={{
                           color: 'var(--text-strong)',
                           borderColor: 'color-mix(in srgb, var(--border-subtle), transparent 14%)',
-                          background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
+                          background: 'color-mix(in srgb, var(--surface-1), transparent 8%)',
                           opacity: isBusy ? 0.65 : 1,
                         }}
                         title={`Reopen ${entry.name}`}
@@ -295,16 +351,25 @@ export function EmptySceneState({
                         <span className="min-w-0 inline-flex items-center gap-1.5">
                           <span
                             className="inline-flex items-center rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
-                            style={kindChipStyle}
+                            style={{
+                              color: kindAccent,
+                              background: `color-mix(in srgb, ${kindAccent}, var(--surface-0) 88%)`,
+                              border: `1px solid color-mix(in srgb, ${kindAccent}, var(--border-subtle) 46%)`,
+                            }}
                           >
                             {entry.kind === 'scene' ? 'Scene' : 'Mesh'}
                           </span>
-                          <span className="max-w-[140px] truncate" title={entry.name}>
-                            {entry.name}
+                          <span className="min-w-0">
+                            <span className="block max-w-[132px] truncate text-[10px] leading-tight" title={entry.name}>
+                              {entry.name}
+                            </span>
+                            <span className="block text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                              last opened {formatRecentOpenedAt(entry.openedAt)}
+                            </span>
                           </span>
                         </span>
-                        <span className="shrink-0" style={{ color: 'var(--text-muted)' }}>
-                          {isBusy ? 'loading…' : (sizeLabel ?? formatRecentOpenedAt(entry.openedAt))}
+                        <span className="shrink-0 text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                          {isBusy ? 'loading…' : (sizeLabel ?? 'cached')}
                         </span>
                       </button>
                     );
@@ -317,25 +382,37 @@ export function EmptySceneState({
                   {reopenError}
                 </div>
               )}
-            </div>
 
-            <div
-              className="mt-3 block rounded-md border border-dashed px-3 py-3 text-center transition-colors"
-              style={{
-                borderColor: isDropActive ? 'var(--accent)' : 'var(--border-subtle)',
-                background: isDropActive
-                  ? 'color-mix(in srgb, var(--accent), var(--surface-0) 88%)'
-                  : 'color-mix(in srgb, var(--surface-1), transparent 12%)',
-              }}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-            >
-              <div className="text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Drag & drop mesh files here
-              </div>
-              <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                STL supported now • 3MF coming soon
+              <div
+                className="mt-2 block rounded-md border border-dashed px-2.5 py-2 transition-colors"
+                style={{
+                  borderColor: isDropActive ? 'var(--accent)' : 'var(--border-subtle)',
+                  background: isDropActive
+                    ? 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)'
+                    : 'color-mix(in srgb, var(--surface-1), transparent 16%)',
+                }}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 inline-flex items-center gap-1.5">
+                    <Upload className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+                    <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      Drop supported files
+                    </span>
+                  </div>
+                  <span
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+                    style={{
+                      color: 'var(--accent)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 86%)',
+                      border: '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
+                    }}
+                  >
+                    STL • 3MF • VOXL • LYS
+                  </span>
+                </div>
               </div>
             </div>
           </>
@@ -344,7 +421,7 @@ export function EmptySceneState({
         <input
           id="empty-state-stl-file-input"
           type="file"
-          accept=".stl"
+          accept=".stl,.3mf"
           multiple
           onChange={onFileChange}
           className="hidden"
@@ -354,7 +431,7 @@ export function EmptySceneState({
           <input
             id="empty-state-scene-file-input"
             type="file"
-            accept=".lys"
+            accept=".voxl,.lys"
             onChange={onImportSceneChange}
             className="hidden"
           />

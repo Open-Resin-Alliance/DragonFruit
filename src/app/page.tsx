@@ -30,6 +30,7 @@ import { PrintingLayerScrubPreview } from '@/components/controls/PrintingLayerSc
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
+import { ExportManager } from '@/features/export/logic/ExportManager';
 import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
@@ -102,6 +103,7 @@ import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
+  pickOpenFilesWithNativeDialog,
   readPrintLayerPreviewPngFromPath,
   readPrintArtifactBytesFromPath,
   savePrintArtifactPathWithNativeDialog,
@@ -286,6 +288,69 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   centerOnModel: true,
 };
 
+const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
+
+function getFileExtension(name: string): string {
+  const trimmed = name.trim().toLowerCase();
+  const dotIndex = trimmed.lastIndexOf('.');
+  if (dotIndex < 0 || dotIndex === trimmed.length - 1) return '';
+  return trimmed.slice(dotIndex);
+}
+
+function getFileNameFromPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+function isSupportedPrepareDropName(name: string): boolean {
+  return PREPARE_DROP_EXTENSIONS.has(getFileExtension(name));
+}
+
+function getDroppedFileMimeType(name: string): string {
+  const ext = getFileExtension(name);
+  if (ext === '.stl') return 'model/stl';
+  if (ext === '.3mf') return 'model/3mf';
+  if (ext === '.voxl') return 'application/json';
+  if (ext === '.lys') return 'application/octet-stream';
+  return 'application/octet-stream';
+}
+
+function extractTauriDroppedPaths(payload: unknown): string[] {
+  const isStringArray = (value: unknown): value is string[] => (
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+  );
+
+  if (isStringArray(payload)) {
+    return payload;
+  }
+
+  if (payload && typeof payload === 'object' && 'paths' in payload) {
+    const candidate = (payload as { paths?: unknown }).paths;
+    if (isStringArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  return [];
+}
+
+function isLikelyFileDragPayload(dataTransfer: DataTransfer | null): boolean {
+  if (!dataTransfer) return false;
+  if ((dataTransfer.files?.length ?? 0) > 0) return true;
+  if (Array.from(dataTransfer.items ?? []).some((item) => item.kind === 'file')) return true;
+  if (Array.from(dataTransfer.types ?? []).includes('Files')) return true;
+  // Desktop runtime drags may not expose file metadata until drop.
+  return true;
+}
+
+function buildDroppedFilesSignature(files: File[]): string {
+  return files
+    .map((file) => `${file.name.trim().toLowerCase()}::${Number.isFinite(file.size) ? file.size : -1}`)
+    .sort((a, b) => a.localeCompare(b))
+    .join('|');
+}
+
 function resolveInitialExportThumbnailRenderOptions(): ExportThumbnailRenderOptions {
   if (typeof window === 'undefined') return DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS;
 
@@ -416,6 +481,7 @@ export default function Home() {
   });
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
+  const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyTransformResyncTokenRef = React.useRef(0);
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
@@ -423,6 +489,7 @@ export default function Home() {
   const historyTransformResyncTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
+  const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -661,6 +728,10 @@ export default function Home() {
     operationLabel: string;
   } | null>(null);
   const dragDepthRef = React.useRef(0);
+  const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
+    signature: '',
+    atMs: 0,
+  });
   const modelStatsCardContainerRef = React.useRef<HTMLDivElement | null>(null);
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
@@ -2414,6 +2485,152 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }, [printingArtifact]);
 
+  const handleTopBarSaveScene = React.useCallback(async () => {
+    const visibleModels = scene.models.filter((model) => model.visible);
+    const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
+
+    const buildModelGroup = (model: typeof scene.models[number]): THREE.Group => {
+      const group = new THREE.Group();
+      const t = model.transform;
+      group.position.copy(t.position);
+      group.rotation.copy(t.rotation);
+      group.scale.copy(t.scale);
+
+      const centerOffset = model.geometry.center;
+      const mesh = new THREE.Mesh(model.geometry.geometry);
+      mesh.position.set(-centerOffset.x, -centerOffset.y, -centerOffset.z);
+
+      group.add(mesh);
+      group.updateMatrixWorld(true);
+      return group;
+    };
+
+    const exportRoot = new THREE.Group();
+    scopeModels.forEach((model) => exportRoot.add(buildModelGroup(model)));
+    exportRoot.updateMatrixWorld(true);
+
+    await ExportManager.exportScene(
+      scopeModels.length > 0 ? exportRoot : null,
+      supportsRef.current || null,
+      {
+        filename: 'Scene',
+        format: 'voxl',
+        binary: true,
+        separateFiles: false,
+        includeRaft: false,
+        includeSupports: true,
+        includeModel: true,
+      },
+      {
+        models: scopeModels,
+        activeModelId: scene.activeModelId,
+        selectedModelIds: scene.selectedModelIds,
+      },
+    );
+  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+  const isDesktopRuntime = React.useCallback(() => {
+    if (typeof window === 'undefined') return false;
+    return window.location.protocol === 'tauri:'
+      || window.location.protocol === 'file:'
+      || window.location.hostname === 'tauri.localhost'
+      || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+  }, []);
+
+  const buildSyntheticFileChangeEvent = React.useCallback((nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
+    const dt = new DataTransfer();
+    nextFiles.forEach((file) => dt.items.add(file));
+    const target = { files: dt.files, value: '' } as unknown as HTMLInputElement;
+    return { target, currentTarget: target } as React.ChangeEvent<HTMLInputElement>;
+  }, []);
+
+  const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
+    if (!isDesktopRuntime()) return null;
+
+    try {
+      const picked = await pickOpenFilesWithNativeDialog(category, multiple);
+      if (!picked || picked.length === 0) return [];
+
+      const core = await import('@tauri-apps/api/core');
+      const files: File[] = [];
+
+      for (const entry of picked) {
+        try {
+          const sourcePath = entry.path.trim();
+          if (!sourcePath) continue;
+
+          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+          const name = entry.name || getFileNameFromPath(sourcePath);
+
+          files.push(new File([new Uint8Array(bytes)], name, {
+            type: getDroppedFileMimeType(name),
+            lastModified: Date.now(),
+          }));
+        } catch (error) {
+          console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
+        }
+      }
+
+      return files;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      const cancelled = message.toLowerCase().includes('cancel');
+      if (cancelled) return [];
+      console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
+      return null;
+    }
+  }, [isDesktopRuntime]);
+
+  const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
+    return new Promise((resolve) => {
+      if (typeof document === 'undefined') {
+        resolve([]);
+        return;
+      }
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = accept;
+      input.multiple = multiple;
+
+      input.onchange = () => {
+        resolve(Array.from(input.files ?? []));
+      };
+
+      input.click();
+    });
+  }, []);
+
+  const handleOpenMeshDialog = React.useCallback(async () => {
+    const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
+    if (nativeFiles) {
+      if (nativeFiles.length === 0) return;
+      scene.onFileChange(buildSyntheticFileChangeEvent(nativeFiles));
+      return;
+    }
+
+    const webFiles = await pickFilesWithWebInput('.stl,.3mf', true);
+    if (webFiles.length === 0) return;
+    scene.onFileChange(buildSyntheticFileChangeEvent(webFiles));
+  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+
+  const handleOpenSceneDialog = React.useCallback(async () => {
+    const nativeFiles = await pickFilesWithNativeDialog('scene', false);
+    if (nativeFiles) {
+      if (nativeFiles.length === 0) return;
+      scene.onImportLysChange(buildSyntheticFileChangeEvent([nativeFiles[0]]));
+      return;
+    }
+
+    const webFiles = await pickFilesWithWebInput('.voxl,.lys', false);
+    if (webFiles.length === 0) return;
+    scene.onImportLysChange(buildSyntheticFileChangeEvent([webFiles[0]]));
+  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+
+  const handleTopBarOpenScene = React.useCallback(() => {
+    void handleOpenSceneDialog();
+  }, [handleOpenSceneDialog]);
+
   const handleSendToPrinter = React.useCallback(async () => {
     if (!printingArtifact || !activePrinterProfile) return;
     if (activePrinterProfile.networkSupport !== 'nanodlp') return;
@@ -2756,23 +2973,166 @@ export default function Home() {
     usePrintingSettledHiResCanvas,
   ]);
 
-  const handleDroppedMeshFiles = React.useCallback((files: File[]) => {
+  const handleDroppedPrepareFiles = React.useCallback(async (files: File[]) => {
     if (scene.mode !== 'prepare') return;
 
-    const meshFiles = files.filter((file) => file.name.toLowerCase().endsWith('.stl'));
-    if (meshFiles.length === 0) {
-      console.warn('[DragDrop] No supported mesh files dropped. STL is supported for now.');
+    const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
+    if (supportedFiles.length === 0) {
+      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .3mf, .lys, .voxl');
       return;
     }
 
-    const dt = new DataTransfer();
-    meshFiles.forEach((file) => dt.items.add(file));
-    void scene.loadFiles(dt.files);
+    const signature = buildDroppedFilesSignature(supportedFiles);
+    const nowMs = Date.now();
+    const last = lastPrepareDropRef.current;
+    if (signature.length > 0 && last.signature === signature && (nowMs - last.atMs) < 1500) {
+      // Tauri desktop can emit both native drag-drop and DOM drop for a single gesture.
+      // Ignore near-identical repeat payloads to prevent duplicate imports.
+      return;
+    }
+    lastPrepareDropRef.current = { signature, atMs: nowMs };
+
+    const meshFiles = supportedFiles.filter((file) => {
+      const ext = getFileExtension(file.name);
+      return ext === '.stl' || ext === '.3mf';
+    });
+    const sceneFiles = supportedFiles.filter((file) => {
+      const ext = getFileExtension(file.name);
+      return ext === '.lys' || ext === '.voxl';
+    });
+
+    const buildSyntheticFileChangeEvent = (nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
+      const dt = new DataTransfer();
+      nextFiles.forEach((file) => dt.items.add(file));
+      const target = { files: dt.files, value: '' } as unknown as HTMLInputElement;
+      return { target, currentTarget: target } as React.ChangeEvent<HTMLInputElement>;
+    };
+
+    if (sceneFiles.length > 0) {
+      // Match "Import Scene" button behavior: when a scene file is present,
+      // treat the drop as a scene import path and don't separately load mesh files.
+      // Use the same handler as the Import Scene button.
+      const sceneEvent = buildSyntheticFileChangeEvent([sceneFiles[0]]);
+      scene.onImportLysChange(sceneEvent);
+      return;
+    }
+
+    if (meshFiles.length > 0) {
+      // Use the same handler as the Load Mesh button.
+      const meshEvent = buildSyntheticFileChangeEvent(meshFiles);
+      scene.onFileChange(meshEvent);
+    }
   }, [scene]);
+
+  const createFilesFromTauriDroppedPaths = React.useCallback(async (paths: string[]) => {
+    const normalizedSupportedPaths = paths
+      .map((path) => path.trim())
+      .filter((path) => path.length > 0)
+      .filter((path) => isSupportedPrepareDropName(getFileNameFromPath(path)));
+
+    if (normalizedSupportedPaths.length === 0) return [] as File[];
+
+    try {
+      const core = await import('@tauri-apps/api/core');
+      const files: File[] = [];
+
+      for (const sourcePath of normalizedSupportedPaths) {
+        try {
+          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+          const name = getFileNameFromPath(sourcePath);
+          files.push(new File([new Uint8Array(bytes)], name, {
+            type: getDroppedFileMimeType(name),
+            lastModified: Date.now(),
+          }));
+        } catch (error) {
+          console.warn(`[DragDrop] Failed reading dropped file path: ${sourcePath}`, error);
+        }
+      }
+
+      return files;
+    } catch {
+      return [] as File[];
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (scene.mode !== 'prepare') return;
+    if (typeof window === 'undefined') return;
+
+    const isLikelyDesktopRuntime =
+      window.location.protocol === 'tauri:'
+      || window.location.protocol === 'file:'
+      || window.location.hostname === 'tauri.localhost'
+      || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+
+    if (!isLikelyDesktopRuntime) return;
+
+    const unlisten: Array<() => void> = [];
+    let disposed = false;
+
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+
+        const unlistenDragOver = await listen('tauri://drag-over', () => {
+          if (disposed || scene.mode !== 'prepare') return;
+          setIsPrepareDragActive(true);
+        });
+        unlisten.push(unlistenDragOver);
+
+        const hideOverlay = () => {
+          dragDepthRef.current = 0;
+          setIsPrepareDragActive(false);
+        };
+
+        const unlistenDragLeave = await listen('tauri://drag-leave', () => {
+          if (disposed) return;
+          hideOverlay();
+        });
+        unlisten.push(unlistenDragLeave);
+
+        const unlistenDragCancelled = await listen('tauri://drag-drop-cancelled', () => {
+          if (disposed) return;
+          hideOverlay();
+        });
+        unlisten.push(unlistenDragCancelled);
+
+        const unlistenDragDrop = await listen<unknown>('tauri://drag-drop', (event) => {
+          if (disposed || scene.mode !== 'prepare') return;
+
+          hideOverlay();
+
+          const paths = extractTauriDroppedPaths(event.payload);
+          if (paths.length === 0) return;
+
+          void (async () => {
+            const files = await createFilesFromTauriDroppedPaths(paths);
+            if (files.length === 0) return;
+            await handleDroppedPrepareFiles(files);
+          })();
+        });
+        unlisten.push(unlistenDragDrop);
+      } catch {
+        // Ignore in non-Tauri environments or when listeners are unavailable.
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      while (unlisten.length > 0) {
+        const remove = unlisten.pop();
+        try {
+          remove?.();
+        } catch {
+          // noop
+        }
+      }
+    };
+  }, [createFilesFromTauriDroppedPaths, handleDroppedPrepareFiles, scene.mode]);
 
   const handlePrepareDragEnter = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (scene.mode !== 'prepare') return;
-    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    if (!isLikelyFileDragPayload(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     dragDepthRef.current += 1;
@@ -2781,7 +3141,7 @@ export default function Home() {
 
   const handlePrepareDragOver = React.useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (scene.mode !== 'prepare') return;
-    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    if (!isLikelyFileDragPayload(e.dataTransfer)) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';
@@ -2806,8 +3166,8 @@ export default function Home() {
     setIsPrepareDragActive(false);
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length === 0) return;
-    handleDroppedMeshFiles(files);
-  }, [handleDroppedMeshFiles, scene.mode]);
+    void handleDroppedPrepareFiles(files);
+  }, [handleDroppedPrepareFiles, scene.mode]);
 
   const closeEditorContextMenu = React.useCallback(() => {
     setEditorContextMenuPos(null);
@@ -3119,6 +3479,35 @@ export default function Home() {
       }
     };
   }, [invalidatePendingTransformHistory]);
+
+  React.useEffect(() => {
+    if (!scene.sceneImportReport) {
+      setIsSceneImportToastVisible(false);
+      if (sceneImportToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
+        sceneImportToastFadeTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    setIsSceneImportToastVisible(true);
+
+    if (sceneImportToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
+    }
+
+    sceneImportToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsSceneImportToastVisible(false);
+      sceneImportToastFadeTimeoutRef.current = null;
+    }, 3800);
+
+    return () => {
+      if (sceneImportToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
+        sceneImportToastFadeTimeoutRef.current = null;
+      }
+    };
+  }, [scene.sceneImportReport]);
 
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
     if (historyTransformResyncRafRef.current !== null) {
@@ -6345,6 +6734,8 @@ export default function Home() {
         heatmapColors={scene.heatmapColors}
         onHeatmapColorChange={scene.onHeatmapColorChange}
         isSlicingBusy={isSlicingBusy}
+        onSaveScene={() => { void handleTopBarSaveScene(); }}
+        onOpenScene={handleTopBarOpenScene}
       />
 
       <FloatingPanelStack>
@@ -6367,7 +6758,9 @@ export default function Home() {
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
+              onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onLoadMeshChange={scene.onFileChange}
+              onImportSceneClick={() => { void handleOpenSceneDialog(); }}
               onImportSceneChange={scene.onImportLysChange}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
@@ -6652,6 +7045,7 @@ export default function Home() {
               models={scene.models}
               activeModel={scene.activeModel}
               activeModelId={scene.activeModelId}
+              selectedModelIds={scene.selectedModelIds}
               onActiveModelChange={scene.setActiveModelId}
               supportsRef={supportsRef}
             />
@@ -7012,9 +7406,11 @@ export default function Home() {
         >
           {scene.models.length === 0 && (
             <EmptySceneState
+              onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onFileChange={scene.onFileChange}
+              onImportSceneClick={() => { void handleOpenSceneDialog(); }}
               onImportSceneChange={scene.onImportLysChange}
-              onDropMeshFiles={handleDroppedMeshFiles}
+              onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
               onReopenRecentFile={scene.reopenRecentOpenedFile}
               isLoading={showInlineEmptyLoading}
@@ -7036,10 +7432,10 @@ export default function Home() {
                 }}
               >
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Drop mesh files to import
+                  Drop supported files to import
                 </div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  STL supported now • 3MF coming soon
+                  Supported: STL, 3MF, LYS, VOXL
                 </div>
               </div>
             </div>
@@ -7629,6 +8025,32 @@ export default function Home() {
               <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
             )}
             {historyActionToast.text}
+          </div>
+        </div>
+      )}
+
+      {scene.sceneImportReport && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
+          <div
+            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
+            style={{
+              borderColor: scene.sceneImportReport.tone === 'error'
+                ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)'
+                : scene.sceneImportReport.tone === 'warning'
+                  ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 50%)'
+                  : 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
+              background: scene.sceneImportReport.tone === 'error'
+                ? 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)'
+                : scene.sceneImportReport.tone === 'warning'
+                  ? 'color-mix(in srgb, #f59e0b, var(--surface-0) 90%)'
+                  : 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
+              color: 'var(--text-strong)',
+              opacity: isSceneImportToastVisible ? 1 : 0,
+              transform: `translateY(${isSceneImportToastVisible ? '0px' : '8px'})`,
+              transition: 'opacity 220ms ease, transform 220ms ease',
+            }}
+          >
+            {scene.sceneImportReport.text}
           </div>
         </div>
       )}

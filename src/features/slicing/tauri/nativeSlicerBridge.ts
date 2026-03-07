@@ -176,6 +176,13 @@ export type NativeSliceTempPathArtifact = {
   bridge: NativeSlicerBridgeMetrics;
 };
 
+export type NativeOpenDialogCategory = 'mesh' | 'scene';
+
+export type NativePickedOpenFile = {
+  path: string;
+  name: string;
+};
+
 export type NativeSlicerBridgeMetrics = {
   payloadBuildMs: number;
   invokeRoundTripMs: number;
@@ -483,6 +490,53 @@ export async function savePrintArtifactPathWithNativeDialog(
   });
 
   return path;
+}
+
+export async function pickSavePathWithNativeDialog(defaultFilename: string): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native save dialog is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<string>('pick_save_path', {
+    args: {
+      defaultFilename,
+    },
+  });
+}
+
+export async function pickOpenFilesWithNativeDialog(
+  category: NativeOpenDialogCategory,
+  multiple = false,
+): Promise<NativePickedOpenFile[]> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native open dialog is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<NativePickedOpenFile[]>('pick_open_files', {
+    args: {
+      category,
+      multiple,
+    },
+  });
+}
+
+export async function writeBytesToNativePath(
+  destinationPath: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native file writing is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  return core.invoke<string>('write_bytes_to_path', {
+    args: {
+      destinationPath,
+      bytes: Uint8Array.from(bytes),
+    },
+  });
 }
 
 export async function readPrintArtifactBytesFromPath(sourcePath: string): Promise<Uint8Array> {
