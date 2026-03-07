@@ -11,6 +11,14 @@
   },
   "bundle": {
     "active": true,
+    "fileAssociations": [
+      {
+        "ext": ["voxl"],
+        "name": "DragonFruit Scene File",
+        "description": "DragonFruit scene",
+        "mimeType": "application/vnd.dragonfruit.voxl+json"
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

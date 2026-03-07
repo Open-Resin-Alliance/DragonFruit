@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{InvokeBody, Response};
 use tauri::Emitter;
+use tauri::Manager;
 
 fn temp_artifact_path(extension: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
@@ -437,6 +438,52 @@ struct PickedOpenFile {
     name: String,
 }
 
+fn is_scene_file_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            ext.trim()
+                .trim_start_matches('.')
+                .eq_ignore_ascii_case("voxl")
+                || ext
+                    .trim()
+                    .trim_start_matches('.')
+                    .eq_ignore_ascii_case("lys")
+        })
+        .unwrap_or(false)
+}
+
+fn collect_scene_file_paths_from_args(args: &[String]) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+
+    for arg in args.iter().skip(1) {
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let path = std::path::PathBuf::from(trimmed);
+        if !path.is_file() {
+            continue;
+        }
+
+        if !is_scene_file_path(&path) {
+            continue;
+        }
+
+        files.push(path.to_string_lossy().to_string());
+    }
+
+    files
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SceneFileHandoffPayload {
+    paths: Vec<String>,
+    source: String,
+}
+
 fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
     let mut dialog = rfd::FileDialog::new();
 
@@ -606,6 +653,76 @@ async fn pick_open_files(args: PickOpenFilesArgs) -> Result<Vec<PickedOpenFile>,
 }
 
 #[tauri::command]
+async fn get_launch_scene_files() -> Result<Vec<PickedOpenFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let files = collect_scene_file_paths_from_args(&std::env::args().collect::<Vec<_>>())
+            .into_iter()
+            .map(|path_text| {
+                let path = std::path::PathBuf::from(&path_text);
+                PickedOpenFile {
+                    name: path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("file")
+                        .to_string(),
+                    path: path_text,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok(files)
+    })
+    .await
+    .map_err(|err| format!("Launch scene-files task failed to join: {err}"))?
+}
+
+fn emit_scene_file_handoff(app: &tauri::AppHandle, args: &[String], source: &str) {
+    let paths = collect_scene_file_paths_from_args(args);
+    if paths.is_empty() {
+        return;
+    }
+
+    let payload = SceneFileHandoffPayload {
+        paths,
+        source: source.to_string(),
+    };
+
+    let _ = app.emit("dragonfruit://scene-file-handoff", payload);
+}
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let is_visible = window.is_visible().unwrap_or(true);
+        if !is_visible {
+            let _ = window.show();
+        }
+
+        let is_minimized = window.is_minimized().unwrap_or(false);
+        if is_minimized {
+            let _ = window.unminimize();
+        }
+
+        let is_focused = window.is_focused().unwrap_or(false);
+        if !is_focused {
+            let _ = window.set_focus();
+        }
+    }
+}
+
+#[tauri::command]
+async fn notify_launch_scene_handoff(app: tauri::AppHandle) -> Result<(), String> {
+    let args = std::env::args().collect::<Vec<_>>();
+    emit_scene_file_handoff(&app, &args, "primary-launch");
+    Ok(())
+}
+
+#[tauri::command]
+async fn focus_main_window_command(app: tauri::AppHandle) -> Result<(), String> {
+    focus_main_window(&app);
+    Ok(())
+}
+
+#[tauri::command]
 async fn read_print_file_bytes(source_path: String) -> Result<Response, String> {
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         let source = std::path::PathBuf::from(source_path.trim());
@@ -699,6 +816,17 @@ fn main() {
     let _ = plugin_registry::initialize_plugins();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let has_scene_files = !collect_scene_file_paths_from_args(&argv).is_empty();
+            emit_scene_file_handoff(app, &argv, "single-instance");
+
+            // Only force foreground when this second launch is handing off a scene file.
+            // Avoiding unconditional focus here reduces Windows "error" chimes when users
+            // launch the app again while it's already running.
+            if has_scene_files {
+                focus_main_window(app);
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             slice_solid_native,
             stage_mesh_binary,
@@ -708,6 +836,9 @@ fn main() {
             save_print_file_from_path,
             pick_save_path,
             pick_open_files,
+            get_launch_scene_files,
+            notify_launch_scene_handoff,
+            focus_main_window_command,
             write_bytes_to_path,
             read_print_file_bytes,
             read_print_layer_png,
