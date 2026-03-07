@@ -6513,11 +6513,14 @@ export default function Home() {
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
 
-      const maxCols = Math.max(1, Math.floor((plateWidth + spacing) / (width + spacing)));
-      const maxRows = Math.max(1, Math.floor((plateDepth + spacing) / (depth + spacing)));
+      // Add small epsilon to prevent floating point edge cases when spacing is very small
+      const gridSpacing = spacing > 0 ? spacing : 0.001;
+      const maxCols = Math.max(1, Math.floor((plateWidth + gridSpacing) / (width + gridSpacing)));
+      const maxRows = Math.max(1, Math.floor((plateDepth + gridSpacing) / (depth + gridSpacing)));
       const usedCols = maxCols;
       const usedRows = maxRows;
 
+      // Use actual spacing (including 0) for layout, not gridSpacing
       const totalUsedWidth = (usedCols * width) + Math.max(0, usedCols - 1) * spacing;
       const totalUsedDepth = (usedRows * depth) + Math.max(0, usedRows - 1) * spacing;
 
@@ -6526,8 +6529,11 @@ export default function Home() {
 
       type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
+      // Use a tiny tolerance to allow touching (not overlapping) rects when spacing = 0
+      const COLLISION_TOLERANCE = 0.01;
       const intersectsRect = (a: Rect2D, b: Rect2D) => {
-        return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
+        return !(a.maxX <= b.minX + COLLISION_TOLERANCE || a.minX + COLLISION_TOLERANCE >= b.maxX || 
+                 a.maxY <= b.minY + COLLISION_TOLERANCE || a.minY + COLLISION_TOLERANCE >= b.maxY);
       };
 
       const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
@@ -6753,9 +6759,12 @@ export default function Home() {
 
     const plateWidth = Math.max(1, maxX - minX);
     const plateDepth = Math.max(1, maxY - minY);
-    const maxCols = Math.max(1, Math.floor((plateWidth + spacing) / (width + spacing)));
-    const maxRows = Math.max(1, Math.floor((plateDepth + spacing) / (depth + spacing)));
+    // Add small epsilon to prevent floating point edge cases when spacing is very small
+    const gridSpacing = spacing > 0 ? spacing : 0.001;
+    const maxCols = Math.max(1, Math.floor((plateWidth + gridSpacing) / (width + gridSpacing)));
+    const maxRows = Math.max(1, Math.floor((plateDepth + gridSpacing) / (depth + gridSpacing)));
 
+    // Use actual spacing (including 0) for layout, not gridSpacing
     const totalUsedWidth = (maxCols * width) + Math.max(0, maxCols - 1) * spacing;
     const totalUsedDepth = (maxRows * depth) + Math.max(0, maxRows - 1) * spacing;
     const startX = minX + ((plateWidth - totalUsedWidth) * 0.5) + (width * 0.5);
@@ -6763,8 +6772,11 @@ export default function Home() {
 
     type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
+    // Use a tiny tolerance to allow touching (not overlapping) rects when spacing = 0
+    const COLLISION_TOLERANCE = 0.01;
     const intersectsRect = (a: Rect2D, b: Rect2D) => {
-      return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
+      return !(a.maxX <= b.minX + COLLISION_TOLERANCE || a.minX + COLLISION_TOLERANCE >= b.maxX || 
+               a.maxY <= b.minY + COLLISION_TOLERANCE || a.minY + COLLISION_TOLERANCE >= b.maxY);
     };
 
     const modelToRect = (m: (typeof scene.models)[number]): Rect2D => {
