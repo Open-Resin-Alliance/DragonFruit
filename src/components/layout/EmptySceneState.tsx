@@ -6,7 +6,9 @@ import type { RecentOpenedFileEntry } from '@/features/scene/useSceneCollectionM
 
 type EmptySceneStateProps = {
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onLoadMeshClick?: () => void;
   onImportSceneChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onImportSceneClick?: () => void;
   onDropMeshFiles?: (files: File[]) => void | Promise<void>;
   recentOpenedFiles?: RecentOpenedFileEntry[];
   onReopenRecentFile?: (entryId: string) => Promise<boolean> | boolean;
@@ -56,7 +58,9 @@ function formatBytes(bytes?: number): string | null {
 
 export function EmptySceneState({
   onFileChange,
+  onLoadMeshClick,
   onImportSceneChange,
+  onImportSceneClick,
   onDropMeshFiles,
   recentOpenedFiles = [],
   onReopenRecentFile,
@@ -122,6 +126,28 @@ export function EmptySceneState({
       setReopeningEntryId(null);
     }
   }, [onReopenRecentFile]);
+
+  const triggerMeshPicker = React.useCallback(() => {
+    if (onLoadMeshClick) {
+      onLoadMeshClick();
+      return;
+    }
+
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('empty-state-stl-file-input') as HTMLInputElement | null;
+    input?.click();
+  }, [onLoadMeshClick]);
+
+  const triggerScenePicker = React.useCallback(() => {
+    if (onImportSceneClick) {
+      onImportSceneClick();
+      return;
+    }
+
+    if (typeof document === 'undefined') return;
+    const input = document.getElementById('empty-state-scene-file-input') as HTMLInputElement | null;
+    input?.click();
+  }, [onImportSceneClick]);
 
   const shouldShowFirstTimeOnboarding = showFirstTimeOnboarding && !isLoading;
 
@@ -231,8 +257,9 @@ export function EmptySceneState({
                 Import
               </div>
               <div className={`grid gap-2 ${onImportSceneChange ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                <label
-                  htmlFor="empty-state-stl-file-input"
+                <button
+                  type="button"
+                  onClick={triggerMeshPicker}
                   className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
                   style={{
                     background: 'var(--primary-button-surface)',
@@ -244,13 +271,14 @@ export function EmptySceneState({
                     <span>Load Mesh</span>
                   </div>
                   <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-contrast), black 16%)' }}>
-                    STL • 3MF
+                    Mesh Files (.stl, .3mf)
                   </div>
-                </label>
+                </button>
 
                 {onImportSceneChange && (
-                  <label
-                    htmlFor="empty-state-scene-file-input"
+                  <button
+                    type="button"
+                    onClick={triggerScenePicker}
                     className="group cursor-pointer rounded-md border px-3 py-3 text-left transition-colors"
                     style={{
                       background: 'var(--secondary-button-surface)',
@@ -262,9 +290,9 @@ export function EmptySceneState({
                       <span>Import Scene</span>
                     </div>
                     <div className="text-[11px]" style={{ color: 'color-mix(in srgb, var(--accent-secondary-contrast), black 18%)' }}>
-                      LYS now • VOXL coming soon
+                      Scene Files (.voxl, .lys)
                     </div>
-                  </label>
+                  </button>
                 )}
               </div>
 
@@ -382,7 +410,7 @@ export function EmptySceneState({
                       border: '1px solid color-mix(in srgb, var(--accent), var(--border-subtle) 56%)',
                     }}
                   >
-                    STL • 3MF • LYS
+                    STL • 3MF • VOXL • LYS
                   </span>
                 </div>
               </div>
@@ -403,7 +431,7 @@ export function EmptySceneState({
           <input
             id="empty-state-scene-file-input"
             type="file"
-            accept=".lys"
+            accept=".voxl,.lys"
             onChange={onImportSceneChange}
             className="hidden"
           />

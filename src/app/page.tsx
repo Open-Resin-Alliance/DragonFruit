@@ -30,6 +30,7 @@ import { PrintingLayerScrubPreview } from '@/components/controls/PrintingLayerSc
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
+import { ExportManager } from '@/features/export/logic/ExportManager';
 import { SlicingPanel } from '@/features/slicing/components/SlicingPanel';
 import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
@@ -102,6 +103,7 @@ import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/
 import {
   cleanupStalePrintTempArtifacts,
   deletePrintTempArtifactPath,
+  pickOpenFilesWithNativeDialog,
   readPrintLayerPreviewPngFromPath,
   readPrintArtifactBytesFromPath,
   savePrintArtifactPathWithNativeDialog,
@@ -286,7 +288,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
   centerOnModel: true,
 };
 
-const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys']);
+const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
 
 function getFileExtension(name: string): string {
   const trimmed = name.trim().toLowerCase();
@@ -309,6 +311,7 @@ function getDroppedFileMimeType(name: string): string {
   const ext = getFileExtension(name);
   if (ext === '.stl') return 'model/stl';
   if (ext === '.3mf') return 'model/3mf';
+  if (ext === '.voxl') return 'application/json';
   if (ext === '.lys') return 'application/octet-stream';
   return 'application/octet-stream';
 }
@@ -478,6 +481,7 @@ export default function Home() {
   });
   const [historyActionToast, setHistoryActionToast] = React.useState<{ id: number; text: string; direction: 'undo' | 'redo' } | null>(null);
   const [isHistoryActionToastVisible, setIsHistoryActionToastVisible] = React.useState(false);
+  const [isSceneImportToastVisible, setIsSceneImportToastVisible] = React.useState(false);
   const [historyTransformResyncTick, setHistoryTransformResyncTick] = React.useState(0);
   const historyTransformResyncTokenRef = React.useRef(0);
   const historyTransformResyncRafRef = React.useRef<number | null>(null);
@@ -485,6 +489,7 @@ export default function Home() {
   const historyTransformResyncTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
+  const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
   const effectiveShaderType = sessionShaderOverride ?? scene.shaderType;
@@ -2480,6 +2485,152 @@ export default function Home() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }, [printingArtifact]);
 
+  const handleTopBarSaveScene = React.useCallback(async () => {
+    const visibleModels = scene.models.filter((model) => model.visible);
+    const scopeModels = visibleModels.length > 0 ? visibleModels : scene.models;
+
+    const buildModelGroup = (model: typeof scene.models[number]): THREE.Group => {
+      const group = new THREE.Group();
+      const t = model.transform;
+      group.position.copy(t.position);
+      group.rotation.copy(t.rotation);
+      group.scale.copy(t.scale);
+
+      const centerOffset = model.geometry.center;
+      const mesh = new THREE.Mesh(model.geometry.geometry);
+      mesh.position.set(-centerOffset.x, -centerOffset.y, -centerOffset.z);
+
+      group.add(mesh);
+      group.updateMatrixWorld(true);
+      return group;
+    };
+
+    const exportRoot = new THREE.Group();
+    scopeModels.forEach((model) => exportRoot.add(buildModelGroup(model)));
+    exportRoot.updateMatrixWorld(true);
+
+    await ExportManager.exportScene(
+      scopeModels.length > 0 ? exportRoot : null,
+      supportsRef.current || null,
+      {
+        filename: 'Scene',
+        format: 'voxl',
+        binary: true,
+        separateFiles: false,
+        includeRaft: false,
+        includeSupports: true,
+        includeModel: true,
+      },
+      {
+        models: scopeModels,
+        activeModelId: scene.activeModelId,
+        selectedModelIds: scene.selectedModelIds,
+      },
+    );
+  }, [scene.activeModelId, scene.models, scene.selectedModelIds]);
+
+  const isDesktopRuntime = React.useCallback(() => {
+    if (typeof window === 'undefined') return false;
+    return window.location.protocol === 'tauri:'
+      || window.location.protocol === 'file:'
+      || window.location.hostname === 'tauri.localhost'
+      || typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+  }, []);
+
+  const buildSyntheticFileChangeEvent = React.useCallback((nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
+    const dt = new DataTransfer();
+    nextFiles.forEach((file) => dt.items.add(file));
+    const target = { files: dt.files, value: '' } as unknown as HTMLInputElement;
+    return { target, currentTarget: target } as React.ChangeEvent<HTMLInputElement>;
+  }, []);
+
+  const pickFilesWithNativeDialog = React.useCallback(async (category: 'mesh' | 'scene', multiple: boolean): Promise<File[] | null> => {
+    if (!isDesktopRuntime()) return null;
+
+    try {
+      const picked = await pickOpenFilesWithNativeDialog(category, multiple);
+      if (!picked || picked.length === 0) return [];
+
+      const core = await import('@tauri-apps/api/core');
+      const files: File[] = [];
+
+      for (const entry of picked) {
+        try {
+          const sourcePath = entry.path.trim();
+          if (!sourcePath) continue;
+
+          const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+          const name = entry.name || getFileNameFromPath(sourcePath);
+
+          files.push(new File([new Uint8Array(bytes)], name, {
+            type: getDroppedFileMimeType(name),
+            lastModified: Date.now(),
+          }));
+        } catch (error) {
+          console.warn(`[Picker] Failed reading picked file path: ${entry.path}`, error);
+        }
+      }
+
+      return files;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      const cancelled = message.toLowerCase().includes('cancel');
+      if (cancelled) return [];
+      console.warn(`[Picker] Native ${category} picker failed, falling back to web input.`, error);
+      return null;
+    }
+  }, [isDesktopRuntime]);
+
+  const pickFilesWithWebInput = React.useCallback((accept: string, multiple: boolean): Promise<File[]> => {
+    return new Promise((resolve) => {
+      if (typeof document === 'undefined') {
+        resolve([]);
+        return;
+      }
+
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = accept;
+      input.multiple = multiple;
+
+      input.onchange = () => {
+        resolve(Array.from(input.files ?? []));
+      };
+
+      input.click();
+    });
+  }, []);
+
+  const handleOpenMeshDialog = React.useCallback(async () => {
+    const nativeFiles = await pickFilesWithNativeDialog('mesh', true);
+    if (nativeFiles) {
+      if (nativeFiles.length === 0) return;
+      scene.onFileChange(buildSyntheticFileChangeEvent(nativeFiles));
+      return;
+    }
+
+    const webFiles = await pickFilesWithWebInput('.stl,.3mf', true);
+    if (webFiles.length === 0) return;
+    scene.onFileChange(buildSyntheticFileChangeEvent(webFiles));
+  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+
+  const handleOpenSceneDialog = React.useCallback(async () => {
+    const nativeFiles = await pickFilesWithNativeDialog('scene', false);
+    if (nativeFiles) {
+      if (nativeFiles.length === 0) return;
+      scene.onImportLysChange(buildSyntheticFileChangeEvent([nativeFiles[0]]));
+      return;
+    }
+
+    const webFiles = await pickFilesWithWebInput('.voxl,.lys', false);
+    if (webFiles.length === 0) return;
+    scene.onImportLysChange(buildSyntheticFileChangeEvent([webFiles[0]]));
+  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+
+  const handleTopBarOpenScene = React.useCallback(() => {
+    void handleOpenSceneDialog();
+  }, [handleOpenSceneDialog]);
+
   const handleSendToPrinter = React.useCallback(async () => {
     if (!printingArtifact || !activePrinterProfile) return;
     if (activePrinterProfile.networkSupport !== 'nanodlp') return;
@@ -2827,7 +2978,7 @@ export default function Home() {
 
     const supportedFiles = files.filter((file) => isSupportedPrepareDropName(file.name));
     if (supportedFiles.length === 0) {
-      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .3mf, .lys');
+      console.warn('[DragDrop] No supported files dropped. Supported: .stl, .3mf, .lys, .voxl');
       return;
     }
 
@@ -2845,7 +2996,10 @@ export default function Home() {
       const ext = getFileExtension(file.name);
       return ext === '.stl' || ext === '.3mf';
     });
-    const sceneFiles = supportedFiles.filter((file) => getFileExtension(file.name) === '.lys');
+    const sceneFiles = supportedFiles.filter((file) => {
+      const ext = getFileExtension(file.name);
+      return ext === '.lys' || ext === '.voxl';
+    });
 
     const buildSyntheticFileChangeEvent = (nextFiles: File[]): React.ChangeEvent<HTMLInputElement> => {
       const dt = new DataTransfer();
@@ -3325,6 +3479,35 @@ export default function Home() {
       }
     };
   }, [invalidatePendingTransformHistory]);
+
+  React.useEffect(() => {
+    if (!scene.sceneImportReport) {
+      setIsSceneImportToastVisible(false);
+      if (sceneImportToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
+        sceneImportToastFadeTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    setIsSceneImportToastVisible(true);
+
+    if (sceneImportToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
+    }
+
+    sceneImportToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsSceneImportToastVisible(false);
+      sceneImportToastFadeTimeoutRef.current = null;
+    }, 3800);
+
+    return () => {
+      if (sceneImportToastFadeTimeoutRef.current !== null) {
+        window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
+        sceneImportToastFadeTimeoutRef.current = null;
+      }
+    };
+  }, [scene.sceneImportReport]);
 
   const cancelPendingHistoryTransformResyncFrames = React.useCallback(() => {
     if (historyTransformResyncRafRef.current !== null) {
@@ -6551,6 +6734,8 @@ export default function Home() {
         heatmapColors={scene.heatmapColors}
         onHeatmapColorChange={scene.onHeatmapColorChange}
         isSlicingBusy={isSlicingBusy}
+        onSaveScene={() => { void handleTopBarSaveScene(); }}
+        onOpenScene={handleTopBarOpenScene}
       />
 
       <FloatingPanelStack>
@@ -6573,7 +6758,9 @@ export default function Home() {
               onOpenSupportsInfo={handleOpenModelSupportsInfo}
               onDelete={scene.deleteModel}
               onVisibilityChange={scene.setModelVisibility}
+              onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onLoadMeshChange={scene.onFileChange}
+              onImportSceneClick={() => { void handleOpenSceneDialog(); }}
               onImportSceneChange={scene.onImportLysChange}
               dimmed={showEmptySceneDialog || importOverlayState.active}
               bottomClearancePx={modelStatsBottomClearancePx}
@@ -6858,6 +7045,7 @@ export default function Home() {
               models={scene.models}
               activeModel={scene.activeModel}
               activeModelId={scene.activeModelId}
+              selectedModelIds={scene.selectedModelIds}
               onActiveModelChange={scene.setActiveModelId}
               supportsRef={supportsRef}
             />
@@ -7218,7 +7406,9 @@ export default function Home() {
         >
           {scene.models.length === 0 && (
             <EmptySceneState
+              onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onFileChange={scene.onFileChange}
+              onImportSceneClick={() => { void handleOpenSceneDialog(); }}
               onImportSceneChange={scene.onImportLysChange}
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
@@ -7245,7 +7435,7 @@ export default function Home() {
                   Drop supported files to import
                 </div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Supported: STL and LYS
+                  Supported: STL, 3MF, LYS, VOXL
                 </div>
               </div>
             </div>
@@ -7835,6 +8025,32 @@ export default function Home() {
               <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
             )}
             {historyActionToast.text}
+          </div>
+        </div>
+      )}
+
+      {scene.sceneImportReport && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[125] flex justify-center px-3">
+          <div
+            className="rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
+            style={{
+              borderColor: scene.sceneImportReport.tone === 'error'
+                ? 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)'
+                : scene.sceneImportReport.tone === 'warning'
+                  ? 'color-mix(in srgb, #f59e0b, var(--border-subtle) 50%)'
+                  : 'color-mix(in srgb, #22c55e, var(--border-subtle) 50%)',
+              background: scene.sceneImportReport.tone === 'error'
+                ? 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)'
+                : scene.sceneImportReport.tone === 'warning'
+                  ? 'color-mix(in srgb, #f59e0b, var(--surface-0) 90%)'
+                  : 'color-mix(in srgb, #22c55e, var(--surface-0) 90%)',
+              color: 'var(--text-strong)',
+              opacity: isSceneImportToastVisible ? 1 : 0,
+              transform: `translateY(${isSceneImportToastVisible ? '0px' : '8px'})`,
+              transition: 'opacity 220ms ease, transform 220ms ease',
+            }}
+          >
+            {scene.sceneImportReport.text}
           </div>
         </div>
       )}

@@ -87,6 +87,27 @@ fn sweep_all_temp_artifacts() -> u32 {
     removed
 }
 
+fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
+    let mut dialog = rfd::FileDialog::new().set_file_name(suggested_name);
+
+    let maybe_ext = std::path::Path::new(suggested_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|ext| !ext.is_empty());
+
+    if let Some(ext) = maybe_ext.as_deref() {
+        dialog = match ext {
+            "stl" | "3mf" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
+            "voxl" => dialog.add_filter("Scene Files", &["voxl"]),
+            "lys" => dialog.add_filter("Scene Files", &["lys"]),
+            _ => dialog.add_filter("Print Files", &[ext]),
+        };
+    }
+
+    dialog
+}
+
 static SLICER_POOL: OnceLock<ThreadPool> = OnceLock::new();
 static CANCEL_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 static STAGED_MESH: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
@@ -389,6 +410,48 @@ struct SavePrintFileFromPathArgs {
     source_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PickSavePathArgs {
+    default_filename: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WriteBytesToPathArgs {
+    destination_path: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PickOpenFilesArgs {
+    category: String,
+    multiple: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PickedOpenFile {
+    path: String,
+    name: String,
+}
+
+fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
+    let mut dialog = rfd::FileDialog::new();
+
+    let normalized = category.trim().to_ascii_lowercase();
+    dialog = match normalized.as_str() {
+        "mesh" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
+        "scene" => dialog.add_filter("Scene Files", &["voxl", "lys"]),
+        _ => dialog
+            .add_filter("Mesh Files", &["stl", "3mf"])
+            .add_filter("Scene Files", &["voxl", "lys"]),
+    };
+
+    dialog
+}
+
 #[tauri::command]
 async fn save_print_file(args: SavePrintFileArgs) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -403,8 +466,7 @@ async fn save_print_file(args: SavePrintFileArgs) -> Result<String, String> {
             }
         };
 
-        let picked = rfd::FileDialog::new()
-            .set_file_name(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name)
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 
@@ -441,8 +503,7 @@ async fn save_print_file_from_path(args: SavePrintFileFromPathArgs) -> Result<St
             return Err("Source print file no longer exists on disk".to_string());
         }
 
-        let picked = rfd::FileDialog::new()
-            .set_file_name(&suggested_name)
+        let picked = build_save_dialog_with_filters(&suggested_name)
             .save_file()
             .ok_or_else(|| "Save cancelled by user".to_string())?;
 
@@ -458,6 +519,90 @@ async fn save_print_file_from_path(args: SavePrintFileFromPathArgs) -> Result<St
     })
     .await
     .map_err(|err| format!("Save task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn pick_save_path(args: PickSavePathArgs) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let suggested_name = {
+            let trimmed = args.default_filename.trim();
+            if trimmed.is_empty() {
+                let format_provider = plugin_registry::get_format_provider()
+                    .unwrap_or_else(|_| plugin_registry::get_default_format_provider());
+                format_provider.default_export_filename()
+            } else {
+                trimmed.to_string()
+            }
+        };
+
+        let picked = build_save_dialog_with_filters(&suggested_name)
+            .save_file()
+            .ok_or_else(|| "Save cancelled by user".to_string())?;
+
+        Ok(picked.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("Save picker task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn write_bytes_to_path(args: WriteBytesToPathArgs) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let trimmed_destination = args.destination_path.trim();
+        if trimmed_destination.is_empty() {
+            return Err("Destination path is empty".to_string());
+        }
+
+        let destination = std::path::PathBuf::from(trimmed_destination);
+
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("Failed creating destination folder: {err}"))?;
+        }
+
+        std::fs::write(&destination, &args.bytes)
+            .map_err(|err| format!("Failed writing file bytes: {err}"))?;
+
+        Ok(destination.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("Write-bytes task failed to join: {err}"))?
+}
+
+#[tauri::command]
+async fn pick_open_files(args: PickOpenFilesArgs) -> Result<Vec<PickedOpenFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dialog = build_open_dialog_with_filters(&args.category);
+
+        let picked_paths: Vec<std::path::PathBuf> = if args.multiple {
+            dialog.pick_files().unwrap_or_default()
+        } else {
+            match dialog.pick_file() {
+                Some(path) => vec![path],
+                None => Vec::new(),
+            }
+        };
+
+        if picked_paths.is_empty() {
+            return Err("Open cancelled by user".to_string());
+        }
+
+        let files = picked_paths
+            .into_iter()
+            .map(|path| PickedOpenFile {
+                name: path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("file")
+                    .to_string(),
+                path: path.to_string_lossy().to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(files)
+    })
+    .await
+    .map_err(|err| format!("Open picker task failed to join: {err}"))?
 }
 
 #[tauri::command]
@@ -561,6 +706,9 @@ fn main() {
             cancel_slicing,
             save_print_file,
             save_print_file_from_path,
+            pick_save_path,
+            pick_open_files,
+            write_bytes_to_path,
             read_print_file_bytes,
             read_print_layer_png,
             delete_print_temp_file,
