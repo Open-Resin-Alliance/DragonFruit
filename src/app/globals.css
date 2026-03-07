@@ -399,14 +399,14 @@ button:disabled,
 }
 
 .ui-empty-state {
-  background: color-mix(in srgb, var(--surface-0), transparent 10%);
-  border: 1px solid color-mix(in srgb, var(--border-subtle), transparent 20%);
+  background: color-mix(in srgb, var(--surface-0), transparent 6%);
+  border: 1px solid color-mix(in srgb, var(--border-subtle), transparent 10%);
   border-radius: var(--radius-lg);
-  padding: var(--space-6);
+  padding: 20px;
   max-width: 560px;
   width: min(90vw, 560px);
   text-align: center;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
 }
 
 .ui-empty-title {
@@ -414,6 +414,9 @@ button:disabled,
   font-size: clamp(24px, 3vw, 34px);
   line-height: var(--line-height-tight);
   font-weight: 700;
+  max-width: 460px;
+  margin-left: auto;
+  margin-right: auto;
   margin-bottom: var(--space-3);
 }
 
