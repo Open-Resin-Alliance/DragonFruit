@@ -5,6 +5,7 @@ import { PickingProvider, usePicking } from '@/components/picking';
 import { useSelection } from '@/components/selection';
 import { subscribe, getSnapshot } from '@/supports/state';
 import type { SupportMode } from '@/supports/types';
+import type { TransformMode } from '@/hooks/useModelTransform';
 
 export function SelectionSync({ activeModelId }: { activeModelId: string | null }) {
   const { select, deselect, state } = useSelection();
@@ -111,7 +112,7 @@ export function PickingOrbitPauser() {
   return null;
 }
 
-function PickingModeConfigSync({ mode }: { mode?: SupportMode }) {
+function PickingModeConfigSync({ mode, transformMode }: { mode?: SupportMode; transformMode?: TransformMode }) {
   const { setConfig } = usePicking();
 
   useEffect(() => {
@@ -125,11 +126,21 @@ function PickingModeConfigSync({ mode }: { mode?: SupportMode }) {
       return;
     }
 
+    if (nextMode === 'prepare' && transformMode === 'transform') {
+      // In prepare/modify mode, prioritize transform responsiveness and avoid
+      // traversing dense support registrations every hover sample.
+      setConfig({
+        includeGizmo: true,
+        allowedCategories: ['model', 'gizmo'],
+      });
+      return;
+    }
+
     setConfig({
       includeGizmo: true,
       allowedCategories: ['model', 'gizmo', 'support', 'joint', 'knot', 'segment', 'raft'],
     });
-  }, [mode, setConfig]);
+  }, [mode, setConfig, transformMode]);
 
   return null;
 }
@@ -137,7 +148,7 @@ function PickingModeConfigSync({ mode }: { mode?: SupportMode }) {
 /**
  * Wrapper that always applies PickingProvider, but conditionally enables debug mode.
  */
-export function PickingProviderWrapper({ enabled, mode, children }: { enabled?: boolean; mode?: SupportMode; children: React.ReactNode }) {
+export function PickingProviderWrapper({ enabled, mode, transformMode, children }: { enabled?: boolean; mode?: SupportMode; transformMode?: TransformMode; children: React.ReactNode }) {
   // Always render PickingProvider, pass enabled as debug flag
-  return <PickingProvider debug={enabled}><PickingOrbitPauser /><PickingModeConfigSync mode={mode} />{children}</PickingProvider>;
+  return <PickingProvider debug={enabled}><PickingOrbitPauser /><PickingModeConfigSync mode={mode} transformMode={transformMode} />{children}</PickingProvider>;
 }

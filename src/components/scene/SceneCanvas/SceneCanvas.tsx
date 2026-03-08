@@ -374,11 +374,47 @@ function OrbitPivotIndicator({
 function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
   const { hit } = usePicking();
   const wasEmptyRef = React.useRef<boolean>(false);
+  const lastModelHoverIdRef = React.useRef<string | null>(null);
+  const hoverClearTimeoutRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     if (!enabled) {
       wasEmptyRef.current = false;
+      lastModelHoverIdRef.current = null;
+      if (hoverClearTimeoutRef.current !== null) {
+        window.clearTimeout(hoverClearTimeoutRef.current);
+        hoverClearTimeoutRef.current = null;
+      }
       return;
+    }
+
+    const hoveredModelIdFromPicking = (
+      hit.category === 'model' && typeof hit.objectId === 'string' && hit.objectId.length > 0
+    )
+      ? hit.objectId
+      : null;
+
+    if (hoveredModelIdFromPicking) {
+      if (hoverClearTimeoutRef.current !== null) {
+        window.clearTimeout(hoverClearTimeoutRef.current);
+        hoverClearTimeoutRef.current = null;
+      }
+    } else if (lastModelHoverIdRef.current !== null && hoverClearTimeoutRef.current === null) {
+      hoverClearTimeoutRef.current = window.setTimeout(() => {
+        hoverClearTimeoutRef.current = null;
+        if (lastModelHoverIdRef.current === null) return;
+        lastModelHoverIdRef.current = null;
+        window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+          detail: { modelId: null },
+        }));
+      }, 72);
+    }
+
+    if (lastModelHoverIdRef.current !== hoveredModelIdFromPicking) {
+      lastModelHoverIdRef.current = hoveredModelIdFromPicking;
+      window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+        detail: { modelId: hoveredModelIdFromPicking },
+      }));
     }
 
     const isEmpty = hit.category === 'none';
@@ -399,7 +435,16 @@ function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
     window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
       detail: { modelId: null, category: 'raft' },
     }));
-  }, [enabled, hit.category]);
+  }, [enabled, hit.category, hit.objectId]);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverClearTimeoutRef.current !== null) {
+        window.clearTimeout(hoverClearTimeoutRef.current);
+        hoverClearTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   return null;
 }
@@ -1136,6 +1181,7 @@ export function SceneCanvas({
   // across all modes (prepare/support/analysis/export).
   const effectiveModelSelected = isModelSelected || !!activeModelId;
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
+  const [isGizmoRetargeting, setIsGizmoRetargeting] = React.useState(false);
   const [outOfBoundsRotateGraceActive, setOutOfBoundsRotateGraceActive] = React.useState(false);
   const outOfBoundsRotateGraceTimeoutRef = React.useRef<number | null>(null);
   const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
@@ -1384,6 +1430,12 @@ export function SceneCanvas({
   }, []);
 
   React.useEffect(() => {
+    const handleModelPointerHoverImmediate = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      const modelId = customEvent.detail?.modelId ?? null;
+      setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
+    };
+
     const handleSupportRaftModelPointerHover = (event: Event) => {
       const customEvent = event as CustomEvent<{ modelId?: string | null; category?: string | null }>;
       const category = customEvent.detail?.category;
@@ -1407,9 +1459,11 @@ export function SceneCanvas({
       }
     };
 
+    window.addEventListener('model-pointer-hover-immediate', handleModelPointerHoverImmediate as EventListener);
     window.addEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
 
     return () => {
+      window.removeEventListener('model-pointer-hover-immediate', handleModelPointerHoverImmediate as EventListener);
       window.removeEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
     };
   }, []);
@@ -1454,7 +1508,7 @@ export function SceneCanvas({
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
-    if (isGizmoDragging) return null;
+    if (isGizmoDragging || isGizmoRetargeting) return null;
 
     const bounds = new THREE.Box3();
     let hasAny = false;
@@ -1600,7 +1654,7 @@ export function SceneCanvas({
     }
 
     return hasAny ? bounds : null;
-  }, [isGizmoDragging, raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
+  }, [isGizmoDragging, isGizmoRetargeting, raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
 
   const computeModelWorldBounds = React.useCallback((
     model: LoadedModel,
@@ -1653,7 +1707,7 @@ export function SceneCanvas({
   );
 
   const modelWorldBounds = React.useMemo(() => {
-    if (isGizmoDragging) {
+    if (isGizmoDragging || isGizmoRetargeting) {
       return cachedModelWorldBoundsRef.current;
     }
 
@@ -1668,11 +1722,11 @@ export function SceneCanvas({
     }
     cachedModelWorldBoundsRef.current = map;
     return map;
-  }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, models, transform]);
+  }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, isGizmoRetargeting, models, transform]);
 
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
-    if (isGizmoDragging || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
+    if (isGizmoDragging || isGizmoRetargeting || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
 
     return models
       .filter((model) => model.visible)
@@ -1690,6 +1744,7 @@ export function SceneCanvas({
     buildVolumeBounds,
     computeModelWorldBounds,
     isGizmoDragging,
+    isGizmoRetargeting,
     modelWorldBounds,
     models,
     outOfBoundsRotateGraceActive,
@@ -1732,6 +1787,7 @@ export function SceneCanvas({
     || isBracePlacementActive
     || isSupportBracePlacementActive,
   );
+  const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
   const supportHoverTargetActive = supportStateForBounds.hoveredCategory === 'support'
     || supportStateForBounds.hoveredCategory === 'segment'
@@ -3001,7 +3057,7 @@ export function SceneCanvas({
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
-  const dynamicDpr = (isIntroAnimating || isDropAnimating || isGizmoDragging)
+  const dynamicDpr = (isIntroAnimating || isDropAnimating || isGizmoDragging || isGizmoRetargeting)
     ? ([1, 1.5] as [number, number])
     : ([1, 10] as [number, number]);
 
@@ -3459,7 +3515,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = plateContactCullActive;
   const hideRaftPrimitives = plateContactCullActive;
-  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive || isGizmoDragging;
+  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -4734,7 +4790,7 @@ export function SceneCanvas({
         <CameraProjectionController mode={cameraProjectionMode} />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
-        <PickingProviderWrapper enabled={gpuPickingTest} mode={mode}>
+        <PickingProviderWrapper enabled={gpuPickingTest} mode={mode} transformMode={transformMode}>
           <PickingStateSyncer />
           <PickingEmptySpaceHoverResetter enabled={mode === 'prepare' || mode === 'support'} />
 
@@ -4866,7 +4922,7 @@ export function SceneCanvas({
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
                             navigationLodActive={navigationLodActive}
-                            disableSelectionAndHover={supportCreationModeActive}
+                            disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                             raftColorized={raftColorized}
                             raftHoverized={raftHoverized}
                             passive
@@ -5187,7 +5243,7 @@ export function SceneCanvas({
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive={navigationLodActive}
-                  disableSelectionAndHover={supportCreationModeActive}
+                  disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
@@ -5213,7 +5269,7 @@ export function SceneCanvas({
                 />
               )}
 
-              {!hideRaftPrimitives && !isGizmoDragging && (
+              {!hideRaftPrimitives && !isGizmoDragging && !isGizmoRetargeting && (
                 <FootprintBorderRenderer
                   modelGeometry={activeModel ? activeModel.geometry : null}
                   modelTransform={activeModelTransform}
@@ -5254,7 +5310,7 @@ export function SceneCanvas({
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive
-                  disableSelectionAndHover={supportCreationModeActive}
+                  disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   passive
@@ -5289,7 +5345,7 @@ export function SceneCanvas({
                         hoverModelId={hoveredModelId}
                         modelDropOffsetsById={entryDropOffsets}
                         modelFilterId={modelId}
-                        disableSelectionAndHover={supportCreationModeActive}
+                        disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                         raftColorized={raftColorized}
                         raftHoverized={raftHoverized}
                         passive
@@ -5325,6 +5381,7 @@ export function SceneCanvas({
                   enableScale
                   enableLighting
                   onDragStateChange={setIsGizmoDragging}
+                  onRetargetingChange={setIsGizmoRetargeting}
                   onMove={(delta) => {
                     if (activeGroupRef.current) {
                       activeGroupRef.current.position.add(delta);

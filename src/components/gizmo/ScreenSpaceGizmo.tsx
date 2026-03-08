@@ -40,6 +40,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
   meshRef?: React.RefObject<THREE.Group | THREE.Mesh | null>;
   scaleFactor?: number;
   followMeshRef?: boolean;
+  onRetargetingChange?: (isRetargeting: boolean) => void;
 }) {
   const SWITCH_DAMP_LAMBDA = 30;
   const SWITCH_SNAP_EPSILON = 0.003;
@@ -63,6 +64,13 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     active: false,
     target: [0, 0, 0],
   });
+  const retargetingActiveRef = React.useRef(false);
+
+  const setRetargetingActive = React.useCallback((next: boolean) => {
+    if (retargetingActiveRef.current === next) return;
+    retargetingActiveRef.current = next;
+    props.onRetargetingChange?.(next);
+  }, [props]);
 
   const resolveCurrentPosition = React.useCallback((): [number, number, number] => {
     const meshPos = followMeshRef ? props.meshRef?.current?.position : null;
@@ -82,6 +90,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
 
   const stopTransition = React.useCallback((snapTo?: [number, number, number]) => {
     transitionRef.current.active = false;
+    setRetargetingActive(false);
     if (!snapTo) return;
 
     lastPositionRef.current = snapTo;
@@ -90,7 +99,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
     if (root) {
       root.position.set(snapTo[0], snapTo[1], snapTo[2]);
     }
-  }, []);
+  }, [setRetargetingActive]);
 
   React.useLayoutEffect(() => {
     const targetChanged = prevTargetObjectRef.current !== targetObject;
@@ -121,6 +130,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
         active: true,
         target: nextTarget,
       };
+      setRetargetingActive(true);
     } else {
       stopTransition(nextTarget);
     }
@@ -131,7 +141,7 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
         switchAnimationTimeoutRef.current = null;
       }
     };
-  }, [AXIS_SUPPRESS_MS, resolveCurrentPosition, stopTransition, targetObject]);
+  }, [AXIS_SUPPRESS_MS, resolveCurrentPosition, setRetargetingActive, stopTransition, targetObject]);
 
   React.useLayoutEffect(() => {
     const root = gizmoRootRef.current;
@@ -153,6 +163,12 @@ export function ScreenSpaceGizmo(props: Omit<TransformGizmoProps, 'size'> & {
       root.scale.setScalar(nextScale);
     }
   }, [camera, resolveCurrentPosition, scaleFactor, targetObject]);
+
+  React.useEffect(() => {
+    return () => {
+      setRetargetingActive(false);
+    };
+  }, [setRetargetingActive]);
   
   // Imperative per-frame sync keeps gizmo visually glued to the target
   // without React state scheduling overhead.
