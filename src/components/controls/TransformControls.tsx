@@ -95,7 +95,6 @@ export function TransformControls({
 
   const compactButtonClass = 'ui-button ui-button-secondary !h-8 whitespace-nowrap px-1.5 text-[10px] sm:text-[11px]';
   const valueInputClass = 'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-center tabular-nums no-spinners';
-  const configButtonClass = 'ui-button ui-button-secondary !h-8 px-2 text-xs uppercase tracking-wide';
 
   const sectionCardStyle: React.CSSProperties = {
     borderColor: 'var(--border-subtle)',
@@ -115,19 +114,6 @@ export function TransformControls({
   const scaleCardStyle: React.CSSProperties = {
     borderColor: 'color-mix(in srgb, #2eb67d, var(--border-subtle) 80%)',
     background: 'color-mix(in srgb, #2eb67d, var(--surface-1) 95%)',
-  };
-
-  const outlinedConfigInactiveStyle: React.CSSProperties = {
-    borderColor: 'var(--border-subtle)',
-    background: 'transparent',
-    color: 'var(--text-muted)',
-  };
-
-  const outlinedConfigActiveStyle: React.CSSProperties = {
-    borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 16%)',
-    background: 'transparent',
-    color: 'var(--text-strong)',
-    boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent), transparent 72%) inset',
   };
 
   const outlinedConfigEmphasisStyle: React.CSSProperties = {
@@ -303,22 +289,24 @@ export function TransformControls({
                 <div className="rounded-md border p-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Auto lift</span>
-                    <div className="grid grid-cols-2 gap-1">
-                      <button
-                        onClick={() => onAutoLiftChange(true)}
-                        className={configButtonClass}
-                        style={autoLift ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
-                      >
-                        ON
-                      </button>
-                      <button
-                        onClick={() => onAutoLiftChange(false)}
-                        className={configButtonClass}
-                        style={!autoLift ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
-                      >
-                        OFF
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onAutoLiftChange(!autoLift)}
+                      className="h-8 min-w-[72px] rounded-md border px-3 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                      style={autoLift
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                            color: 'var(--accent-contrast)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                            color: 'var(--text-muted)',
+                          }}
+                    >
+                      {autoLift ? 'ON' : 'OFF'}
+                    </button>
                   </div>
 
                   <div className="grid grid-cols-[auto_1fr] items-center gap-2 min-w-0">
@@ -463,22 +451,24 @@ export function TransformControls({
 
                 <div className="flex items-center justify-between gap-2">
                   <span className="ui-meta" style={{ color: 'var(--text-muted)' }}>Uniform</span>
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      onClick={() => setUniformScaling(true)}
-                      className={configButtonClass}
-                      style={uniformScaling ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
-                    >
-                      ON
-                    </button>
-                    <button
-                      onClick={() => setUniformScaling(false)}
-                      className={configButtonClass}
-                      style={!uniformScaling ? outlinedConfigActiveStyle : outlinedConfigInactiveStyle}
-                    >
-                      OFF
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUniformScaling(!uniformScaling)}
+                    className="h-8 min-w-[72px] rounded-md border px-3 text-[11px] font-semibold uppercase tracking-wide transition-colors"
+                    style={uniformScaling
+                      ? {
+                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                          color: 'var(--accent-contrast)',
+                        }
+                      : {
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                          color: 'var(--text-muted)',
+                        }}
+                  >
+                    {uniformScaling ? 'ON' : 'OFF'}
+                  </button>
                 </div>
 
                 <button
