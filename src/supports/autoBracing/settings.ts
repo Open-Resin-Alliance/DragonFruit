@@ -6,9 +6,11 @@ export interface AutoBracingSettings {
     initialDistanceMm: number;
     repeatingPattern: AutoBracingPattern;
     patternIntervalMm: number;
-    maxGroupSize: number;
+    seedSpacingMm: number;
+    seedJitterMm: number;
     maxBraceLengthMm: number;
     debugSectionColorsEnabled: boolean;
+    debugVoronoiSeedsEnabled: boolean;
 }
 
 type NumericConstraint = {
@@ -23,7 +25,8 @@ type NumericAutoBracingSettingKey =
     | 'braceDiameterMm'
     | 'initialDistanceMm'
     | 'patternIntervalMm'
-    | 'maxGroupSize'
+    | 'seedSpacingMm'
+    | 'seedJitterMm'
     | 'maxBraceLengthMm';
 
 export const AUTO_BRACING_PATTERN_OPTIONS: readonly AutoBracingPattern[] = [
@@ -35,7 +38,8 @@ export const AUTO_BRACING_CONSTRAINTS = {
     braceDiameterMm: { min: 0.5, max: 2.0, step: 0.05, defaultValue: 0.7 },
     initialDistanceMm: { min: 0.1, max: 25, step: 0.1, defaultValue: 2.0 },
     patternIntervalMm: { min: 1.0, max: 50, step: 0.1, defaultValue: 10.0 },
-    maxGroupSize: { min: 3, max: 20, step: 1, defaultValue: 7, integer: true },
+    seedSpacingMm: { min: 2.0, max: 60, step: 0.5, defaultValue: 10.0 },
+    seedJitterMm: { min: 0.0, max: 20, step: 0.25, defaultValue: 1.0 },
     maxBraceLengthMm: { min: 1.0, max: 50, step: 0.1, defaultValue: 10.0 },
 } satisfies Record<NumericAutoBracingSettingKey, NumericConstraint>;
 
@@ -95,9 +99,11 @@ export function createDefaultAutoBracingSettings(): AutoBracingSettings {
         initialDistanceMm: AUTO_BRACING_CONSTRAINTS.initialDistanceMm.defaultValue,
         repeatingPattern: 'singleDiagonal',
         patternIntervalMm: AUTO_BRACING_CONSTRAINTS.patternIntervalMm.defaultValue,
-        maxGroupSize: AUTO_BRACING_CONSTRAINTS.maxGroupSize.defaultValue,
+        seedSpacingMm: AUTO_BRACING_CONSTRAINTS.seedSpacingMm.defaultValue,
+        seedJitterMm: AUTO_BRACING_CONSTRAINTS.seedJitterMm.defaultValue,
         maxBraceLengthMm: AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm.defaultValue,
         debugSectionColorsEnabled: false,
+        debugVoronoiSeedsEnabled: false,
     };
 }
 
@@ -111,9 +117,11 @@ export function normalizeAutoBracingSettings(input?: Partial<AutoBracingSettings
         initialDistanceMm: clampNumeric(source.initialDistanceMm, AUTO_BRACING_CONSTRAINTS.initialDistanceMm),
         repeatingPattern: normalizePattern(source.repeatingPattern, defaults.repeatingPattern),
         patternIntervalMm: clampNumeric(source.patternIntervalMm, AUTO_BRACING_CONSTRAINTS.patternIntervalMm),
-        maxGroupSize: clampNumeric(source.maxGroupSize, AUTO_BRACING_CONSTRAINTS.maxGroupSize),
+        seedSpacingMm: clampNumeric(source.seedSpacingMm, AUTO_BRACING_CONSTRAINTS.seedSpacingMm),
+        seedJitterMm: clampNumeric(source.seedJitterMm, AUTO_BRACING_CONSTRAINTS.seedJitterMm),
         maxBraceLengthMm: clampNumeric(source.maxBraceLengthMm, AUTO_BRACING_CONSTRAINTS.maxBraceLengthMm),
         debugSectionColorsEnabled: normalizeBoolean(source.debugSectionColorsEnabled, defaults.debugSectionColorsEnabled),
+        debugVoronoiSeedsEnabled: normalizeBoolean(source.debugVoronoiSeedsEnabled, defaults.debugVoronoiSeedsEnabled),
     };
 }
 

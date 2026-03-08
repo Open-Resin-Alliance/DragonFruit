@@ -58,3 +58,25 @@
 
 ## Notes & Terminology
 *   **Terminology**: "Support brace" is a distinct type from [[Brace]].
+
+## Grid Placement Addendum (Interactive Snapping Rules)
+*   **Scope**: These rules apply to manual Support Brace placement while Grid Mode is enabled.
+*   **Root Locking**:
+    *   The support-brace root snaps to a valid grid node (not an arbitrary in-between position).
+    *   Preview and committed placement use the same node decision so final placement matches preview.
+*   **Allowed Directional Targets**:
+    *   Selection is restricted to three cardinal options around the host shaft: **Left**, **Front (toward camera)**, and **Right**.
+    *   "Away from camera" is excluded in this interaction mode.
+*   **Interactive Zone Intent**:
+    *   Mouse on the support shaft surface resolves to the **Front** option.
+    *   Mouse just outside the visible shaft on the right resolves to **Right**.
+    *   Mouse just outside the visible shaft on the left resolves to **Left**.
+*   **Occupied Node Rule**:
+    *   If a candidate grid node is already occupied by another support root, that node is invalid for new Support Brace placement.
+    *   Placement does not overwrite/stack onto an occupied node.
+*   **Validity Feedback + Placement Blocking**:
+    *   **Green preview** = valid node, placement allowed.
+    *   **Red preview** = invalid node (for example, occupied), placement blocked.
+*   **No Auto-Fallback**:
+    *   If the currently targeted node is invalid, the system does not automatically jump to another valid node.
+    *   User input must move to a different valid zone/node to place.
