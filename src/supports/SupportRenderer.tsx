@@ -33,6 +33,7 @@ import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactD
 import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftState';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './autoBracing/settings';
+import { VoronoiSeedDebugMarkers } from './autoBracing/VoronoiSeedDebugMarkers';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -2726,6 +2727,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     />
                 </group>
             ))}
+
+            {/*
+              Auto-bracing debug overlay mount point.
+              - This only renders Voronoi seed indicators when the auto-bracing debug toggle is enabled.
+              - Core support rendering does not depend on these markers.
+              - If needed later, this block can be safely commented out or removed.
+            */}
+            <VoronoiSeedDebugMarkers
+                enabled={!!settings.autoBracing.debugVoronoiSeedsEnabled}
+                ghostRenderOrder={ghostRenderOrder}
+                isModelVisible={isModelVisible}
+                applyDropToVec3Like={applyDropToVec3Like}
+            />
         </group>
     );
 });

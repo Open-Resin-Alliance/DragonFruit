@@ -152,7 +152,7 @@ test('buildAutoBracedSnapshot isolated grouping respects min/max limits', () => 
         snapshot.trunks[trunk.id] = trunk;
     }
 
-    const settings = { ...createDefaultAutoBracingSettings(), maxGroupSize: 5 };
+    const settings = { ...createDefaultAutoBracingSettings(), seedSpacingMm: 8, seedJitterMm: 0 };
     const result = buildAutoBracedSnapshot(snapshot, settings);
 
     // Braces never cross groups. Verify no brace connects trunk-4 (end of group 1) to trunk-5 (start of group 2).
@@ -225,7 +225,7 @@ test('buildAutoBracedSnapshot respects maxBraceLengthMm during grouping', () => 
     snapshot.trunks[trunk2.id] = trunk2;
     snapshot.trunks[trunk3.id] = trunk3;
 
-    const settings = { ...createDefaultAutoBracingSettings(), maxBraceLengthMm: 6, minGroupSize: 2 };
+    const settings = { ...createDefaultAutoBracingSettings(), maxBraceLengthMm: 6 };
     const result = buildAutoBracedSnapshot(snapshot, settings);
 
     // trunk-1 and trunk-2 should have a brace. trunk-3 should have NONE.

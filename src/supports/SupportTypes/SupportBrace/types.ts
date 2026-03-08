@@ -23,6 +23,7 @@ export interface SupportBrace extends SupportEntity {
     hostKnotId: string;
     hostSegmentId: string;
     hostMinT: number;
+    autoBracingGenerated?: boolean;
     segments: Segment[];
     profile: {
         bodyDiameterMm: number;
