@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { checkShaftCollision } from '../PlacementLogic/CollisionUtils';
 import { buildSupportBraceData } from '../SupportTypes/SupportBrace/supportBraceBuilder';
 import { snapToGridIndex } from '../PlacementLogic/Grid/gridMath';
 import type { SupportBraceBuildResult, SupportBraceHostTarget, SupportBraceState } from '../SupportTypes/SupportBrace/types';
@@ -7,23 +6,20 @@ import type { SupportState, Trunk, Vec3, Segment, Roots } from '../types';
 import { AUTO_BRACING_HARD_RULES, type AutoBracingSettings } from './settings';
 import { getAllMeshEntriesForAutoBrace } from './meshGeometryStore';
 import { getTrunkSegmentEndpoints } from '../SupportPrimitives/Knot/knotUtils';
+import { linePassesMeshClearance } from './meshClearance';
+import {
+    additionalAxesNeededForTwoAxisBracing,
+    hasQualifiedTwoAxisBracing,
+    normalizeAxisAngleRad,
+} from './twoAxisDetection';
 
 const MIN_HEIGHT_FOR_MANDATORY_BRACING_MM = 15.0;
 const DROP_COLLISION_SAMPLES = 20;
+const MAX_GRID_ROOT_SEARCH_RING = 1;
+const MIN_ROOT_PROXIMITY_CLEARANCE_MM = 2.0;
 
 function createVector3(v: Vec3) {
     return new THREE.Vector3(v.x, v.y, v.z);
-}
-
-function normalizeAxisAngleRad(angleRad: number): number {
-    let n = angleRad % Math.PI;
-    if (n < 0) n += Math.PI;
-    return n;
-}
-
-function axisSeparationDeg(aRad: number, bRad: number): number {
-    const diff = Math.abs(aRad - bRad);
-    return (Math.min(diff, Math.PI - diff) * 180) / Math.PI;
 }
 
 /**
@@ -58,72 +54,98 @@ export function generateRequiredSupportBraces(
             z: root.transform.pos.z,
         })),
     ];
+    const minRootProximityClearanceSq = MIN_ROOT_PROXIMITY_CLEARANCE_MM * MIN_ROOT_PROXIMITY_CLEARANCE_MM;
+    const isCandidateRootTooCloseToExistingRoot = (x: number, y: number): boolean => {
+        for (const root of occupiedRootPositions) {
+            const dx = root.x - x;
+            const dy = root.y - y;
+            if (dx * dx + dy * dy <= minRootProximityClearanceSq) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     const isGridEnabled = gridSettings.enabled && gridSettings.spacingMm > 0;
-    const occupiedWorldKeys = new Set<string>();
-    const worldKey = (x: number, y: number) => `${x.toFixed(4)},${y.toFixed(4)}`;
+    const gridNodeKey = (modelId: string, gx: number, gy: number) => `${modelId}:${gx},${gy}`;
+    const occupiedGridNodeKeys = new Set<string>();
     if (isGridEnabled) {
-        for (const root of occupiedRootPositions) {
-            occupiedWorldKeys.add(worldKey(root.x, root.y));
+        for (const root of Object.values(snapshot.roots)) {
+            const gx = snapToGridIndex(root.transform.pos.x, gridSettings.spacingMm);
+            const gy = snapToGridIndex(root.transform.pos.y, gridSettings.spacingMm);
+            occupiedGridNodeKeys.add(gridNodeKey(root.modelId, gx, gy));
+        }
+        for (const root of Object.values(supportBraceState.roots)) {
+            const gx = snapToGridIndex(root.transform.pos.x, gridSettings.spacingMm);
+            const gy = snapToGridIndex(root.transform.pos.y, gridSettings.spacingMm);
+            occupiedGridNodeKeys.add(gridNodeKey(root.modelId, gx, gy));
         }
     }
 
-    const snapToGridWithOrigin = (valueMm: number, spacingMm: number, originMm: number): number => {
-        const idx = snapToGridIndex((valueMm - originMm) / spacingMm, 1);
-        return originMm + idx * spacingMm;
+    const isGridNodeOccupied = (modelId: string, gx: number, gy: number): boolean => {
+        if (!isGridEnabled) return false;
+        return occupiedGridNodeKeys.has(gridNodeKey(modelId, gx, gy));
+    };
+
+    const snapToGlobalGrid = (valueMm: number, spacingMm: number): number => {
+        const idx = snapToGridIndex(valueMm, spacingMm);
+        return idx * spacingMm;
     };
 
     const findNearestAvailableGridPoint = (
         x: number,
         y: number,
-        originX: number,
-        originY: number,
+        hostX: number,
+        hostY: number,
+        modelId: string,
+        maxRingOverride?: number,
     ): { x: number; y: number } | null => {
         if (!isGridEnabled) return { x, y };
 
         const spacing = gridSettings.spacingMm;
-        const centerGx = snapToGridIndex((x - originX) / spacing, 1);
-        const centerGy = snapToGridIndex((y - originY) / spacing, 1);
-        const maxRing = Math.max(1, Math.ceil(maxHorizontalRun / spacing) + 2);
+        // Hard rule: search must stay within the host-centered grid neighborhood.
+        // We then pick the candidate nearest to the desired target point.
+        const centerGx = snapToGridIndex(hostX, spacing);
+        const centerGy = snapToGridIndex(hostY, spacing);
+        const defaultMaxRing = Math.max(1, Math.ceil(maxHorizontalRun / spacing) + 2);
+        const maxRing = typeof maxRingOverride === 'number'
+            ? Math.max(0, Math.min(defaultMaxRing, maxRingOverride))
+            : defaultMaxRing;
+        if (maxRing < 1) return null;
 
-        for (let ring = 0; ring <= maxRing; ring += 1) {
-            let best: { gx: number; gy: number; distSq: number } | null = null;
+        // Match manual support-brace snapping neighborhood: immediate cardinal nodes around host.
+        const candidates = [
+            { gx: centerGx + 1, gy: centerGy },
+            { gx: centerGx - 1, gy: centerGy },
+            { gx: centerGx, gy: centerGy + 1 },
+            { gx: centerGx, gy: centerGy - 1 },
+        ];
 
-            for (let dx = -ring; dx <= ring; dx += 1) {
-                for (let dy = -ring; dy <= ring; dy += 1) {
-                    if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        let best: { x: number; y: number; distSq: number } | null = null;
+        for (const candidate of candidates) {
+            const worldX = candidate.gx * spacing;
+            const worldY = candidate.gy * spacing;
+            if (isGridNodeOccupied(modelId, candidate.gx, candidate.gy)) continue;
+            if (isCandidateRootTooCloseToExistingRoot(worldX, worldY)) continue;
 
-                    const gx = centerGx + dx;
-                    const gy = centerGy + dy;
-
-                    const worldX = originX + gx * spacing;
-                    const worldY = originY + gy * spacing;
-                    if (occupiedWorldKeys.has(worldKey(worldX, worldY))) continue;
-
-                    const ddx = worldX - x;
-                    const ddy = worldY - y;
-                    const distSq = ddx * ddx + ddy * ddy;
-
-                    if (!best || distSq < best.distSq) {
-                        best = { gx, gy, distSq };
-                    }
-                }
+            const ddx = worldX - x;
+            const ddy = worldY - y;
+            const distSq = ddx * ddx + ddy * ddy;
+            if (!best || distSq < best.distSq) {
+                best = { x: worldX, y: worldY, distSq };
             }
+        }
 
-            if (best) {
-                return {
-                    x: originX + best.gx * spacing,
-                    y: originY + best.gy * spacing,
-                };
-            }
+        if (best) {
+            return { x: best.x, y: best.y };
         }
 
         return null;
     };
 
-    const toCanonicalGridPoint = (x: number, y: number, originX: number, originY: number): { x: number; y: number } => {
-        const snappedX = snapToGridWithOrigin(x, gridSettings.spacingMm, originX);
-        const snappedY = snapToGridWithOrigin(y, gridSettings.spacingMm, originY);
+    const toCanonicalGridPoint = (x: number, y: number): { x: number; y: number } => {
+        const snappedX = snapToGlobalGrid(x, gridSettings.spacingMm);
+        const snappedY = snapToGlobalGrid(y, gridSettings.spacingMm);
         return {
             x: snappedX,
             y: snappedY,
@@ -165,6 +187,60 @@ export function generateRequiredSupportBraces(
         axesByTrunkId.set(hostTrunkId, list);
     }
 
+    // Build connected trunk groups using trunk-to-trunk brace edges and gather group-level axes.
+    // Generative support-brace decisions should be based on group axis coverage, not only per-trunk axes.
+    const trunkAdjacency = new Map<string, Set<string>>();
+    for (const trunkId of Object.keys(snapshot.trunks)) {
+        trunkAdjacency.set(trunkId, new Set<string>());
+    }
+    for (const edge of existingBraceEdges) {
+        if (!trunkAdjacency.has(edge.a) || !trunkAdjacency.has(edge.b)) continue;
+        trunkAdjacency.get(edge.a)!.add(edge.b);
+        trunkAdjacency.get(edge.b)!.add(edge.a);
+    }
+
+    const visitedTrunks = new Set<string>();
+    const groupIdByTrunkId = new Map<string, string>();
+    const groupAxesByGroupId = new Map<string, number[]>();
+    const remainingBracesNeededByGroupId = new Map<string, number>();
+    for (const trunkId of Object.keys(snapshot.trunks)) {
+        if (visitedTrunks.has(trunkId)) continue;
+
+        const members: string[] = [];
+        const queue: string[] = [trunkId];
+        visitedTrunks.add(trunkId);
+
+        for (let cursor = 0; cursor < queue.length; cursor += 1) {
+            const current = queue[cursor];
+            members.push(current);
+
+            const neighbors = trunkAdjacency.get(current);
+            if (!neighbors) continue;
+            for (const neighborId of neighbors) {
+                if (visitedTrunks.has(neighborId)) continue;
+                visitedTrunks.add(neighborId);
+                queue.push(neighborId);
+            }
+        }
+
+        const memberSet = new Set(members);
+        const groupAxes = existingBraceEdges
+            .filter((edge) => memberSet.has(edge.a) && memberSet.has(edge.b))
+            .map((edge) => edge.angleRad);
+
+        const groupId = members[0] ?? trunkId;
+        const groupAxesState = [...groupAxes];
+        groupAxesByGroupId.set(groupId, groupAxesState);
+        remainingBracesNeededByGroupId.set(
+            groupId,
+            additionalAxesNeededForTwoAxisBracing(groupAxesState, AUTO_BRACING_HARD_RULES.minAxisSeparationDeg),
+        );
+
+        for (const memberId of members) {
+            groupIdByTrunkId.set(memberId, groupId);
+        }
+    }
+
     const checkSlantedCollision = (topPos: Vec3, bottomPos: Vec3, modelId: string, radius: number): boolean => {
         const entry = meshEntries.get(modelId);
         if (!entry) return false;
@@ -189,7 +265,41 @@ export function generateRequiredSupportBraces(
         return false;
     };
 
-    // 1. Find trunks > 15mm that lack 2-axis bracing
+    const builtSupportBracePassesMeshClearance = (build: SupportBraceBuildResult, modelId: string): boolean => {
+        const bodyDiameterMm = Math.max(0.001, build.supportBrace.profile.bodyDiameterMm);
+        const rootPos = build.root.transform.pos;
+        const rootTop: Vec3 = {
+            x: rootPos.x,
+            y: rootPos.y,
+            z: rootPos.z + build.root.diskHeight + build.root.coneHeight,
+        };
+
+        const pathPoints: Vec3[] = [rootTop];
+        for (const segment of build.supportBrace.segments) {
+            if (segment.bottomJoint) pathPoints.push(segment.bottomJoint.pos);
+            if (segment.topJoint) pathPoints.push(segment.topJoint.pos);
+        }
+        pathPoints.push(build.hostKnot.pos);
+
+        for (let i = 0; i < pathPoints.length - 1; i += 1) {
+            const a = pathPoints[i];
+            const b = pathPoints[i + 1];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dz = b.z - a.z;
+            if (dx * dx + dy * dy + dz * dz < 0.000001) continue;
+            if (!linePassesMeshClearance(a, b, modelId, bodyDiameterMm)) return false;
+        }
+
+        return true;
+    };
+
+    // Two-phase generation:
+    // Pass 1 = normal generation flow.
+    // Pass 2 = cleanup retry for groups still missing true two-axis bracing.
+    for (let passIndex = 0; passIndex < 2; passIndex += 1) {
+        const isCleanupPass = passIndex === 1;
+
     for (const trunk of Object.values(snapshot.trunks)) {
         const root = snapshot.roots[trunk.rootId];
         if (!root) continue;
@@ -229,43 +339,17 @@ export function generateRequiredSupportBraces(
         const trunkHeight = maxZ - root.transform.pos.z;
         if (trunkHeight < MIN_HEIGHT_FOR_MANDATORY_BRACING_MM) continue;
 
-        // Support-brace generation is strict fallback for isolated trunks only.
-        // If another trunk is already within physical brace reach, Voronoi pairing should handle it.
-        let hasReachableTrunkNeighbor = false;
-        for (const otherTrunk of Object.values(snapshot.trunks)) {
-            if (otherTrunk.id === trunk.id) continue;
-            if (otherTrunk.modelId !== trunk.modelId) continue;
+        const localAxes = axesByTrunkId.get(trunk.id) || [];
+        const groupId = groupIdByTrunkId.get(trunk.id) ?? trunk.id;
+        const groupAxesState = groupAxesByGroupId.get(groupId) ?? [];
+        const decisionAxes = [...groupAxesState];
+        const hasTwoAxis = hasQualifiedTwoAxisBracing(decisionAxes, AUTO_BRACING_HARD_RULES.minAxisSeparationDeg);
+        let remainingGroupNeed = remainingBracesNeededByGroupId.get(groupId) ?? 0;
 
-            const otherRoot = snapshot.roots[otherTrunk.rootId];
-            if (!otherRoot) continue;
-
-            const dx = otherRoot.transform.pos.x - root.transform.pos.x;
-            const dy = otherRoot.transform.pos.y - root.transform.pos.y;
-            const hDist = Math.sqrt(dx * dx + dy * dy);
-            if (hDist <= maxHorizontalRun + 0.000001) {
-                hasReachableTrunkNeighbor = true;
-                break;
-            }
-        }
-        if (hasReachableTrunkNeighbor) continue;
-
-        const axes = axesByTrunkId.get(trunk.id) || [];
-        let hasTwoAxis = false;
-
-        for (let i = 0; i < axes.length; i++) {
-            for (let j = i + 1; j < axes.length; j++) {
-                if (axisSeparationDeg(axes[i], axes[j]) >= AUTO_BRACING_HARD_RULES.minAxisSeparationDeg) {
-                    hasTwoAxis = true;
-                    break;
-                }
-            }
-            if (hasTwoAxis) break;
-        }
-
-        if (hasTwoAxis) continue;
+        if (hasTwoAxis || remainingGroupNeed <= 0) continue;
 
         // Needs extra bracing!
-        const numBracesNeeded = axes.length === 0 ? 2 : 1;
+        const maxBracesToGenerate = Math.min(2, Math.max(1, remainingGroupNeed));
         
         if (candidateAnchors.length === 0) continue;
         
@@ -275,16 +359,25 @@ export function generateRequiredSupportBraces(
         const rootPos = root.transform.pos;
         const gridOriginX = rootPos.x;
         const gridOriginY = rootPos.y;
-        let existingAxis = axes.length > 0 ? axes[0] : 0;
-        const braceRadius = settings.braceDiameterMm / 2;
+        let existingAxis = decisionAxes.length > 0
+            ? decisionAxes[0]
+            : (localAxes.length > 0 ? localAxes[0] : 0);
+
+        const generatedAxes = [...decisionAxes];
 
         const usedRootPositions: Vec3[] = [];
 
-        for (let i = 0; i < numBracesNeeded; i++) {
-            const angleOffset = numBracesNeeded === 2 ? (i === 0 ? 0 : existingAxis + Math.PI / 2) : (existingAxis + Math.PI / 2);
-            let dropDist = GENERATION_DISTANCE_MM;
-            let finalRootPos: Vec3 | null = null;
-            let chosenAnchor: CandidateAnchor | null = null;
+        for (let i = 0; i < maxBracesToGenerate; i++) {
+            if (hasQualifiedTwoAxisBracing(generatedAxes, AUTO_BRACING_HARD_RULES.minAxisSeparationDeg) || remainingGroupNeed <= 0) {
+                break;
+            }
+
+            const angleOffset = maxBracesToGenerate === 2
+                ? (i === 0 ? 0 : existingAxis + Math.PI / 2)
+                : (existingAxis + Math.PI / 2);
+            const dropDist = GENERATION_DISTANCE_MM;
+            let selectedBuild: SupportBraceBuildResult | null = null;
+            let selectedRootPos: Vec3 | null = null;
 
             // Iterate through possible anchor points (highest first)
             for (const anchor of candidateAnchors) {
@@ -293,9 +386,24 @@ export function generateRequiredSupportBraces(
                 const trunkDy = anchor.pos.y - rootPos.y;
 
                 // Simple iterative solver to find a non-colliding drop from this anchor
-                for (let attempt = 0; attempt < 8; attempt++) { 
-                    const angle = angleOffset + (attempt % 2 === 0 ? 0 : Math.PI); // Try opposite side if first fails
-                    const currentDist = dropDist + Math.floor(attempt / 2) * 2; // Expand distance slowly
+                const maxAttempts = isCleanupPass ? 12 : 8;
+                for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                    let angle = angleOffset + (attempt % 2 === 0 ? 0 : Math.PI);
+                    if (isCleanupPass) {
+                        const cleanupPhase = attempt % 6;
+                        if (cleanupPhase === 2) {
+                            angle = existingAxis + Math.PI / 2;
+                        } else if (cleanupPhase === 3) {
+                            angle = existingAxis + (3 * Math.PI) / 2;
+                        } else if (cleanupPhase === 4) {
+                            angle = existingAxis;
+                        } else if (cleanupPhase === 5) {
+                            angle = existingAxis + Math.PI;
+                        }
+                    }
+                    const currentDist = isGridEnabled
+                        ? dropDist
+                        : dropDist + Math.floor(attempt / 2) * 2; // Expand only in non-grid mode
 
                     if (currentDist > maxHorizontalRun) break; // Don't generate out of connection range
 
@@ -308,11 +416,26 @@ export function generateRequiredSupportBraces(
                     let candidateRootY = topAnchorY - trunkDy;
 
                     if (isGridEnabled) {
-                        const snapped = findNearestAvailableGridPoint(candidateRootX, candidateRootY, gridOriginX, gridOriginY);
+                        const snapped = findNearestAvailableGridPoint(
+                            candidateRootX,
+                            candidateRootY,
+                            gridOriginX,
+                            gridOriginY,
+                            trunk.modelId,
+                            MAX_GRID_ROOT_SEARCH_RING,
+                        );
                         if (!snapped) continue;
-                        const canonical = toCanonicalGridPoint(snapped.x, snapped.y, gridOriginX, gridOriginY);
+                        const canonical = toCanonicalGridPoint(snapped.x, snapped.y);
                         candidateRootX = canonical.x;
                         candidateRootY = canonical.y;
+
+                        const hostGx = snapToGridIndex(rootPos.x, gridSettings.spacingMm);
+                        const hostGy = snapToGridIndex(rootPos.y, gridSettings.spacingMm);
+                        const candidateGx = snapToGridIndex(candidateRootX, gridSettings.spacingMm);
+                        const candidateGy = snapToGridIndex(candidateRootY, gridSettings.spacingMm);
+                        if (Math.abs(candidateGx - hostGx) > 1 || Math.abs(candidateGy - hostGy) > 1) {
+                            continue;
+                        }
                     }
 
                     const candidateRootPos = {
@@ -320,6 +443,45 @@ export function generateRequiredSupportBraces(
                         y: candidateRootY,
                         z: 0 // Drop to build plate
                     };
+
+                    const hostDx = candidateRootX - anchor.pos.x;
+                    const hostDy = candidateRootY - anchor.pos.y;
+                    if (hostDx * hostDx + hostDy * hostDy <= minRootProximityClearanceSq) {
+                        continue;
+                    }
+
+                    const hostRootDx = candidateRootX - rootPos.x;
+                    const hostRootDy = candidateRootY - rootPos.y;
+                    if (hostRootDx * hostRootDx + hostRootDy * hostRootDy <= minRootProximityClearanceSq) {
+                        continue;
+                    }
+
+                    const hostSegDx = anchor.pos.x - rootPos.x;
+                    const hostSegDy = anchor.pos.y - rootPos.y;
+                    const hostSegLenSq = hostSegDx * hostSegDx + hostSegDy * hostSegDy;
+                    if (hostSegLenSq > 0.000001) {
+                        const t = Math.max(0, Math.min(1,
+                            ((candidateRootX - rootPos.x) * hostSegDx + (candidateRootY - rootPos.y) * hostSegDy) / hostSegLenSq,
+                        ));
+                        const nearestX = rootPos.x + hostSegDx * t;
+                        const nearestY = rootPos.y + hostSegDy * t;
+                        const shaftDx = candidateRootX - nearestX;
+                        const shaftDy = candidateRootY - nearestY;
+                        if (shaftDx * shaftDx + shaftDy * shaftDy <= minRootProximityClearanceSq) {
+                            continue;
+                        }
+                    } else {
+                        // Degenerate host projection fallback: treat as host point clearance.
+                        const rootPointDx = candidateRootX - rootPos.x;
+                        const rootPointDy = candidateRootY - rootPos.y;
+                        if (rootPointDx * rootPointDx + rootPointDy * rootPointDy <= minRootProximityClearanceSq) {
+                            continue;
+                        }
+                    }
+
+                    if (isCandidateRootTooCloseToExistingRoot(candidateRootX, candidateRootY)) {
+                        continue;
+                    }
 
                     // Prevent generating exactly on top of an already placed support brace root
                     const isOverlapping = usedRootPositions.some(used => 
@@ -332,52 +494,84 @@ export function generateRequiredSupportBraces(
 
                     const topAnchorPos = { x: topAnchorX, y: topAnchorY, z: anchor.pos.z };
 
-                    if (!checkSlantedCollision(topAnchorPos, candidateRootPos, trunk.modelId, braceRadius + 1.0)) {
-                        finalRootPos = candidateRootPos;
-                        chosenAnchor = anchor;
+                    if (!linePassesMeshClearance(topAnchorPos, anchor.pos, trunk.modelId, anchor.diameterMm)) {
+                        continue;
+                    }
+
+                    const candidateBraceRadius = Math.max(0.001, anchor.diameterMm / 2);
+                    if (checkSlantedCollision(topAnchorPos, candidateRootPos, trunk.modelId, candidateBraceRadius + 1.0)) {
+                        continue;
+                    }
+
+                    const hostTarget: SupportBraceHostTarget = {
+                        segmentId: anchor.segmentId,
+                        supportKind: 'trunk',
+                        t: anchor.t,
+                        pos: anchor.pos,
+                        diameterMm: anchor.diameterMm,
+                    };
+
+                    const buildInput = {
+                        modelId: trunk.modelId,
+                        rootPos: candidateRootPos,
+                        host: hostTarget,
+                    };
+
+                    try {
+                        const trialBuild = buildSupportBraceData(buildInput);
+                        if (!builtSupportBracePassesMeshClearance(trialBuild, trunk.modelId)) {
+                            continue;
+                        }
+
+                        selectedBuild = trialBuild;
+                        selectedRootPos = candidateRootPos;
                         break;
+                    } catch (err) {
+                        console.warn("Failed to build generative Support Brace", err);
                     }
                 }
 
-                if (finalRootPos) break; // Found a valid drop path, stop walking down the trunk
+                if (selectedBuild && selectedRootPos) break; // Found a valid drop path, stop walking down the trunk
             }
 
-            if (finalRootPos && chosenAnchor) {
-                const hostTarget: SupportBraceHostTarget = {
-                    segmentId: chosenAnchor.segmentId,
-                    supportKind: 'trunk',
-                    t: chosenAnchor.t,
-                    pos: chosenAnchor.pos,
-                    diameterMm: chosenAnchor.diameterMm
-                };
-
-                const buildInput = {
-                    modelId: trunk.modelId,
-                    rootPos: finalRootPos,
-                    host: hostTarget
-                };
-                
-                try {
-                    const result = buildSupportBraceData(buildInput);
-                    generatedSupportBraces.push(result);
-
-                    if (isGridEnabled) {
-                        occupiedWorldKeys.add(worldKey(finalRootPos.x, finalRootPos.y));
-                    }
-                    
-                    const actualAngle = normalizeAxisAngleRad(Math.atan2(finalRootPos.y - rootPos.y, finalRootPos.x - rootPos.x));
-                    axes.push(actualAngle);
-                    
-                    if (i === 0) {
-                        existingAxis = actualAngle;
-                    }
-
-                    usedRootPositions.push(finalRootPos);
-                } catch (err) {
-                    console.warn("Failed to build generative Support Brace", err);
+            if (selectedBuild && selectedRootPos) {
+                const actualAngle = normalizeAxisAngleRad(Math.atan2(selectedRootPos.y - rootPos.y, selectedRootPos.x - rootPos.x));
+                const needBefore = additionalAxesNeededForTwoAxisBracing(
+                    groupAxesState,
+                    AUTO_BRACING_HARD_RULES.minAxisSeparationDeg,
+                );
+                const needAfter = additionalAxesNeededForTwoAxisBracing(
+                    [...groupAxesState, actualAngle],
+                    AUTO_BRACING_HARD_RULES.minAxisSeparationDeg,
+                );
+                // Accept only if this support brace actually improves group axis coverage.
+                // This prevents placing one-axis duplicates on every support in a straight chain.
+                if (needAfter >= needBefore) {
+                    continue;
                 }
+
+                generatedSupportBraces.push(selectedBuild);
+
+                if (isGridEnabled) {
+                    const gx = snapToGridIndex(selectedRootPos.x, gridSettings.spacingMm);
+                    const gy = snapToGridIndex(selectedRootPos.y, gridSettings.spacingMm);
+                    occupiedGridNodeKeys.add(gridNodeKey(trunk.modelId, gx, gy));
+                }
+                occupiedRootPositions.push(selectedRootPos);
+
+                generatedAxes.push(actualAngle);
+                groupAxesState.push(actualAngle);
+                remainingGroupNeed = needAfter;
+                remainingBracesNeededByGroupId.set(groupId, remainingGroupNeed);
+
+                if (i === 0) {
+                    existingAxis = actualAngle;
+                }
+
+                usedRootPositions.push(selectedRootPos);
             }
         }
+    }
     }
 
     return generatedSupportBraces;

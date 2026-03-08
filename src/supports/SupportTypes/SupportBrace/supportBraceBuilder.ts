@@ -4,7 +4,6 @@ import { getJointDiameter } from '../../constants';
 import * as THREE from 'three';
 import { assertSupportBraceHostKind, clampSupportBraceHostT } from './supportBraceRules';
 import {
-    getSupportBraceBodyDiameterMm,
     getSupportBraceKnotDiameterMm,
     getSupportBraceRootProfile,
     resolveSupportBraceLayout,
@@ -67,7 +66,7 @@ export function buildSupportBraceData(input: SupportBraceBuildInput): SupportBra
     assertSupportBraceHostKind(input.host.supportKind);
 
     const rootProfile = getSupportBraceRootProfile();
-    const bodyDiameterMm = getSupportBraceBodyDiameterMm();
+    const bodyDiameterMm = Math.max(0.001, input.host.diameterMm);
     const jointDiameterMm = getJointDiameter(bodyDiameterMm);
 
     const rootId = uuid();

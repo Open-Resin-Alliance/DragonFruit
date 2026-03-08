@@ -4,6 +4,7 @@ export type VoronoiSupportNode = {
     supportId: string;
     modelId: string;
     point: Vec2;
+    debugPoint?: Vec2;
 };
 
 export type VoronoiPartitionSettings = {
@@ -326,10 +327,11 @@ export function partitionSupportsWithVoronoi(
         for (const seedId of seeds) {
             const node = nodeById.get(seedId);
             if (!node) continue;
+            const markerPoint = node.debugPoint ?? node.point;
             lastVoronoiSeedMarkers.push({
                 supportId: node.supportId,
                 modelId: node.modelId,
-                point: { x: node.point.x, y: node.point.y },
+                point: { x: markerPoint.x, y: markerPoint.y },
             });
         }
 
