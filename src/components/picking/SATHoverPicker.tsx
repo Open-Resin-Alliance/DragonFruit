@@ -95,60 +95,35 @@ export function SATHoverPicker({
       return fallbackHull;
     }
 
-    // Sample geometry points
     const points2d: THREE.Vector2[] = [];
-    const stride = Math.max(1, Math.floor(positionAttr.count / 8000));
     const tmp = new THREE.Vector3();
     const center = new THREE.Vector3();
-    geometry.computeBoundingBox();
-    if (geometry.boundingBox) {
-      center.copy(geometry.boundingBox.getCenter(new THREE.Vector3()));
-    }
-
-    // Create transformation matrix for this model
     const matrix = new THREE.Matrix4().compose(
       new THREE.Vector3(0, 0, 0),
       quaternionFromGlobalEuler({ x: transform.rotation.x, y: transform.rotation.y, z: transform.rotation.z }),
       transform.scale,
     );
 
-    // Sample geometry vertices in local XY
-    for (let i = 0; i < positionAttr.count; i += stride) {
-      tmp.set(
-        positionAttr.getX(i) - center.x,
-        positionAttr.getY(i) - center.y,
-        positionAttr.getZ(i) - center.z,
-      ).applyMatrix4(matrix);
-      points2d.push(new THREE.Vector2(tmp.x, tmp.y));
-    }
+    geometry.computeBoundingBox();
+    if (geometry.boundingBox) {
+      center.copy(geometry.boundingBox.getCenter(new THREE.Vector3()));
 
-    // Add extreme points for better hull coverage
-    const nE = 8;
-    const eDx = [1, -1, 0, 0, 0.7071068, 0.7071068, -0.7071068, -0.7071068];
-    const eDy = [0, 0, 1, -1, 0.7071068, -0.7071068, 0.7071068, -0.7071068];
-    const eDot = new Float64Array(nE).fill(-Infinity);
-    const eXArr = new Float32Array(nE);
-    const eYArr = new Float32Array(nE);
-    for (let i = 0; i < positionAttr.count; i++) {
-      tmp.set(
-        positionAttr.getX(i) - center.x,
-        positionAttr.getY(i) - center.y,
-        positionAttr.getZ(i) - center.z,
-      ).applyMatrix4(matrix);
-      const tx = tmp.x;
-      const ty = tmp.y;
-      for (let d = 0; d < nE; d++) {
-        const dot = tx * eDx[d] + ty * eDy[d];
-        if (dot > eDot[d]) {
-          eDot[d] = dot;
-          eXArr[d] = tx;
-          eYArr[d] = ty;
-        }
-      }
-    }
-    for (let d = 0; d < nE; d++) {
-      if (Number.isFinite(eXArr[d]) && Number.isFinite(eYArr[d])) {
-        points2d.push(new THREE.Vector2(eXArr[d], eYArr[d]));
+      // Fast path: use 8 bounding-box corners as SAT seed points.
+      const bb = geometry.boundingBox;
+      const corners = [
+        new THREE.Vector3(bb.min.x, bb.min.y, bb.min.z),
+        new THREE.Vector3(bb.max.x, bb.min.y, bb.min.z),
+        new THREE.Vector3(bb.max.x, bb.max.y, bb.min.z),
+        new THREE.Vector3(bb.min.x, bb.max.y, bb.min.z),
+        new THREE.Vector3(bb.min.x, bb.min.y, bb.max.z),
+        new THREE.Vector3(bb.max.x, bb.min.y, bb.max.z),
+        new THREE.Vector3(bb.max.x, bb.max.y, bb.max.z),
+        new THREE.Vector3(bb.min.x, bb.max.y, bb.max.z),
+      ];
+
+      for (const corner of corners) {
+        tmp.set(corner.x - center.x, corner.y - center.y, corner.z - center.z).applyMatrix4(matrix);
+        points2d.push(new THREE.Vector2(tmp.x, tmp.y));
       }
     }
 
@@ -203,51 +178,24 @@ export function SATHoverPicker({
     return hullData;
   }, [getModelTransform, getModelGeometry, getSupportLocalPoints, getHullCacheKey]);
 
-  // Project polygon onto axis and return min/max
-  const projectPolygon = useCallback((poly: THREE.Vector2[], center: THREE.Vector2, axis: THREE.Vector2) => {
-    let min = Infinity;
-    let max = -Infinity;
-    for (const p of poly) {
-      const dot = (p.x + center.x) * axis.x + (p.y + center.y) * axis.y;
-      min = Math.min(min, dot);
-      max = Math.max(max, dot);
-    }
-    return { min, max };
-  }, []);
-
-  // Get SAT axes from polygon edges
-  const getAxesFromPolygon = useCallback((poly: THREE.Vector2[]) => {
-    const axes: THREE.Vector2[] = [];
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i];
-      const b = poly[(i + 1) % poly.length];
-      const edge = new THREE.Vector2(b.x - a.x, b.y - a.y);
-      if (edge.lengthSq() <= 1e-10) continue;
-      axes.push(new THREE.Vector2(-edge.y, edge.x).normalize());
-    }
-    return axes;
-  }, []);
-
-  // SAT overlap test
+  // Point-in-convex-polygon test (works for CW or CCW winding)
   const checkSATOverlap = useCallback((hullA: ModelHoverData, pointB: THREE.Vector2): boolean => {
-    const axes = getAxesFromPolygon(hullA.hull);
-    // For a point, we just need to check if it's inside the polygon
-    // Use a simple approach: point-in-polygon via cross products
+    let sawPositive = false;
+    let sawNegative = false;
+
     for (let i = 0; i < hullA.hull.length; i++) {
       const a = hullA.hull[i];
       const b = hullA.hull[(i + 1) % hullA.hull.length];
-      const edge = new THREE.Vector2(b.x - a.x, b.y - a.y);
-      const toPoint = new THREE.Vector2(pointB.x - a.x, pointB.y - a.y);
-      const cross = edge.x * toPoint.y - edge.y * toPoint.x;
-      // All cross products should have same sign for point inside
-      if (i === 0) {
-        if (cross < 0) return false; // Point on wrong side
-      } else if (cross < 0) {
-        return false;
-      }
+      const cross = ((b.x - a.x) * (pointB.y - a.y)) - ((b.y - a.y) * (pointB.x - a.x));
+
+      if (cross > 1e-6) sawPositive = true;
+      else if (cross < -1e-6) sawNegative = true;
+
+      if (sawPositive && sawNegative) return false;
     }
+
     return true;
-  }, [getAxesFromPolygon]);
+  }, []);
 
   // Convert screen cursor to world 2D
   const screenToWorld2D = useCallback((screenX: number, screenY: number): THREE.Vector2 => {
@@ -267,65 +215,71 @@ export function SATHoverPicker({
     return new THREE.Vector2(intersection.x, intersection.y);
   }, [camera, canvasSize]);
 
-  // Track cursor position
-  useEffect(() => {
-    if (!enabled) return;
+  const runHoverCheck = useCallback(() => {
+    const cursorWorld = screenToWorld2D(cursorPosRef.current.x, cursorPosRef.current.y);
 
-    const handleMouseMove = (e: MouseEvent) => {
-      cursorPosRef.current = { x: e.clientX, y: e.clientY };
-    };
+    let hoveredModelId: string | null = null;
+    let minDist = Infinity;
 
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [enabled]);
+    for (const modelId of visibleModelIds) {
+      const hull = getOrBuildHull(modelId);
+      if (!hull) continue;
 
-  // Main hover detection loop
-  useEffect(() => {
-    if (!enabled) return;
-
-    const checkHover = () => {
-      // Convert cursor to world 2D
-      const cursorWorld = screenToWorld2D(cursorPosRef.current.x, cursorPosRef.current.y);
-
-      // Test all visible models
-      let hoveredModelId: string | null = null;
-      let minDist = Infinity;
-
-      for (const modelId of visibleModelIds) {
-        const hull = getOrBuildHull(modelId);
-        if (!hull) continue;
-
-        if (checkSATOverlap(hull, cursorWorld)) {
-          // Multiple hits: pick closest to cursor
-          const dist = cursorWorld.distanceTo(hull.center);
-          if (dist < minDist) {
-            minDist = dist;
-            hoveredModelId = modelId;
-          }
+      if (checkSATOverlap(hull, cursorWorld)) {
+        const dist = cursorWorld.distanceToSquared(hull.center);
+        if (dist < minDist) {
+          minDist = dist;
+          hoveredModelId = modelId;
         }
       }
+    }
 
-      // Dispatch event if hover changed
-      if (hoveredModelId !== lastHoveredModelIdRef.current) {
-        lastHoveredModelIdRef.current = hoveredModelId;
-        window.dispatchEvent(new CustomEvent('sat-hover-model-changed', {
-          detail: { modelId: hoveredModelId },
-        }));
-      }
-    };
+    if (hoveredModelId !== lastHoveredModelIdRef.current) {
+      lastHoveredModelIdRef.current = hoveredModelId;
+      window.dispatchEvent(new CustomEvent('sat-hover-model-changed', {
+        detail: { modelId: hoveredModelId },
+      }));
+    }
+  }, [checkSATOverlap, getOrBuildHull, screenToWorld2D, visibleModelIds]);
 
-    // Check hover on animation frame
-    const frameId = setInterval(checkHover, 16); // ~60fps
-
-    return () => clearInterval(frameId);
-  }, [enabled, visibleModelIds, getOrBuildHull, checkSATOverlap, screenToWorld2D]);
-
-  // Clear cache when models change
+  // Event-driven hover checks (no continuous polling)
   useEffect(() => {
     if (!enabled) {
       hullCacheRef.current.clear();
+      if (lastHoveredModelIdRef.current !== null) {
+        lastHoveredModelIdRef.current = null;
+        window.dispatchEvent(new CustomEvent('sat-hover-model-changed', {
+          detail: { modelId: null },
+        }));
+      }
+      return;
     }
-  }, [enabled, visibleModelIds]);
+
+    let rafId: number | null = null;
+    const scheduleCheck = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        runHoverCheck();
+      });
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      cursorPosRef.current = { x: event.clientX, y: event.clientY };
+      scheduleCheck();
+    };
+
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+    // Run once on enable/model-change so state is never stale.
+    scheduleCheck();
+
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [enabled, runHoverCheck, visibleModelIds]);
 
   return null;
 }

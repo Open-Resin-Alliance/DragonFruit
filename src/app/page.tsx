@@ -2210,6 +2210,14 @@ export default function Home() {
 
   React.useEffect(() => {
     let cancelled = false;
+
+    if (!shouldCalculateVolumes) {
+      setIsPrintingEstimatedResinBusy(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const visibleModels = scene.models.filter((model) => model.visible);
 
     if (visibleModels.length === 0) {
@@ -2250,7 +2258,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [getOrComputeBaseResinMl, scene.models, supportAndRaftResinMl]);
+  }, [getOrComputeBaseResinMl, scene.models, shouldCalculateVolumes, supportAndRaftResinMl]);
 
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);

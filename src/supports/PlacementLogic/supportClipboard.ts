@@ -6,6 +6,10 @@ import {
   setSupportBraceSnapshot,
 } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
 import type { SupportBrace, SupportBraceState } from '@/supports/SupportTypes/SupportBrace/types';
+import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
+import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
+import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
+import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { generateUuid } from '@/utils/uuid';
 
 type SupportClipboardPayload = {
@@ -20,6 +24,13 @@ type SupportClipboardPayload = {
   supportBraceRoots: Roots[];
   supportBraceKnots: Knot[];
   supportBraces: SupportBrace[];
+};
+
+export type SupportModelBounds2D = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
 };
 
 function clonePlain<T>(value: T): T {
@@ -452,6 +463,117 @@ function mergeSupportClipboardPayload(
 
 export function captureModelSupportsToClipboard(modelId: string): SupportClipboardPayload | null {
   return extractSupportClipboardPayload(modelId);
+}
+
+export function estimateSupportBoundsForModel(modelId: string): SupportModelBounds2D | null {
+  if (!modelId) return null;
+
+  const state = getSnapshot();
+  const supportBraceState = getSupportBraceSnapshot();
+  const raftSettings = getRaftSettings();
+
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let hasAny = false;
+
+  const expand = (pos?: { x: number; y: number; z: number } | null, radius = 0) => {
+    if (!pos) return;
+    const r = Math.max(0, radius);
+    minX = Math.min(minX, pos.x - r);
+    maxX = Math.max(maxX, pos.x + r);
+    minY = Math.min(minY, pos.y - r);
+    maxY = Math.max(maxY, pos.y + r);
+    hasAny = true;
+  };
+
+  const roots = Object.values(state.roots).filter((root) => root.modelId === modelId);
+  roots.forEach((root) => {
+    const rr = Math.max(0.001, root.diameter / 2);
+    expand(root.transform.pos, rr);
+    expand({
+      x: root.transform.pos.x,
+      y: root.transform.pos.y,
+      z: root.transform.pos.z + Math.max(0, root.diskHeight) + Math.max(0, root.coneHeight),
+    }, rr);
+  });
+
+  if (raftSettings.bottomMode !== 'off' && roots.length > 0) {
+    const circles: SupportBaseCircle[] = roots.map((root) => ({
+      x: root.transform.pos.x,
+      y: root.transform.pos.y,
+      r: root.diameter / 2,
+    }));
+
+    const chamferInset = raftSettings.bottomMode === 'line'
+      ? Math.max(0, raftSettings.lineHeightMm) * Math.tan((Math.PI / 180) * (90 - Math.min(90, Math.max(45, raftSettings.chamferAngle))))
+      : 0;
+
+    const baseProfile = computeFootprint(circles, {
+      marginMm: 0.2 + chamferInset,
+      samplesPerCircle: 24,
+    });
+
+    if (baseProfile && baseProfile.length >= 3) {
+      const outerProfile = raftSettings.wallEnabled
+        ? computeRaftOuterBoundary(baseProfile, raftSettings)
+        : baseProfile;
+      outerProfile.forEach((point) => expand({ x: point.x, y: point.y, z: 0 }, 0));
+    }
+  }
+
+  Object.values(state.knots)
+    .filter((knot) => knot.modelId === modelId)
+    .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
+
+  Object.values(supportBraceState.knots)
+    .filter((knot) => knot.modelId === modelId)
+    .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
+
+  const expandSegments = (segments: Array<any>) => {
+    segments.forEach((segment) => {
+      expand(segment.topJoint?.pos, Math.max(0.001, (segment.topJoint?.diameter ?? segment.diameter) / 2));
+      expand(segment.bottomJoint?.pos, Math.max(0.001, (segment.bottomJoint?.diameter ?? segment.diameter) / 2));
+    });
+  };
+
+  Object.values(state.trunks).filter((trunk) => trunk.modelId === modelId).forEach((trunk) => {
+    expandSegments(trunk.segments as any[]);
+    if (trunk.contactCone) {
+      expand(trunk.contactCone.pos, Math.max(0.001, trunk.contactCone.profile.contactDiameterMm / 2));
+    }
+  });
+
+  Object.values(state.branches).filter((branch) => branch.modelId === modelId).forEach((branch) => {
+    expandSegments(branch.segments as any[]);
+    if (branch.contactCone) {
+      expand(branch.contactCone.pos, Math.max(0.001, branch.contactCone.profile.contactDiameterMm / 2));
+    }
+  });
+
+  Object.values(state.leaves).filter((leaf) => leaf.modelId === modelId).forEach((leaf) => {
+    if (!leaf.contactCone) return;
+    expand(leaf.contactCone.pos, Math.max(0.001, leaf.contactCone.profile.contactDiameterMm / 2));
+  });
+
+  Object.values(state.twigs).filter((twig) => twig.modelId === modelId).forEach((twig) => {
+    expandSegments(twig.segments as any[]);
+    expand(twig.contactDiskA.pos, Math.max(0.001, twig.contactDiskA.contactDiameterMm / 2));
+    expand(twig.contactDiskB.pos, Math.max(0.001, twig.contactDiskB.contactDiameterMm / 2));
+  });
+
+  Object.values(state.sticks).filter((stick) => stick.modelId === modelId).forEach((stick) => {
+    expandSegments(stick.segments as any[]);
+    expand(stick.contactConeA.pos, Math.max(0.001, stick.contactConeA.profile.contactDiameterMm / 2));
+    expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
+  });
+
+  Object.values(supportBraceState.supportBraces)
+    .filter((supportBrace) => supportBrace.modelId === modelId)
+    .forEach((supportBrace) => expandSegments(supportBrace.segments as any[]));
+
+  return hasAny ? { minX, maxX, minY, maxY } : null;
 }
 
 export function pasteModelSupportsFromClipboard(
