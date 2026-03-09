@@ -181,7 +181,7 @@ describe('LysConverter', () => {
         assert.ok(hostedByTrunk, 'Hinted knot should remain attached to a real trunk segment');
     });
 
-    it('should convert grounded single-parent supports with explicit parent hint into support braces', () => {
+    it('should convert grounded single-parent supports with explicit parent hint into kickstands', () => {
         const SUPPORT_BRACE_DATA = {
             objects: {
                 present: {
@@ -236,14 +236,14 @@ describe('LysConverter', () => {
         const result = LysConverter.convert(SUPPORT_BRACE_DATA as any, createDefaultSettings());
 
         assert.strictEqual(result.trunks.length, 1, 'Expected one root trunk host');
-        assert.strictEqual(result.branches.length, 0, 'Support brace candidate should not import as branch');
-        assert.strictEqual(result.leaves.length, 0, 'Support brace candidate should not import as leaf');
-        assert.strictEqual(result.supportBraces?.length ?? 0, 1, 'Expected one imported support brace build');
+        assert.strictEqual(result.branches.length, 0, 'Kickstand candidate should not import as branch');
+        assert.strictEqual(result.leaves.length, 0, 'Kickstand candidate should not import as leaf');
+        assert.strictEqual(result.kickstands?.length ?? 0, 1, 'Expected one imported kickstand build');
 
-        const build = result.supportBraces![0];
-        assert.ok(build.supportBrace.segments.length >= 1, 'Support brace should include generated segments');
-        assert.strictEqual(build.hostKnot.parentShaftId.length > 0, true, 'Support brace host knot should target a host segment id');
-        assert.strictEqual(Math.abs(build.root.transform.pos.z) < 1e-6, true, 'Support brace root should remain grounded on plate');
+        const build = result.kickstands![0];
+        assert.ok(build.kickstand.segments.length >= 1, 'Kickstand should include generated segments');
+        assert.strictEqual(build.hostKnot.parentShaftId.length > 0, true, 'Kickstand host knot should target a host segment id');
+        assert.strictEqual(Math.abs(build.root.transform.pos.z) < 1e-6, true, 'Kickstand root should remain grounded on plate');
     });
 
     it('should correctly convert Braces (Type 0)', () => {

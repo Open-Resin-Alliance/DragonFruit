@@ -5,8 +5,8 @@ import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { addSupportBrace, getSupportBraceSnapshot, reassignAllSupportBraceModelIds, removeSupportBrace, resetSupportBraceStore, transformAllSupportBraces, transformSupportBracesForModel, updateSupportBrace } from './SupportTypes/SupportBrace/supportBraceStore';
-import type { SupportBrace, SupportBraceBuildResult } from './SupportTypes/SupportBrace/types';
+import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
+import type { Kickstand, KickstandBuildResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
@@ -821,8 +821,8 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
         notify();
     }
 
-    const supportBraceChanged = reassignAllSupportBraceModelIds(modelId);
-    return changed || supportBraceChanged;
+    const kickstandChanged = reassignAllKickstandModelIds(modelId);
+    return changed || kickstandChanged;
 }
 
 export function setSnapshot(next: SupportState) {
@@ -1318,7 +1318,7 @@ export function transformSupportsForModel(
         notify();
     }
 
-    transformSupportBracesForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds, preserveRootZ);
+    transformKickstandsForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds, preserveRootZ);
 }
 
 export function transformAllSupportsForSingleModel(
@@ -1444,7 +1444,7 @@ export function transformAllSupportsForSingleModel(
     };
     notify();
 
-    transformAllSupportBraces(deltaMatrix, preserveRootZ);
+    transformAllKickstands(deltaMatrix, preserveRootZ);
 }
 
 export function removeRootById(rootId: string): Roots | null {
@@ -1519,9 +1519,9 @@ export function toggleSegmentCurve(segmentId: string) {
     let targetBranchId: string | null = null;
     let targetTwigId: string | null = null;
     let targetStickId: string | null = null;
-    let targetSupportBraceId: string | null = null;
+    let targetKickstandId: string | null = null;
     let targetSegmentIndex = -1;
-    let container: Trunk | Branch | Twig | Stick | SupportBrace | null = null;
+    let container: Trunk | Branch | Twig | Stick | Kickstand | null = null;
 
     // Search Trunks
     for (const t of Object.values(state.trunks)) {
@@ -1573,15 +1573,15 @@ export function toggleSegmentCurve(segmentId: string) {
         }
     }
 
-    // Search Support Braces if not found
+    // Search Kickstands if not found
     if (!container) {
-        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
-        for (const supportBrace of supportBraces) {
-            const idx = supportBrace.segments.findIndex(s => s.id === segmentId);
+        const kickstands = Object.values(getKickstandSnapshot().kickstands);
+        for (const kickstand of kickstands) {
+            const idx = kickstand.segments.findIndex(s => s.id === segmentId);
             if (idx !== -1) {
-                targetSupportBraceId = supportBrace.id;
+                targetKickstandId = kickstand.id;
                 targetSegmentIndex = idx;
-                container = supportBrace;
+                container = kickstand;
                 break;
             }
         }
@@ -1617,8 +1617,8 @@ export function toggleSegmentCurve(segmentId: string) {
                 } else {
                     startPos = new THREE.Vector3();
                 }
-            } else if (targetSupportBraceId) {
-                const root = state.roots[(newContainer as SupportBrace).rootId];
+            } else if (targetKickstandId) {
+                const root = state.roots[(newContainer as Kickstand).rootId];
                 if (root) {
                     const startZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
                     startPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, startZ);
@@ -1645,8 +1645,8 @@ export function toggleSegmentCurve(segmentId: string) {
         let endPos: THREE.Vector3;
         if (segment.topJoint) {
             endPos = toVector3(segment.topJoint.pos);
-        } else if (targetSupportBraceId) {
-            const hostKnot = state.knots[(newContainer as SupportBrace).hostKnotId];
+        } else if (targetKickstandId) {
+            const hostKnot = state.knots[(newContainer as Kickstand).hostKnotId];
             endPos = hostKnot ? toVector3(hostKnot.pos) : startPos.clone().add(new THREE.Vector3(0, 0, 10));
         } else if ((newContainer as Trunk).contactCone) {
             const cone = (newContainer as Trunk).contactCone!;
@@ -1694,14 +1694,14 @@ export function toggleSegmentCurve(segmentId: string) {
         updateTwig(newContainer as Twig);
     } else if (targetStickId) {
         updateStick(newContainer as Stick);
-    } else if (targetSupportBraceId) {
-        updateSupportBrace(newContainer as SupportBrace);
+    } else if (targetKickstandId) {
+        updateKickstand(newContainer as Kickstand);
     }
 }
 
 export function resetStore() {
     state = { ...initialState };
-    resetSupportBraceStore();
+    resetKickstandStore();
     notify();
 }
 
@@ -1710,7 +1710,7 @@ export function resetStore() {
  */
 export function loadFromLychee(data: DragonfruitImportFormat) {
     // Reset first
-    resetSupportBraceStore();
+    resetKickstandStore();
 
     const newState: SupportState = {
         roots: {},
@@ -1774,8 +1774,8 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
         });
     }
 
-    for (const supportBraceBuild of data.supportBraces ?? []) {
-        addSupportBrace(supportBraceBuild);
+    for (const kickstandBuild of data.kickstands ?? []) {
+        addKickstand(kickstandBuild);
     }
 
     const normalized = normalizeLoadedKnotAndLeafGeometry(newState);
@@ -1792,7 +1792,7 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
         sticks: Object.keys(state.sticks).length,
         braces: Object.keys(state.braces).length,
         knots: Object.keys(state.knots).length,
-        supportBraces: Object.keys(getSupportBraceSnapshot().supportBraces).length,
+        kickstands: Object.keys(getKickstandSnapshot().kickstands).length,
     });
     notify();
 }
@@ -1803,7 +1803,7 @@ export function setSelectedId(id: string | null) {
     let category: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | null = null;
 
     if (id) {
-        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
+        const kickstands = Object.values(getKickstandSnapshot().kickstands);
 
         if (id.startsWith('braceSegment:')) category = 'segment';
         if (state.roots[id]) category = 'root';
@@ -1813,7 +1813,7 @@ export function setSelectedId(id: string | null) {
         else if (state.twigs[id]) category = 'twig';
         else if (state.sticks[id]) category = 'stick';
         else if (state.braces[id]) category = 'brace';
-        else if (supportBraces.some((supportBrace) => supportBrace.id === id)) category = 'brace';
+        else if (kickstands.some((kickstand) => kickstand.id === id)) category = 'brace';
         else if (state.knots[id]) category = 'knot';
         else {
             // Check for joints inside trunks
@@ -1847,8 +1847,8 @@ export function setSelectedId(id: string | null) {
             }
 
             if (!category) {
-                for (const supportBrace of supportBraces) {
-                    const hasJoint = supportBrace.segments.some(s => s.topJoint?.id === id || s.bottomJoint?.id === id);
+                for (const kickstand of kickstands) {
+                    const hasJoint = kickstand.segments.some(s => s.topJoint?.id === id || s.bottomJoint?.id === id);
                     if (hasJoint) {
                         foundJoint = true;
                         break;
@@ -1927,8 +1927,8 @@ export function setSelectedId(id: string | null) {
             }
 
             if (!category) {
-                for (const supportBrace of supportBraces) {
-                    if (supportBrace.segments.some(s => s.id === id)) {
+                for (const kickstand of kickstands) {
+                    if (kickstand.segments.some(s => s.id === id)) {
                         category = 'segment';
                         break;
                     }
@@ -2240,7 +2240,7 @@ export function removeBrace(braceId: string): { brace: Brace; startKnot: Knot | 
     return snapshots;
 }
 
-export function removeBranch(branchId: string): { branches: Branch[]; braces: Brace[]; supportBraces: SupportBraceBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
+export function removeBranch(branchId: string): { branches: Branch[]; braces: Brace[]; kickstands: KickstandBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
     const rootBranch = state.branches[branchId];
     if (!rootBranch) return null;
 
@@ -2302,13 +2302,13 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
         }
     }
 
-    const supportBraceState = getSupportBraceSnapshot();
-    const supportBraceIdsToRemove = new Set<string>();
-    for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-        if (branchSegmentIds.has(supportBrace.hostSegmentId) || knotIdsToRemove.has(supportBrace.hostKnotId)) {
-            supportBraceIdsToRemove.add(supportBrace.id);
-            if (supportBrace.hostKnotId) {
-                knotIdsToRemove.add(supportBrace.hostKnotId);
+    const kickstandState = getKickstandSnapshot();
+    const kickstandIdsToRemove = new Set<string>();
+    for (const kickstand of Object.values(kickstandState.kickstands)) {
+        if (branchSegmentIds.has(kickstand.hostSegmentId) || knotIdsToRemove.has(kickstand.hostKnotId)) {
+            kickstandIdsToRemove.add(kickstand.id);
+            if (kickstand.hostKnotId) {
+                knotIdsToRemove.add(kickstand.hostKnotId);
             }
         }
     }
@@ -2316,34 +2316,34 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
     const snapshots = {
         branches: Array.from(branchIdsToRemove).map((id) => deepClone(state.branches[id])).filter(Boolean),
         braces: Array.from(braceIdsToRemove).map((id) => deepClone(state.braces[id])).filter(Boolean),
-        supportBraces: [] as SupportBraceBuildResult[],
+        kickstands: [] as KickstandBuildResult[],
         leaves: Array.from(leafIdsToRemove).map((id) => deepClone(state.leaves[id])).filter(Boolean),
         knots: Array.from(knotIdsToRemove).map((id) => deepClone(state.knots[id])).filter(Boolean),
     };
 
-    const supportBraceRootIdsToRemove = new Set<string>();
-    for (const supportBraceId of supportBraceIdsToRemove) {
-        const currentSupportBraceState = getSupportBraceSnapshot();
-        const supportBrace = currentSupportBraceState.supportBraces[supportBraceId];
-        if (!supportBrace) continue;
+    const kickstandRootIdsToRemove = new Set<string>();
+    for (const kickstandId of kickstandIdsToRemove) {
+        const currentKickstandState = getKickstandSnapshot();
+        const kickstand = currentKickstandState.kickstands[kickstandId];
+        if (!kickstand) continue;
 
-        supportBraceRootIdsToRemove.add(supportBrace.rootId);
-        knotIdsToRemove.add(supportBrace.hostKnotId);
+        kickstandRootIdsToRemove.add(kickstand.rootId);
+        knotIdsToRemove.add(kickstand.hostKnotId);
 
-        const root = currentSupportBraceState.roots[supportBrace.rootId];
-        const hostKnot = currentSupportBraceState.knots[supportBrace.hostKnotId] ?? state.knots[supportBrace.hostKnotId];
+        const root = currentKickstandState.roots[kickstand.rootId];
+        const hostKnot = currentKickstandState.knots[kickstand.hostKnotId] ?? state.knots[kickstand.hostKnotId];
 
         if (root && hostKnot) {
-            snapshots.supportBraces.push({
-                supportBrace: deepClone(supportBrace),
+            snapshots.kickstands.push({
+                kickstand: deepClone(kickstand),
                 root: deepClone(root),
                 hostKnot: deepClone(hostKnot),
             });
-            supportBraceRootIdsToRemove.add(root.id);
+            kickstandRootIdsToRemove.add(root.id);
             knotIdsToRemove.add(hostKnot.id);
         }
 
-        removeSupportBrace(supportBraceId);
+        removeKickstand(kickstandId);
     }
 
     const nextBranches = { ...state.branches };
@@ -2367,9 +2367,9 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
     }
 
     let nextRoots = state.roots;
-    if (supportBraceRootIdsToRemove.size > 0) {
+    if (kickstandRootIdsToRemove.size > 0) {
         const updatedRoots: Record<string, Roots> = { ...state.roots };
-        for (const rootId of supportBraceRootIdsToRemove) {
+        for (const rootId of kickstandRootIdsToRemove) {
             delete updatedRoots[rootId];
         }
         nextRoots = updatedRoots;
@@ -2380,10 +2380,10 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
     if (
         (nextSelectedId && branchIdsToRemove.has(nextSelectedId)) ||
         (nextSelectedId && braceIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && supportBraceIdsToRemove.has(nextSelectedId)) ||
+        (nextSelectedId && kickstandIdsToRemove.has(nextSelectedId)) ||
         (nextSelectedId && leafIdsToRemove.has(nextSelectedId)) ||
         (nextSelectedId && knotIdsToRemove.has(nextSelectedId)) ||
-        (nextSelectedId && supportBraceRootIdsToRemove.has(nextSelectedId))
+        (nextSelectedId && kickstandRootIdsToRemove.has(nextSelectedId))
     ) {
         nextSelectedId = null;
         nextSelectedCategory = null;
@@ -2547,7 +2547,7 @@ export function removeLeaf(leafId: string): { leaf: Leaf; knot: Knot | null } | 
 
 export function removeTrunk(
     trunkId: string
-): { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; supportBraces: SupportBraceBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
+): { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; kickstands: KickstandBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
     const existingTrunk = state.trunks[trunkId];
     if (!existingTrunk) return null;
 
@@ -2578,22 +2578,22 @@ export function removeTrunk(
         }
     }
 
-    const snapshots: { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; supportBraces: SupportBraceBuildResult[]; leaves: Leaf[]; knots: Knot[] } = {
+    const snapshots: { trunk: Trunk; root: Roots | null; branches: Branch[]; braces: Brace[]; kickstands: KickstandBuildResult[]; leaves: Leaf[]; knots: Knot[] } = {
         trunk: deepClone(existingTrunk),
         root: null,
         branches: [],
         braces: [],
-        supportBraces: [],
+        kickstands: [],
         leaves: [],
         knots: [],
     };
 
     const seenBranchIds = new Set<string>();
     const seenBraceIds = new Set<string>();
-    const seenSupportBraceIds = new Set<string>();
+    const seenKickstandIds = new Set<string>();
     const seenLeafIds = new Set<string>();
     const seenKnotIds = new Set<string>();
-    const supportBraceRootIdsToRemove = new Set<string>();
+    const kickstandRootIdsToRemove = new Set<string>();
 
     for (const branchId of branchIdsToRemove) {
         const removed = removeBranch(branchId);
@@ -2608,12 +2608,12 @@ export function removeTrunk(
             seenBraceIds.add(br.id);
             snapshots.braces.push(br);
         }
-        for (const supportBraceBuild of removed.supportBraces ?? []) {
-            if (!supportBraceBuild || seenSupportBraceIds.has(supportBraceBuild.supportBrace.id)) continue;
-            seenSupportBraceIds.add(supportBraceBuild.supportBrace.id);
-            snapshots.supportBraces.push(supportBraceBuild);
-            supportBraceRootIdsToRemove.add(supportBraceBuild.root.id);
-            seenKnotIds.add(supportBraceBuild.hostKnot.id);
+        for (const kickstandBuild of removed.kickstands ?? []) {
+            if (!kickstandBuild || seenKickstandIds.has(kickstandBuild.kickstand.id)) continue;
+            seenKickstandIds.add(kickstandBuild.kickstand.id);
+            snapshots.kickstands.push(kickstandBuild);
+            kickstandRootIdsToRemove.add(kickstandBuild.root.id);
+            seenKnotIds.add(kickstandBuild.hostKnot.id);
         }
         for (const l of removed.leaves ?? []) {
             if (!l || seenLeafIds.has(l.id)) continue;
@@ -2657,43 +2657,43 @@ export function removeTrunk(
         }
     }
 
-    const supportBraceState = getSupportBraceSnapshot();
-    const supportBraceIdsToRemove = new Set<string>();
-    for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-        if (trunkSegmentIds.has(supportBrace.hostSegmentId) || trunkHostedKnotIds.has(supportBrace.hostKnotId)) {
-            supportBraceIdsToRemove.add(supportBrace.id);
+    const kickstandState = getKickstandSnapshot();
+    const kickstandIdsToRemove = new Set<string>();
+    for (const kickstand of Object.values(kickstandState.kickstands)) {
+        if (trunkSegmentIds.has(kickstand.hostSegmentId) || trunkHostedKnotIds.has(kickstand.hostKnotId)) {
+            kickstandIdsToRemove.add(kickstand.id);
         }
     }
 
-    for (const supportBraceId of supportBraceIdsToRemove) {
-        const currentSupportBraceState = getSupportBraceSnapshot();
-        const supportBrace = currentSupportBraceState.supportBraces[supportBraceId];
-        if (!supportBrace) continue;
+    for (const kickstandId of kickstandIdsToRemove) {
+        const currentKickstandState = getKickstandSnapshot();
+        const kickstand = currentKickstandState.kickstands[kickstandId];
+        if (!kickstand) continue;
 
-        supportBraceRootIdsToRemove.add(supportBrace.rootId);
-        if (!seenKnotIds.has(supportBrace.hostKnotId) && state.knots[supportBrace.hostKnotId]) {
-            seenKnotIds.add(supportBrace.hostKnotId);
-            snapshots.knots.push(deepClone(state.knots[supportBrace.hostKnotId]));
+        kickstandRootIdsToRemove.add(kickstand.rootId);
+        if (!seenKnotIds.has(kickstand.hostKnotId) && state.knots[kickstand.hostKnotId]) {
+            seenKnotIds.add(kickstand.hostKnotId);
+            snapshots.knots.push(deepClone(state.knots[kickstand.hostKnotId]));
         }
 
-        const root = currentSupportBraceState.roots[supportBrace.rootId];
-        const hostKnot = currentSupportBraceState.knots[supportBrace.hostKnotId] ?? state.knots[supportBrace.hostKnotId];
+        const root = currentKickstandState.roots[kickstand.rootId];
+        const hostKnot = currentKickstandState.knots[kickstand.hostKnotId] ?? state.knots[kickstand.hostKnotId];
 
-        if (root && hostKnot && !seenSupportBraceIds.has(supportBrace.id)) {
-            seenSupportBraceIds.add(supportBrace.id);
-            snapshots.supportBraces.push({
-                supportBrace: deepClone(supportBrace),
+        if (root && hostKnot && !seenKickstandIds.has(kickstand.id)) {
+            seenKickstandIds.add(kickstand.id);
+            snapshots.kickstands.push({
+                kickstand: deepClone(kickstand),
                 root: deepClone(root),
                 hostKnot: deepClone(hostKnot),
             });
-            supportBraceRootIdsToRemove.add(root.id);
+            kickstandRootIdsToRemove.add(root.id);
             if (!seenKnotIds.has(hostKnot.id)) {
                 seenKnotIds.add(hostKnot.id);
                 snapshots.knots.push(deepClone(hostKnot));
             }
         }
 
-        removeSupportBrace(supportBraceId);
+        removeKickstand(kickstandId);
     }
 
     const remainingKnotsToRemove: string[] = [];
@@ -2718,9 +2718,9 @@ export function removeTrunk(
 
     const { [trunkId]: _, ...remainingTrunks } = state.trunks;
     let nextRoots = state.roots;
-    if (supportBraceRootIdsToRemove.size > 0) {
+    if (kickstandRootIdsToRemove.size > 0) {
         const updatedRoots: Record<string, Roots> = { ...nextRoots };
-        for (const rootId of supportBraceRootIdsToRemove) {
+        for (const rootId of kickstandRootIdsToRemove) {
             delete updatedRoots[rootId];
         }
         nextRoots = updatedRoots;
@@ -2756,7 +2756,7 @@ export function removeTrunk(
             nextSelectedId = null;
             nextSelectedCategory = null;
         }
-    } else if (state.selectedId && seenSupportBraceIds.has(state.selectedId)) {
+    } else if (state.selectedId && seenKickstandIds.has(state.selectedId)) {
         nextSelectedId = null;
         nextSelectedCategory = null;
     }
@@ -2848,9 +2848,9 @@ export function getModelIdForSupportEntityId(id: string | null | undefined): str
     if (state.sticks[id]) return state.sticks[id].modelId ?? null;
     if (state.braces[id]) return state.braces[id].modelId ?? null;
 
-    const supportBraceState = getSupportBraceSnapshot();
-    const directSupportBrace = supportBraceState.supportBraces[id];
-    if (directSupportBrace) return directSupportBrace.modelId ?? null;
+    const kickstandState = getKickstandSnapshot();
+    const directKickstand = kickstandState.kickstands[id];
+    if (directKickstand) return directKickstand.modelId ?? null;
 
     for (const trunk of Object.values(state.trunks)) {
         if (trunk.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
@@ -2882,10 +2882,10 @@ export function getModelIdForSupportEntityId(id: string | null | undefined): str
         }
     }
 
-    for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-        if (supportBrace.hostKnotId === id) return supportBrace.modelId ?? null;
-        if (supportBrace.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
-            return supportBrace.modelId ?? null;
+    for (const kickstand of Object.values(kickstandState.kickstands)) {
+        if (kickstand.hostKnotId === id) return kickstand.modelId ?? null;
+        if (kickstand.segments.some((segment) => segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
+            return kickstand.modelId ?? null;
         }
     }
 

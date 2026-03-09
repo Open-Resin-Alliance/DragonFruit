@@ -5,7 +5,7 @@ import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
-import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { generateChamferedBase } from '@/supports/Rafts/Crenelated/geometry/generateChamferedBase';
@@ -484,7 +484,7 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
 
   const out: WorldTriangle[] = [];
   const supportState = getSupportSnapshot();
-  const supportBraceState = getSupportBraceSnapshot();
+  const kickstandState = getKickstandSnapshot();
   const visibleRootIds = new Set<string>();
   const rootModelKeyById = new Map<string, string>();
 
@@ -496,11 +496,11 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
     }
   }
 
-  for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-    if (!visibleModelIds.has(supportBrace.modelId)) continue;
-    visibleRootIds.add(supportBrace.rootId);
-    if (!rootModelKeyById.has(supportBrace.rootId)) {
-      rootModelKeyById.set(supportBrace.rootId, supportBrace.modelId);
+  for (const kickstand of Object.values(kickstandState.kickstands)) {
+    if (!visibleModelIds.has(kickstand.modelId)) continue;
+    visibleRootIds.add(kickstand.rootId);
+    if (!rootModelKeyById.has(kickstand.rootId)) {
+      rootModelKeyById.set(kickstand.rootId, kickstand.modelId);
     }
   }
 
@@ -511,10 +511,10 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
       rootTopRadiusByRootId.set(trunk.rootId, Math.max(0.05, firstDiameter! * 0.5));
     }
   }
-  for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-    const firstDiameter = supportBrace.segments[0]?.diameter;
+  for (const kickstand of Object.values(kickstandState.kickstands)) {
+    const firstDiameter = kickstand.segments[0]?.diameter;
     if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
-      rootTopRadiusByRootId.set(supportBrace.rootId, Math.max(0.05, firstDiameter! * 0.5));
+      rootTopRadiusByRootId.set(kickstand.rootId, Math.max(0.05, firstDiameter! * 0.5));
     }
   }
 
@@ -639,11 +639,11 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
     appendContactConePrimitive(out, leaf.contactCone as any);
   }
 
-  for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-    const modelId = supportBrace.modelId;
+  for (const kickstand of Object.values(kickstandState.kickstands)) {
+    const modelId = kickstand.modelId;
     if (!modelId || !visibleModelIds.has(modelId)) continue;
-    const root = supportBraceState.roots[supportBrace.rootId];
-    const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
+    const root = kickstandState.roots[kickstand.rootId];
+    const hostKnot = kickstandState.knots[kickstand.hostKnotId];
     if (!root || !hostKnot) continue;
 
     let currentStart = new THREE.Vector3(
@@ -652,7 +652,7 @@ function buildSupportAndRaftWorldTriangles(visibleModelIds: Set<string>): WorldT
       root.transform.pos.z + root.diskHeight + root.coneHeight,
     );
 
-    for (const seg of supportBrace.segments) {
+    for (const seg of kickstand.segments) {
       const endPoint = seg.topJoint
         ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
         : new THREE.Vector3(hostKnot.pos.x, hostKnot.pos.y, hostKnot.pos.z);

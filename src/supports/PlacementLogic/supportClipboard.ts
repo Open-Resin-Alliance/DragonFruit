@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { getSnapshot, setSnapshot, transformSupportsForModel } from '@/supports/state';
 import type { Brace, Branch, Knot, Leaf, Roots, Stick, SupportState, Trunk, Twig } from '@/supports/types';
 import {
-  getSupportBraceSnapshot,
-  setSupportBraceSnapshot,
-} from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
-import type { SupportBrace, SupportBraceState } from '@/supports/SupportTypes/SupportBrace/types';
+  getKickstandSnapshot,
+  setKickstandSnapshot,
+} from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import type { Kickstand, KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
@@ -21,9 +21,9 @@ type SupportClipboardPayload = {
   sticks: Stick[];
   braces: Brace[];
   knots: Knot[];
-  supportBraceRoots: Roots[];
-  supportBraceKnots: Knot[];
-  supportBraces: SupportBrace[];
+  kickstandRoots: Roots[];
+  kickstandKnots: Knot[];
+  kickstands: Kickstand[];
 };
 
 export type SupportModelBounds2D = {
@@ -59,7 +59,7 @@ function remapSupportJoint<T extends { id: string; pos: { x: number; y: number; 
 
 function extractSupportClipboardPayload(modelId: string): SupportClipboardPayload | null {
   const state = getSnapshot();
-  const supportBraceState = getSupportBraceSnapshot();
+  const kickstandState = getKickstandSnapshot();
 
   const roots = Object.values(state.roots).filter((item) => item.modelId === modelId).map(clonePlain);
   const trunks = Object.values(state.trunks).filter((item) => item.modelId === modelId).map(clonePlain);
@@ -69,16 +69,16 @@ function extractSupportClipboardPayload(modelId: string): SupportClipboardPayloa
   const sticks = Object.values(state.sticks).filter((item) => item.modelId === modelId).map(clonePlain);
   const braces = Object.values(state.braces).filter((item) => item.modelId === modelId).map(clonePlain);
 
-  const supportBraces = Object.values(supportBraceState.supportBraces)
+  const kickstands = Object.values(kickstandState.kickstands)
     .filter((item) => item.modelId === modelId)
     .map(clonePlain);
-  const supportBraceRootIds = new Set(supportBraces.map((item) => item.rootId));
-  const supportBraceKnotIds = new Set(supportBraces.map((item) => item.hostKnotId));
-  const supportBraceRoots = Object.values(supportBraceState.roots)
-    .filter((item) => supportBraceRootIds.has(item.id))
+  const kickstandRootIds = new Set(kickstands.map((item) => item.rootId));
+  const kickstandKnotIds = new Set(kickstands.map((item) => item.hostKnotId));
+  const kickstandRoots = Object.values(kickstandState.roots)
+    .filter((item) => kickstandRootIds.has(item.id))
     .map(clonePlain);
-  const supportBraceKnots = Object.values(supportBraceState.knots)
-    .filter((item) => supportBraceKnotIds.has(item.id))
+  const kickstandKnots = Object.values(kickstandState.knots)
+    .filter((item) => kickstandKnotIds.has(item.id))
     .map(clonePlain);
 
   const includedSegmentIds = new Set<string>();
@@ -123,9 +123,9 @@ function extractSupportClipboardPayload(modelId: string): SupportClipboardPayloa
     || sticks.length > 0
     || braces.length > 0
     || knots.length > 0
-    || supportBraces.length > 0
-    || supportBraceRoots.length > 0
-    || supportBraceKnots.length > 0;
+    || kickstands.length > 0
+    || kickstandRoots.length > 0
+    || kickstandKnots.length > 0;
 
   if (!hasData) return null;
 
@@ -138,18 +138,18 @@ function extractSupportClipboardPayload(modelId: string): SupportClipboardPayloa
     sticks,
     braces,
     knots,
-    supportBraceRoots,
-    supportBraceKnots,
-    supportBraces,
+    kickstandRoots,
+    kickstandKnots,
+    kickstands,
   };
 }
 
 function mergeSupportClipboardPayload(
   payload: SupportClipboardPayload,
   targetModelId: string,
-): { mergedState: SupportState; mergedSupportBraceState: SupportBraceState } {
+): { mergedState: SupportState; mergedKickstandState: KickstandState } {
   const state = getSnapshot();
-  const supportBraceState = getSupportBraceSnapshot();
+  const kickstandState = getKickstandSnapshot();
 
   const rootIdMap = new Map<string, string>();
   const knotIdMap = new Map<string, string>();
@@ -158,9 +158,9 @@ function mergeSupportClipboardPayload(
   const twigIdMap = new Map<string, string>();
   const stickIdMap = new Map<string, string>();
   const braceIdMap = new Map<string, string>();
-  const supportBraceRootIdMap = new Map<string, string>();
-  const supportBraceKnotIdMap = new Map<string, string>();
-  const supportBraceIdMap = new Map<string, string>();
+  const kickstandRootIdMap = new Map<string, string>();
+  const kickstandKnotIdMap = new Map<string, string>();
+  const kickstandIdMap = new Map<string, string>();
   const segmentIdMap = new Map<string, string>();
   const jointIdMap = new Map<string, string>();
 
@@ -361,9 +361,9 @@ function mergeSupportClipboardPayload(
     } as Knot;
   });
 
-  const clonedSupportBraceRoots = payload.supportBraceRoots.map((root) => {
+  const clonedKickstandRoots = payload.kickstandRoots.map((root) => {
     const id = generateUuid();
-    supportBraceRootIdMap.set(root.id, id);
+    kickstandRootIdMap.set(root.id, id);
     return {
       ...clonePlain(root),
       id,
@@ -371,9 +371,9 @@ function mergeSupportClipboardPayload(
     };
   });
 
-  const clonedSupportBraceKnots = payload.supportBraceKnots.map((knot) => {
+  const clonedKickstandKnots = payload.kickstandKnots.map((knot) => {
     const id = generateUuid();
-    supportBraceKnotIdMap.set(knot.id, id);
+    kickstandKnotIdMap.set(knot.id, id);
     return {
       ...clonePlain(knot),
       id,
@@ -381,11 +381,11 @@ function mergeSupportClipboardPayload(
     };
   });
 
-  const clonedSupportBraces = payload.supportBraces.map((supportBrace) => {
+  const clonedKickstands = payload.kickstands.map((kickstand) => {
     const id = generateUuid();
-    supportBraceIdMap.set(supportBrace.id, id);
+    kickstandIdMap.set(kickstand.id, id);
 
-    const clonedSegments = supportBrace.segments.map((segment) => {
+    const clonedSegments = kickstand.segments.map((segment) => {
       const segmentId = getOrCreateMappedId(segment.id, segmentIdMap);
       return {
         ...clonePlain(segment),
@@ -396,14 +396,14 @@ function mergeSupportClipboardPayload(
     });
 
     return {
-      ...clonePlain(supportBrace),
+      ...clonePlain(kickstand),
       id,
       modelId: targetModelId,
-      rootId: getOrCreateMappedId(supportBrace.rootId, supportBraceRootIdMap),
-      hostKnotId: getOrCreateMappedId(supportBrace.hostKnotId, supportBraceKnotIdMap),
-      hostSegmentId: getOrCreateMappedId(supportBrace.hostSegmentId, segmentIdMap),
+      rootId: getOrCreateMappedId(kickstand.rootId, kickstandRootIdMap),
+      hostKnotId: getOrCreateMappedId(kickstand.hostKnotId, kickstandKnotIdMap),
+      hostSegmentId: getOrCreateMappedId(kickstand.hostSegmentId, segmentIdMap),
       segments: clonedSegments,
-    } as SupportBrace;
+    } as Kickstand;
   });
 
   const mergedState: SupportState = {
@@ -442,23 +442,23 @@ function mergeSupportClipboardPayload(
     },
   };
 
-  const mergedSupportBraceState: SupportBraceState = {
-    ...supportBraceState,
-    supportBraces: {
-      ...supportBraceState.supportBraces,
-      ...Object.fromEntries(clonedSupportBraces.map((item) => [item.id, item])),
+  const mergedKickstandState: KickstandState = {
+    ...kickstandState,
+    kickstands: {
+      ...kickstandState.kickstands,
+      ...Object.fromEntries(clonedKickstands.map((item) => [item.id, item])),
     },
     roots: {
-      ...supportBraceState.roots,
-      ...Object.fromEntries(clonedSupportBraceRoots.map((item) => [item.id, item])),
+      ...kickstandState.roots,
+      ...Object.fromEntries(clonedKickstandRoots.map((item) => [item.id, item])),
     },
     knots: {
-      ...supportBraceState.knots,
-      ...Object.fromEntries(clonedSupportBraceKnots.map((item) => [item.id, item])),
+      ...kickstandState.knots,
+      ...Object.fromEntries(clonedKickstandKnots.map((item) => [item.id, item])),
     },
   };
 
-  return { mergedState, mergedSupportBraceState };
+  return { mergedState, mergedKickstandState };
 }
 
 export function captureModelSupportsToClipboard(modelId: string): SupportClipboardPayload | null {
@@ -469,7 +469,7 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
   if (!modelId) return null;
 
   const state = getSnapshot();
-  const supportBraceState = getSupportBraceSnapshot();
+  const kickstandState = getKickstandSnapshot();
   const raftSettings = getRaftSettings();
 
   let minX = Number.POSITIVE_INFINITY;
@@ -523,12 +523,45 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
     }
   }
 
+  const knotBelongsToModel = (knot: Knot) => {
+    const parentShaftId = knot.parentShaftId;
+    if (parentShaftId.startsWith('leafCone:')) {
+      const leafId = parentShaftId.slice('leafCone:'.length);
+      return state.leaves[leafId]?.modelId === modelId;
+    }
+    if (parentShaftId.startsWith('braceSegment:')) {
+      const braceId = parentShaftId.slice('braceSegment:'.length);
+      return state.braces[braceId]?.modelId === modelId;
+    }
+
+    for (const trunk of Object.values(state.trunks)) {
+      if (trunk.modelId === modelId && trunk.segments.some((segment) => segment.id === parentShaftId)) return true;
+    }
+    for (const branch of Object.values(state.branches)) {
+      if (branch.modelId === modelId && branch.segments.some((segment) => segment.id === parentShaftId)) return true;
+    }
+    for (const twig of Object.values(state.twigs)) {
+      if (twig.modelId === modelId && twig.segments.some((segment) => segment.id === parentShaftId)) return true;
+    }
+    for (const stick of Object.values(state.sticks)) {
+      if (stick.modelId === modelId && stick.segments.some((segment) => segment.id === parentShaftId)) return true;
+    }
+
+    return false;
+  };
+
   Object.values(state.knots)
-    .filter((knot) => knot.modelId === modelId)
+    .filter(knotBelongsToModel)
     .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
-  Object.values(supportBraceState.knots)
-    .filter((knot) => knot.modelId === modelId)
+  const kickstandHostKnotIds = new Set(
+    Object.values(kickstandState.kickstands)
+      .filter((kickstand) => kickstand.modelId === modelId)
+      .map((kickstand) => kickstand.hostKnotId),
+  );
+
+  Object.values(kickstandState.knots)
+    .filter((knot) => kickstandHostKnotIds.has(knot.id))
     .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
   const expandSegments = (segments: Array<any>) => {
@@ -569,9 +602,9 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
     expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
   });
 
-  Object.values(supportBraceState.supportBraces)
-    .filter((supportBrace) => supportBrace.modelId === modelId)
-    .forEach((supportBrace) => expandSegments(supportBrace.segments as any[]));
+  Object.values(kickstandState.kickstands)
+    .filter((kickstand) => kickstand.modelId === modelId)
+    .forEach((kickstand) => expandSegments(kickstand.segments as any[]));
 
   return hasAny ? { minX, maxX, minY, maxY } : null;
 }
@@ -591,13 +624,13 @@ export function pasteModelSupportsFromClipboard(
     + payload.twigs.length
     + payload.sticks.length
     + payload.braces.length
-    + payload.supportBraces.length;
+    + payload.kickstands.length;
 
   if (hasSupports === 0) return 0;
 
-  const { mergedState, mergedSupportBraceState } = mergeSupportClipboardPayload(payload, targetModelId);
+  const { mergedState, mergedKickstandState } = mergeSupportClipboardPayload(payload, targetModelId);
   setSnapshot(mergedState);
-  setSupportBraceSnapshot(mergedSupportBraceState);
+  setKickstandSnapshot(mergedKickstandState);
 
   transformSupportsForModel(targetModelId, sourceTransform, targetTransform);
   return hasSupports;

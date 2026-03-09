@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'r
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_ADD_SUPPORT_BRACE } from '@/supports/history/actionTypes';
+import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
 import { addKnot, addRoot, subscribe, getSnapshot, setSelectedId } from '../../state';
 import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints } from '../../SupportPrimitives/Knot/knotUtils';
@@ -10,19 +10,19 @@ import type { SnapTarget } from '../../interaction/SnappingManager';
 import { useSnapping } from '../../interaction/useSnapping';
 import { getGridSettings } from '../../Settings';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
-import { addSupportBrace, getSupportBraceSnapshot } from './supportBraceStore';
-import { clampSupportBraceHostT } from './supportBraceRules';
-import { buildSupportBraceData, toSupportBracePreviewData } from './supportBraceBuilder';
-import { getSupportBracePlacementOffsetMm } from './supportBraceSettings';
-import { supportBracePlacementStore, useSupportBracePlacementState, type SupportBracePlacementTarget } from './supportBracePlacementState';
-import type { SupportBraceHostKind } from './types';
+import { addKickstand, getKickstandSnapshot } from './kickstandStore';
+import { clampKickstandHostT } from './kickstandRules';
+import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
+import { getKickstandPlacementOffsetMm } from './kickstandSettings';
+import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
+import type { KickstandHostKind } from './types';
 import type { Vec3 } from '../../types';
 
 type DesiredBand = 'left' | 'right' | 'front';
 
-interface SupportBraceTargetMeta {
+interface KickstandTargetMeta {
     segmentId: string;
-    supportKind: SupportBraceHostKind;
+    supportKind: KickstandHostKind;
     modelId: string;
     diameterMm: number;
     minT: number;
@@ -150,7 +150,7 @@ function computeRootPos(
     preferredPoint?: Vec3 | null,
 ): Vec3 {
     const offsetDir = perpendicularDirection(path, axisPoint, cameraPos, preferredPoint);
-    const offsetMm = getSupportBracePlacementOffsetMm();
+    const offsetMm = getKickstandPlacementOffsetMm();
     const root = toVector3(axisPoint).add(offsetDir.multiplyScalar(offsetMm));
 
     return {
@@ -328,8 +328,8 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string): boolean {
         if (rootGx === gx && rootGy === gy) return true;
     }
 
-    const supportBraceSnapshot = getSupportBraceSnapshot();
-    for (const root of Object.values(supportBraceSnapshot.roots)) {
+    const kickstandSnapshot = getKickstandSnapshot();
+    for (const root of Object.values(kickstandSnapshot.roots)) {
         if (root.modelId !== modelId) continue;
         const rootGx = snapToGridIndex(root.transform.pos.x, grid.spacingMm);
         const rootGy = snapToGridIndex(root.transform.pos.y, grid.spacingMm);
@@ -345,8 +345,8 @@ function hasCtrlModifier(intersection: unknown): boolean {
     return Boolean(candidate.ctrlKey ?? candidate.nativeEvent?.ctrlKey);
 }
 
-export function SupportBracePlacementController() {
-    const { hotkeyActive } = useSupportBracePlacementState();
+export function KickstandPlacementController() {
+    const { hotkeyActive } = useKickstandPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const { camera, gl, pointer, raycaster } = useThree();
     const hoverPointBySegmentRef = useRef<Map<string, Vec3>>(new Map());
@@ -354,7 +354,7 @@ export function SupportBracePlacementController() {
     const lastPreviewSegmentIdRef = useRef<string | null>(null);
 
     const targetMetaById = useMemo(() => {
-        const map = new Map<string, SupportBraceTargetMeta>();
+        const map = new Map<string, KickstandTargetMeta>();
         const rootsById = new Map(Object.values(supportState.roots).map((root) => [root.id, root]));
         const knotsById = new Map(Object.values(supportState.knots).map((knot) => [knot.id, knot]));
 
@@ -434,13 +434,13 @@ export function SupportBracePlacementController() {
 
     const { updateSnapping, resetSnapping } = useSnapping(getTarget, getPotentialTargets);
 
-    const buildPlacementFromSnap = useCallback((meta: SupportBraceTargetMeta, t: number, snappedPos: Vec3, rootPos: Vec3): {
-        target: SupportBracePlacementTarget;
-        build: ReturnType<typeof buildSupportBraceData>;
+    const buildPlacementFromSnap = useCallback((meta: KickstandTargetMeta, t: number, snappedPos: Vec3, rootPos: Vec3): {
+        target: KickstandPlacementTarget;
+        build: ReturnType<typeof buildKickstandData>;
     } => {
-        const clampedT = clampSupportBraceHostT(t, meta.minT);
+        const clampedT = clampKickstandHostT(t, meta.minT);
 
-        const build = buildSupportBraceData({
+        const build = buildKickstandData({
             modelId: meta.modelId,
             rootPos,
             host: {
@@ -474,9 +474,9 @@ export function SupportBracePlacementController() {
         const cancelIfCtrlReleased = (event: PointerEvent) => {
             if (event.ctrlKey) return;
 
-            const snapshot = supportBracePlacementStore.getSnapshot();
+            const snapshot = kickstandPlacementStore.getSnapshot();
             if (snapshot.hotkeyActive) {
-                supportBracePlacementStore.setHotkeyActive(false);
+                kickstandPlacementStore.setHotkeyActive(false);
                 resetSnapping();
             }
         };
@@ -523,7 +523,7 @@ export function SupportBracePlacementController() {
 
     useFrame(() => {
         if (!hotkeyActive) {
-            supportBracePlacementStore.clearPreview();
+            kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
             return;
@@ -532,7 +532,7 @@ export function SupportBracePlacementController() {
         const result = updateSnapping();
 
         if (result.state !== 'locked' || !result.targetId || result.t === undefined) {
-            supportBracePlacementStore.clearPreview();
+            kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
             return;
@@ -541,7 +541,7 @@ export function SupportBracePlacementController() {
         const meta = targetMetaById.get(result.targetId);
         const path = meta?.target.pathSegment;
         if (!meta || !path) {
-            supportBracePlacementStore.clearPreview();
+            kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
             return;
@@ -552,7 +552,7 @@ export function SupportBracePlacementController() {
             lastPreviewSegmentIdRef.current = meta.segmentId;
         }
 
-        const clampedT = clampSupportBraceHostT(result.t, meta.minT);
+        const clampedT = clampKickstandHostT(result.t, meta.minT);
         const snappedPos = clampedT === result.t ? result.snappedPos : getPathPointAtT(path, clampedT);
         const hoveredPoint = hoverPointBySegmentRef.current.get(meta.segmentId);
         const preferredPoint = hoveredPoint
@@ -572,14 +572,14 @@ export function SupportBracePlacementController() {
         const nodeOccupied = isGridRootOccupied(rootPos, meta.modelId);
 
         const { target, build } = buildPlacementFromSnap(meta, clampedT, snappedPos, rootPos);
-        const previewData = toSupportBracePreviewData(build);
+        const previewData = toKickstandPreviewData(build);
         previewData.error = nodeOccupied ? 'TOO_CLOSE_TO_EXISTING' : undefined;
-        supportBracePlacementStore.setPreview(target, build, previewData);
+        kickstandPlacementStore.setPreview(target, build, previewData);
     });
 
     useEffect(() => {
         if (!hotkeyActive) {
-            supportBracePlacementStore.clearPreview();
+            kickstandPlacementStore.clearPreview();
             resetSnapping();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -591,7 +591,7 @@ export function SupportBracePlacementController() {
             const detail = (event as CustomEvent<ShaftClickDetail>).detail;
             if (!detail?.segmentId) return;
 
-            const ctrlDown = hasCtrlModifier(detail.intersection) || supportBracePlacementStore.getSnapshot().hotkeyActive;
+            const ctrlDown = hasCtrlModifier(detail.intersection) || kickstandPlacementStore.getSnapshot().hotkeyActive;
             if (!ctrlDown) return;
 
             const meta = targetMetaById.get(detail.segmentId);
@@ -606,13 +606,13 @@ export function SupportBracePlacementController() {
                 projectedT = projected.t;
                 projectedPos = projected.pos;
             } else {
-                const snapshotTarget = supportBracePlacementStore.getSnapshot().snapTarget;
+                const snapshotTarget = kickstandPlacementStore.getSnapshot().snapTarget;
                 if (!snapshotTarget || snapshotTarget.segmentId !== detail.segmentId) return;
                 projectedT = snapshotTarget.t;
                 projectedPos = snapshotTarget.pos;
             }
 
-            const clampedT = clampSupportBraceHostT(projectedT, meta.minT);
+            const clampedT = clampKickstandHostT(projectedT, meta.minT);
             if (clampedT !== projectedT) {
                 projectedPos = getPathPointAtT(path, clampedT);
             }
@@ -638,15 +638,15 @@ export function SupportBracePlacementController() {
 
             const { build } = buildPlacementFromSnap(meta, clampedT, projectedPos, rootPos);
 
-            addSupportBrace(build);
+            addKickstand(build);
             addRoot(build.root);
             addKnot(build.hostKnot);
             pushHistory({
-                type: SUPPORT_ADD_SUPPORT_BRACE,
+                type: SUPPORT_ADD_KICKSTAND,
                 payload: { build },
             });
-            setSelectedId(build.supportBrace.id);
-            supportBracePlacementStore.clearPreview();
+            setSelectedId(build.kickstand.id);
+            kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
         };

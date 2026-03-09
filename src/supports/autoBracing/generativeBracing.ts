@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { buildSupportBraceData } from '../SupportTypes/SupportBrace/supportBraceBuilder';
+import { buildKickstandData } from '../SupportTypes/Kickstand/kickstandBuilder';
 import { snapToGridIndex } from '../PlacementLogic/Grid/gridMath';
-import type { SupportBraceBuildResult, SupportBraceHostTarget, SupportBraceState } from '../SupportTypes/SupportBrace/types';
+import type { KickstandBuildResult, KickstandHostTarget, KickstandState } from '../SupportTypes/Kickstand/types';
 import type { SupportState, Trunk, Vec3, Segment, Roots } from '../types';
 import { AUTO_BRACING_HARD_RULES, type AutoBracingSettings } from './settings';
 import { getAllMeshEntriesForAutoBrace } from './meshGeometryStore';
@@ -25,21 +25,21 @@ function createVector3(v: Vec3) {
 /**
  * Ensures that any trunk over 15mm tall has at least 2-axis bracing.
  * If a trunk lacks bracing, this function calculates the placement for
- * new Support Braces to satisfy the structural requirement.
+ * new Kickstands to satisfy the structural requirement.
  */
-export function generateRequiredSupportBraces(
+export function generateRequiredKickstands(
     snapshot: SupportState,
-    supportBraceState: SupportBraceState,
+    kickstandState: KickstandState,
     settings: AutoBracingSettings,
     existingBraceEdges: Array<{ a: string; b: string; angleRad: number }>,
     gridSettings: { enabled: boolean; spacingMm: number },
-): SupportBraceBuildResult[] {
+): KickstandBuildResult[] {
     const meshEntries = getAllMeshEntriesForAutoBrace();
-    const generatedSupportBraces: SupportBraceBuildResult[] = [];
+    const generatedKickstands: KickstandBuildResult[] = [];
 
     // The maximum horizontal run a brace can physically reach based on the 3D max length setting
     const maxHorizontalRun = settings.maxBraceLengthMm / Math.SQRT2;
-    // We want the new support brace to generate well within the max run so it definitely connects.
+    // We want the new kickstand to generate well within the max run so it definitely connects.
     const GENERATION_DISTANCE_MM = Math.min(5.0, maxHorizontalRun * 0.8);
 
     const occupiedRootPositions: Vec3[] = [
@@ -48,7 +48,7 @@ export function generateRequiredSupportBraces(
             y: root.transform.pos.y,
             z: root.transform.pos.z,
         })),
-        ...Object.values(supportBraceState.roots).map((root) => ({
+        ...Object.values(kickstandState.roots).map((root) => ({
             x: root.transform.pos.x,
             y: root.transform.pos.y,
             z: root.transform.pos.z,
@@ -75,7 +75,7 @@ export function generateRequiredSupportBraces(
             const gy = snapToGridIndex(root.transform.pos.y, gridSettings.spacingMm);
             occupiedGridNodeKeys.add(gridNodeKey(root.modelId, gx, gy));
         }
-        for (const root of Object.values(supportBraceState.roots)) {
+        for (const root of Object.values(kickstandState.roots)) {
             const gx = snapToGridIndex(root.transform.pos.x, gridSettings.spacingMm);
             const gy = snapToGridIndex(root.transform.pos.y, gridSettings.spacingMm);
             occupiedGridNodeKeys.add(gridNodeKey(root.modelId, gx, gy));
@@ -171,13 +171,13 @@ export function generateRequiredSupportBraces(
         axesByTrunkId.set(edge.b, bList);
     }
 
-    // Mix in axes from existing Support Braces already hosted on this trunk
-    for (const sb of Object.values(supportBraceState.supportBraces)) {
+    // Mix in axes from existing Kickstands already hosted on this trunk
+    for (const sb of Object.values(kickstandState.kickstands)) {
         const hostTrunkId = segmentOwnerTrunkId.get(sb.hostSegmentId);
         if (!hostTrunkId) continue;
         
-        const root = supportBraceState.roots[sb.rootId];
-        const hostKnot = supportBraceState.knots[sb.hostKnotId];
+        const root = kickstandState.roots[sb.rootId];
+        const hostKnot = kickstandState.knots[sb.hostKnotId];
         if (!root || !hostKnot) continue;
 
         const angleRad = normalizeAxisAngleRad(Math.atan2(root.transform.pos.y - hostKnot.pos.y, root.transform.pos.x - hostKnot.pos.x));
@@ -265,8 +265,8 @@ export function generateRequiredSupportBraces(
         return false;
     };
 
-    const builtSupportBracePassesMeshClearance = (build: SupportBraceBuildResult, modelId: string): boolean => {
-        const bodyDiameterMm = Math.max(0.001, build.supportBrace.profile.bodyDiameterMm);
+    const builtKickstandPassesMeshClearance = (build: KickstandBuildResult, modelId: string): boolean => {
+        const bodyDiameterMm = Math.max(0.001, build.kickstand.profile.bodyDiameterMm);
         const rootPos = build.root.transform.pos;
         const rootTop: Vec3 = {
             x: rootPos.x,
@@ -275,7 +275,7 @@ export function generateRequiredSupportBraces(
         };
 
         const pathPoints: Vec3[] = [rootTop];
-        for (const segment of build.supportBrace.segments) {
+        for (const segment of build.kickstand.segments) {
             if (segment.bottomJoint) pathPoints.push(segment.bottomJoint.pos);
             if (segment.topJoint) pathPoints.push(segment.topJoint.pos);
         }
@@ -376,7 +376,7 @@ export function generateRequiredSupportBraces(
                 ? (i === 0 ? 0 : existingAxis + Math.PI / 2)
                 : (existingAxis + Math.PI / 2);
             const dropDist = GENERATION_DISTANCE_MM;
-            let selectedBuild: SupportBraceBuildResult | null = null;
+            let selectedBuild: KickstandBuildResult | null = null;
             let selectedRootPos: Vec3 | null = null;
 
             // Iterate through possible anchor points (highest first)
@@ -483,7 +483,7 @@ export function generateRequiredSupportBraces(
                         continue;
                     }
 
-                    // Prevent generating exactly on top of an already placed support brace root
+                    // Prevent generating exactly on top of an already placed kickstand root
                     const isOverlapping = usedRootPositions.some(used => 
                         Math.abs(used.x - candidateRootX) < 0.1 && Math.abs(used.y - candidateRootY) < 0.1
                     );
@@ -503,7 +503,7 @@ export function generateRequiredSupportBraces(
                         continue;
                     }
 
-                    const hostTarget: SupportBraceHostTarget = {
+                    const hostTarget: KickstandHostTarget = {
                         segmentId: anchor.segmentId,
                         supportKind: 'trunk',
                         t: anchor.t,
@@ -518,8 +518,8 @@ export function generateRequiredSupportBraces(
                     };
 
                     try {
-                        const trialBuild = buildSupportBraceData(buildInput);
-                        if (!builtSupportBracePassesMeshClearance(trialBuild, trunk.modelId)) {
+                        const trialBuild = buildKickstandData(buildInput);
+                        if (!builtKickstandPassesMeshClearance(trialBuild, trunk.modelId)) {
                             continue;
                         }
 
@@ -527,7 +527,7 @@ export function generateRequiredSupportBraces(
                         selectedRootPos = candidateRootPos;
                         break;
                     } catch (err) {
-                        console.warn("Failed to build generative Support Brace", err);
+                        console.warn("Failed to build generative Kickstand", err);
                     }
                 }
 
@@ -544,13 +544,13 @@ export function generateRequiredSupportBraces(
                     [...groupAxesState, actualAngle],
                     AUTO_BRACING_HARD_RULES.minAxisSeparationDeg,
                 );
-                // Accept only if this support brace actually improves group axis coverage.
+                // Accept only if this kickstand actually improves group axis coverage.
                 // This prevents placing one-axis duplicates on every support in a straight chain.
                 if (needAfter >= needBefore) {
                     continue;
                 }
 
-                generatedSupportBraces.push(selectedBuild);
+                generatedKickstands.push(selectedBuild);
 
                 if (isGridEnabled) {
                     const gx = snapToGridIndex(selectedRootPos.x, gridSettings.spacingMm);
@@ -574,5 +574,5 @@ export function generateRequiredSupportBraces(
     }
     }
 
-    return generatedSupportBraces;
+    return generatedKickstands;
 }

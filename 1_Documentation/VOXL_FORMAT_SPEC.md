@@ -104,7 +104,7 @@ v1 supports two valid top-level profiles:
     "sticks": [],
     "braces": [],
     "knots": [],
-    "supportBraces": []
+    "kickstands": []
   },
   "extensions": {}
 }

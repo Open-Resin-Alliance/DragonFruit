@@ -13,7 +13,7 @@ import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints } from '../../Suppo
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { useSupportBraceStoreState } from '../SupportBrace/supportBraceStore';
+import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { generateUuid } from '@/utils/uuid';
@@ -30,7 +30,7 @@ function vecEq(a: Vec3, b: Vec3) {
 export function BracePlacementController() {
     const { altActive, stage, start } = useBracePlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const supportBraceState = useSupportBraceStoreState();
+    const kickstandState = useKickstandStoreState();
 
     const { raycaster, camera, pointer } = useThree();
     const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
@@ -56,11 +56,11 @@ export function BracePlacementController() {
             }
         }
 
-        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            for (const seg of supportBrace.segments) {
+        for (const kickstand of Object.values(kickstandState.kickstands)) {
+            for (const seg of kickstand.segments) {
                 map.set(seg.id, {
-                    modelId: supportBrace.modelId,
-                    supportKey: `supportBrace:${supportBrace.id}`,
+                    modelId: kickstand.modelId,
+                    supportKey: `kickstand:${kickstand.id}`,
                     isBezier: seg.type === 'bezier',
                 });
             }
@@ -94,7 +94,7 @@ export function BracePlacementController() {
             });
         }
         return map;
-    }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, supportBraceState.supportBraces]);
+    }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, kickstandState.kickstands]);
 
     const leafMeta = useMemo(() => {
         const map = new Map<
@@ -235,30 +235,30 @@ export function BracePlacementController() {
             });
         }
 
-        for (const supportBrace of Object.values(supportBraceState.supportBraces)) {
-            const supportBraceRoot = supportBraceState.roots[supportBrace.rootId];
-            const supportBraceHostKnot = supportBraceState.knots[supportBrace.hostKnotId];
-            if (!supportBraceRoot || !supportBraceHostKnot) continue;
+        for (const kickstand of Object.values(kickstandState.kickstands)) {
+            const kickstandRoot = kickstandState.roots[kickstand.rootId];
+            const kickstandHostKnot = kickstandState.knots[kickstand.hostKnotId];
+            if (!kickstandRoot || !kickstandHostKnot) continue;
 
-            const rootTopZ = supportBraceRoot.transform.pos.z + supportBraceRoot.diskHeight + supportBraceRoot.coneHeight;
+            const rootTopZ = kickstandRoot.transform.pos.z + kickstandRoot.diskHeight + kickstandRoot.coneHeight;
 
-            supportBrace.segments.forEach((seg, idx) => {
+            kickstand.segments.forEach((seg, idx) => {
                 if (start?.kind === 'shaft' && start.segmentId && seg.id === start.segmentId) return;
 
                 let startPos: Vec3;
                 if (idx === 0) {
                     startPos = {
-                        x: supportBraceRoot.transform.pos.x,
-                        y: supportBraceRoot.transform.pos.y,
+                        x: kickstandRoot.transform.pos.x,
+                        y: kickstandRoot.transform.pos.y,
                         z: rootTopZ,
                     };
                 } else {
-                    const prevSeg = supportBrace.segments[idx - 1];
+                    const prevSeg = kickstand.segments[idx - 1];
                     if (!prevSeg.topJoint) return;
                     startPos = prevSeg.topJoint.pos;
                 }
 
-                const endPos = seg.topJoint?.pos ?? supportBraceHostKnot.pos;
+                const endPos = seg.topJoint?.pos ?? kickstandHostKnot.pos;
 
                 targets.push({
                     id: seg.id,
@@ -394,7 +394,7 @@ export function BracePlacementController() {
         }
 
         return targets;
-    }, [altActive, stage, start, supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, supportState.leaves, supportState.roots, supportState.knots, supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, leafMeta]);
+    }, [altActive, stage, start, supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, supportState.leaves, supportState.roots, supportState.knots, kickstandState.kickstands, kickstandState.roots, kickstandState.knots, leafMeta]);
 
     const targetById = useMemo(() => {
         const map = new Map<string, SnapTarget>();

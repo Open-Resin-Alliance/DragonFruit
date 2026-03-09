@@ -4,7 +4,7 @@ import JSZip from 'jszip';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSupportExportFromStores, buildVoxlDocumentV1, serializeVoxlDocument } from '@/features/scene/voxl';
 import { pickSavePathWithNativeDialog, writeBytesToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
-import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getSnapshot } from '@/supports/state';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
@@ -541,10 +541,10 @@ export class ExportManager {
 
   private static async exportVoxl(sceneContext: ExportSceneContext | undefined, options: ExportOptions): Promise<void> {
     const supportSnapshot = getSnapshot();
-    const supportBraceSnapshot = getSupportBraceSnapshot();
+    const kickstandSnapshot = getKickstandSnapshot();
     const supports = buildSupportExportFromStores(
       supportSnapshot,
-      supportBraceSnapshot,
+      kickstandSnapshot,
       'dragonfruit-voxl-export',
     );
 
@@ -557,7 +557,7 @@ export class ExportManager {
       supports.sticks = [];
       supports.braces = [];
       supports.knots = [];
-      supports.supportBraces = [];
+      supports.kickstands = [];
     }
 
     const models = options.includeModel

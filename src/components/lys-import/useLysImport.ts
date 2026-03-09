@@ -357,7 +357,7 @@ export function useLysImport() {
                     LysConverter.reassignModelId(dragonfruitData, importedModelId);
 
                     if (Math.abs(importCenterX) > 1e-6 || Math.abs(importCenterY) > 1e-6) {
-                        // Canonical XY shift (includes roots, braces, support braces, joints, knots, etc.)
+                        // Canonical XY shift (includes roots, braces, kickstands, joints, knots, etc.)
                         LysConverter.applyWorldXYPlacement(dragonfruitData, importCenterX, importCenterY);
                     }
                 }
