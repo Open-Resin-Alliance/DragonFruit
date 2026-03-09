@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { Cpu, Gauge, Layers3, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
-import { Button, Card, CardHeader, IconButton, Input } from '@/components/ui/primitives';
+import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -72,6 +72,25 @@ function normalizeExportBaseName(rawName: string | null | undefined): string {
   const withoutKnownExt = trimmed.replace(/(\.(stl|obj|3mf|lys|lychee|json))+$/i, '');
   const cleaned = withoutKnownExt.replace(/[.\s]+$/g, '').trim();
   return cleaned || 'MyPrint';
+}
+
+function resolveSliceFilenameBase(models: LoadedModel[], activeModel: LoadedModel | null): string {
+  const visibleModels = models.filter((model) => model.visible);
+
+  if (visibleModels.length === 1) {
+    return normalizeExportBaseName(visibleModels[0].name);
+  }
+
+  if (visibleModels.length > 1) {
+    const firstVisibleName = normalizeExportBaseName(visibleModels[0]?.name);
+    return `${firstVisibleName}_DF_Scene`;
+  }
+
+  if (activeModel) {
+    return normalizeExportBaseName(activeModel.name);
+  }
+
+  return 'MyPrint';
 }
 
 function formatDuration(ms: number | null): string {
@@ -181,7 +200,6 @@ export function SlicingPanel({
   onSlicingBusyChange,
 }: SlicingPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [filename, setFilename] = useState(() => normalizeExportBaseName(activeModel?.name));
   const [isSlicingZip, setIsSlicingZip] = useState(false);
   const [sliceStatus, setSliceStatus] = useState('Idle');
   const [currentPhase, setCurrentPhase] = useState('Idle');
@@ -280,6 +298,10 @@ export function SlicingPanel({
   const slicingElapsedLabel = useMemo(() => formatElapsedClock(currentElapsedMs), [currentElapsedMs]);
 
   const visibleModels = useMemo(() => models.filter((model) => model.visible), [models]);
+  const sliceFilenameBase = useMemo(
+    () => resolveSliceFilenameBase(models, activeModel),
+    [activeModel, models],
+  );
 
   const estimatedVolumeLabel = useMemo(() => {
     if (estimatedVolumeLabelOverride && estimatedVolumeLabelOverride.trim().length > 0) {
@@ -404,11 +426,6 @@ export function SlicingPanel({
       if (rafId) window.cancelAnimationFrame(rafId);
     };
   }, [progressPercent, showSlicingModal]);
-
-  useEffect(() => {
-    if (!activeModel) return;
-    setFilename(normalizeExportBaseName(activeModel.name));
-  }, [activeModel]);
 
   const clearLayerPreviewUrls = useCallback(() => {
     setLayerPreviewUrls((previous) => {
@@ -564,7 +581,7 @@ export function SlicingPanel({
         models: visibleModels,
         printerProfile: activePrinterProfile,
         materialProfile: activeMaterialProfile,
-        filenameBase: filename || activePrinterProfile.name || 'slice_export',
+        filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
         antiAliasingLevel: effectiveAntiAliasingLevel,
         aaOnSupports: effectiveAaOnSupports,
         outputMode: 'return',
@@ -891,28 +908,6 @@ export function SlicingPanel({
 
       {isExpanded && (
         <div className="px-3 pt-2 pb-3 space-y-2.5">
-          <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-              <Layers3 className="w-3.5 h-3.5" />
-              <span>Job Setup</span>
-            </div>
-
-            <div className="space-y-0.5">
-              <label className="text-xs" style={{ color: 'var(--text-muted)' }}>Filename</label>
-              <Input
-                type="text"
-                value={filename}
-                onChange={(e) => setFilename(e.target.value)}
-                className="w-full !h-9 text-sm"
-                placeholder="my_print"
-              />
-            </div>
-
-            <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-              Visible models: {visibleModels.length}
-            </div>
-          </div>
-
           <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
               <Gauge className="w-3.5 h-3.5" />
@@ -934,7 +929,7 @@ export function SlicingPanel({
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Output</div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
                   {selectedFormat?.displayName ?? selectedFormat?.outputFormat ?? '—'}
                 </div>
               </div>
