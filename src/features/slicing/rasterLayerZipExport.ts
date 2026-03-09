@@ -122,6 +122,13 @@ type WorldTriangle = {
 
 export type ProjectedCrossSectionContext = {
   triangles: WorldTriangle[];
+  quantizedBucketsByStep: Map<string, ProjectedCrossSectionQuantizedBuckets>;
+};
+
+type ProjectedCrossSectionQuantizedBuckets = {
+  stepMm: number;
+  baseLayer: number;
+  buckets: number[][];
 };
 
 type SliceSegment2D = {
@@ -1049,8 +1056,9 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
 
   const visibleModelIds = new Set(models.filter((model) => model.visible).map((model) => model.id));
   const supportAndRaftTriangles = buildSupportAndRaftWorldTriangles(visibleModelIds);
-  if (supportAndRaftTriangles.length > 0) {
-    triangles.push(...supportAndRaftTriangles);
+  // Avoid stack overflow from spreading huge arrays - push one by one instead
+  for (let i = 0; i < supportAndRaftTriangles.length; i++) {
+    triangles.push(supportAndRaftTriangles[i]);
   }
 
   return triangles;
@@ -1127,6 +1135,78 @@ function buildLayerWorldTriangleBuckets(
   }
 
   return buckets;
+}
+
+function buildProjectedCrossSectionQuantizedBuckets(
+  triangles: WorldTriangle[],
+  stepMm: number,
+): ProjectedCrossSectionQuantizedBuckets {
+  const safeStepMm = Math.max(0.0001, stepMm);
+  const eps = 1e-6;
+  let minLayer = Infinity;
+  let maxLayer = -Infinity;
+
+  for (let triIndex = 0; triIndex < triangles.length; triIndex += 1) {
+    const tri = triangles[triIndex];
+    const start = Math.ceil((tri.zMin - eps) / safeStepMm);
+    const end = Math.floor((tri.zMax + eps) / safeStepMm);
+    if (end < start) continue;
+    if (start < minLayer) minLayer = start;
+    if (end > maxLayer) maxLayer = end;
+  }
+
+  if (!Number.isFinite(minLayer) || !Number.isFinite(maxLayer)) {
+    return {
+      stepMm: safeStepMm,
+      baseLayer: 0,
+      buckets: [],
+    };
+  }
+
+  const buckets = Array.from({ length: Math.max(0, maxLayer - minLayer + 1) }, () => [] as number[]);
+
+  for (let triIndex = 0; triIndex < triangles.length; triIndex += 1) {
+    const tri = triangles[triIndex];
+    const start = Math.ceil((tri.zMin - eps) / safeStepMm);
+    const end = Math.floor((tri.zMax + eps) / safeStepMm);
+    if (end < start) continue;
+
+    for (let layer = start; layer <= end; layer += 1) {
+      buckets[layer - minLayer].push(triIndex);
+    }
+  }
+
+  return {
+    stepMm: safeStepMm,
+    baseLayer: minLayer,
+    buckets,
+  };
+}
+
+function getProjectedCrossSectionTriangleIndicesAtZ(
+  context: ProjectedCrossSectionContext,
+  zMm: number,
+  quantizedStepMm?: number,
+): number[] | null {
+  if (!Number.isFinite(quantizedStepMm) || !quantizedStepMm || quantizedStepMm <= 0) {
+    return null;
+  }
+
+  const safeStepMm = Math.max(0.0001, quantizedStepMm);
+  const bucketKey = safeStepMm.toFixed(5);
+  let bucketSet = context.quantizedBucketsByStep.get(bucketKey);
+  if (!bucketSet) {
+    bucketSet = buildProjectedCrossSectionQuantizedBuckets(context.triangles, safeStepMm);
+    context.quantizedBucketsByStep.set(bucketKey, bucketSet);
+  }
+
+  const layerIndex = Math.round(zMm / safeStepMm);
+  const bucketIndex = layerIndex - bucketSet.baseLayer;
+  if (bucketIndex < 0 || bucketIndex >= bucketSet.buckets.length) {
+    return [];
+  }
+
+  return bucketSet.buckets[bucketIndex];
 }
 
 function edgePlaneIntersectionXY(
@@ -1719,21 +1799,31 @@ export function buildProjectedCrossSectionContext(models: LoadedModel[]): Projec
   const triangles = buildWorldTriangles(visibleModels);
   if (triangles.length === 0) return null;
 
-  return { triangles };
+  return {
+    triangles,
+    quantizedBucketsByStep: new Map(),
+  };
 }
 
 export function buildProjectedCrossSectionLoopsAtZFromContext(options: {
   context: ProjectedCrossSectionContext;
   zMm: number;
+  quantizedStepMm?: number;
 }): THREE.Vector2[][] {
   const triangles = options.context.triangles;
   if (triangles.length === 0) return [];
 
   const zMm = options.zMm + 1e-5;
+  const triangleIndices = getProjectedCrossSectionTriangleIndicesAtZ(
+    options.context,
+    options.zMm,
+    options.quantizedStepMm,
+  );
   const segments: Array<[[number, number], [number, number]]> = [];
 
-  for (let i = 0; i < triangles.length; i += 1) {
-    const tri = triangles[i];
+  const triangleCount = triangleIndices ? triangleIndices.length : triangles.length;
+  for (let i = 0; i < triangleCount; i += 1) {
+    const tri = triangleIndices ? triangles[triangleIndices[i]] : triangles[i];
     if (zMm < tri.zMin || zMm > tri.zMax) continue;
 
     const ux = tri.bx - tri.ax;

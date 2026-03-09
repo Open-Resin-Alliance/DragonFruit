@@ -50,20 +50,7 @@ export function SupportKindTabs({
                             }}
                         title={tab.label}
                     >
-                        <span
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border"
-                            style={isActive
-                                ? {
-                                    background: 'color-mix(in srgb, var(--accent), var(--surface-0) 62%)',
-                                    borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
-                                }
-                                : {
-                                    background: 'var(--surface-0)',
-                                    borderColor: 'var(--border-subtle)',
-                                }}
-                        >
-                            <Icon className="h-3.5 w-3.5" />
-                        </span>
+                        <Icon className="h-4 w-4" />
                         <span className="text-[13px] font-semibold leading-none">{tab.label}</span>
                     </button>
                 );

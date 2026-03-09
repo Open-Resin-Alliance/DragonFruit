@@ -49,6 +49,17 @@ export function PickingProvider({
   initialConfig,
   debug = false,
 }: PickingProviderProps) {
+  const isSameHitIdentity = React.useCallback((
+    a: PickingResult,
+    b: PickingResult,
+  ): boolean => {
+    return a.pickId === b.pickId
+      && a.category === b.category
+      && a.objectId === b.objectId
+      && a.parentId === b.parentId
+      && a.gizmoHandle === b.gizmoHandle;
+  }, []);
+
   // Configuration state
   const [config, setConfigState] = useState<PickingConfig>(() => ({
     ...DEFAULT_PICKING_CONFIG,
@@ -148,70 +159,70 @@ export function PickingProvider({
     const timestamp = performance.now();
     const screenPosition = { x: ndcX, y: ndcY };
     
+    let nextHit: PickingResult;
+
     // No hit
     if (pickId === PICK_ID.NONE) {
-      setHit({
+      nextHit = {
         pickId: PICK_ID.NONE,
         category: 'none',
         objectId: null,
         screenPosition,
         timestamp,
-      });
-      return;
+      };
     }
-    
     // Model hit
-    if (pickId === PICK_ID.MODEL) {
-      setHit({
+    else if (pickId === PICK_ID.MODEL) {
+      nextHit = {
         pickId,
         category: 'model',
         objectId: null,
         screenPosition,
         timestamp,
-      });
-      return;
+      };
     }
-    
     // Gizmo hit
-    if (isGizmoPickId(pickId)) {
+    else if (isGizmoPickId(pickId)) {
       const handleType = GIZMO_PICK_ID_TO_HANDLE[pickId] as GizmoHandleType | undefined;
-      setHit({
+      nextHit = {
         pickId,
         category: 'gizmo',
         objectId: null,
         gizmoHandle: handleType,
         screenPosition,
         timestamp,
-      });
-      return;
+      };
     }
-    
     // Dynamic object hit - look up registration
-    const registration = registrationsRef.current.get(pickId);
-    if (registration) {
-      setHit({
-        pickId,
-        category: registration.category,
-        objectId: registration.objectId,
-        parentId: registration.parentId,
-        gizmoHandle: registration.gizmoHandle,
-        screenPosition,
-        timestamp,
-      });
-    } else {
-      // Unknown ID - treat as nothing
-      if (config.debug) {
-        console.warn('[Picking] Unknown pick ID:', pickId);
+    else {
+      const registration = registrationsRef.current.get(pickId);
+      if (registration) {
+        nextHit = {
+          pickId,
+          category: registration.category,
+          objectId: registration.objectId,
+          parentId: registration.parentId,
+          gizmoHandle: registration.gizmoHandle,
+          screenPosition,
+          timestamp,
+        };
+      } else {
+        // Unknown ID - treat as nothing
+        if (config.debug) {
+          console.warn('[Picking] Unknown pick ID:', pickId);
+        }
+        nextHit = {
+          pickId: PICK_ID.NONE,
+          category: 'none',
+          objectId: null,
+          screenPosition,
+          timestamp,
+        };
       }
-      setHit({
-        pickId: PICK_ID.NONE,
-        category: 'none',
-        objectId: null,
-        screenPosition,
-        timestamp,
-      });
     }
-  }, [config.debug]);
+
+    setHit((previous) => (isSameHitIdentity(previous, nextHit) ? previous : nextHit));
+  }, [config.debug, isSameHitIdentity]);
   
   /**
    * Drag state handlers.

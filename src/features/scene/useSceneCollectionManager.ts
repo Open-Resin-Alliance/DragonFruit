@@ -592,6 +592,7 @@ type DebugPrimitiveSizePreset = 'small' | 'medium' | 'large';
 import { deleteSupportsForModel, getSupportsForModel } from '@/supports/PlacementLogic/SupportModelLinker';
 import {
   captureModelSupportsToClipboard,
+  estimateSupportBoundsForModel,
   pasteModelSupportsFromClipboard,
   type SupportClipboardPayload,
 } from '@/supports/PlacementLogic/supportClipboard';
@@ -2123,18 +2124,30 @@ export function useSceneCollectionManager() {
     const blockedRects: Rect2D[] = models
       .filter((model) => model.visible)
       .map((model) => {
-        const supportPayload = captureModelSupportsToClipboard(model.id);
-        const placement = buildPlacementOffsets(
+        const meshPlacement = buildPlacementOffsets(
           { x: model.transform.position.x, y: model.transform.position.y },
           model.geometry.size,
           model.transform,
-          supportPayload,
+          null,
         );
+
+        const meshRect: Rect2D = {
+          minX: model.transform.position.x + meshPlacement.minXOffset,
+          maxX: model.transform.position.x + meshPlacement.maxXOffset,
+          minY: model.transform.position.y + meshPlacement.minYOffset,
+          maxY: model.transform.position.y + meshPlacement.maxYOffset,
+        };
+
+        const supportBounds = estimateSupportBoundsForModel(model.id);
+        if (!supportBounds) {
+          return meshRect;
+        }
+
         return {
-          minX: model.transform.position.x + placement.minXOffset,
-          maxX: model.transform.position.x + placement.maxXOffset,
-          minY: model.transform.position.y + placement.minYOffset,
-          maxY: model.transform.position.y + placement.maxYOffset,
+          minX: Math.min(meshRect.minX, supportBounds.minX),
+          maxX: Math.max(meshRect.maxX, supportBounds.maxX),
+          minY: Math.min(meshRect.minY, supportBounds.minY),
+          maxY: Math.max(meshRect.maxY, supportBounds.maxY),
         };
       });
 

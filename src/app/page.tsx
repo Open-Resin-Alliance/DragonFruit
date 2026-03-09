@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Redo2, Undo2 } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
@@ -26,7 +26,7 @@ import {
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
-import { PrintingLayerScrubPreview } from '@/components/controls/PrintingLayerScrubPreview';
+import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
@@ -131,6 +131,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
+import { uploadToNanoDlpWithProgress, type UploadProgressEvent } from '../../plugins/athena/network';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 interface ShaftHoverDebugDetail {
@@ -557,7 +558,6 @@ export default function Home() {
   const printingPreviewSettledRef = React.useRef(false);
   const printingPreviewCanvasRenderNonceRef = React.useRef(0);
   const printingPreviewLoadNonceRef = React.useRef(0);
-  const lastPrintingLayerSyncPerfRef = React.useRef(0);
   const pendingPrintingSelectedLayerRef = React.useRef<number | null>(null);
   const printingSelectedLayerRafRef = React.useRef<number | null>(null);
   const printingSelectedLayerRef = React.useRef(1);
@@ -591,11 +591,17 @@ export default function Home() {
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
   const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
   const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
+  const [printingUploadTelemetry, setPrintingUploadTelemetry] = React.useState<{
+    speed: string;
+    remaining: string;
+    transferred: string;
+  } | null>(null);
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
+  const printingUploadProcessingHandoffTimeoutRef = React.useRef<number | null>(null);
   const [printingDeviceProcessingStartedAtMs, setPrintingDeviceProcessingStartedAtMs] = React.useState<number | null>(null);
   const [printingDeviceProcessingElapsedSec, setPrintingDeviceProcessingElapsedSec] = React.useState(0);
   const lastOwnedPrintTempPathRef = React.useRef<string | null>(null);
@@ -1380,8 +1386,8 @@ export default function Home() {
     printingPreviewTotalLayers,
   ]);
 
-  // Show scrub preview while actively scrubbing, before settle completes,
-  // or if the target PNG isn't loaded yet (avoids stale-frame flash).
+  // Show GPU preview during scrubbing or while waiting for PNG to load
+  // (GPU preview is fast enough to render real-time during scrub)
   const shouldShowScrubPreview = React.useMemo(() => {
     return (
       isPrintingLayerScrubbing
@@ -1607,7 +1613,6 @@ export default function Home() {
       setPrintingPreviewZoom(1);
       queuePrintingPreviewPan({ x: 0, y: 0 });
       setIsPrintingPreviewPanning(false);
-      lastPrintingLayerSyncPerfRef.current = 0;
       printingPreviewDragRef.current = null;
       setPrintingDisplayedLayer(1);
       if (printingPreviewSettleTimeoutRef.current !== null) {
@@ -1715,8 +1720,13 @@ export default function Home() {
     setPrintingSendStatusText(null);
     setPrintingSendProgress(0);
     setPrintingSendStageText(null);
+    setPrintingUploadTelemetry(null);
     setPrintingReadyPlateId(null);
     setPrintingPrintNowBusy(false);
+    if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+      window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+      printingUploadProcessingHandoffTimeoutRef.current = null;
+    }
     setPrintingUploadDialogOpen(false);
     setPrintingUploadDialogStage('uploading');
     setPrintingUploadDisplayProgress(0);
@@ -2210,6 +2220,14 @@ export default function Home() {
 
   React.useEffect(() => {
     let cancelled = false;
+
+    if (!shouldCalculateVolumes) {
+      setIsPrintingEstimatedResinBusy(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const visibleModels = scene.models.filter((model) => model.visible);
 
     if (visibleModels.length === 0) {
@@ -2250,7 +2268,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [getOrComputeBaseResinMl, scene.models, supportAndRaftResinMl]);
+  }, [getOrComputeBaseResinMl, scene.models, shouldCalculateVolumes, supportAndRaftResinMl]);
 
   const estimatedVolumeMlLabel = React.useMemo(() => {
     const visible = scene.models.filter((model) => model.visible);
@@ -2409,28 +2427,13 @@ export default function Home() {
   }, []);
 
   React.useEffect(() => {
-    if (!printingUploadDialogOpen) {
-      setPrintingUploadDisplayProgress(printingSendProgress);
-      return;
-    }
-
-    let raf = 0;
-    const animate = () => {
-      setPrintingUploadDisplayProgress((previous) => {
-        const target = Math.max(0, Math.min(1, printingSendProgress));
-        if (Math.abs(target - previous) < 0.0025) {
-          return target;
-        }
-        return previous + ((target - previous) * 0.18);
-      });
-      raf = window.requestAnimationFrame(animate);
-    };
-
-    raf = window.requestAnimationFrame(animate);
     return () => {
-      window.cancelAnimationFrame(raf);
+      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+        printingUploadProcessingHandoffTimeoutRef.current = null;
+      }
     };
-  }, [printingSendProgress, printingUploadDialogOpen]);
+  }, []);
 
   React.useEffect(() => {
     if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
@@ -2777,8 +2780,10 @@ export default function Home() {
     setPrintingReadyPlateId(null);
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
+    setPrintingUploadDisplayProgress(0.01);
     setPrintingSendStageText('Uploading print job…');
     setPrintingSendStatusText('Uploading print job to printer…');
+    setPrintingUploadTelemetry(null);
     setPrintingUploadDialogStage('uploading');
     setPrintingUploadDialogOpen(true);
     setPrintingDeviceProcessingStartedAtMs(null);
@@ -2786,59 +2791,91 @@ export default function Home() {
 
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
-      let zipBase64: string | undefined;
+      let zipBlob = printingArtifact.blob;
 
-      // Prefer native temp-path handoff (avoids huge JS base64 payloads and intermittent truncation).
-      // Fall back to base64 only when we do not have a valid temp-path artifact.
-      if (!nativeTempPath) {
-        const bytes = printingArtifact.blob
-          ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
-          : null;
-
-        if (!bytes || bytes.length === 0) {
-          throw new Error('No print artifact payload available for printer upload.');
+      // If we have a local temp path and no blob, read the blob from native bridge
+      if (!zipBlob && nativeTempPath) {
+        try {
+          const fileBytes = await readPrintArtifactBytesFromPath(nativeTempPath);
+          if (fileBytes && fileBytes.length > 0) {
+            const normalizedBytes = Uint8Array.from(fileBytes);
+            zipBlob = new Blob([normalizedBytes], { type: 'application/octet-stream' });
+          }
+        } catch (readError) {
+          console.warn('Failed to read artifact from native path:', readError);
         }
+      }
 
-        let binary = '';
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          const chunk = bytes.subarray(i, i + chunkSize);
-          binary += String.fromCharCode(...chunk);
-        }
-        zipBase64 = btoa(binary);
+      if (!zipBlob) {
+        throw new Error('No print artifact blob available for printer upload.');
       }
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
+      
+      // Build the NanoDLP host URL
+      const hostUrl = `http://${host}${port && port !== 80 ? `:${port}` : ''}`;
 
-      const response = await pluginNetworkFetch({
-        pluginId: 'athena',
-        operation: 'nanodlp/job/import',
-        ipAddress: host,
-        port,
-        zipBase64,
-        zipFilePath: nativeTempPath || undefined,
-        path: pathBase,
-        profileId: selectedMaterialId,
-      });
+      // Track upload progress and send directly to NanoDLP
+      let resolvedPlateId: number | null = null;
+      
+      const uploadResult = await uploadToNanoDlpWithProgress(
+        hostUrl,
+        zipBlob,
+        pathBase,
+        selectedMaterialId,
+        {
+          onProgress: (event: UploadProgressEvent) => {
+            const progress = event.percentComplete / 100;
+            const clampedProgress = Math.min(progress, 0.9999);
+            if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+              window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+              printingUploadProcessingHandoffTimeoutRef.current = null;
+            }
+            setPrintingSendProgress(clampedProgress);
+            setPrintingUploadDisplayProgress(clampedProgress);
+            setPrintingUploadTelemetry({
+              speed: event.uploadSpeed,
+              remaining: event.remainingTime,
+              transferred: event.transferred,
+            });
+          },
+          onStatusUpdate: (update) => {
+            if (update.stage === 'processing') {
+              setPrintingSendProgress(1);
+              setPrintingUploadDisplayProgress(1);
+              if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+                window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+              }
+              printingUploadProcessingHandoffTimeoutRef.current = window.setTimeout(() => {
+                printingUploadProcessingHandoffTimeoutRef.current = null;
+                setPrintingUploadDialogStage('processing');
+                setPrintingSendStageText('Processing on device…');
+                setPrintingSendStatusText('Upload complete. NanoDLP is processing file metadata…');
+                setPrintingUploadTelemetry(null);
+                setPrintingDeviceProcessingStartedAtMs(Date.now());
+              }, 220);
+            } else if (update.stage === 'error') {
+              if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+                window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+                printingUploadProcessingHandoffTimeoutRef.current = null;
+              }
+              setPrintingSendStatusText(`Send failed: ${update.error || update.message}`);
+              setPrintingSendStageText('Upload failed');
+              setPrintingUploadDialogStage('failed');
+              setPrintingUploadTelemetry(null);
+              setPrintingSendProgress(0);
+              setPrintingUploadDisplayProgress(0);
+            }
+          },
+          onComplete: (plateId) => {
+            resolvedPlateId = plateId;
+          },
+        },
+      );
 
-      const payload = await response.json().catch(() => ({} as any));
-      if (!(response.ok && payload?.ok)) {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-        setPrintingSendStatusText(`Send failed: ${reason}`);
-        setPrintingSendStageText('Upload failed');
-        setPrintingUploadDialogStage('failed');
-        setPrintingSendProgress(0);
-        return;
+      if (!uploadResult.ok) {
+        throw new Error('Upload failed at NanoDLP');
       }
-
-      const importedPlateId = Number(payload?.plateId);
-      let resolvedPlateId = Number.isFinite(importedPlateId) && importedPlateId > 0 ? importedPlateId : null;
-
-      setPrintingSendProgress(1);
-      setPrintingUploadDialogStage('processing');
-      setPrintingSendStageText('Processing on device…');
-      setPrintingSendStatusText('Upload complete. NanoDLP is processing file metadata…');
-      setPrintingDeviceProcessingStartedAtMs(Date.now());
 
       const startedAt = Date.now();
       const timeoutMs = 10 * 60 * 1000;
@@ -2891,30 +2928,45 @@ export default function Home() {
         setPrintingReadyPlateId(resolvedPlateId);
       }
 
+      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+        printingUploadProcessingHandoffTimeoutRef.current = null;
+      }
+
       if (metadataReady) {
         setPrintingSendProgress(1);
+        setPrintingUploadDisplayProgress(1);
         setPrintingSendStageText('Ready to print');
         setPrintingUploadDialogStage('ready');
         setPrintingDeviceProcessingStartedAtMs(null);
+        setPrintingUploadTelemetry(null);
         setPrintingSendStatusText(
           `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
         );
       } else {
         setPrintingSendProgress(1);
+        setPrintingUploadDisplayProgress(1);
         setPrintingSendStageText('Device still processing');
         setPrintingUploadDialogStage('failed');
         setPrintingDeviceProcessingStartedAtMs(null);
+        setPrintingUploadTelemetry(null);
         setPrintingSendStatusText(
           `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Device is still processing metadata after waiting.`,
         );
       }
     } catch (error) {
+      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+        printingUploadProcessingHandoffTimeoutRef.current = null;
+      }
       const message = error instanceof Error ? error.message : 'Unknown error';
       setPrintingSendStatusText(`Send failed: ${message}`);
       setPrintingSendStageText('Upload failed');
       setPrintingUploadDialogStage('failed');
       setPrintingDeviceProcessingStartedAtMs(null);
+      setPrintingUploadTelemetry(null);
       setPrintingSendProgress(0);
+      setPrintingUploadDisplayProgress(0);
     } finally {
       setPrintingSendBusy(false);
     }
@@ -4181,17 +4233,35 @@ export default function Home() {
   }, [transformMgr.onTransformChange, transformMgr.setIsTransforming]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
-  const sceneZRange = React.useMemo(() => {
-    const projected = buildProjectedCrossSectionZRange(scene.models);
-    if (projected) return projected;
+  // Only calculate expensive Z range with triangles for printing/analysis (layer scrubbing critical)
+  // Export mode uses cheap sceneBounds - accurate range calculated only when actually slicing
+  const fallbackZRange = React.useMemo(() => ({
+    min: scene.sceneBounds?.min.z ?? 0,
+    max: scene.sceneBounds?.max.z ?? 100,
+  }), [scene.sceneBounds]);
 
-    return {
-      min: scene.sceneBounds?.min.z ?? 0,
-      max: scene.sceneBounds?.max.z ?? 100, // Default range if empty
-    };
+  const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
+
+  useEffect(() => {
+    // Only printing/analysis modes need expensive accurate Z range with all support triangles
+    // Export mode can use cheap sceneBounds - accurate range only needed when actually slicing
+    const needsAccurateZRange = scene.mode === 'printing' || scene.mode === 'analysis';
+    
+    if (needsAccurateZRange) {
+      // Defer expensive calculation to prevent blocking mode switch UI
+      const timeoutId = setTimeout(() => {
+        const projected = buildProjectedCrossSectionZRange(scene.models);
+        setSceneZRange(projected ?? fallbackZRange);
+      }, 0);
+      return () => clearTimeout(timeoutId);
+    } else {
+      // Use fast fallback for prepare/support/export modes
+      setSceneZRange(fallbackZRange);
+    }
   }, [
+    scene.mode,
     scene.models,
-    scene.sceneBounds,
+    fallbackZRange,
     supportStateSnapshot,
     supportBraceStateSnapshot,
     raftSettingsSnapshot,
@@ -4401,16 +4471,6 @@ export default function Home() {
     if (scene.mode !== 'printing') return;
     const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
 
-    if (isPrintingLayerScrubbing) {
-      const now = performance.now();
-      if ((now - lastPrintingLayerSyncPerfRef.current) < 42) {
-        return;
-      }
-      lastPrintingLayerSyncPerfRef.current = now;
-    } else {
-      lastPrintingLayerSyncPerfRef.current = 0;
-    }
-
     // Keep 3D cross-section in lock-step with selected PNG layer.
     // Use 1-based layer index here so layer 1 still produces a real cut plane.
     const targetLayerIndex = Math.max(1, clamped);
@@ -4424,7 +4484,6 @@ export default function Home() {
     printingSelectedLayer,
     slicing.layerIndex,
     slicing.setLayerIndex,
-    isPrintingLayerScrubbing,
   ]);
 
   // 4. Islands (needs geom & transform & layerHeight)
@@ -5660,13 +5719,24 @@ export default function Home() {
 
   React.useEffect(() => {
     if (scene.mode !== 'export') return;
-    if (scene.activeModelId) return;
     if (scene.models.length === 0) return;
 
-    const firstVisible = scene.models.find((model) => model.visible) ?? scene.models[0];
-    if (firstVisible) {
-      scene.setActiveModelId(firstVisible.id);
+    // In export mode, select all visible models for tinting
+    const visibleModels = scene.models.filter((model) => model.visible);
+    const visibleIds = visibleModels.length > 0 
+      ? visibleModels.map((m) => m.id) 
+      : scene.models.map((m) => m.id);
+
+    // Set active model if none exists
+    if (!scene.activeModelId) {
+      const firstVisible = visibleModels[0] ?? scene.models[0];
+      if (firstVisible) {
+        scene.setActiveModelId(firstVisible.id);
+      }
     }
+
+    // Select all visible models for export workspace tinting
+    scene.setSelectedModelIds(visibleIds);
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
 
   React.useEffect(() => {
@@ -7793,89 +7863,93 @@ export default function Home() {
                 onPointerUp={handlePrintingPreviewPointerEnd}
                 onPointerCancel={handlePrintingPreviewPointerEnd}
               >
-                {shouldShowScrubPreview ? (
-                  // While scrubbing: render a vector cross-section instead of decoding PNGs.
-                  // This avoids image-decode memory churn and gives instant visual feedback
-                  // via the same loop data used by the 3-D cross-section cap.
-                  // Wrap in aspect-ratio container to match PNG preview sizing behavior.
-                  (() => {
-                    const aspectW = printingPreviewTargetResolution
-                      ? printingPreviewTargetResolution.viewportWidth
-                      : activePrinterProfile?.buildVolumeMm?.width ?? 143;
-                    const aspectH = printingPreviewTargetResolution
-                      ? printingPreviewTargetResolution.viewportHeight
-                      : activePrinterProfile?.buildVolumeMm?.depth ?? 89;
-                    const aspectRatio = aspectW / aspectH;
-                    return (
-                      <div
-                        className="block rounded"
-                        style={{ 
-                          aspectRatio: aspectRatio.toString(),
-                          width: '100%',
-                          maxWidth: '100%',
-                          maxHeight: '100%',
-                          transform: printingPreviewVisualTransform || 'none',
-                          transformOrigin: 'center center',
-                          willChange: 'transform',
-                        }}
-                      >
-                        <PrintingLayerScrubPreview
+                {/* Layered preview: GPU preview (instant) underneath, PNG (higher quality) on top when loaded */}
+                {(() => {
+                  const aspectW = printingPreviewTargetResolution
+                    ? printingPreviewTargetResolution.viewportWidth
+                    : activePrinterProfile?.buildVolumeMm?.width ?? 143;
+                  const aspectH = printingPreviewTargetResolution
+                    ? printingPreviewTargetResolution.viewportHeight
+                    : activePrinterProfile?.buildVolumeMm?.depth ?? 89;
+                  const aspectRatio = aspectW / aspectH;
+                  
+                  return (
+                    <div
+                      className="block rounded relative"
+                      style={{ 
+                        aspectRatio: aspectRatio.toString(),
+                        width: '100%',
+                        maxWidth: '100%',
+                        maxHeight: '100%',
+                        transform: printingPreviewVisualTransform || 'none',
+                        transformOrigin: 'center center',
+                        willChange: 'transform',
+                      }}
+                    >
+                      {/* GPU preview layer (always visible during scrub or when PNG not loaded) */}
+                      <div className="absolute inset-0">
+                        <PrintingLayerGpuPreview
                           models={scene.models}
                           clipZ={printingSelectedLayer * slicing.layerHeightMm}
                           buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
                           buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
+                          viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
+                          viewportHeightMm={printingPreviewTargetResolution?.viewportHeight}
+                          supportGroupRef={supportDragGroupRef as React.RefObject<THREE.Group>}
+                          supportVersion={supportRenderRefreshNonce}
                           mirrorX={activePrinterProfile?.display?.mirrorX === true}
                           mirrorY={activePrinterProfile?.display?.mirrorY === true}
                           className="block w-full h-full rounded"
                         />
                       </div>
-                    );
-                  })()
-                ) : selectedPrintingLayerPreviewUrl ? (
-                  printingPreviewTargetResolution ? (
-                    <svg
-                      viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
-                      preserveAspectRatio="xMidYMid meet"
-                      className="block w-full h-full max-w-full max-h-full rounded"
-                      style={{
-                        transform: printingPreviewVisualTransform || 'none',
-                        transformOrigin: 'center center',
-                        willChange: 'transform',
-                      }}
-                      role="img"
-                      aria-label={`Layer ${printingSelectedLayer} preview`}
-                    >
-                      <image
-                        href={selectedPrintingLayerPreviewUrl}
-                        x={0}
-                        y={0}
-                        width={printingPreviewTargetResolution.viewportWidth}
-                        height={printingPreviewTargetResolution.viewportHeight}
-                        preserveAspectRatio="none"
-                        style={{ imageRendering: 'pixelated' }}
-                      />
-                    </svg>
-                  ) : (
-                    <img
-                      src={selectedPrintingLayerPreviewUrl}
-                      alt={`Layer ${printingSelectedLayer} preview`}
-                      className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
-                      style={{
-                        imageRendering: 'pixelated',
-                        transform: printingPreviewVisualTransform || 'none',
-                        transformOrigin: 'center center',
-                        willChange: 'transform',
-                      }}
-                    />
-                  )
-                ) : (
-                  <div
-                    className="h-full w-full rounded border border-dashed flex items-center justify-center text-xs"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                  >
-                    No preview PNG available for this layer yet.
-                  </div>
-                )}
+
+                      {/* PNG layer on top (fades in when loaded, hidden during active scrub) */}
+                      {selectedPrintingLayerPreviewUrl && !isPrintingLayerScrubbing && (
+                        <div 
+                          className="absolute inset-0 transition-opacity duration-150" 
+                          style={{ opacity: isPrintingPngLoaded ? 1 : 0 }}
+                        >
+                          {printingPreviewTargetResolution ? (
+                            <svg
+                              viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
+                              preserveAspectRatio="xMidYMid meet"
+                              className="block w-full h-full rounded"
+                              role="img"
+                              aria-label={`Layer ${printingSelectedLayer} preview`}
+                            >
+                              <image
+                                href={selectedPrintingLayerPreviewUrl}
+                                x={0}
+                                y={0}
+                                width={printingPreviewTargetResolution.viewportWidth}
+                                height={printingPreviewTargetResolution.viewportHeight}
+                                preserveAspectRatio="none"
+                                style={{ imageRendering: 'pixelated' }}
+                              />
+                            </svg>
+                          ) : (
+                            <img
+                              src={selectedPrintingLayerPreviewUrl}
+                              alt={`Layer ${printingSelectedLayer} preview`}
+                              className="block rounded w-full h-full object-contain"
+                              style={{ imageRendering: 'pixelated' }}
+                            />
+                          )}
+                        </div>
+                      )}
+
+                      {/* Fallback message when no data available */}
+                      {!selectedPrintingLayerPreviewUrl && printingPreviewTotalLayers === 0 && (
+                        <div
+                          className="absolute inset-0 rounded border border-dashed flex items-center justify-center text-xs"
+                          style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                        >
+                          No preview available yet.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {selectedPrintingLayerPreviewUrl && usePrintingSettledHiResCanvas && (
                   <canvas
@@ -8019,9 +8093,50 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs min-h-[18px]" style={{ color: 'var(--text-muted)' }}>
                 {printingSendStatusText ?? 'Preparing upload pipeline…'}
               </div>
+
+              {printingUploadDialogStage === 'uploading' && printingUploadTelemetry && (
+                <div className="grid grid-cols-3 gap-2 text-[11px]">
+                  <div
+                    className="rounded-md border px-2.5 py-2"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                  >
+                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
+                    <div
+                      className="mt-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {printingUploadTelemetry.speed}
+                    </div>
+                  </div>
+                  <div
+                    className="rounded-md border px-2.5 py-2"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                  >
+                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Remaining</div>
+                    <div
+                      className="mt-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {printingUploadTelemetry.remaining}
+                    </div>
+                  </div>
+                  <div
+                    className="rounded-md border px-2.5 py-2"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                  >
+                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Transferred</div>
+                    <div
+                      className="mt-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {printingUploadTelemetry.transferred}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {printingDialogIsIndeterminate ? (
                 <>
@@ -8047,9 +8162,9 @@ export default function Home() {
                   }}
                 >
                   <div
-                    className="h-full rounded-full transition-all duration-200"
+                    className="h-full rounded-full transition-[width] duration-200 ease-out"
                     style={{
-                      width: `${printingDialogProgressPercent.toFixed(1)}%`,
+                      width: `${printingDialogProgressPercent.toFixed(2)}%`,
                       background: printingUploadDialogStage === 'failed'
                         ? 'linear-gradient(90deg, #ef4444, #f97316)'
                         : printingUploadDialogStage === 'started'

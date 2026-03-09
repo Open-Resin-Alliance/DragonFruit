@@ -112,6 +112,7 @@ function buildNonCrossingEdges(points: THREE.Vector2[], maxDegree: number, maxLe
 interface LineRaftRendererProps {
   clipLower?: number | null;
   clipUpper?: number | null;
+  passive?: boolean;
   colorized?: boolean;
   hoverized?: boolean;
   ghostOpacity?: number;
@@ -129,6 +130,7 @@ interface LineRaftRendererProps {
 export default function LineRaftRenderer({
   clipLower = null,
   clipUpper = null,
+  passive = false,
   colorized = true,
   hoverized = false,
   ghostOpacity = 1,
@@ -145,8 +147,14 @@ export default function LineRaftRenderer({
   const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const raft = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
+  const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
+    if (passive) {
+      setImmediateModelHoverId((prev) => (prev === null ? prev : null));
+      return;
+    }
+
     const handleImmediateModelHover = (event: Event) => {
       if (navigationLodActive) return;
       const customEvent = event as CustomEvent<{ modelId?: string | null }>;
@@ -157,10 +165,41 @@ export default function LineRaftRenderer({
     return () => {
       window.removeEventListener('model-pointer-hover-immediate', handleImmediateModelHover as EventListener);
     };
-  }, []);
+  }, [navigationLodActive, passive]);
 
-  const effectiveHoverModelId = immediateModelHoverId ?? hoverModelId;
-  const clippingPlanes = React.useMemo(() => {
+  const effectiveHoverModelId = passive ? null : (immediateModelHoverId ?? hoverModelId);
+  const effectiveVisualActiveModelId = passive
+    ? activeModelId
+    : (immediatePrepareActiveModelId ?? activeModelId);
+
+  React.useEffect(() => {
+    if (passive) {
+      setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+      return;
+    }
+
+    const handleModelClicked = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      const modelId = customEvent.detail?.modelId ?? null;
+      setImmediatePrepareActiveModelId((prev) => (prev === modelId ? prev : modelId));
+    };
+
+    const handleModelDeselected = () => {
+      setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+    };
+
+    window.addEventListener('model-clicked', handleModelClicked as EventListener);
+    window.addEventListener('model-deselected', handleModelDeselected);
+    return () => {
+      window.removeEventListener('model-clicked', handleModelClicked as EventListener);
+      window.removeEventListener('model-deselected', handleModelDeselected);
+    };
+  }, [passive]);
+
+  // Initialize clipping planes once (update in-place to avoid recreation)
+  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
+
+  React.useEffect(() => {
     const planes: THREE.Plane[] = [];
 
     if (clipLower != null) {
@@ -171,8 +210,10 @@ export default function LineRaftRenderer({
       planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
 
-    return planes;
+    clippingPlanesRef.current = planes;
   }, [clipLower, clipUpper]);
+
+  const clippingPlanes = clippingPlanesRef.current;
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
@@ -198,7 +239,7 @@ export default function LineRaftRenderer({
 
     const resolveTintStrength = (modelId: string) => {
       if (!colorized) return 0;
-      if (modelId === activeModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId)) return 1;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
@@ -447,7 +488,7 @@ export default function LineRaftRenderer({
     const resolveTintStrength = (modelId: string | null) => {
       if (!modelId) return colorized ? (hoverized ? 0.5 : 1) : 0;
       if (!colorized) return 0;
-      if (modelId === activeModelId || selectedModelIdSet.has(modelId)) return 1;
+      if (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId)) return 1;
       if (effectiveHoverModelId) return modelId === effectiveHoverModelId ? 0.5 : 0;
       if (hasSelectedModels) return 0;
       return hoverized ? 0.5 : 1;
@@ -490,7 +531,7 @@ export default function LineRaftRenderer({
         mesh.renderOrder = ghostRenderOrder;
       }
     }
-  }, [activeModelId, colorized, effectiveHoverModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes]);
+  }, [colorized, effectiveHoverModelId, effectiveVisualActiveModelId, hasSelectedModels, hoverized, raft.lineHeightMm, raftOpacity, raftTransparent, ghostRenderOrder, raftMeshes, selectedModelIdSet, clippingPlanes]);
 
   if (raft.bottomMode !== 'line') return null;
   return <group ref={groupRef} position={[0, 0, 0]} onClick={navigationLodActive ? undefined : handleClick} onPointerMove={navigationLodActive ? undefined : handlePointerMove} onPointerOut={navigationLodActive ? undefined : handlePointerOut} />;

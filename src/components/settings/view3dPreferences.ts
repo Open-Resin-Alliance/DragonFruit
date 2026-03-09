@@ -12,6 +12,7 @@ export type View3DSettings = {
   showSliceSatBoundingMeshForAllModels: boolean;
   sliceSatBoundingMeshMode: 'accurate_hull' | 'experimental_slice';
   experimentalSliceSatBoundingMeshRenderMode: 'shaded' | 'wireframe';
+  useSATForHoverPicking: boolean;
 };
 
 export const VIEW3D_SETTINGS_STORAGE_KEY = 'app-3d-view-settings';
@@ -31,6 +32,7 @@ export const DEFAULT_VIEW3D_SETTINGS: View3DSettings = {
   showSliceSatBoundingMeshForAllModels: false,
   sliceSatBoundingMeshMode: 'accurate_hull',
   experimentalSliceSatBoundingMeshRenderMode: 'shaded',
+  useSATForHoverPicking: false,
 };
 
 function clampNumber(input: unknown, min: number, max: number, fallback: number): number {
@@ -109,6 +111,7 @@ export function normalizeView3DSettings(input: unknown): View3DSettings {
       candidate.experimentalSliceSatBoundingMeshRenderMode ?? inferredExperimentalRenderFromLegacy,
       DEFAULT_VIEW3D_SETTINGS.experimentalSliceSatBoundingMeshRenderMode,
     ),
+    useSATForHoverPicking: clampBoolean(candidate.useSATForHoverPicking, DEFAULT_VIEW3D_SETTINGS.useSATForHoverPicking),
   };
 }
 

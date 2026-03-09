@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import React from 'react';
+import ClipperLib from 'clipper-lib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import {
   buildProjectedCrossSectionContext,
@@ -119,6 +120,14 @@ type LoopGroup = {
   holes: THREE.Vector2[][];
 };
 
+type IntPoint = { X: number; Y: number };
+
+const CLIPPER_SCALE = 1000;
+const CONTEXT_CACHE_LIMIT = 8;
+const LOOPS_CACHE_LIMIT = 48;
+const LOOP_GROUPS_CACHE_LIMIT = 48;
+const SHAPE_GEOMETRY_CACHE_LIMIT = 32;
+
 function polygonSignedArea(loop: THREE.Vector2[]): number {
   let area = 0;
   for (let i = 0; i < loop.length; i += 1) {
@@ -127,44 +136,6 @@ function polygonSignedArea(loop: THREE.Vector2[]): number {
     area += (a.x * b.y) - (b.x * a.y);
   }
   return area * 0.5;
-}
-
-function isPointOnSegment2D(p: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2, eps = 1e-7): boolean {
-  const abX = b.x - a.x;
-  const abY = b.y - a.y;
-  const apX = p.x - a.x;
-  const apY = p.y - a.y;
-  const cross = (abX * apY) - (abY * apX);
-  if (Math.abs(cross) > eps) return false;
-
-  const dot = (apX * abX) + (apY * abY);
-  if (dot < -eps) return false;
-  const lenSq = (abX * abX) + (abY * abY);
-  if (dot - lenSq > eps) return false;
-  return true;
-}
-
-function isPointOnPolygonBoundary2D(p: THREE.Vector2, loop: THREE.Vector2[], eps = 1e-7): boolean {
-  for (let i = 0; i < loop.length; i += 1) {
-    if (isPointOnSegment2D(p, loop[i], loop[(i + 1) % loop.length], eps)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isPointInPolygon2D(point: THREE.Vector2, loop: THREE.Vector2[]): boolean {
-  let inside = false;
-  for (let i = 0, j = loop.length - 1; i < loop.length; j = i, i += 1) {
-    const xi = loop[i].x;
-    const yi = loop[i].y;
-    const xj = loop[j].x;
-    const yj = loop[j].y;
-    const intersects = ((yi > point.y) !== (yj > point.y))
-      && (point.x < ((xj - xi) * (point.y - yi)) / ((yj - yi) || 1e-20) + xi);
-    if (intersects) inside = !inside;
-  }
-  return inside;
 }
 
 function normalizeLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
@@ -185,6 +156,84 @@ function orientLoop(loop: THREE.Vector2[], clockwise: boolean): THREE.Vector2[] 
   return oriented;
 }
 
+function toIntPoint(point: THREE.Vector2): IntPoint {
+  return {
+    X: Math.round(point.x * CLIPPER_SCALE),
+    Y: Math.round(point.y * CLIPPER_SCALE),
+  };
+}
+
+function toVector2Loop(path: IntPoint[]): THREE.Vector2[] {
+  return path.map((point) => new THREE.Vector2(point.X / CLIPPER_SCALE, point.Y / CLIPPER_SCALE));
+}
+
+function getPolyTreeChildren(node: any): any[] {
+  if (!node) return [];
+  if (Array.isArray(node.Childs)) return node.Childs;
+  if (typeof node.Childs === 'function') {
+    const value = node.Childs();
+    return Array.isArray(value) ? value : [];
+  }
+  if (Array.isArray(node.m_Childs)) return node.m_Childs;
+  return [];
+}
+
+function getPolyTreeContour(node: any): IntPoint[] {
+  if (!node) return [];
+  if (Array.isArray(node.Contour)) return node.Contour;
+  if (Array.isArray(node.m_polygon)) return node.m_polygon;
+  if (Array.isArray(node.m_Contour)) return node.m_Contour;
+  return [];
+}
+
+function isPolyTreeHoleNode(node: any): boolean {
+  if (!node) return false;
+  if (typeof node.IsHole === 'function') return !!node.IsHole();
+  if (typeof node.IsHole === 'boolean') return node.IsHole;
+  if (typeof node.m_IsHole === 'boolean') return node.m_IsHole;
+  return false;
+}
+
+function polyTreeToLoopGroups(polyTree: any): LoopGroup[] {
+  const result: LoopGroup[] = [];
+
+  const addOuterNode = (node: any) => {
+    const outerContour = getPolyTreeContour(node);
+    if (!outerContour || outerContour.length < 3) return;
+
+    const outer = orientLoop(toVector2Loop(outerContour), false);
+    const holes: THREE.Vector2[][] = [];
+
+    for (const child of getPolyTreeChildren(node)) {
+      if (!isPolyTreeHoleNode(child)) continue;
+      const holeContour = getPolyTreeContour(child);
+      if (!holeContour || holeContour.length < 3) continue;
+      holes.push(orientLoop(toVector2Loop(holeContour), true));
+    }
+
+    result.push({ outer, holes });
+  };
+
+  if (polyTree && typeof polyTree.GetFirst === 'function') {
+    let node = polyTree.GetFirst();
+    while (node) {
+      if (!isPolyTreeHoleNode(node)) {
+        addOuterNode(node);
+      }
+      node = typeof node.GetNext === 'function' ? node.GetNext() : null;
+    }
+    return result;
+  }
+
+  for (const child of getPolyTreeChildren(polyTree)) {
+    if (!isPolyTreeHoleNode(child)) {
+      addOuterNode(child);
+    }
+  }
+
+  return result;
+}
+
 function buildLoopGroups(loops: THREE.Vector2[][]): LoopGroup[] {
   const normalizedLoops = loops
     .map(normalizeLoop)
@@ -192,62 +241,20 @@ function buildLoopGroups(loops: THREE.Vector2[][]): LoopGroup[] {
 
   if (normalizedLoops.length === 0) return [];
 
-  const absAreas = normalizedLoops.map((loop) => Math.abs(polygonSignedArea(loop)));
-  const parent = new Array<number>(normalizedLoops.length).fill(-1);
+  const subject = normalizedLoops.map((loop) => loop.map(toIntPoint));
+  const clipper = new ClipperLib.Clipper();
+  clipper.StrictlySimple = true;
+  clipper.AddPaths(subject, ClipperLib.PolyType.ptSubject, true);
 
-  for (let i = 0; i < normalizedLoops.length; i += 1) {
-    let bestParent = -1;
-    let bestParentArea = Infinity;
+  const polyTree = new ClipperLib.PolyTree();
+  clipper.Execute(
+    ClipperLib.ClipType.ctUnion,
+    polyTree,
+    ClipperLib.PolyFillType.pftNonZero,
+    ClipperLib.PolyFillType.pftNonZero,
+  );
 
-    for (let j = 0; j < normalizedLoops.length; j += 1) {
-      if (i === j) continue;
-      if (absAreas[j] <= absAreas[i]) continue;
-
-      const candidatePoint = normalizedLoops[i].find((p) => !isPointOnPolygonBoundary2D(p, normalizedLoops[j]));
-      if (!candidatePoint) continue;
-      if (!isPointInPolygon2D(candidatePoint, normalizedLoops[j])) continue;
-
-      if (absAreas[j] < bestParentArea) {
-        bestParentArea = absAreas[j];
-        bestParent = j;
-      }
-    }
-
-    parent[i] = bestParent;
-  }
-
-  const depthMemo = new Array<number>(normalizedLoops.length).fill(-1);
-  const getDepth = (index: number): number => {
-    if (depthMemo[index] >= 0) return depthMemo[index];
-    const p = parent[index];
-    const depth = p < 0 ? 0 : getDepth(p) + 1;
-    depthMemo[index] = depth;
-    return depth;
-  };
-
-  const groupsByOuterIndex = new Map<number, LoopGroup>();
-
-  for (let i = 0; i < normalizedLoops.length; i += 1) {
-    const depth = getDepth(i);
-    if (depth % 2 === 0) {
-      groupsByOuterIndex.set(i, {
-        outer: orientLoop(normalizedLoops[i], false),
-        holes: [],
-      });
-    }
-  }
-
-  for (let i = 0; i < normalizedLoops.length; i += 1) {
-    const depth = getDepth(i);
-    if (depth % 2 !== 1) continue;
-    const p = parent[i];
-    if (p < 0) continue;
-    const owner = groupsByOuterIndex.get(p);
-    if (!owner) continue;
-    owner.holes.push(orientLoop(normalizedLoops[i], true));
-  }
-
-  return Array.from(groupsByOuterIndex.values());
+  return polyTreeToLoopGroups(polyTree);
 }
 
 // Rasterize loops into a pixel grid
@@ -361,6 +368,17 @@ export function CrossSectionCap({
 
   const projectedLoopsCacheRef = React.useRef<Map<string, THREE.Vector2[][]>>(new Map());
   const projectedContextCacheRef = React.useRef<Map<string, ProjectedCrossSectionContext>>(new Map());
+  const projectedLoopGroupsCacheRef = React.useRef<Map<string, LoopGroup[]>>(new Map());
+  const projectedShapeGeometryCacheRef = React.useRef<Map<string, THREE.ShapeGeometry>>(new Map());
+
+  React.useEffect(() => {
+    return () => {
+      for (const geometry of projectedShapeGeometryCacheRef.current.values()) {
+        geometry.dispose();
+      }
+      projectedShapeGeometryCacheRef.current.clear();
+    };
+  }, []);
 
   const mesh = React.useMemo(() => {
     if (!visible) return null;
@@ -368,11 +386,21 @@ export function CrossSectionCap({
     const effectiveY = interactive
       ? Math.round(y / Math.max(0.001, interactiveZStepMm)) * Math.max(0.001, interactiveZStepMm)
       : y;
+    const quantizedStepMm = interactive ? Math.max(0.001, interactiveZStepMm) : undefined;
 
     const loops: THREE.Vector2[][] = [];
+    let projectedCacheKey: string | null = null;
+    const canUseProjectedCaches = Boolean(
+      projectedModels
+      && (!sourceObject || (interactive && preferProjectedOnlyDuringInteractive))
+      && !geometry,
+    );
 
     if (projectedModels) {
       const cacheKey = `${projectedModelSignature}|${effectiveY.toFixed(3)}`;
+      if (canUseProjectedCaches) {
+        projectedCacheKey = cacheKey;
+      }
       const cached = projectedLoopsCacheRef.current.get(cacheKey);
       if (cached) {
         loops.push(...cached);
@@ -385,7 +413,7 @@ export function CrossSectionCap({
             context = buildProjectedCrossSectionContext(projectedModels) ?? undefined;
             if (context) {
               projectedContextCacheRef.current.set(projectedModelSignature, context);
-              if (projectedContextCacheRef.current.size > 8) {
+              if (projectedContextCacheRef.current.size > CONTEXT_CACHE_LIMIT) {
                 const oldestContextKey = projectedContextCacheRef.current.keys().next().value;
                 if (oldestContextKey) projectedContextCacheRef.current.delete(oldestContextKey);
               }
@@ -396,6 +424,7 @@ export function CrossSectionCap({
             computed = buildProjectedCrossSectionLoopsAtZFromContext({
               context,
               zMm: effectiveY,
+              quantizedStepMm,
             });
           }
         }
@@ -407,7 +436,7 @@ export function CrossSectionCap({
         loops.push(...computed);
 
         projectedLoopsCacheRef.current.set(cacheKey, computed);
-        if (projectedLoopsCacheRef.current.size > 48) {
+        if (projectedLoopsCacheRef.current.size > LOOPS_CACHE_LIMIT) {
           const oldestKey = projectedLoopsCacheRef.current.keys().next().value;
           if (oldestKey) projectedLoopsCacheRef.current.delete(oldestKey);
         }
@@ -424,7 +453,21 @@ export function CrossSectionCap({
 
     if (loops.length === 0) return null;
 
-    const loopGroups = buildLoopGroups(loops);
+    let loopGroups: LoopGroup[] | undefined;
+    if (projectedCacheKey) {
+      loopGroups = projectedLoopGroupsCacheRef.current.get(projectedCacheKey);
+      if (!loopGroups) {
+        loopGroups = buildLoopGroups(loops);
+        projectedLoopGroupsCacheRef.current.set(projectedCacheKey, loopGroups);
+        if (projectedLoopGroupsCacheRef.current.size > LOOP_GROUPS_CACHE_LIMIT) {
+          const oldestKey = projectedLoopGroupsCacheRef.current.keys().next().value;
+          if (oldestKey) projectedLoopGroupsCacheRef.current.delete(oldestKey);
+        }
+      }
+    } else {
+      loopGroups = buildLoopGroups(loops);
+    }
+
     if (loopGroups.length === 0) return null;
 
     const group = new THREE.Group();
@@ -457,13 +500,42 @@ export function CrossSectionCap({
         }
 
         if (pixelCount > 0) {
-          const pixelSize = pxMm * 0.95;
-          const pixelGeom = new THREE.PlaneGeometry(pixelSize, pixelSize);
+          const rgba = new Uint8Array(width * height * 4);
+          const tint = new THREE.Color(color);
+          const r = Math.round(THREE.MathUtils.clamp(tint.r, 0, 1) * 255);
+          const g = Math.round(THREE.MathUtils.clamp(tint.g, 0, 1) * 255);
+          const b = Math.round(THREE.MathUtils.clamp(tint.b, 0, 1) * 255);
+
+          for (let row = 0; row < height; row += 1) {
+            for (let col = 0; col < width; col += 1) {
+              const srcIndex = row * width + col;
+              const flippedRow = height - 1 - row;
+              const dstIndex = (flippedRow * width + col) * 4;
+              if (grid[srcIndex] === 1) {
+                rgba[dstIndex] = r;
+                rgba[dstIndex + 1] = g;
+                rgba[dstIndex + 2] = b;
+                rgba[dstIndex + 3] = 255;
+              }
+            }
+          }
+
+          const texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat);
+          texture.needsUpdate = true;
+          texture.flipY = false;
+          texture.magFilter = THREE.NearestFilter;
+          texture.minFilter = THREE.NearestFilter;
+          texture.generateMipmaps = false;
+
+          const planeWidth = width * pxMm;
+          const planeHeight = height * pxMm;
+          const planeGeom = new THREE.PlaneGeometry(planeWidth, planeHeight);
           const mat = new THREE.MeshBasicMaterial({
-            color,
+            map: texture,
+            transparent: true,
+            alphaTest: 0.5,
             depthWrite: true,
             depthTest: true,
-            transparent: false,
             opacity: 1.0,
             side: THREE.FrontSide,
             polygonOffset: true,
@@ -471,37 +543,50 @@ export function CrossSectionCap({
             polygonOffsetUnits: -1,
           });
 
-          const instancedMesh = new THREE.InstancedMesh(pixelGeom, mat, pixelCount);
-          const matrix = new THREE.Matrix4();
-          let instanceIndex = 0;
-
-          for (let row = 0; row < height; row += 1) {
-            for (let col = 0; col < width; col += 1) {
-              if (grid[row * width + col] === 1) {
-                const worldX = originX + col * pxMm;
-                const worldY = originY + row * pxMm;
-                matrix.setPosition(worldX, worldY, effectiveY + 1e-4);
-                instancedMesh.setMatrixAt(instanceIndex, matrix);
-                instanceIndex += 1;
-              }
-            }
-          }
-
-          instancedMesh.instanceMatrix.needsUpdate = true;
-          group.add(instancedMesh);
+          const plane = new THREE.Mesh(planeGeom, mat);
+          plane.position.set(originX + ((width - 1) * pxMm * 0.5), originY + ((height - 1) * pxMm * 0.5), effectiveY + 1e-4);
+          group.add(plane);
         }
       }
     } else {
-      const shapes = loopGroups.map((loopGroup) => {
-        const shape = new THREE.Shape(loopGroup.outer);
-        for (const hole of loopGroup.holes) {
-          shape.holes.push(new THREE.Path(hole));
-        }
-        return shape;
-      });
+      let shapeGeom: THREE.ShapeGeometry;
+      if (projectedCacheKey) {
+        const cachedGeometry = projectedShapeGeometryCacheRef.current.get(projectedCacheKey);
+        if (cachedGeometry) {
+          shapeGeom = cachedGeometry;
+        } else {
+          const shapes = loopGroups.map((loopGroup) => {
+            const shape = new THREE.Shape(loopGroup.outer);
+            for (const hole of loopGroup.holes) {
+              shape.holes.push(new THREE.Path(hole));
+            }
+            return shape;
+          });
 
-      const shapeGeom = new THREE.ShapeGeometry(shapes);
-      shapeGeom.translate(0, 0, effectiveY + 1e-4);
+          shapeGeom = new THREE.ShapeGeometry(shapes);
+          shapeGeom.translate(0, 0, effectiveY + 1e-4);
+          projectedShapeGeometryCacheRef.current.set(projectedCacheKey, shapeGeom);
+          if (projectedShapeGeometryCacheRef.current.size > SHAPE_GEOMETRY_CACHE_LIMIT) {
+            const oldestKey = projectedShapeGeometryCacheRef.current.keys().next().value;
+            if (oldestKey) {
+              const oldestGeometry = projectedShapeGeometryCacheRef.current.get(oldestKey);
+              projectedShapeGeometryCacheRef.current.delete(oldestKey);
+              oldestGeometry?.dispose();
+            }
+          }
+        }
+      } else {
+        const shapes = loopGroups.map((loopGroup) => {
+          const shape = new THREE.Shape(loopGroup.outer);
+          for (const hole of loopGroup.holes) {
+            shape.holes.push(new THREE.Path(hole));
+          }
+          return shape;
+        });
+
+        shapeGeom = new THREE.ShapeGeometry(shapes);
+        shapeGeom.translate(0, 0, effectiveY + 1e-4);
+      }
 
       const mat = new THREE.MeshBasicMaterial({
         color,

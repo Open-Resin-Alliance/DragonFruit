@@ -30,8 +30,10 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
   const visibleColor = useMemo(() => new THREE.Color('#ffff00'), []); // Bright yellow when visible
   const occludedColor = useMemo(() => new THREE.Color('#fF6600'), []); // Vibrant red-orange when behind mesh
 
-  // Create clipping planes for layer slider support
-  const clippingPlanes = useMemo(() => {
+  // Initialize clipping planes once (update in-place to avoid recreation)
+  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
+
+  React.useEffect(() => {
     const planes: THREE.Plane[] = [];
 
     if (clipLower != null) {
@@ -41,8 +43,10 @@ export function IslandOverlay({ markers, meshRef, brushRadiusMm, color, opacity,
       planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
 
-    return planes;
+    clippingPlanesRef.current = planes;
   }, [clipLower, clipUpper]);
+
+  const clippingPlanes = clippingPlanesRef.current;
 
   // console.log('[IslandOverlay] Rendering with:', {
   //   markerCount: markers.length,

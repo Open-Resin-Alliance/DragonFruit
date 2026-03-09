@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { CrossSectionCap } from '@/components/scene/CrossSectionCap';
+import { CrossSectionStencilCap, type CrossSectionStencilCapEntry } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
@@ -14,6 +14,7 @@ import { IslandIdLabels } from '@/components/scene/IslandIdLabels';
 import { ScreenSpaceGizmo as UnifiedGizmo } from '@/components/gizmo';
 import { PickingDebugOverlay } from '@/components/picking';
 import { usePicking } from '@/components/picking';
+import { SATHoverPicker } from '@/components/picking/SATHoverPicker';
 import { SelectionProvider, SelectionManager, SelectionOutlineRenderer, SelectionSpotlight } from '@/components/selection';
 import type { SelectionHighlightMode } from '@/components/selection';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
@@ -374,11 +375,47 @@ function OrbitPivotIndicator({
 function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
   const { hit } = usePicking();
   const wasEmptyRef = React.useRef<boolean>(false);
+  const lastModelHoverIdRef = React.useRef<string | null>(null);
+  const hoverClearTimeoutRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     if (!enabled) {
       wasEmptyRef.current = false;
+      lastModelHoverIdRef.current = null;
+      if (hoverClearTimeoutRef.current !== null) {
+        window.clearTimeout(hoverClearTimeoutRef.current);
+        hoverClearTimeoutRef.current = null;
+      }
       return;
+    }
+
+    const hoveredModelIdFromPicking = (
+      hit.category === 'model' && typeof hit.objectId === 'string' && hit.objectId.length > 0
+    )
+      ? hit.objectId
+      : null;
+
+    if (hoveredModelIdFromPicking) {
+      if (hoverClearTimeoutRef.current !== null) {
+        window.clearTimeout(hoverClearTimeoutRef.current);
+        hoverClearTimeoutRef.current = null;
+      }
+    } else if (lastModelHoverIdRef.current !== null && hoverClearTimeoutRef.current === null) {
+      hoverClearTimeoutRef.current = window.setTimeout(() => {
+        hoverClearTimeoutRef.current = null;
+        if (lastModelHoverIdRef.current === null) return;
+        lastModelHoverIdRef.current = null;
+        window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+          detail: { modelId: null },
+        }));
+      }, 72);
+    }
+
+    if (lastModelHoverIdRef.current !== hoveredModelIdFromPicking) {
+      lastModelHoverIdRef.current = hoveredModelIdFromPicking;
+      window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+        detail: { modelId: hoveredModelIdFromPicking },
+      }));
     }
 
     const isEmpty = hit.category === 'none';
@@ -399,22 +436,16 @@ function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
     window.dispatchEvent(new CustomEvent('support-raft-model-pointer-hover', {
       detail: { modelId: null, category: 'raft' },
     }));
-  }, [enabled, hit.category]);
+  }, [enabled, hit.category, hit.objectId]);
 
-  return null;
-}
-
-function CrossSectionScrubFpsMonitor({
-  enabled,
-  onFrame,
-}: {
-  enabled: boolean;
-  onFrame: (deltaSeconds: number) => void;
-}) {
-  useFrame((_, delta) => {
-    if (!enabled) return;
-    onFrame(delta);
-  });
+  React.useEffect(() => {
+    return () => {
+      if (hoverClearTimeoutRef.current !== null) {
+        window.clearTimeout(hoverClearTimeoutRef.current);
+        hoverClearTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   return null;
 }
@@ -1136,6 +1167,7 @@ export function SceneCanvas({
   // across all modes (prepare/support/analysis/export).
   const effectiveModelSelected = isModelSelected || !!activeModelId;
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
+  const [isGizmoRetargeting, setIsGizmoRetargeting] = React.useState(false);
   const [outOfBoundsRotateGraceActive, setOutOfBoundsRotateGraceActive] = React.useState(false);
   const outOfBoundsRotateGraceTimeoutRef = React.useRef<number | null>(null);
   const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
@@ -1362,6 +1394,9 @@ export function SceneCanvas({
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
   const [hoveredMeshModelId, setHoveredMeshModelId] = React.useState<string | null>(null);
+  const hoveredMeshModelIdRef = React.useRef<string | null>(null);
+  const hoverModelRafRef = React.useRef<number | null>(null);
+  const pendingHoverModelIdRef = React.useRef<string | null>(null);
   const [hoveredRaftModelId, setHoveredRaftModelId] = React.useState<string | null>(null);
   const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
   const hoveredSupportModelIdFromStore = React.useMemo(() => {
@@ -1379,11 +1414,40 @@ export function SceneCanvas({
   const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
     lastHoveredModelPointRef.current = point;
   }, []);
+  React.useEffect(() => {
+    hoveredMeshModelIdRef.current = hoveredMeshModelId;
+  }, [hoveredMeshModelId]);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverModelRafRef.current !== null) {
+        cancelAnimationFrame(hoverModelRafRef.current);
+        hoverModelRafRef.current = null;
+      }
+    };
+  }, []);
+
   const onModelHoverModelChange = React.useCallback((id: string | null) => {
-    setHoveredMeshModelId(id);
+    const nextId = id ?? null;
+    pendingHoverModelIdRef.current = nextId;
+    if (hoverModelRafRef.current !== null) return;
+
+    hoverModelRafRef.current = requestAnimationFrame(() => {
+      hoverModelRafRef.current = null;
+      const pending = pendingHoverModelIdRef.current;
+      pendingHoverModelIdRef.current = null;
+      if (pending === hoveredMeshModelIdRef.current) return;
+      setHoveredMeshModelId((prev) => (prev === pending ? prev : pending));
+    });
   }, []);
 
   React.useEffect(() => {
+    const handleModelPointerHoverImmediate = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      const modelId = customEvent.detail?.modelId ?? null;
+      setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
+    };
+
     const handleSupportRaftModelPointerHover = (event: Event) => {
       const customEvent = event as CustomEvent<{ modelId?: string | null; category?: string | null }>;
       const category = customEvent.detail?.category;
@@ -1407,12 +1471,34 @@ export function SceneCanvas({
       }
     };
 
+    window.addEventListener('model-pointer-hover-immediate', handleModelPointerHoverImmediate as EventListener);
     window.addEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
 
     return () => {
+      window.removeEventListener('model-pointer-hover-immediate', handleModelPointerHoverImmediate as EventListener);
       window.removeEventListener('support-raft-model-pointer-hover', handleSupportRaftModelPointerHover as EventListener);
     };
   }, []);
+
+  // Listen for SAT-based hover changes (when enabled)
+  React.useEffect(() => {
+    if (!activeBuildVolumeSettings.useSATForHoverPicking) return;
+
+    const handleSATHoverModelChanged = (event: Event) => {
+      const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+      const modelId = customEvent.detail?.modelId ?? null;
+      // When SAT picking is active, it replaces GPU picking for hover state
+      setHoveredMeshModelId((prev) => (prev === modelId ? prev : modelId));
+      // Clear support/raft hover states when SAT is enabled (they're now included in the hull)
+      setHoveredRaftModelId(null);
+      setHoveredSupportPointerModelId(null);
+    };
+
+    window.addEventListener('sat-hover-model-changed', handleSATHoverModelChanged as EventListener);
+    return () => {
+      window.removeEventListener('sat-hover-model-changed', handleSATHoverModelChanged as EventListener);
+    };
+  }, [activeBuildVolumeSettings.useSATForHoverPicking]);
 
   const selectModelFromPointerHit = React.useCallback((modelId: string | null | undefined) => {
     if (mode !== 'prepare') return;
@@ -1454,7 +1540,7 @@ export function SceneCanvas({
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
-    if (isGizmoDragging) return null;
+    if (isGizmoDragging || isGizmoRetargeting) return null;
 
     const bounds = new THREE.Box3();
     let hasAny = false;
@@ -1600,7 +1686,7 @@ export function SceneCanvas({
     }
 
     return hasAny ? bounds : null;
-  }, [isGizmoDragging, raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
+  }, [isGizmoDragging, isGizmoRetargeting, raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
 
   const computeModelWorldBounds = React.useCallback((
     model: LoadedModel,
@@ -1653,7 +1739,7 @@ export function SceneCanvas({
   );
 
   const modelWorldBounds = React.useMemo(() => {
-    if (isGizmoDragging) {
+    if (isGizmoDragging || isGizmoRetargeting) {
       return cachedModelWorldBoundsRef.current;
     }
 
@@ -1668,11 +1754,11 @@ export function SceneCanvas({
     }
     cachedModelWorldBoundsRef.current = map;
     return map;
-  }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, models, transform]);
+  }, [activeTransformOverrideModelId, buildVolumeBounds, computeModelWorldBounds, isGizmoDragging, isGizmoRetargeting, models, transform]);
 
   const outOfBoundsModels = React.useMemo(() => {
     if (!buildVolumeBounds) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
-    if (isGizmoDragging || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
+    if (isGizmoDragging || isGizmoRetargeting || outOfBoundsRotateGraceActive) return [] as Array<{ id: string; name: string; bounds: THREE.Box3 }>;
 
     return models
       .filter((model) => model.visible)
@@ -1690,6 +1776,7 @@ export function SceneCanvas({
     buildVolumeBounds,
     computeModelWorldBounds,
     isGizmoDragging,
+    isGizmoRetargeting,
     modelWorldBounds,
     models,
     outOfBoundsRotateGraceActive,
@@ -1732,6 +1819,7 @@ export function SceneCanvas({
     || isBracePlacementActive
     || isSupportBracePlacementActive,
   );
+  const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
   const supportHoverTargetActive = supportStateForBounds.hoveredCategory === 'support'
     || supportStateForBounds.hoveredCategory === 'segment'
@@ -2867,73 +2955,27 @@ export function SceneCanvas({
     transform,
   ]);
 
-  const crossSectionInteractive = Boolean(isLayerScrubbing);
-  const requestedCrossSectionMode: 'smooth' | 'rasterized' = crossSectionMode ?? 'smooth';
-  const [crossSectionAutoFallbackRasterized, setCrossSectionAutoFallbackRasterized] = React.useState(false);
-  const crossSectionFpsEmaRef = React.useRef<number | null>(null);
-  const crossSectionLowFpsSinceRef = React.useRef<number | null>(null);
-  const crossSectionHighFpsSinceRef = React.useRef<number | null>(null);
+  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
+    return models
+      .filter((model) => model.visible)
+      .map((model) => ({
+        id: model.id,
+        geometry: model.geometry.geometry,
+        center: model.geometry.center,
+        transform: model.id === activeModelId && transform
+          ? transform
+          : model.transform,
+      }));
+  }, [activeModelId, models, transform]);
 
-  const crossSectionAutoFallbackEnabled = crossSectionInteractive && requestedCrossSectionMode === 'smooth';
-
-  const handleCrossSectionFpsFrame = React.useCallback((delta: number) => {
-    const dt = Math.max(0.0001, delta);
-    const fps = 1 / dt;
-    const alpha = 0.12;
-    const prev = crossSectionFpsEmaRef.current;
-    const ema = prev == null ? fps : (prev * (1 - alpha) + fps * alpha);
-    crossSectionFpsEmaRef.current = ema;
-
-    const now = performance.now();
-    const dropThresholdFps = 24;
-    const recoverThresholdFps = 33;
-    const dropHoldMs = 400;
-    const recoverHoldMs = 900;
-
-    if (!crossSectionAutoFallbackRasterized) {
-      if (ema < dropThresholdFps) {
-        if (crossSectionLowFpsSinceRef.current == null) {
-          crossSectionLowFpsSinceRef.current = now;
-        } else if ((now - crossSectionLowFpsSinceRef.current) >= dropHoldMs) {
-          setCrossSectionAutoFallbackRasterized(true);
-          crossSectionHighFpsSinceRef.current = null;
-        }
-      } else {
-        crossSectionLowFpsSinceRef.current = null;
-      }
-      return;
-    }
-
-    if (ema > recoverThresholdFps) {
-      if (crossSectionHighFpsSinceRef.current == null) {
-        crossSectionHighFpsSinceRef.current = now;
-      } else if ((now - crossSectionHighFpsSinceRef.current) >= recoverHoldMs) {
-        setCrossSectionAutoFallbackRasterized(false);
-        crossSectionLowFpsSinceRef.current = null;
-      }
-    } else {
-      crossSectionHighFpsSinceRef.current = null;
-    }
-  }, [crossSectionAutoFallbackRasterized]);
-
-  React.useEffect(() => {
-    if (crossSectionAutoFallbackEnabled) return;
-    setCrossSectionAutoFallbackRasterized(false);
-    crossSectionFpsEmaRef.current = null;
-    crossSectionLowFpsSinceRef.current = null;
-    crossSectionHighFpsSinceRef.current = null;
-  }, [crossSectionAutoFallbackEnabled]);
-
-  const crossSectionModeForRender: 'smooth' | 'rasterized' = (
-    crossSectionAutoFallbackEnabled && crossSectionAutoFallbackRasterized
-      ? 'rasterized'
-      : requestedCrossSectionMode
+  const crossSectionPlaneWidthMm = Math.max(
+    1,
+    (activeBuildVolumeSettings?.widthMm ?? 200) + 24,
   );
-
-  const crossSectionPxMmForRender = crossSectionModeForRender === 'rasterized'
-    ? Math.max(pxMm ?? 0.1, 0.25)
-    : pxMm;
-  const crossSectionInteractiveStepMm = Math.max(0.001, layerHeightMm ?? 0.05);
+  const crossSectionPlaneHeightMm = Math.max(
+    1,
+    (activeBuildVolumeSettings?.depthMm ?? 200) + 24,
+  );
 
   const introControllerBounds = introBoundsSnapshot;
 
@@ -3001,7 +3043,7 @@ export function SceneCanvas({
   const pendingEntryAnimRef = React.useRef<Record<string, { fromZ: number; runId: number; skipBounce: boolean }>>({});
   const isIntroAnimating = cameraIntroRunId > cameraIntroCompletedRunId;
   const isDropAnimating = Object.keys(entryDropOffsets).length > 0;
-  const dynamicDpr = (isIntroAnimating || isDropAnimating || isGizmoDragging)
+  const dynamicDpr = (isIntroAnimating || isDropAnimating || isGizmoDragging || isGizmoRetargeting)
     ? ([1, 1.5] as [number, number])
     : ([1, 10] as [number, number]);
 
@@ -3459,7 +3501,7 @@ export function SceneCanvas({
 
   const hidePlateContactPrimitives = plateContactCullActive;
   const hideRaftPrimitives = plateContactCullActive;
-  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive || isGizmoDragging;
+  const navigationLodActive = isOrbitInteracting || spaceMouseNavigationActive || isGizmoDragging || isGizmoRetargeting;
   const isSpotlightHighlightActive =
     effectiveModelSelected
     && selectionHighlightMode === 'spotlight';
@@ -4691,6 +4733,34 @@ export function SceneCanvas({
     };
   }, []);
 
+  // Callbacks for SATHoverPicker to access model data
+  const getModelTransformForSAT = React.useCallback((modelId: string) => {
+    const model = models.find((m) => m.id === modelId);
+    if (!model) return null;
+    return {
+      position: model.transform.position.clone(),
+      rotation: model.transform.rotation.clone(),
+      scale: model.transform.scale.clone(),
+    };
+  }, [models]);
+
+  const getModelGeometryForSAT = React.useCallback((modelId: string) => {
+    const model = models.find((m) => m.id === modelId);
+    return model?.geometry?.geometry ?? null;
+  }, [models]);
+
+  const getSupportLocalPointsForSAT = React.useCallback((modelId: string) => {
+    // Collect all support joint vertices for this model's supports
+    // We don't have direct access to support hull points here, so return null
+    // The SAT picker can handle null gracefully
+    return null;
+  }, []);
+
+  const visibleModelIds = React.useMemo(
+    () => models.filter((m) => m.visible).map((m) => m.id),
+    [models],
+  );
+
   return (
     <div
       style={{ width: '100%', height: '100%', position: 'relative' }}
@@ -4710,11 +4780,19 @@ export function SceneCanvas({
         onPointerMissed={handleScenePointerMissed}
       >
         <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
-        <CrossSectionScrubFpsMonitor
-          enabled={crossSectionAutoFallbackEnabled}
-          onFrame={handleCrossSectionFpsFrame}
-        />
         <LoggingHelper mode={mode} />
+        
+        {/* SAT-based hover detection (experimental) */}
+        {activeBuildVolumeSettings.useSATForHoverPicking && (
+          <SATHoverPicker
+            enabled={activeBuildVolumeSettings.useSATForHoverPicking}
+            visibleModelIds={visibleModelIds}
+            getModelTransform={getModelTransformForSAT}
+            getModelGeometry={getModelGeometryForSAT}
+            getSupportLocalPoints={getSupportLocalPointsForSAT}
+          />
+        )}
+
         <Lights
           ambientIntensity={ambientIntensity ?? 1.2}
           directionalIntensity={directionalIntensity ?? 0.3}
@@ -4734,7 +4812,7 @@ export function SceneCanvas({
         <CameraProjectionController mode={cameraProjectionMode} />
         <CameraClipPlaneStabilizer />
         {/* GPU Picking Provider - wraps all pickable content when enabled */}
-        <PickingProviderWrapper enabled={gpuPickingTest} mode={mode}>
+        <PickingProviderWrapper enabled={gpuPickingTest} mode={mode} transformMode={transformMode}>
           <PickingStateSyncer />
           <PickingEmptySpaceHoverResetter enabled={mode === 'prepare' || mode === 'support'} />
 
@@ -4866,7 +4944,7 @@ export function SceneCanvas({
                             hoverModelId={hoveredModelId}
                             modelDropOffsetsById={entryDropOffsets}
                             navigationLodActive={navigationLodActive}
-                            disableSelectionAndHover={supportCreationModeActive}
+                            disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                             raftColorized={raftColorized}
                             raftHoverized={raftHoverized}
                             passive
@@ -5187,7 +5265,7 @@ export function SceneCanvas({
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive={navigationLodActive}
-                  disableSelectionAndHover={supportCreationModeActive}
+                  disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
@@ -5197,23 +5275,20 @@ export function SceneCanvas({
               )}
               </group>{/* end supportDragGroupRef */}
 
-              {/* Projection-based cross-section cap sourced from slicer world triangles (models + supports + rafts). */}
               {clipUpper != null && !hideCrossSectionCap && (
-                <CrossSectionCap
-                  projectedModels={models}
+                <CrossSectionStencilCap
+                  entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
+                  sourceObjectVersion={supportRenderRefreshNonce + (isGizmoDragging ? 1 : 0) + (holdSupportDragDelta ? 1 : 0)}
                   y={clipUpper}
                   color="#FFFFFF"
-                  mode={crossSectionModeForRender}
-                  pxMm={crossSectionPxMmForRender}
-                  interactive={crossSectionInteractive}
-                  interactiveZStepMm={crossSectionInteractiveStepMm}
-                  preferProjectedOnlyDuringInteractive
+                  planeWidthMm={crossSectionPlaneWidthMm}
+                  planeHeightMm={crossSectionPlaneHeightMm}
                   visible={!hideCrossSectionCap && clipUpper != null}
                 />
               )}
 
-              {!hideRaftPrimitives && !isGizmoDragging && (
+              {!hideRaftPrimitives && !isGizmoDragging && !isGizmoRetargeting && (
                 <FootprintBorderRenderer
                   modelGeometry={activeModel ? activeModel.geometry : null}
                   modelTransform={activeModelTransform}
@@ -5254,7 +5329,7 @@ export function SceneCanvas({
                   hoverModelId={hoveredModelId}
                   modelDropOffsetsById={entryDropOffsets}
                   navigationLodActive
-                  disableSelectionAndHover={supportCreationModeActive}
+                  disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                   raftColorized={raftColorized}
                   raftHoverized={raftHoverized}
                   passive
@@ -5289,7 +5364,7 @@ export function SceneCanvas({
                         hoverModelId={hoveredModelId}
                         modelDropOffsetsById={entryDropOffsets}
                         modelFilterId={modelId}
-                        disableSelectionAndHover={supportCreationModeActive}
+                        disableSelectionAndHover={supportCreationModeActive || suppressSupportSelectionAndHover}
                         raftColorized={raftColorized}
                         raftHoverized={raftHoverized}
                         passive
@@ -5325,6 +5400,7 @@ export function SceneCanvas({
                   enableScale
                   enableLighting
                   onDragStateChange={setIsGizmoDragging}
+                  onRetargetingChange={setIsGizmoRetargeting}
                   onMove={(delta) => {
                     if (activeGroupRef.current) {
                       activeGroupRef.current.position.add(delta);

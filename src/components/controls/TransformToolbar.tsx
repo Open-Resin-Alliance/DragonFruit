@@ -30,7 +30,7 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
       className="fixed top-16 left-1/2 z-30 -translate-x-1/2 rounded-full pointer-events-auto"
       style={{
         padding: '2px',
-        background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent), var(--border-subtle) 70%), var(--border-subtle), color-mix(in srgb, var(--accent), var(--border-subtle) 70%))',
+        background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%), var(--border-subtle), color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 70%))',
         boxShadow: '0 4px 20px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.2)',
       }}
     >
@@ -46,8 +46,8 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
           style={{
             width: 'calc((100% - 8px) / 4)',
             transform: `translateX(${activeIndex * 100}%)`,
-            background: 'var(--accent)',
-            boxShadow: '0 2px 12px color-mix(in srgb, var(--accent), transparent 50%)',
+            background: 'var(--accent-secondary)',
+            boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',
           }}
         />
 
@@ -67,7 +67,7 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
                   : 'hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)]'
               }`}
               style={active ? {
-                color: 'var(--accent-contrast)',
+                color: '#000000',
               } : {
                 background: hovered
                   ? 'color-mix(in srgb, var(--surface-2), transparent 18%)'

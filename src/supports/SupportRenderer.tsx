@@ -120,8 +120,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const excludedModelIdSet = useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);
     const hidePlateContactPrimitivesEffective = hidePlateContactPrimitives;
     const restrictToActiveModel = mode === 'support' && !!activeModelId;
+    const filteredActiveModelId = restrictToActiveModel ? activeModelId : null;
     const suppressHover = supportSelectionAndHoverSuppressed || isJointCreationActive || !isInteractable || braceAltActive;
     const [immediateModelHoverId, setImmediateModelHoverId] = React.useState<string | null>(null);
+    const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
     const [sceneHoveredSupportId, setSceneHoveredSupportId] = React.useState<string | null>(null);
     const [marqueeHoveredSupportId, setMarqueeHoveredSupportId] = React.useState<string | null>(null);
     const pendingSceneHoverClearFrameRef = React.useRef<number | null>(null);
@@ -218,12 +220,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const resolvedModelId = resolveSupportModelId(modelId, supportId);
 
         if ((restrictToActiveModel || modelFilterId || excludeModelId || excludedModelIdSet.size > 0) && !resolvedModelId) return false;
-        if (restrictToActiveModel && resolvedModelId !== activeModelId) return false;
+        if (restrictToActiveModel && resolvedModelId !== filteredActiveModelId) return false;
         if (modelFilterId && resolvedModelId !== modelFilterId) return false;
         if (excludeModelId && resolvedModelId === excludeModelId) return false;
         if (resolvedModelId && excludedModelIdSet.has(resolvedModelId)) return false;
         return true;
-    }, [resolveSupportModelId, restrictToActiveModel, activeModelId, modelFilterId, excludeModelId, excludedModelIdSet]);
+    }, [resolveSupportModelId, restrictToActiveModel, filteredActiveModelId, modelFilterId, excludeModelId, excludedModelIdSet]);
 
     useEffect(() => {
         if (!interactionHooksEnabled) return;
@@ -405,8 +407,36 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, []);
 
     const effectiveHoverModelId = supportSelectionAndHoverSuppressed ? null : (immediateModelHoverId ?? hoverModelId);
+    const effectiveVisualActiveModelId = mode === 'prepare'
+        ? (immediatePrepareActiveModelId ?? activeModelId)
+        : activeModelId;
     const hoveredCategoryForVisual = supportSelectionAndHoverSuppressed ? 'none' : state.hoveredCategory;
     const hoveredIdForVisual = supportSelectionAndHoverSuppressed ? null : state.hoveredId;
+
+    useEffect(() => {
+        if (mode !== 'prepare') {
+            setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+            return;
+        }
+
+        const handleModelClicked = (event: Event) => {
+            const customEvent = event as CustomEvent<{ modelId?: string | null }>;
+            const modelId = customEvent.detail?.modelId ?? null;
+            setImmediatePrepareActiveModelId((prev) => (prev === modelId ? prev : modelId));
+        };
+
+        const handleModelDeselected = () => {
+            setImmediatePrepareActiveModelId((prev) => (prev === null ? prev : null));
+        };
+
+        window.addEventListener('model-clicked', handleModelClicked as EventListener);
+        window.addEventListener('model-deselected', handleModelDeselected);
+
+        return () => {
+            window.removeEventListener('model-clicked', handleModelClicked as EventListener);
+            window.removeEventListener('model-deselected', handleModelDeselected);
+        };
+    }, [mode]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -522,7 +552,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
 
-    const clippingPlanes = useMemo(() => {
+    // Initialize clipping planes once (update in-place to avoid recreation)
+    const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
+
+    React.useEffect(() => {
         const planes: THREE.Plane[] = [];
 
         if (clipLower != null) {
@@ -533,8 +566,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
         }
 
-        return planes;
+        clippingPlanesRef.current = planes;
     }, [clipLower, clipUpper]);
+
+    const clippingPlanes = clippingPlanesRef.current;
 
     const resolveBaseColor = useMemo(() => {
         const baseHex = '#a3a3a3';
@@ -542,7 +577,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.5).getStyle();
 
         return (modelId?: string) => {
-            const isSelectedModelSupport = !!modelId && (modelId === activeModelId || selectedModelIdSet.has(modelId));
+            const isSelectedModelSupport = !!modelId && (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId));
             if (isSelectedModelSupport) return '#ff8800';
 
             const isHoveredModelSupport = !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
@@ -550,7 +585,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             return baseHex;
         };
-    }, [activeModelId, effectiveHoverModelId, selectedModelIdSet]);
+    }, [effectiveHoverModelId, effectiveVisualActiveModelId, selectedModelIdSet]);
 
     const resolveSceneSupportColor = React.useCallback((modelId: string | undefined, supportId: string) => {
         if (hasSupportMultiSelection && !useMultiSelectionDetail && selectedSupportIdSet.has(supportId)) {
@@ -804,7 +839,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.trunks, state.roots, settings.baseFlare, settings.roots, restrictToActiveModel, activeModelId]);
+    }, [state.trunks, state.roots, settings.baseFlare, settings.roots, isModelVisible]);
 
     const branchShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -857,7 +892,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.branches, state.knots, restrictToActiveModel, activeModelId]);
+    }, [state.branches, state.knots, isModelVisible]);
 
     const braceShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -886,7 +921,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.braces, state.knots, restrictToActiveModel, activeModelId]);
+    }, [state.braces, state.knots, isModelVisible]);
 
     const twigShaftsBySupport = useMemo(() => {
         if (!enableTwigSceneBatching) {
@@ -959,7 +994,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.twigs, restrictToActiveModel, activeModelId, enableTwigSceneBatching]);
+    }, [state.twigs, isModelVisible, enableTwigSceneBatching]);
 
     const stickShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1009,7 +1044,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.sticks, restrictToActiveModel, activeModelId]);
+    }, [state.sticks, isModelVisible]);
 
     const supportBraceShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1066,7 +1101,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, restrictToActiveModel, activeModelId]);
+    }, [supportBraceState.supportBraces, supportBraceState.roots, supportBraceState.knots, isModelVisible]);
 
     const segmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();
@@ -1242,7 +1277,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.trunks, state.branches, state.sticks, state.leaves, modelIdByKnotId, restrictToActiveModel, activeModelId, modelFilterId, excludeModelId]);
+    }, [state.trunks, state.branches, state.sticks, state.leaves, modelIdByKnotId, isModelVisible]);
 
     const trunkJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
@@ -1276,7 +1311,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.trunks, restrictToActiveModel, activeModelId]);
+    }, [state.trunks, isModelVisible]);
 
     const branchJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
@@ -1310,7 +1345,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.branches, restrictToActiveModel, activeModelId]);
+    }, [state.branches, isModelVisible]);
 
     const twigJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
@@ -1355,7 +1390,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.twigs, restrictToActiveModel, activeModelId]);
+    }, [state.twigs, isModelVisible]);
 
     const stickJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
@@ -1400,7 +1435,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.sticks, restrictToActiveModel, activeModelId]);
+    }, [state.sticks, isModelVisible]);
 
     const supportBraceJointsBySupport = useMemo(() => {
         const result = new Map<string, SupportJointSet>();
@@ -1434,7 +1469,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [supportBraceState.supportBraces, restrictToActiveModel, activeModelId]);
+    }, [supportBraceState.supportBraces, isModelVisible]);
 
     const sceneBatchedJointGroups = useMemo(() => {
         const grouped = new Map<string, InstancedJoint[]>();
@@ -1511,8 +1546,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         state.twigs,
         state.sticks,
         supportBraceState.supportBraces,
-        restrictToActiveModel,
-        activeModelId,
+        isModelVisible,
         selectedTrunkIds,
         selectedBranchIds,
         selectedTwigIds,
@@ -1525,7 +1559,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         supportBraceJointsBySupport,
         applyDropToVec3Like,
         dimNonSelected,
-        resolveBaseColor,
         resolveSceneSupportColor,
     ]);
 
@@ -1553,7 +1586,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, restrictToActiveModel, activeModelId, applyDropToVec3Like, enableTwigSceneBatching]);
+    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToVec3Like, enableTwigSceneBatching]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
@@ -1575,7 +1608,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.sticks, stickShaftsBySupport, selectedStickIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
+    }, [state.sticks, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToVec3Like]);
 
     const sceneBatchedSupportBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
@@ -1597,7 +1630,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
+    }, [supportBraceState.supportBraces, supportBraceShaftsBySupport, selectedSupportBraceIds, isModelVisible, applyDropToVec3Like]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; debugSection?: 'initial' | 'repeating' | null; shafts: InstancedShaft[] }>();
@@ -1639,7 +1672,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.braces, braceShaftsBySupport, selectedBraceIds, restrictToActiveModel, activeModelId, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected]);
+    }, [state.braces, braceShaftsBySupport, selectedBraceIds, isModelVisible, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
@@ -1663,7 +1696,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
+    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToVec3Like]);
 
     const sceneBatchedBranchShaftGroups = useMemo(() => {
         const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
@@ -1689,7 +1722,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.branches, branchShaftsBySupport, selectedBranchIds, restrictToActiveModel, activeModelId, applyDropToVec3Like]);
+    }, [state.branches, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToVec3Like]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
