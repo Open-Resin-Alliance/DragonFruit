@@ -45,7 +45,11 @@ export function CrossSectionStencilCap({
   planeHeightMm: number;
   visible?: boolean;
 }) {
-  const clipPlane = React.useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, -1), y), [y]);
+  const clipPlaneRef = React.useRef(new THREE.Plane(new THREE.Vector3(0, 0, -1), y));
+  
+  React.useEffect(() => {
+    clipPlaneRef.current.constant = y;
+  }, [y]);
 
   const stencilBase = React.useMemo(() => {
     const material = new THREE.MeshBasicMaterial();
@@ -60,22 +64,22 @@ export function CrossSectionStencilCap({
   const stencilBack = React.useMemo(() => {
     const material = stencilBase.clone();
     material.side = THREE.BackSide;
-    material.clippingPlanes = [clipPlane];
+    material.clippingPlanes = [clipPlaneRef.current];
     material.stencilFail = THREE.IncrementWrapStencilOp;
     material.stencilZFail = THREE.IncrementWrapStencilOp;
     material.stencilZPass = THREE.IncrementWrapStencilOp;
     return material;
-  }, [clipPlane, stencilBase]);
+  }, [stencilBase]);
 
   const stencilFront = React.useMemo(() => {
     const material = stencilBase.clone();
     material.side = THREE.FrontSide;
-    material.clippingPlanes = [clipPlane];
+    material.clippingPlanes = [clipPlaneRef.current];
     material.stencilFail = THREE.DecrementWrapStencilOp;
     material.stencilZFail = THREE.DecrementWrapStencilOp;
     material.stencilZPass = THREE.DecrementWrapStencilOp;
     return material;
-  }, [clipPlane, stencilBase]);
+  }, [stencilBase]);
 
   const capPlaneGeometry = React.useMemo(() => {
     return new THREE.PlaneGeometry(
