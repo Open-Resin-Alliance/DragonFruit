@@ -1049,8 +1049,9 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
 
   const visibleModelIds = new Set(models.filter((model) => model.visible).map((model) => model.id));
   const supportAndRaftTriangles = buildSupportAndRaftWorldTriangles(visibleModelIds);
-  if (supportAndRaftTriangles.length > 0) {
-    triangles.push(...supportAndRaftTriangles);
+  // Avoid stack overflow from spreading huge arrays - push one by one instead
+  for (let i = 0; i < supportAndRaftTriangles.length; i++) {
+    triangles.push(supportAndRaftTriangles[i]);
   }
 
   return triangles;

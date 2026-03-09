@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Redo2, Undo2 } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
@@ -4189,17 +4189,35 @@ export default function Home() {
   }, [transformMgr.onTransformChange, transformMgr.setIsTransforming]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
-  const sceneZRange = React.useMemo(() => {
-    const projected = buildProjectedCrossSectionZRange(scene.models);
-    if (projected) return projected;
+  // Only calculate expensive Z range with triangles for printing/analysis (layer scrubbing critical)
+  // Export mode uses cheap sceneBounds - accurate range calculated only when actually slicing
+  const fallbackZRange = React.useMemo(() => ({
+    min: scene.sceneBounds?.min.z ?? 0,
+    max: scene.sceneBounds?.max.z ?? 100,
+  }), [scene.sceneBounds]);
 
-    return {
-      min: scene.sceneBounds?.min.z ?? 0,
-      max: scene.sceneBounds?.max.z ?? 100, // Default range if empty
-    };
+  const [sceneZRange, setSceneZRange] = useState(fallbackZRange);
+
+  useEffect(() => {
+    // Only printing/analysis modes need expensive accurate Z range with all support triangles
+    // Export mode can use cheap sceneBounds - accurate range only needed when actually slicing
+    const needsAccurateZRange = scene.mode === 'printing' || scene.mode === 'analysis';
+    
+    if (needsAccurateZRange) {
+      // Defer expensive calculation to prevent blocking mode switch UI
+      const timeoutId = setTimeout(() => {
+        const projected = buildProjectedCrossSectionZRange(scene.models);
+        setSceneZRange(projected ?? fallbackZRange);
+      }, 0);
+      return () => clearTimeout(timeoutId);
+    } else {
+      // Use fast fallback for prepare/support/export modes
+      setSceneZRange(fallbackZRange);
+    }
   }, [
+    scene.mode,
     scene.models,
-    scene.sceneBounds,
+    fallbackZRange,
     supportStateSnapshot,
     supportBraceStateSnapshot,
     raftSettingsSnapshot,
@@ -5668,13 +5686,24 @@ export default function Home() {
 
   React.useEffect(() => {
     if (scene.mode !== 'export') return;
-    if (scene.activeModelId) return;
     if (scene.models.length === 0) return;
 
-    const firstVisible = scene.models.find((model) => model.visible) ?? scene.models[0];
-    if (firstVisible) {
-      scene.setActiveModelId(firstVisible.id);
+    // In export mode, select all visible models for tinting
+    const visibleModels = scene.models.filter((model) => model.visible);
+    const visibleIds = visibleModels.length > 0 
+      ? visibleModels.map((m) => m.id) 
+      : scene.models.map((m) => m.id);
+
+    // Set active model if none exists
+    if (!scene.activeModelId) {
+      const firstVisible = visibleModels[0] ?? scene.models[0];
+      if (firstVisible) {
+        scene.setActiveModelId(firstVisible.id);
+      }
     }
+
+    // Select all visible models for export workspace tinting
+    scene.setSelectedModelIds(visibleIds);
   }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
 
   React.useEffect(() => {
