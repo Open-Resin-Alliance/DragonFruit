@@ -131,6 +131,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
+import { uploadToNanoDlpWithProgress, type UploadProgressEvent } from '../../plugins/athena/network';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 interface ShaftHoverDebugDetail {
@@ -591,11 +592,17 @@ export default function Home() {
   const [printingSendStatusText, setPrintingSendStatusText] = React.useState<string | null>(null);
   const [printingSendProgress, setPrintingSendProgress] = React.useState(0);
   const [printingSendStageText, setPrintingSendStageText] = React.useState<string | null>(null);
+  const [printingUploadTelemetry, setPrintingUploadTelemetry] = React.useState<{
+    speed: string;
+    remaining: string;
+    transferred: string;
+  } | null>(null);
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
+  const printingUploadProcessingHandoffTimeoutRef = React.useRef<number | null>(null);
   const [printingDeviceProcessingStartedAtMs, setPrintingDeviceProcessingStartedAtMs] = React.useState<number | null>(null);
   const [printingDeviceProcessingElapsedSec, setPrintingDeviceProcessingElapsedSec] = React.useState(0);
   const lastOwnedPrintTempPathRef = React.useRef<string | null>(null);
@@ -1715,8 +1722,13 @@ export default function Home() {
     setPrintingSendStatusText(null);
     setPrintingSendProgress(0);
     setPrintingSendStageText(null);
+    setPrintingUploadTelemetry(null);
     setPrintingReadyPlateId(null);
     setPrintingPrintNowBusy(false);
+    if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+      window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+      printingUploadProcessingHandoffTimeoutRef.current = null;
+    }
     setPrintingUploadDialogOpen(false);
     setPrintingUploadDialogStage('uploading');
     setPrintingUploadDisplayProgress(0);
@@ -2417,28 +2429,13 @@ export default function Home() {
   }, []);
 
   React.useEffect(() => {
-    if (!printingUploadDialogOpen) {
-      setPrintingUploadDisplayProgress(printingSendProgress);
-      return;
-    }
-
-    let raf = 0;
-    const animate = () => {
-      setPrintingUploadDisplayProgress((previous) => {
-        const target = Math.max(0, Math.min(1, printingSendProgress));
-        if (Math.abs(target - previous) < 0.0025) {
-          return target;
-        }
-        return previous + ((target - previous) * 0.18);
-      });
-      raf = window.requestAnimationFrame(animate);
-    };
-
-    raf = window.requestAnimationFrame(animate);
     return () => {
-      window.cancelAnimationFrame(raf);
+      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+        printingUploadProcessingHandoffTimeoutRef.current = null;
+      }
     };
-  }, [printingSendProgress, printingUploadDialogOpen]);
+  }, []);
 
   React.useEffect(() => {
     if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
@@ -2785,8 +2782,10 @@ export default function Home() {
     setPrintingReadyPlateId(null);
     setPrintingSendBusy(true);
     setPrintingSendProgress(0.01);
+    setPrintingUploadDisplayProgress(0.01);
     setPrintingSendStageText('Uploading print job…');
     setPrintingSendStatusText('Uploading print job to printer…');
+    setPrintingUploadTelemetry(null);
     setPrintingUploadDialogStage('uploading');
     setPrintingUploadDialogOpen(true);
     setPrintingDeviceProcessingStartedAtMs(null);
@@ -2794,59 +2793,91 @@ export default function Home() {
 
     try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
-      let zipBase64: string | undefined;
+      let zipBlob = printingArtifact.blob;
 
-      // Prefer native temp-path handoff (avoids huge JS base64 payloads and intermittent truncation).
-      // Fall back to base64 only when we do not have a valid temp-path artifact.
-      if (!nativeTempPath) {
-        const bytes = printingArtifact.blob
-          ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
-          : null;
-
-        if (!bytes || bytes.length === 0) {
-          throw new Error('No print artifact payload available for printer upload.');
+      // If we have a local temp path and no blob, read the blob from native bridge
+      if (!zipBlob && nativeTempPath) {
+        try {
+          const fileBytes = await readPrintArtifactBytesFromPath(nativeTempPath);
+          if (fileBytes && fileBytes.length > 0) {
+            const normalizedBytes = Uint8Array.from(fileBytes);
+            zipBlob = new Blob([normalizedBytes], { type: 'application/octet-stream' });
+          }
+        } catch (readError) {
+          console.warn('Failed to read artifact from native path:', readError);
         }
+      }
 
-        let binary = '';
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          const chunk = bytes.subarray(i, i + chunkSize);
-          binary += String.fromCharCode(...chunk);
-        }
-        zipBase64 = btoa(binary);
+      if (!zipBlob) {
+        throw new Error('No print artifact blob available for printer upload.');
       }
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
+      
+      // Build the NanoDLP host URL
+      const hostUrl = `http://${host}${port && port !== 80 ? `:${port}` : ''}`;
 
-      const response = await pluginNetworkFetch({
-        pluginId: 'athena',
-        operation: 'nanodlp/job/import',
-        ipAddress: host,
-        port,
-        zipBase64,
-        zipFilePath: nativeTempPath || undefined,
-        path: pathBase,
-        profileId: selectedMaterialId,
-      });
+      // Track upload progress and send directly to NanoDLP
+      let resolvedPlateId: number | null = null;
+      
+      const uploadResult = await uploadToNanoDlpWithProgress(
+        hostUrl,
+        zipBlob,
+        pathBase,
+        selectedMaterialId,
+        {
+          onProgress: (event: UploadProgressEvent) => {
+            const progress = event.percentComplete / 100;
+            const clampedProgress = Math.min(progress, 0.9999);
+            if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+              window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+              printingUploadProcessingHandoffTimeoutRef.current = null;
+            }
+            setPrintingSendProgress(clampedProgress);
+            setPrintingUploadDisplayProgress(clampedProgress);
+            setPrintingUploadTelemetry({
+              speed: event.uploadSpeed,
+              remaining: event.remainingTime,
+              transferred: event.transferred,
+            });
+          },
+          onStatusUpdate: (update) => {
+            if (update.stage === 'processing') {
+              setPrintingSendProgress(1);
+              setPrintingUploadDisplayProgress(1);
+              if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+                window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+              }
+              printingUploadProcessingHandoffTimeoutRef.current = window.setTimeout(() => {
+                printingUploadProcessingHandoffTimeoutRef.current = null;
+                setPrintingUploadDialogStage('processing');
+                setPrintingSendStageText('Processing on device…');
+                setPrintingSendStatusText('Upload complete. NanoDLP is processing file metadata…');
+                setPrintingUploadTelemetry(null);
+                setPrintingDeviceProcessingStartedAtMs(Date.now());
+              }, 220);
+            } else if (update.stage === 'error') {
+              if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+                window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+                printingUploadProcessingHandoffTimeoutRef.current = null;
+              }
+              setPrintingSendStatusText(`Send failed: ${update.error || update.message}`);
+              setPrintingSendStageText('Upload failed');
+              setPrintingUploadDialogStage('failed');
+              setPrintingUploadTelemetry(null);
+              setPrintingSendProgress(0);
+              setPrintingUploadDisplayProgress(0);
+            }
+          },
+          onComplete: (plateId) => {
+            resolvedPlateId = plateId;
+          },
+        },
+      );
 
-      const payload = await response.json().catch(() => ({} as any));
-      if (!(response.ok && payload?.ok)) {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-        setPrintingSendStatusText(`Send failed: ${reason}`);
-        setPrintingSendStageText('Upload failed');
-        setPrintingUploadDialogStage('failed');
-        setPrintingSendProgress(0);
-        return;
+      if (!uploadResult.ok) {
+        throw new Error('Upload failed at NanoDLP');
       }
-
-      const importedPlateId = Number(payload?.plateId);
-      let resolvedPlateId = Number.isFinite(importedPlateId) && importedPlateId > 0 ? importedPlateId : null;
-
-      setPrintingSendProgress(1);
-      setPrintingUploadDialogStage('processing');
-      setPrintingSendStageText('Processing on device…');
-      setPrintingSendStatusText('Upload complete. NanoDLP is processing file metadata…');
-      setPrintingDeviceProcessingStartedAtMs(Date.now());
 
       const startedAt = Date.now();
       const timeoutMs = 10 * 60 * 1000;
@@ -2899,30 +2930,45 @@ export default function Home() {
         setPrintingReadyPlateId(resolvedPlateId);
       }
 
+      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+        printingUploadProcessingHandoffTimeoutRef.current = null;
+      }
+
       if (metadataReady) {
         setPrintingSendProgress(1);
+        setPrintingUploadDisplayProgress(1);
         setPrintingSendStageText('Ready to print');
         setPrintingUploadDialogStage('ready');
         setPrintingDeviceProcessingStartedAtMs(null);
+        setPrintingUploadTelemetry(null);
         setPrintingSendStatusText(
           `Import complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Click Print Now when ready.`,
         );
       } else {
         setPrintingSendProgress(1);
+        setPrintingUploadDisplayProgress(1);
         setPrintingSendStageText('Device still processing');
         setPrintingUploadDialogStage('failed');
         setPrintingDeviceProcessingStartedAtMs(null);
+        setPrintingUploadTelemetry(null);
         setPrintingSendStatusText(
           `Upload complete${resolvedPlateId ? ` • Plate #${resolvedPlateId}` : ''}. Device is still processing metadata after waiting.`,
         );
       }
     } catch (error) {
+      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+        printingUploadProcessingHandoffTimeoutRef.current = null;
+      }
       const message = error instanceof Error ? error.message : 'Unknown error';
       setPrintingSendStatusText(`Send failed: ${message}`);
       setPrintingSendStageText('Upload failed');
       setPrintingUploadDialogStage('failed');
       setPrintingDeviceProcessingStartedAtMs(null);
+      setPrintingUploadTelemetry(null);
       setPrintingSendProgress(0);
+      setPrintingUploadDisplayProgress(0);
     } finally {
       setPrintingSendBusy(false);
     }
@@ -8056,9 +8102,50 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div className="text-xs min-h-[18px]" style={{ color: 'var(--text-muted)' }}>
                 {printingSendStatusText ?? 'Preparing upload pipeline…'}
               </div>
+
+              {printingUploadDialogStage === 'uploading' && printingUploadTelemetry && (
+                <div className="grid grid-cols-3 gap-2 text-[11px]">
+                  <div
+                    className="rounded-md border px-2.5 py-2"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                  >
+                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Speed</div>
+                    <div
+                      className="mt-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {printingUploadTelemetry.speed}
+                    </div>
+                  </div>
+                  <div
+                    className="rounded-md border px-2.5 py-2"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                  >
+                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Remaining</div>
+                    <div
+                      className="mt-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {printingUploadTelemetry.remaining}
+                    </div>
+                  </div>
+                  <div
+                    className="rounded-md border px-2.5 py-2"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                  >
+                    <div className="uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Transferred</div>
+                    <div
+                      className="mt-1 text-xs font-semibold"
+                      style={{ color: 'var(--text-strong)', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {printingUploadTelemetry.transferred}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {printingDialogIsIndeterminate ? (
                 <>
@@ -8084,9 +8171,9 @@ export default function Home() {
                   }}
                 >
                   <div
-                    className="h-full rounded-full transition-all duration-200"
+                    className="h-full rounded-full transition-[width] duration-200 ease-out"
                     style={{
-                      width: `${printingDialogProgressPercent.toFixed(1)}%`,
+                      width: `${printingDialogProgressPercent.toFixed(2)}%`,
                       background: printingUploadDialogStage === 'failed'
                         ? 'linear-gradient(90deg, #ef4444, #f97316)'
                         : printingUploadDialogStage === 'started'
