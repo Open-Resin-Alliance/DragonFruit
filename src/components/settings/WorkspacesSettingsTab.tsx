@@ -2,7 +2,6 @@
 
 import React from 'react';
 import type { SupportMode } from '@/supports/types';
-import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 import {
   getActivePrinterProfile,
@@ -11,16 +10,11 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import { NumberInput } from '@/components/ui/NumberInput';
-import type {
-  WorkspaceCameraDefaults,
-  WorkspaceSelectionHighlightDefaults,
-} from '@/components/settings/workspaceCameraPreferences';
+import type { WorkspaceSelectionHighlightDefaults } from '@/components/settings/workspaceCameraPreferences';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import { Layers3 } from 'lucide-react';
 
 interface WorkspacesSettingsTabProps {
-  workspaceCameraDefaults: WorkspaceCameraDefaults;
-  onWorkspaceCameraModeChange: (workspace: SupportMode, mode: CameraProjectionMode) => void;
   workspaceSelectionHighlightDefaults: WorkspaceSelectionHighlightDefaults;
   onWorkspaceSelectionHighlightModeChange: (workspace: SupportMode, mode: SelectionHighlightMode) => void;
   view3dSettings: View3DSettings;
@@ -35,8 +29,6 @@ const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = 
 ];
 
 export function WorkspacesSettingsTab({
-  workspaceCameraDefaults,
-  onWorkspaceCameraModeChange,
   workspaceSelectionHighlightDefaults,
   onWorkspaceSelectionHighlightModeChange,
   view3dSettings,
@@ -509,16 +501,16 @@ export function WorkspacesSettingsTab({
           </span>
           <div className="flex-1">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Workspace Camera Defaults
+              Workspace Selection Highlights
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Pick the default projection mode for each workspace. When you switch workspaces, the camera mode auto-adjusts.
+              Controls default selection emphasis when entering each workspace.
             </p>
           </div>
         </div>
 
         <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+          <div className="grid grid-cols-2 gap-1.5 md:grid-cols-4">
             {workspaceMeta.map((workspace) => {
               const active = activeWorkspace === workspace.key;
               return (
@@ -547,56 +539,10 @@ export function WorkspacesSettingsTab({
 
           <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {workspaceMeta.find((w) => w.key === activeWorkspace)?.label} default camera
+              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} selection highlight
             </div>
             <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {workspaceMeta.find((w) => w.key === activeWorkspace)?.hint}
-            </div>
-
-            <div className="mt-2 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'orthographic')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={workspaceCameraDefaults[activeWorkspace] === 'orthographic'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Ortho
-              </button>
-              <button
-                type="button"
-                onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'perspective')}
-                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                style={workspaceCameraDefaults[activeWorkspace] === 'perspective'
-                  ? {
-                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                      color: 'var(--accent-contrast)',
-                    }
-                  : {
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-muted)',
-                    }}
-              >
-                Perspective
-              </button>
-            </div>
-
-            <div className="mt-3 text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {workspaceMeta.find((w) => w.key === activeWorkspace)?.label} selection highlight
-            </div>
-            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Controls default selection emphasis when entering this workspace.
+              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
             </div>
 
             <div className="mt-2 flex flex-wrap items-center gap-1.5">

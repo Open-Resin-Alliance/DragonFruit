@@ -693,14 +693,14 @@ export function SettingsModal({
                   onCameraProjectionModeChange={setDraftCameraProjectionMode}
                   cameraFeelPreset={draftCameraFeelPreset}
                   onCameraFeelPresetChange={setDraftCameraFeelPreset}
+                  workspaceCameraDefaults={draftWorkspaceCameraDefaults}
+                  onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
                   selectionHighlightMode={draftSelectionHighlightMode}
                   onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                 />
               )}
               {activeTab === 'workspaces' && (
                 <WorkspacesSettingsTab
-                  workspaceCameraDefaults={draftWorkspaceCameraDefaults}
-                  onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
                   workspaceSelectionHighlightDefaults={draftWorkspaceSelectionHighlightDefaults}
                   onWorkspaceSelectionHighlightModeChange={handleWorkspaceSelectionHighlightModeChange}
                   view3dSettings={draftView3dSettings}
