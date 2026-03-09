@@ -49,6 +49,7 @@ import {
   DEFAULT_WORKSPACE_CAMERA_SETTINGS,
   getSavedWorkspaceCameraSettings,
   saveWorkspaceCameraSettings,
+  type CameraScopeMode,
   type WorkspaceCameraDefaults,
   type WorkspaceSelectionHighlightDefaults,
 } from '@/components/settings/workspaceCameraPreferences';
@@ -188,6 +189,7 @@ export function SettingsModal({
   const [draftSelectionHighlightMode, setDraftSelectionHighlightMode] = useState(selectionHighlightMode);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
   const [draftCameraFeelPreset, setDraftCameraFeelPreset] = useState<CameraFeelPreset>(() => getSavedCameraFeelSettings().preset);
+  const [draftCameraScope, setDraftCameraScope] = useState<CameraScopeMode>(() => getSavedWorkspaceCameraSettings().scope);
   const [draftThemePreference, setDraftThemePreference] = useState(getSavedThemePreference());
   const [draftThemePreset, setDraftThemePreset] = useState<ThemePreset>(getSavedThemePreset());
   const [draftThemeColors, setDraftThemeColors] = useState<ThemeCustomColors>(getSavedThemeCustomColors());
@@ -217,6 +219,7 @@ export function SettingsModal({
     setDraftSelectionHighlightMode(selectionHighlightMode);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
+    setDraftCameraScope(getSavedWorkspaceCameraSettings().scope);
     setDraftThemePreference(getSavedThemePreference());
     setDraftThemePreset(getSavedThemePreset());
     setDraftThemeColors(getSavedThemeCustomColors());
@@ -289,6 +292,7 @@ export function SettingsModal({
     setDraftSelectionHighlightMode('tint');
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
+    setDraftCameraScope(DEFAULT_WORKSPACE_CAMERA_SETTINGS.scope);
     setDraftThemePreference('system');
     setDraftThemePreset('dragonfruit-dark');
     setDraftThemeColors(DEFAULT_THEME_CUSTOM_COLORS);
@@ -326,6 +330,7 @@ export function SettingsModal({
     saveCameraProjectionSettings({ mode: draftCameraProjectionMode });
     saveCameraFeelSettings({ preset: draftCameraFeelPreset });
     saveWorkspaceCameraSettings({
+      scope: draftCameraScope,
       defaults: draftWorkspaceCameraDefaults,
       selectionHighlightDefaults: draftWorkspaceSelectionHighlightDefaults,
     });
@@ -352,6 +357,7 @@ export function SettingsModal({
     draftHoverTintStrength,
     draftSelectedTintStrength,
     draftSelectionHighlightMode,
+    draftCameraScope,
     draftThemePreset,
     draftShaderType,
     draftToonSteps,
@@ -689,6 +695,8 @@ export function SettingsModal({
               )}
               {activeTab === 'camera' && (
                 <CameraSettingsTab
+                  cameraScope={draftCameraScope}
+                  onCameraScopeChange={setDraftCameraScope}
                   cameraProjectionMode={draftCameraProjectionMode}
                   onCameraProjectionModeChange={setDraftCameraProjectionMode}
                   cameraFeelPreset={draftCameraFeelPreset}

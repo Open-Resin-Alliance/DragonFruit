@@ -2,10 +2,12 @@ import type { SupportMode } from '@/supports/types';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 
+export type CameraScopeMode = 'global' | 'workspace';
 export type WorkspaceCameraDefaults = Record<SupportMode, CameraProjectionMode>;
 export type WorkspaceSelectionHighlightDefaults = Record<SupportMode, SelectionHighlightMode>;
 
 export type WorkspaceCameraSettings = {
+  scope: CameraScopeMode;
   defaults: WorkspaceCameraDefaults;
   selectionHighlightDefaults: WorkspaceSelectionHighlightDefaults;
 };
@@ -14,6 +16,7 @@ export const WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY = 'workspace-camera-settings'
 const WORKSPACE_CAMERA_SETTINGS_EVENT = 'workspace-camera-settings-changed';
 
 export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
+  scope: 'workspace',
   defaults: {
     prepare: 'orthographic',
     analysis: 'orthographic',
@@ -30,8 +33,14 @@ export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
   },
 };
 
+let cachedWorkspaceCameraSettings: WorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+
 function normalizeMode(input: unknown): CameraProjectionMode {
   return input === 'perspective' ? 'perspective' : 'orthographic';
+}
+
+function normalizeScope(input: unknown): CameraScopeMode {
+  return input === 'global' ? 'global' : 'workspace';
 }
 
 function normalizeSelectionHighlightMode(input: unknown): SelectionHighlightMode {
@@ -43,6 +52,7 @@ export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCamer
   if (!input || typeof input !== 'object') return DEFAULT_WORKSPACE_CAMERA_SETTINGS;
 
   const candidate = input as Partial<WorkspaceCameraSettings> & {
+    scope?: unknown;
     defaults?: Partial<Record<SupportMode, unknown>>;
     selectionHighlightDefaults?: Partial<Record<SupportMode, unknown>>;
   };
@@ -51,6 +61,7 @@ export function normalizeWorkspaceCameraSettings(input: unknown): WorkspaceCamer
   const selectionHighlightDefaults: Partial<Record<SupportMode, unknown>> = candidate.selectionHighlightDefaults ?? {};
 
   return {
+    scope: normalizeScope(candidate.scope),
     defaults: {
       prepare: normalizeMode(defaults.prepare),
       analysis: normalizeMode(defaults.analysis),
@@ -73,10 +84,15 @@ export function getSavedWorkspaceCameraSettings(): WorkspaceCameraSettings {
 
   try {
     const raw = window.localStorage.getItem(WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY);
-    if (!raw) return DEFAULT_WORKSPACE_CAMERA_SETTINGS;
-    return normalizeWorkspaceCameraSettings(JSON.parse(raw));
+    if (!raw) {
+      cachedWorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+      return cachedWorkspaceCameraSettings;
+    }
+    cachedWorkspaceCameraSettings = normalizeWorkspaceCameraSettings(JSON.parse(raw));
+    return cachedWorkspaceCameraSettings;
   } catch {
-    return DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+    cachedWorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+    return cachedWorkspaceCameraSettings;
   }
 }
 
@@ -84,6 +100,7 @@ export function saveWorkspaceCameraSettings(settings: WorkspaceCameraSettings): 
   if (typeof window === 'undefined') return;
 
   const normalized = normalizeWorkspaceCameraSettings(settings);
+  cachedWorkspaceCameraSettings = normalized;
 
   try {
     window.localStorage.setItem(WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
@@ -94,11 +111,21 @@ export function saveWorkspaceCameraSettings(settings: WorkspaceCameraSettings): 
   window.dispatchEvent(new CustomEvent(WORKSPACE_CAMERA_SETTINGS_EVENT, { detail: normalized }));
 }
 
+export function getWorkspaceCameraSettingsSnapshot(): WorkspaceCameraSettings {
+  if (typeof window === 'undefined') return DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+  return cachedWorkspaceCameraSettings;
+}
+
+export function getWorkspaceCameraSettingsServerSnapshot(): WorkspaceCameraSettings {
+  return DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+}
+
 export function subscribeToWorkspaceCameraSettings(listener: () => void): () => void {
   if (typeof window === 'undefined') return () => {};
 
   const onStorage = (event: StorageEvent) => {
     if (event.key && event.key !== WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY) return;
+    cachedWorkspaceCameraSettings = getSavedWorkspaceCameraSettings();
     listener();
   };
 

@@ -90,7 +90,12 @@ import {
 import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
-import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
+import {
+  getSavedWorkspaceCameraSettings,
+  getWorkspaceCameraSettingsServerSnapshot,
+  getWorkspaceCameraSettingsSnapshot,
+  subscribeToWorkspaceCameraSettings,
+} from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
   getActiveMaterialProfile,
@@ -398,6 +403,11 @@ export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const workspaceCameraSettings = React.useSyncExternalStore(
+    subscribeToWorkspaceCameraSettings,
+    getWorkspaceCameraSettingsSnapshot,
+    getWorkspaceCameraSettingsServerSnapshot,
+  );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
@@ -5748,14 +5758,16 @@ export default function Home() {
   React.useEffect(() => {
     // Skip camera changes during automatic re-slice flow to prevent flickering
     if (shouldReturnToPrintingAfterSliceRef.current) return;
-    
-    const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
+
+    if (workspaceCameraSettings.scope !== 'workspace') return;
+
+    const workspaceProjectionMode = workspaceCameraSettings.defaults[scene.mode];
     const currentProjectionMode = getSavedCameraProjectionSettings().mode;
 
     if (workspaceProjectionMode !== currentProjectionMode) {
       saveCameraProjectionSettings({ mode: workspaceProjectionMode });
     }
-  }, [scene.mode]);
+  }, [scene.mode, workspaceCameraSettings]);
 
   React.useEffect(() => {
     // Skip selection highlight changes during automatic re-slice flow to prevent flickering

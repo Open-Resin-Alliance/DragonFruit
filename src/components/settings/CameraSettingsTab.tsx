@@ -7,9 +7,11 @@ import type { CameraProjectionMode } from '@/components/settings/cameraProjectio
 import type { CameraFeelPreset } from '@/components/settings/cameraFeelPreferences';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighlightDropdown';
-import type { WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
+import type { CameraScopeMode, WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
 
 interface CameraSettingsTabProps {
+  cameraScope: CameraScopeMode;
+  onCameraScopeChange: (scope: CameraScopeMode) => void;
   cameraProjectionMode: CameraProjectionMode;
   onCameraProjectionModeChange: (mode: CameraProjectionMode) => void;
   cameraFeelPreset: CameraFeelPreset;
@@ -28,6 +30,8 @@ const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = 
 ];
 
 export function CameraSettingsTab({
+  cameraScope,
+  onCameraScopeChange,
   cameraProjectionMode,
   onCameraProjectionModeChange,
   cameraFeelPreset,
@@ -38,6 +42,8 @@ export function CameraSettingsTab({
   onSelectionHighlightModeChange,
 }: CameraSettingsTabProps) {
   const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
+  const usingGlobalScope = cameraScope === 'global';
+  const usingWorkspaceScope = cameraScope === 'workspace';
 
   return (
     <div className="space-y-3">
@@ -72,10 +78,70 @@ export function CameraSettingsTab({
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Camera scope
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Choose one global projection mode for every workspace, or set projection defaults per workspace.
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onCameraScopeChange('global')}
+                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={usingGlobalScope
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent-contrast)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                Global
+              </button>
+              <button
+                type="button"
+                onClick={() => onCameraScopeChange('workspace')}
+                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={usingWorkspaceScope
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent-contrast)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                Workspace
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="mt-2 rounded-md border p-2.5 transition-opacity"
+          aria-disabled={!usingGlobalScope}
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-0)',
+            opacity: usingGlobalScope ? 1 : 0.35,
+            pointerEvents: usingGlobalScope ? 'auto' : 'none',
+          }}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Projection mode
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Immediate camera mode (independent from per-workspace defaults).
+                Use one projection mode everywhere when global scope is active.
               </div>
             </div>
             <div className="flex items-center gap-1.5">
@@ -119,7 +185,16 @@ export function CameraSettingsTab({
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+        <div
+          className="mt-2 rounded-md border p-2.5 transition-opacity"
+          aria-disabled={!usingWorkspaceScope}
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-0)',
+            opacity: usingWorkspaceScope ? 1 : 0.35,
+            pointerEvents: usingWorkspaceScope ? 'auto' : 'none',
+          }}
+        >
           <div>
             <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
               Workspace camera defaults
