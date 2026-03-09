@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import React from 'react';
+import ClipperLib from 'clipper-lib';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import {
   buildProjectedCrossSectionContext,
@@ -119,6 +120,10 @@ type LoopGroup = {
   holes: THREE.Vector2[][];
 };
 
+type IntPoint = { X: number; Y: number };
+
+const CLIPPER_SCALE = 1000;
+
 function polygonSignedArea(loop: THREE.Vector2[]): number {
   let area = 0;
   for (let i = 0; i < loop.length; i += 1) {
@@ -127,44 +132,6 @@ function polygonSignedArea(loop: THREE.Vector2[]): number {
     area += (a.x * b.y) - (b.x * a.y);
   }
   return area * 0.5;
-}
-
-function isPointOnSegment2D(p: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2, eps = 1e-7): boolean {
-  const abX = b.x - a.x;
-  const abY = b.y - a.y;
-  const apX = p.x - a.x;
-  const apY = p.y - a.y;
-  const cross = (abX * apY) - (abY * apX);
-  if (Math.abs(cross) > eps) return false;
-
-  const dot = (apX * abX) + (apY * abY);
-  if (dot < -eps) return false;
-  const lenSq = (abX * abX) + (abY * abY);
-  if (dot - lenSq > eps) return false;
-  return true;
-}
-
-function isPointOnPolygonBoundary2D(p: THREE.Vector2, loop: THREE.Vector2[], eps = 1e-7): boolean {
-  for (let i = 0; i < loop.length; i += 1) {
-    if (isPointOnSegment2D(p, loop[i], loop[(i + 1) % loop.length], eps)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isPointInPolygon2D(point: THREE.Vector2, loop: THREE.Vector2[]): boolean {
-  let inside = false;
-  for (let i = 0, j = loop.length - 1; i < loop.length; j = i, i += 1) {
-    const xi = loop[i].x;
-    const yi = loop[i].y;
-    const xj = loop[j].x;
-    const yj = loop[j].y;
-    const intersects = ((yi > point.y) !== (yj > point.y))
-      && (point.x < ((xj - xi) * (point.y - yi)) / ((yj - yi) || 1e-20) + xi);
-    if (intersects) inside = !inside;
-  }
-  return inside;
 }
 
 function normalizeLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
@@ -185,6 +152,84 @@ function orientLoop(loop: THREE.Vector2[], clockwise: boolean): THREE.Vector2[] 
   return oriented;
 }
 
+function toIntPoint(point: THREE.Vector2): IntPoint {
+  return {
+    X: Math.round(point.x * CLIPPER_SCALE),
+    Y: Math.round(point.y * CLIPPER_SCALE),
+  };
+}
+
+function toVector2Loop(path: IntPoint[]): THREE.Vector2[] {
+  return path.map((point) => new THREE.Vector2(point.X / CLIPPER_SCALE, point.Y / CLIPPER_SCALE));
+}
+
+function getPolyTreeChildren(node: any): any[] {
+  if (!node) return [];
+  if (Array.isArray(node.Childs)) return node.Childs;
+  if (typeof node.Childs === 'function') {
+    const value = node.Childs();
+    return Array.isArray(value) ? value : [];
+  }
+  if (Array.isArray(node.m_Childs)) return node.m_Childs;
+  return [];
+}
+
+function getPolyTreeContour(node: any): IntPoint[] {
+  if (!node) return [];
+  if (Array.isArray(node.Contour)) return node.Contour;
+  if (Array.isArray(node.m_polygon)) return node.m_polygon;
+  if (Array.isArray(node.m_Contour)) return node.m_Contour;
+  return [];
+}
+
+function isPolyTreeHoleNode(node: any): boolean {
+  if (!node) return false;
+  if (typeof node.IsHole === 'function') return !!node.IsHole();
+  if (typeof node.IsHole === 'boolean') return node.IsHole;
+  if (typeof node.m_IsHole === 'boolean') return node.m_IsHole;
+  return false;
+}
+
+function polyTreeToLoopGroups(polyTree: any): LoopGroup[] {
+  const result: LoopGroup[] = [];
+
+  const addOuterNode = (node: any) => {
+    const outerContour = getPolyTreeContour(node);
+    if (!outerContour || outerContour.length < 3) return;
+
+    const outer = orientLoop(toVector2Loop(outerContour), false);
+    const holes: THREE.Vector2[][] = [];
+
+    for (const child of getPolyTreeChildren(node)) {
+      if (!isPolyTreeHoleNode(child)) continue;
+      const holeContour = getPolyTreeContour(child);
+      if (!holeContour || holeContour.length < 3) continue;
+      holes.push(orientLoop(toVector2Loop(holeContour), true));
+    }
+
+    result.push({ outer, holes });
+  };
+
+  if (polyTree && typeof polyTree.GetFirst === 'function') {
+    let node = polyTree.GetFirst();
+    while (node) {
+      if (!isPolyTreeHoleNode(node)) {
+        addOuterNode(node);
+      }
+      node = typeof node.GetNext === 'function' ? node.GetNext() : null;
+    }
+    return result;
+  }
+
+  for (const child of getPolyTreeChildren(polyTree)) {
+    if (!isPolyTreeHoleNode(child)) {
+      addOuterNode(child);
+    }
+  }
+
+  return result;
+}
+
 function buildLoopGroups(loops: THREE.Vector2[][]): LoopGroup[] {
   const normalizedLoops = loops
     .map(normalizeLoop)
@@ -192,62 +237,20 @@ function buildLoopGroups(loops: THREE.Vector2[][]): LoopGroup[] {
 
   if (normalizedLoops.length === 0) return [];
 
-  const absAreas = normalizedLoops.map((loop) => Math.abs(polygonSignedArea(loop)));
-  const parent = new Array<number>(normalizedLoops.length).fill(-1);
+  const subject = normalizedLoops.map((loop) => loop.map(toIntPoint));
+  const clipper = new ClipperLib.Clipper();
+  clipper.StrictlySimple = true;
+  clipper.AddPaths(subject, ClipperLib.PolyType.ptSubject, true);
 
-  for (let i = 0; i < normalizedLoops.length; i += 1) {
-    let bestParent = -1;
-    let bestParentArea = Infinity;
+  const polyTree = new ClipperLib.PolyTree();
+  clipper.Execute(
+    ClipperLib.ClipType.ctUnion,
+    polyTree,
+    ClipperLib.PolyFillType.pftNonZero,
+    ClipperLib.PolyFillType.pftNonZero,
+  );
 
-    for (let j = 0; j < normalizedLoops.length; j += 1) {
-      if (i === j) continue;
-      if (absAreas[j] <= absAreas[i]) continue;
-
-      const candidatePoint = normalizedLoops[i].find((p) => !isPointOnPolygonBoundary2D(p, normalizedLoops[j]));
-      if (!candidatePoint) continue;
-      if (!isPointInPolygon2D(candidatePoint, normalizedLoops[j])) continue;
-
-      if (absAreas[j] < bestParentArea) {
-        bestParentArea = absAreas[j];
-        bestParent = j;
-      }
-    }
-
-    parent[i] = bestParent;
-  }
-
-  const depthMemo = new Array<number>(normalizedLoops.length).fill(-1);
-  const getDepth = (index: number): number => {
-    if (depthMemo[index] >= 0) return depthMemo[index];
-    const p = parent[index];
-    const depth = p < 0 ? 0 : getDepth(p) + 1;
-    depthMemo[index] = depth;
-    return depth;
-  };
-
-  const groupsByOuterIndex = new Map<number, LoopGroup>();
-
-  for (let i = 0; i < normalizedLoops.length; i += 1) {
-    const depth = getDepth(i);
-    if (depth % 2 === 0) {
-      groupsByOuterIndex.set(i, {
-        outer: orientLoop(normalizedLoops[i], false),
-        holes: [],
-      });
-    }
-  }
-
-  for (let i = 0; i < normalizedLoops.length; i += 1) {
-    const depth = getDepth(i);
-    if (depth % 2 !== 1) continue;
-    const p = parent[i];
-    if (p < 0) continue;
-    const owner = groupsByOuterIndex.get(p);
-    if (!owner) continue;
-    owner.holes.push(orientLoop(normalizedLoops[i], true));
-  }
-
-  return Array.from(groupsByOuterIndex.values());
+  return polyTreeToLoopGroups(polyTree);
 }
 
 // Rasterize loops into a pixel grid
