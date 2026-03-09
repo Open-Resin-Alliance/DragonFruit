@@ -551,7 +551,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const groupRef = React.useRef<THREE.Group>(null);
     useImperativeHandle(ref, () => groupRef.current!);
 
-    const clippingPlanes = useMemo(() => {
+    // Initialize clipping planes once (update in-place to avoid recreation)
+    const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
+
+    React.useEffect(() => {
         const planes: THREE.Plane[] = [];
 
         if (clipLower != null) {
@@ -562,8 +565,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
         }
 
-        return planes;
+        clippingPlanesRef.current = planes;
     }, [clipLower, clipUpper]);
+
+    const clippingPlanes = clippingPlanesRef.current;
 
     const resolveBaseColor = useMemo(() => {
         const baseHex = '#a3a3a3';

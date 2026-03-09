@@ -26,7 +26,7 @@ import {
 import { DuplicatePanel, type DuplicateLayoutMode } from '../components/controls/DuplicatePanel';
 import { VisualSettingsPanel } from '@/components/controls/VisualSettingsPanel';
 import { LayerSlider } from '@/components/controls/LayerSlider';
-import { PrintingLayerScrubPreview } from '@/components/controls/PrintingLayerScrubPreview';
+import { PrintingLayerGpuPreview } from '@/components/controls/PrintingLayerGpuPreview';
 import { SupportSidebar } from '@/supports/Settings';
 import { CurveSettingsCard } from '@/supports/Curves/CurveSettingsCard';
 import { ExportPanel } from '@/features/export/components/ExportPanel';
@@ -558,7 +558,6 @@ export default function Home() {
   const printingPreviewSettledRef = React.useRef(false);
   const printingPreviewCanvasRenderNonceRef = React.useRef(0);
   const printingPreviewLoadNonceRef = React.useRef(0);
-  const lastPrintingLayerSyncPerfRef = React.useRef(0);
   const pendingPrintingSelectedLayerRef = React.useRef<number | null>(null);
   const printingSelectedLayerRafRef = React.useRef<number | null>(null);
   const printingSelectedLayerRef = React.useRef(1);
@@ -1387,8 +1386,8 @@ export default function Home() {
     printingPreviewTotalLayers,
   ]);
 
-  // Show scrub preview while actively scrubbing, before settle completes,
-  // or if the target PNG isn't loaded yet (avoids stale-frame flash).
+  // Show GPU preview during scrubbing or while waiting for PNG to load
+  // (GPU preview is fast enough to render real-time during scrub)
   const shouldShowScrubPreview = React.useMemo(() => {
     return (
       isPrintingLayerScrubbing
@@ -1614,7 +1613,6 @@ export default function Home() {
       setPrintingPreviewZoom(1);
       queuePrintingPreviewPan({ x: 0, y: 0 });
       setIsPrintingPreviewPanning(false);
-      lastPrintingLayerSyncPerfRef.current = 0;
       printingPreviewDragRef.current = null;
       setPrintingDisplayedLayer(1);
       if (printingPreviewSettleTimeoutRef.current !== null) {
@@ -4473,16 +4471,6 @@ export default function Home() {
     if (scene.mode !== 'printing') return;
     const clamped = Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), printingSelectedLayer));
 
-    if (isPrintingLayerScrubbing) {
-      const now = performance.now();
-      if ((now - lastPrintingLayerSyncPerfRef.current) < 42) {
-        return;
-      }
-      lastPrintingLayerSyncPerfRef.current = now;
-    } else {
-      lastPrintingLayerSyncPerfRef.current = 0;
-    }
-
     // Keep 3D cross-section in lock-step with selected PNG layer.
     // Use 1-based layer index here so layer 1 still produces a real cut plane.
     const targetLayerIndex = Math.max(1, clamped);
@@ -4496,7 +4484,6 @@ export default function Home() {
     printingSelectedLayer,
     slicing.layerIndex,
     slicing.setLayerIndex,
-    isPrintingLayerScrubbing,
   ]);
 
   // 4. Islands (needs geom & transform & layerHeight)
@@ -7902,11 +7889,13 @@ export default function Home() {
                           willChange: 'transform',
                         }}
                       >
-                        <PrintingLayerScrubPreview
+                        <PrintingLayerGpuPreview
                           models={scene.models}
                           clipZ={printingSelectedLayer * slicing.layerHeightMm}
                           buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
                           buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
+                          supportGroupRef={supportDragGroupRef}
+                          supportVersion={supportRenderRefreshNonce}
                           mirrorX={activePrinterProfile?.display?.mirrorX === true}
                           mirrorY={activePrinterProfile?.display?.mirrorY === true}
                           className="block w-full h-full rounded"

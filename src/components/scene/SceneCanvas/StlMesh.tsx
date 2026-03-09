@@ -139,10 +139,10 @@ export function StlMesh({
   const supportDimWorldScaleRef = React.useRef(new THREE.Vector3());
   const supportDimMaterialRef = React.useRef<THREE.MeshStandardMaterial | null>(null);
 
-  // Build clipping planes for a band [clipLower, clipUpper] on Z axis
-  // Clipping planes work in WORLD space
-  // clipLower/clipUpper are already in world space (0 = bottom of mesh)
-  const planes = React.useMemo(() => {
+  // Initialize clipping planes once (update in-place to avoid recreation)
+  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
+
+  React.useEffect(() => {
     const ps: THREE.Plane[] = [];
 
     if (clipLower != null) {
@@ -155,8 +155,10 @@ export function StlMesh({
       // Normal points down (0,0,-1), hide points where world Z > clipUpper
       ps.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
-    return ps;
+    clippingPlanesRef.current = ps;
   }, [clipLower, clipUpper]);
+
+  const planes = clippingPlanesRef.current;
 
   React.useEffect(() => {
     if (mode === 'prepare' && transformMode === 'smoothing' && isActiveModel) {

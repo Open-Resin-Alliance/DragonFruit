@@ -103,7 +103,11 @@ export default function RaftRenderer({
       window.removeEventListener('model-deselected', handleModelDeselected);
     };
   }, [passive]);
-  const clippingPlanes = React.useMemo(() => {
+
+  // Initialize clipping planes once (update in-place to avoid recreation)
+  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
+
+  React.useEffect(() => {
     const planes: THREE.Plane[] = [];
 
     if (clipLower != null) {
@@ -114,8 +118,10 @@ export default function RaftRenderer({
       planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
 
-    return planes;
+    clippingPlanesRef.current = planes;
   }, [clipLower, clipUpper]);
+
+  const clippingPlanes = clippingPlanesRef.current;
 
   const selectedModelIdSet = React.useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
   const excludedModelIdSet = React.useMemo(() => new Set(excludeModelIds.filter((id): id is string => Boolean(id))), [excludeModelIds]);

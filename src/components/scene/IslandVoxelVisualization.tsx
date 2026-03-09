@@ -380,8 +380,10 @@ export function IslandVoxelVisualization({
     return meshData;
   }, [enabled, scanResults, layerHeightMm, opacity, colorScheme, selectedIslandId, showMerged, showTerritory, centerOffset, zOffset]);
 
-  // Create clipping planes (cheap, can update every frame)
-  const clippingPlanes = useMemo(() => {
+  // Initialize clipping planes once (update in-place to avoid recreation)
+  const clippingPlanesRef = React.useRef<THREE.Plane[]>([]);
+
+  React.useEffect(() => {
     const planes: THREE.Plane[] = [];
 
     if (clipLower != null) {
@@ -391,8 +393,10 @@ export function IslandVoxelVisualization({
       planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), clipUpper));
     }
 
-    return planes;
+    clippingPlanesRef.current = planes;
   }, [clipLower, clipUpper]);
+
+  const clippingPlanes = clippingPlanesRef.current;
 
   if (!enabled) return null;
 

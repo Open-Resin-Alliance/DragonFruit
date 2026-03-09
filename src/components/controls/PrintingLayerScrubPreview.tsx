@@ -42,6 +42,8 @@ interface Props {
   buildPlateWidthMm: number;
   /** Build plate Y extent (mm) */
   buildPlateDepthMm: number;
+  /** Layer height for quantized bucketing (mm) */
+  layerHeightMm?: number;
   mirrorX?: boolean;
   mirrorY?: boolean;
   className?: string;
@@ -61,6 +63,7 @@ export function PrintingLayerScrubPreview({
   clipZ,
   buildPlateWidthMm,
   buildPlateDepthMm,
+  layerHeightMm = 0.05,
   mirrorX = false,
   mirrorY = false,
   className,
@@ -72,6 +75,9 @@ export function PrintingLayerScrubPreview({
   // Per-instance caches — bounded, evict oldest on overflow
   const contextCacheRef = React.useRef<Map<string, ProjectedCrossSectionContext>>(new Map());
   const loopsCacheRef = React.useRef<Map<string, import('three').Vector2[][]>>(new Map());
+
+  // Defer canvas rendering to avoid jank during rapid scrubbing
+  const renderRafRef = React.useRef<number | null>(null);
 
   // Track container size so the canvas pixel dimensions stay correct on layout changes
   const [containerSize, setContainerSize] = React.useState<{ w: number; h: number } | null>(null);
@@ -117,7 +123,11 @@ export function PrintingLayerScrubPreview({
     const loopKey = `${modelSignature}|${clipZ.toFixed(3)}`;
     let cached = loopsCacheRef.current.get(loopKey);
     if (!cached) {
-      cached = buildProjectedCrossSectionLoopsAtZFromContext({ context, zMm: clipZ });
+      cached = buildProjectedCrossSectionLoopsAtZFromContext({
+        context,
+        zMm: clipZ,
+        quantizedStepMm: layerHeightMm,
+      });
       loopsCacheRef.current.set(loopKey, cached);
       if (loopsCacheRef.current.size > LOOPS_CACHE_LIMIT) {
         const oldest = loopsCacheRef.current.keys().next().value;
@@ -126,65 +136,72 @@ export function PrintingLayerScrubPreview({
     }
     return cached;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelSignature, clipZ]);
+  }, [modelSignature, clipZ, layerHeightMm]);
   // Note: `models` intentionally omitted — signature change covers it
 
-  // Render loops to canvas whenever loops or display params change
+  // Deferred render effect: only redraw canvas once per animation frame even if loops change multiple times
   React.useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = Math.max(1, window.devicePixelRatio ?? 1);
-    const cssW = containerSize?.w ?? canvas.clientWidth;
-    const cssH = containerSize?.h ?? canvas.clientHeight;
-    const pxW = Math.max(1, Math.round(cssW * dpr));
-    const pxH = Math.max(1, Math.round(cssH * dpr));
-
-    if (canvas.width !== pxW || canvas.height !== pxH) {
-      canvas.width = pxW;
-      canvas.height = pxH;
+    if (renderRafRef.current !== null) {
+      cancelAnimationFrame(renderRafRef.current);
     }
 
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, pxW, pxH);
+    renderRafRef.current = requestAnimationFrame(() => {
+      renderRafRef.current = null;
 
-    const hasLoops = loops && loops.length > 0;
-    const bwMm = Math.max(1, buildPlateWidthMm);
-    const bdMm = Math.max(1, buildPlateDepthMm);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    if (hasLoops) {
-      // Fit build plate (centered at world 0,0) into canvas with aspect-correct letterboxing.
-      // World X increases right → canvas X increases right.
-      // World Y increases up → canvas Y increases DOWN (raster convention), so negate Y scale.
-      // mirrorX / mirrorY flip the respective axis to match the PNG preview orientation.
-      const baseScale = Math.min(pxW / bwMm, pxH / bdMm);
-      const scaleX = baseScale * (mirrorX ? -1 : 1);
-      const scaleY = baseScale * (mirrorY ? 1 : -1); // default: Y inverted
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-      ctx.translate(pxW * 0.5, pxH * 0.5);
-      ctx.scale(scaleX, scaleY);
+      const dpr = Math.max(1, window.devicePixelRatio ?? 1);
+      const cssW = containerSize?.w ?? canvas.clientWidth;
+      const cssH = containerSize?.h ?? canvas.clientHeight;
+      const pxW = Math.max(1, Math.round(cssW * dpr));
+      const pxH = Math.max(1, Math.round(cssH * dpr));
 
-      ctx.fillStyle = '#ffffff';
-      const path = new Path2D();
-      for (const loop of loops!) {
-        if (loop.length < 2) continue;
-        path.moveTo(loop[0].x, loop[0].y);
-        for (let i = 1; i < loop.length; i++) {
-          path.lineTo(loop[i].x, loop[i].y);
-        }
-        path.closePath();
+      if (canvas.width !== pxW || canvas.height !== pxH) {
+        canvas.width = pxW;
+        canvas.height = pxH;
       }
-      // Use non-zero winding so overlapping solids union together instead of
-      // canceling out (evenodd can produce false voids in overlaps).
-      ctx.fill(path, 'nonzero');
-    }
 
-    ctx.restore();
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, pxW, pxH);
+
+      if (loops && loops.length > 0) {
+        const bwMm = Math.max(1, buildPlateWidthMm);
+        const bdMm = Math.max(1, buildPlateDepthMm);
+        const baseScale = Math.min(pxW / bwMm, pxH / bdMm);
+        const scaleX = baseScale * (mirrorX ? -1 : 1);
+        const scaleY = baseScale * (mirrorY ? 1 : -1);
+
+        ctx.translate(pxW * 0.5, pxH * 0.5);
+        ctx.scale(scaleX, scaleY);
+        ctx.fillStyle = '#ffffff';
+
+        const path = new Path2D();
+        for (const loop of loops) {
+          if (loop.length < 2) continue;
+          path.moveTo(loop[0].x, loop[0].y);
+          for (let i = 1; i < loop.length; i++) {
+            path.lineTo(loop[i].x, loop[i].y);
+          }
+          path.closePath();
+        }
+        ctx.fill(path, 'nonzero');
+      }
+
+      ctx.restore();
+    });
+
+    return () => {
+      if (renderRafRef.current !== null) {
+        cancelAnimationFrame(renderRafRef.current);
+        renderRafRef.current = null;
+      }
+    };
   }, [loops, buildPlateWidthMm, buildPlateDepthMm, mirrorX, mirrorY, containerSize]);
 
   return (
