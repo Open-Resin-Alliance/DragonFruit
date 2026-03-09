@@ -123,6 +123,10 @@ type LoopGroup = {
 type IntPoint = { X: number; Y: number };
 
 const CLIPPER_SCALE = 1000;
+const CONTEXT_CACHE_LIMIT = 8;
+const LOOPS_CACHE_LIMIT = 48;
+const LOOP_GROUPS_CACHE_LIMIT = 48;
+const SHAPE_GEOMETRY_CACHE_LIMIT = 32;
 
 function polygonSignedArea(loop: THREE.Vector2[]): number {
   let area = 0;
@@ -364,6 +368,17 @@ export function CrossSectionCap({
 
   const projectedLoopsCacheRef = React.useRef<Map<string, THREE.Vector2[][]>>(new Map());
   const projectedContextCacheRef = React.useRef<Map<string, ProjectedCrossSectionContext>>(new Map());
+  const projectedLoopGroupsCacheRef = React.useRef<Map<string, LoopGroup[]>>(new Map());
+  const projectedShapeGeometryCacheRef = React.useRef<Map<string, THREE.ShapeGeometry>>(new Map());
+
+  React.useEffect(() => {
+    return () => {
+      for (const geometry of projectedShapeGeometryCacheRef.current.values()) {
+        geometry.dispose();
+      }
+      projectedShapeGeometryCacheRef.current.clear();
+    };
+  }, []);
 
   const mesh = React.useMemo(() => {
     if (!visible) return null;
@@ -371,11 +386,21 @@ export function CrossSectionCap({
     const effectiveY = interactive
       ? Math.round(y / Math.max(0.001, interactiveZStepMm)) * Math.max(0.001, interactiveZStepMm)
       : y;
+    const quantizedStepMm = interactive ? Math.max(0.001, interactiveZStepMm) : undefined;
 
     const loops: THREE.Vector2[][] = [];
+    let projectedCacheKey: string | null = null;
+    const canUseProjectedCaches = Boolean(
+      projectedModels
+      && (!sourceObject || (interactive && preferProjectedOnlyDuringInteractive))
+      && !geometry,
+    );
 
     if (projectedModels) {
       const cacheKey = `${projectedModelSignature}|${effectiveY.toFixed(3)}`;
+      if (canUseProjectedCaches) {
+        projectedCacheKey = cacheKey;
+      }
       const cached = projectedLoopsCacheRef.current.get(cacheKey);
       if (cached) {
         loops.push(...cached);
@@ -388,7 +413,7 @@ export function CrossSectionCap({
             context = buildProjectedCrossSectionContext(projectedModels) ?? undefined;
             if (context) {
               projectedContextCacheRef.current.set(projectedModelSignature, context);
-              if (projectedContextCacheRef.current.size > 8) {
+              if (projectedContextCacheRef.current.size > CONTEXT_CACHE_LIMIT) {
                 const oldestContextKey = projectedContextCacheRef.current.keys().next().value;
                 if (oldestContextKey) projectedContextCacheRef.current.delete(oldestContextKey);
               }
@@ -399,6 +424,7 @@ export function CrossSectionCap({
             computed = buildProjectedCrossSectionLoopsAtZFromContext({
               context,
               zMm: effectiveY,
+              quantizedStepMm,
             });
           }
         }
@@ -410,7 +436,7 @@ export function CrossSectionCap({
         loops.push(...computed);
 
         projectedLoopsCacheRef.current.set(cacheKey, computed);
-        if (projectedLoopsCacheRef.current.size > 48) {
+        if (projectedLoopsCacheRef.current.size > LOOPS_CACHE_LIMIT) {
           const oldestKey = projectedLoopsCacheRef.current.keys().next().value;
           if (oldestKey) projectedLoopsCacheRef.current.delete(oldestKey);
         }
@@ -427,7 +453,21 @@ export function CrossSectionCap({
 
     if (loops.length === 0) return null;
 
-    const loopGroups = buildLoopGroups(loops);
+    let loopGroups: LoopGroup[] | undefined;
+    if (projectedCacheKey) {
+      loopGroups = projectedLoopGroupsCacheRef.current.get(projectedCacheKey);
+      if (!loopGroups) {
+        loopGroups = buildLoopGroups(loops);
+        projectedLoopGroupsCacheRef.current.set(projectedCacheKey, loopGroups);
+        if (projectedLoopGroupsCacheRef.current.size > LOOP_GROUPS_CACHE_LIMIT) {
+          const oldestKey = projectedLoopGroupsCacheRef.current.keys().next().value;
+          if (oldestKey) projectedLoopGroupsCacheRef.current.delete(oldestKey);
+        }
+      }
+    } else {
+      loopGroups = buildLoopGroups(loops);
+    }
+
     if (loopGroups.length === 0) return null;
 
     const group = new THREE.Group();
@@ -460,13 +500,42 @@ export function CrossSectionCap({
         }
 
         if (pixelCount > 0) {
-          const pixelSize = pxMm * 0.95;
-          const pixelGeom = new THREE.PlaneGeometry(pixelSize, pixelSize);
+          const rgba = new Uint8Array(width * height * 4);
+          const tint = new THREE.Color(color);
+          const r = Math.round(THREE.MathUtils.clamp(tint.r, 0, 1) * 255);
+          const g = Math.round(THREE.MathUtils.clamp(tint.g, 0, 1) * 255);
+          const b = Math.round(THREE.MathUtils.clamp(tint.b, 0, 1) * 255);
+
+          for (let row = 0; row < height; row += 1) {
+            for (let col = 0; col < width; col += 1) {
+              const srcIndex = row * width + col;
+              const flippedRow = height - 1 - row;
+              const dstIndex = (flippedRow * width + col) * 4;
+              if (grid[srcIndex] === 1) {
+                rgba[dstIndex] = r;
+                rgba[dstIndex + 1] = g;
+                rgba[dstIndex + 2] = b;
+                rgba[dstIndex + 3] = 255;
+              }
+            }
+          }
+
+          const texture = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat);
+          texture.needsUpdate = true;
+          texture.flipY = false;
+          texture.magFilter = THREE.NearestFilter;
+          texture.minFilter = THREE.NearestFilter;
+          texture.generateMipmaps = false;
+
+          const planeWidth = width * pxMm;
+          const planeHeight = height * pxMm;
+          const planeGeom = new THREE.PlaneGeometry(planeWidth, planeHeight);
           const mat = new THREE.MeshBasicMaterial({
-            color,
+            map: texture,
+            transparent: true,
+            alphaTest: 0.5,
             depthWrite: true,
             depthTest: true,
-            transparent: false,
             opacity: 1.0,
             side: THREE.FrontSide,
             polygonOffset: true,
@@ -474,37 +543,50 @@ export function CrossSectionCap({
             polygonOffsetUnits: -1,
           });
 
-          const instancedMesh = new THREE.InstancedMesh(pixelGeom, mat, pixelCount);
-          const matrix = new THREE.Matrix4();
-          let instanceIndex = 0;
-
-          for (let row = 0; row < height; row += 1) {
-            for (let col = 0; col < width; col += 1) {
-              if (grid[row * width + col] === 1) {
-                const worldX = originX + col * pxMm;
-                const worldY = originY + row * pxMm;
-                matrix.setPosition(worldX, worldY, effectiveY + 1e-4);
-                instancedMesh.setMatrixAt(instanceIndex, matrix);
-                instanceIndex += 1;
-              }
-            }
-          }
-
-          instancedMesh.instanceMatrix.needsUpdate = true;
-          group.add(instancedMesh);
+          const plane = new THREE.Mesh(planeGeom, mat);
+          plane.position.set(originX + ((width - 1) * pxMm * 0.5), originY + ((height - 1) * pxMm * 0.5), effectiveY + 1e-4);
+          group.add(plane);
         }
       }
     } else {
-      const shapes = loopGroups.map((loopGroup) => {
-        const shape = new THREE.Shape(loopGroup.outer);
-        for (const hole of loopGroup.holes) {
-          shape.holes.push(new THREE.Path(hole));
-        }
-        return shape;
-      });
+      let shapeGeom: THREE.ShapeGeometry;
+      if (projectedCacheKey) {
+        const cachedGeometry = projectedShapeGeometryCacheRef.current.get(projectedCacheKey);
+        if (cachedGeometry) {
+          shapeGeom = cachedGeometry;
+        } else {
+          const shapes = loopGroups.map((loopGroup) => {
+            const shape = new THREE.Shape(loopGroup.outer);
+            for (const hole of loopGroup.holes) {
+              shape.holes.push(new THREE.Path(hole));
+            }
+            return shape;
+          });
 
-      const shapeGeom = new THREE.ShapeGeometry(shapes);
-      shapeGeom.translate(0, 0, effectiveY + 1e-4);
+          shapeGeom = new THREE.ShapeGeometry(shapes);
+          shapeGeom.translate(0, 0, effectiveY + 1e-4);
+          projectedShapeGeometryCacheRef.current.set(projectedCacheKey, shapeGeom);
+          if (projectedShapeGeometryCacheRef.current.size > SHAPE_GEOMETRY_CACHE_LIMIT) {
+            const oldestKey = projectedShapeGeometryCacheRef.current.keys().next().value;
+            if (oldestKey) {
+              const oldestGeometry = projectedShapeGeometryCacheRef.current.get(oldestKey);
+              projectedShapeGeometryCacheRef.current.delete(oldestKey);
+              oldestGeometry?.dispose();
+            }
+          }
+        }
+      } else {
+        const shapes = loopGroups.map((loopGroup) => {
+          const shape = new THREE.Shape(loopGroup.outer);
+          for (const hole of loopGroup.holes) {
+            shape.holes.push(new THREE.Path(hole));
+          }
+          return shape;
+        });
+
+        shapeGeom = new THREE.ShapeGeometry(shapes);
+        shapeGeom.translate(0, 0, effectiveY + 1e-4);
+      }
 
       const mat = new THREE.MeshBasicMaterial({
         color,

@@ -79,7 +79,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       const v = min + inv * (max - min);
       onChange(clamp(snap(v)));
     }
-  }, [min, max, value, clamp, snap, onChange]);
+  }, [min, max, value, clamp, onChange, snap]);
 
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -150,7 +150,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [nudge, step, value, clamp, snap, onChange]);
+  }, [nudge, step, value, clamp, onChange, snap]);
 
   const onKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {

@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { CrossSectionCap } from '@/components/scene/CrossSectionCap';
+import { CrossSectionStencilCap, type CrossSectionStencilCapEntry } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import { IslandVoxelVisualization } from '@/components/scene/IslandVoxelVisualization';
 import { IslandExpansionVisualization } from '@/components/scene/IslandExpansionVisualization';
@@ -446,21 +446,6 @@ function PickingEmptySpaceHoverResetter({ enabled }: { enabled: boolean }) {
       }
     };
   }, []);
-
-  return null;
-}
-
-function CrossSectionScrubFpsMonitor({
-  enabled,
-  onFrame,
-}: {
-  enabled: boolean;
-  onFrame: (deltaSeconds: number) => void;
-}) {
-  useFrame((_, delta) => {
-    if (!enabled) return;
-    onFrame(delta);
-  });
 
   return null;
 }
@@ -1409,6 +1394,9 @@ export function SceneCanvas({
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
   const [hoveredMeshModelId, setHoveredMeshModelId] = React.useState<string | null>(null);
+  const hoveredMeshModelIdRef = React.useRef<string | null>(null);
+  const hoverModelRafRef = React.useRef<number | null>(null);
+  const pendingHoverModelIdRef = React.useRef<string | null>(null);
   const [hoveredRaftModelId, setHoveredRaftModelId] = React.useState<string | null>(null);
   const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
   const hoveredSupportModelIdFromStore = React.useMemo(() => {
@@ -1426,8 +1414,31 @@ export function SceneCanvas({
   const onModelHoverPointChange = React.useCallback((point: THREE.Vector3 | null) => {
     lastHoveredModelPointRef.current = point;
   }, []);
+  React.useEffect(() => {
+    hoveredMeshModelIdRef.current = hoveredMeshModelId;
+  }, [hoveredMeshModelId]);
+
+  React.useEffect(() => {
+    return () => {
+      if (hoverModelRafRef.current !== null) {
+        cancelAnimationFrame(hoverModelRafRef.current);
+        hoverModelRafRef.current = null;
+      }
+    };
+  }, []);
+
   const onModelHoverModelChange = React.useCallback((id: string | null) => {
-    setHoveredMeshModelId(id);
+    const nextId = id ?? null;
+    pendingHoverModelIdRef.current = nextId;
+    if (hoverModelRafRef.current !== null) return;
+
+    hoverModelRafRef.current = requestAnimationFrame(() => {
+      hoverModelRafRef.current = null;
+      const pending = pendingHoverModelIdRef.current;
+      pendingHoverModelIdRef.current = null;
+      if (pending === hoveredMeshModelIdRef.current) return;
+      setHoveredMeshModelId((prev) => (prev === pending ? prev : pending));
+    });
   }, []);
 
   React.useEffect(() => {
@@ -2944,73 +2955,27 @@ export function SceneCanvas({
     transform,
   ]);
 
-  const crossSectionInteractive = Boolean(isLayerScrubbing);
-  const requestedCrossSectionMode: 'smooth' | 'rasterized' = crossSectionMode ?? 'smooth';
-  const [crossSectionAutoFallbackRasterized, setCrossSectionAutoFallbackRasterized] = React.useState(false);
-  const crossSectionFpsEmaRef = React.useRef<number | null>(null);
-  const crossSectionLowFpsSinceRef = React.useRef<number | null>(null);
-  const crossSectionHighFpsSinceRef = React.useRef<number | null>(null);
+  const crossSectionCapEntries = React.useMemo<CrossSectionStencilCapEntry[]>(() => {
+    return models
+      .filter((model) => model.visible)
+      .map((model) => ({
+        id: model.id,
+        geometry: model.geometry.geometry,
+        center: model.geometry.center,
+        transform: model.id === activeModelId && transform
+          ? transform
+          : model.transform,
+      }));
+  }, [activeModelId, models, transform]);
 
-  const crossSectionAutoFallbackEnabled = crossSectionInteractive && requestedCrossSectionMode === 'smooth';
-
-  const handleCrossSectionFpsFrame = React.useCallback((delta: number) => {
-    const dt = Math.max(0.0001, delta);
-    const fps = 1 / dt;
-    const alpha = 0.12;
-    const prev = crossSectionFpsEmaRef.current;
-    const ema = prev == null ? fps : (prev * (1 - alpha) + fps * alpha);
-    crossSectionFpsEmaRef.current = ema;
-
-    const now = performance.now();
-    const dropThresholdFps = 24;
-    const recoverThresholdFps = 33;
-    const dropHoldMs = 400;
-    const recoverHoldMs = 900;
-
-    if (!crossSectionAutoFallbackRasterized) {
-      if (ema < dropThresholdFps) {
-        if (crossSectionLowFpsSinceRef.current == null) {
-          crossSectionLowFpsSinceRef.current = now;
-        } else if ((now - crossSectionLowFpsSinceRef.current) >= dropHoldMs) {
-          setCrossSectionAutoFallbackRasterized(true);
-          crossSectionHighFpsSinceRef.current = null;
-        }
-      } else {
-        crossSectionLowFpsSinceRef.current = null;
-      }
-      return;
-    }
-
-    if (ema > recoverThresholdFps) {
-      if (crossSectionHighFpsSinceRef.current == null) {
-        crossSectionHighFpsSinceRef.current = now;
-      } else if ((now - crossSectionHighFpsSinceRef.current) >= recoverHoldMs) {
-        setCrossSectionAutoFallbackRasterized(false);
-        crossSectionLowFpsSinceRef.current = null;
-      }
-    } else {
-      crossSectionHighFpsSinceRef.current = null;
-    }
-  }, [crossSectionAutoFallbackRasterized]);
-
-  React.useEffect(() => {
-    if (crossSectionAutoFallbackEnabled) return;
-    setCrossSectionAutoFallbackRasterized(false);
-    crossSectionFpsEmaRef.current = null;
-    crossSectionLowFpsSinceRef.current = null;
-    crossSectionHighFpsSinceRef.current = null;
-  }, [crossSectionAutoFallbackEnabled]);
-
-  const crossSectionModeForRender: 'smooth' | 'rasterized' = (
-    crossSectionAutoFallbackEnabled && crossSectionAutoFallbackRasterized
-      ? 'rasterized'
-      : requestedCrossSectionMode
+  const crossSectionPlaneWidthMm = Math.max(
+    1,
+    (activeBuildVolumeSettings?.widthMm ?? 200) + 24,
   );
-
-  const crossSectionPxMmForRender = crossSectionModeForRender === 'rasterized'
-    ? Math.max(pxMm ?? 0.1, 0.25)
-    : pxMm;
-  const crossSectionInteractiveStepMm = Math.max(0.001, layerHeightMm ?? 0.05);
+  const crossSectionPlaneHeightMm = Math.max(
+    1,
+    (activeBuildVolumeSettings?.depthMm ?? 200) + 24,
+  );
 
   const introControllerBounds = introBoundsSnapshot;
 
@@ -4815,10 +4780,6 @@ export function SceneCanvas({
         onPointerMissed={handleScenePointerMissed}
       >
         <SceneRenderBindings rendererRef={rendererRef} sceneRef={sceneRef} />
-        <CrossSectionScrubFpsMonitor
-          enabled={crossSectionAutoFallbackEnabled}
-          onFrame={handleCrossSectionFpsFrame}
-        />
         <LoggingHelper mode={mode} />
         
         {/* SAT-based hover detection (experimental) */}
@@ -5314,18 +5275,15 @@ export function SceneCanvas({
               )}
               </group>{/* end supportDragGroupRef */}
 
-              {/* Projection-based cross-section cap sourced from slicer world triangles (models + supports + rafts). */}
               {clipUpper != null && !hideCrossSectionCap && (
-                <CrossSectionCap
-                  projectedModels={models}
+                <CrossSectionStencilCap
+                  entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
+                  sourceObjectVersion={supportRenderRefreshNonce + (isGizmoDragging ? 1 : 0) + (holdSupportDragDelta ? 1 : 0)}
                   y={clipUpper}
                   color="#FFFFFF"
-                  mode={crossSectionModeForRender}
-                  pxMm={crossSectionPxMmForRender}
-                  interactive={crossSectionInteractive}
-                  interactiveZStepMm={crossSectionInteractiveStepMm}
-                  preferProjectedOnlyDuringInteractive
+                  planeWidthMm={crossSectionPlaneWidthMm}
+                  planeHeightMm={crossSectionPlaneHeightMm}
                   visible={!hideCrossSectionCap && clipUpper != null}
                 />
               )}
