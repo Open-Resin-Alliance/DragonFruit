@@ -1596,6 +1596,20 @@ export default function Home() {
     printingPreviewZoom,
   ]);
 
+  const printingPreviewAspectRatio = React.useMemo(() => {
+    const aspectW = printingPreviewTargetResolution
+      ? printingPreviewTargetResolution.viewportWidth
+      : activePrinterProfile?.buildVolumeMm?.width ?? 143;
+    const aspectH = printingPreviewTargetResolution
+      ? printingPreviewTargetResolution.viewportHeight
+      : activePrinterProfile?.buildVolumeMm?.depth ?? 89;
+    return aspectW / aspectH;
+  }, [
+    activePrinterProfile?.buildVolumeMm?.depth,
+    activePrinterProfile?.buildVolumeMm?.width,
+    printingPreviewTargetResolution,
+  ]);
+
   const printingPreviewCursor = React.useMemo<React.CSSProperties['cursor']>(() => {
     if (!selectedPrintingLayerPreviewUrl) return 'default';
     if (printingPreviewZoom > 1.0001) {
@@ -7863,91 +7877,81 @@ export default function Home() {
                 onPointerUp={handlePrintingPreviewPointerEnd}
                 onPointerCancel={handlePrintingPreviewPointerEnd}
               >
-                {shouldShowScrubPreview ? (
-                  // While scrubbing: render a vector cross-section instead of decoding PNGs.
-                  // This avoids image-decode memory churn and gives instant visual feedback
-                  // via the same loop data used by the 3-D cross-section cap.
-                  // Wrap in aspect-ratio container to match PNG preview sizing behavior.
-                  (() => {
-                    const aspectW = printingPreviewTargetResolution
-                      ? printingPreviewTargetResolution.viewportWidth
-                      : activePrinterProfile?.buildVolumeMm?.width ?? 143;
-                    const aspectH = printingPreviewTargetResolution
-                      ? printingPreviewTargetResolution.viewportHeight
-                      : activePrinterProfile?.buildVolumeMm?.depth ?? 89;
-                    const aspectRatio = aspectW / aspectH;
-                    return (
-                      <div
-                        className="block rounded"
-                        style={{ 
-                          aspectRatio: aspectRatio.toString(),
-                          width: '100%',
-                          maxWidth: '100%',
-                          maxHeight: '100%',
-                          transform: printingPreviewVisualTransform || 'none',
-                          transformOrigin: 'center center',
-                          willChange: 'transform',
-                        }}
-                      >
-                        <PrintingLayerGpuPreview
-                          models={scene.models}
-                          clipZ={printingSelectedLayer * slicing.layerHeightMm}
-                          buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
-                          buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
-                          supportGroupRef={supportDragGroupRef}
-                          supportVersion={supportRenderRefreshNonce}
-                          mirrorX={activePrinterProfile?.display?.mirrorX === true}
-                          mirrorY={activePrinterProfile?.display?.mirrorY === true}
-                          className="block w-full h-full rounded"
-                        />
-                      </div>
-                    );
-                  })()
-                ) : selectedPrintingLayerPreviewUrl ? (
-                  printingPreviewTargetResolution ? (
-                    <svg
-                      viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
-                      preserveAspectRatio="xMidYMid meet"
-                      className="block w-full h-full max-w-full max-h-full rounded"
-                      style={{
-                        transform: printingPreviewVisualTransform || 'none',
-                        transformOrigin: 'center center',
-                        willChange: 'transform',
-                      }}
-                      role="img"
-                      aria-label={`Layer ${printingSelectedLayer} preview`}
-                    >
-                      <image
-                        href={selectedPrintingLayerPreviewUrl}
-                        x={0}
-                        y={0}
-                        width={printingPreviewTargetResolution.viewportWidth}
-                        height={printingPreviewTargetResolution.viewportHeight}
-                        preserveAspectRatio="none"
-                        style={{ imageRendering: 'pixelated' }}
-                      />
-                    </svg>
-                  ) : (
-                    <img
-                      src={selectedPrintingLayerPreviewUrl}
-                      alt={`Layer ${printingSelectedLayer} preview`}
-                      className="block rounded max-w-full max-h-full w-auto h-auto object-contain"
-                      style={{
-                        imageRendering: 'pixelated',
-                        transform: printingPreviewVisualTransform || 'none',
-                        transformOrigin: 'center center',
-                        willChange: 'transform',
-                      }}
+                {/* Layered preview: GPU preview (instant) underneath, PNG (higher quality) on top when loaded */}
+                <div
+                  className="block rounded relative"
+                  style={{ 
+                    aspectRatio: printingPreviewAspectRatio.toString(),
+                    width: '100%',
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    transform: printingPreviewVisualTransform || 'none',
+                    transformOrigin: 'center center',
+                    willChange: 'transform',
+                  }}
+                >
+                  {/* GPU preview layer (always visible during scrub or when PNG not loaded) */}
+                  <div className="absolute inset-0">
+                    <PrintingLayerGpuPreview
+                      models={scene.models}
+                      clipZ={printingSelectedLayer * slicing.layerHeightMm}
+                      buildPlateWidthMm={activePrinterProfile?.buildVolumeMm?.width ?? 143}
+                      buildPlateDepthMm={activePrinterProfile?.buildVolumeMm?.depth ?? 89}
+                      viewportWidthMm={printingPreviewTargetResolution?.viewportWidth}
+                      viewportHeightMm={printingPreviewTargetResolution?.viewportHeight}
+                      supportGroupRef={supportDragGroupRef as React.RefObject<THREE.Group>}
+                      supportVersion={supportRenderRefreshNonce}
+                      mirrorX={activePrinterProfile?.display?.mirrorX === true}
+                      mirrorY={activePrinterProfile?.display?.mirrorY === true}
+                      className="block w-full h-full rounded"
                     />
-                  )
-                ) : (
-                  <div
-                    className="h-full w-full rounded border border-dashed flex items-center justify-center text-xs"
-                    style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
-                  >
-                    No preview PNG available for this layer yet.
                   </div>
-                )}
+
+                  {/* PNG layer on top (fades in when loaded, hidden during active scrub) */}
+                  {selectedPrintingLayerPreviewUrl && !isPrintingLayerScrubbing && (
+                    <div 
+                      className="absolute inset-0 transition-opacity duration-150" 
+                      style={{ opacity: isPrintingPngLoaded ? 1 : 0 }}
+                    >
+                      {printingPreviewTargetResolution ? (
+                        <svg
+                          viewBox={`0 0 ${printingPreviewTargetResolution.viewportWidth} ${printingPreviewTargetResolution.viewportHeight}`}
+                          preserveAspectRatio="xMidYMid meet"
+                          className="block w-full h-full rounded"
+                          role="img"
+                          aria-label={`Layer ${printingSelectedLayer} preview`}
+                        >
+                          <image
+                            href={selectedPrintingLayerPreviewUrl}
+                            x={0}
+                            y={0}
+                            width={printingPreviewTargetResolution.viewportWidth}
+                            height={printingPreviewTargetResolution.viewportHeight}
+                            preserveAspectRatio="none"
+                            style={{ imageRendering: 'pixelated' }}
+                          />
+                        </svg>
+                      ) : (
+                        <img
+                          src={selectedPrintingLayerPreviewUrl}
+                          alt={`Layer ${printingSelectedLayer} preview`}
+                          className="block rounded w-full h-full object-contain"
+                          style={{ imageRendering: 'pixelated' }}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {/* Fallback message when no data available */}
+                  {!selectedPrintingLayerPreviewUrl && printingPreviewTotalLayers === 0 && (
+                    <div
+                      className="absolute inset-0 rounded border border-dashed flex items-center justify-center text-xs"
+                      style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                    >
+                      No preview available yet.
+                    </div>
+                  )}
+                </div>
 
                 {selectedPrintingLayerPreviewUrl && usePrintingSettledHiResCanvas && (
                   <canvas

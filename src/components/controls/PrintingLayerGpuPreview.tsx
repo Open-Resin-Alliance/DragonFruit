@@ -11,7 +11,9 @@ interface Props {
   clipZ: number | null;
   buildPlateWidthMm: number;
   buildPlateDepthMm: number;
-  supportGroupRef?: React.RefObject<THREE.Group> | null;
+  viewportWidthMm?: number;
+  viewportHeightMm?: number;
+  supportGroupRef?: React.RefObject<THREE.Group | null> | null;
   supportVersion?: number;
   mirrorX?: boolean;
   mirrorY?: boolean;
@@ -28,6 +30,8 @@ export function PrintingLayerGpuPreview({
   clipZ,
   buildPlateWidthMm,
   buildPlateDepthMm,
+  viewportWidthMm,
+  viewportHeightMm,
   supportGroupRef,
   supportVersion = 0,
   mirrorX = false,
@@ -50,15 +54,40 @@ export function PrintingLayerGpuPreview({
     return [0, 0, 1000];
   }, []);
 
-  const planeWidthMm = Math.max(1, buildPlateWidthMm + 24);
-  const planeHeightMm = Math.max(1, buildPlateDepthMm + 24);
+  const frustumSize = React.useMemo(() => {
+    const baseWidth = Math.max(1, buildPlateWidthMm);
+    const baseHeight = Math.max(1, buildPlateDepthMm);
+
+    const viewportAspect =
+      viewportWidthMm && viewportHeightMm && viewportWidthMm > 0 && viewportHeightMm > 0
+        ? viewportWidthMm / viewportHeightMm
+        : baseWidth / baseHeight;
+
+    const safeViewportAspect = Number.isFinite(viewportAspect) && viewportAspect > 0
+      ? viewportAspect
+      : (baseWidth / baseHeight);
+
+    const baseAspect = baseWidth / baseHeight;
+
+    if (safeViewportAspect >= baseAspect) {
+      const height = baseHeight;
+      const width = height * safeViewportAspect;
+      return { width, height };
+    }
+
+    const width = baseWidth;
+    const height = width / safeViewportAspect;
+    return { width, height };
+  }, [buildPlateDepthMm, buildPlateWidthMm, viewportHeightMm, viewportWidthMm]);
+
+  const frustumWidthMm = frustumSize.width;
+  const frustumHeightMm = frustumSize.height;
+  const planeWidthMm = frustumWidthMm;
+  const planeHeightMm = frustumHeightMm;
 
   const orthoSize = React.useMemo(() => {
-    const margin = 1.15;
-    const width = buildPlateWidthMm * margin;
-    const height = buildPlateDepthMm * margin;
-    return { width, height };
-  }, [buildPlateWidthMm, buildPlateDepthMm]);
+    return { width: frustumWidthMm, height: frustumHeightMm };
+  }, [frustumHeightMm, frustumWidthMm]);
 
   if (clipZ == null) {
     return (
