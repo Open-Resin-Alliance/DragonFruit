@@ -1,4 +1,4 @@
-# Support brace (Element) — Source of Truth
+# Kickstand (Element) — Source of Truth
 
 ## Plain Language Overview
 *   **What it is**: A grounded support type that starts on the plate/raft with [[Roots]] and ends on another support via a [[Knot]].
@@ -16,9 +16,9 @@
     *   **Terminal transition shaft**: Angled end segment that transitions diameter to the host side.
     *   **End [[Knot]]**: Snaps to a host support shaft.
 *   **Dimensions**:
-    *   Base/support-brace diameter uses the active trunk diameter from current support settings.
+    *   Base/kickstand diameter uses the active trunk diameter from current support settings.
     *   End knot size follows normal knot sizing rules against the host shaft diameter (standard knot offset policy).
-    *   Terminal transition shaft tapers from support-brace diameter to host-side diameter.
+    *   Terminal transition shaft tapers from kickstand diameter to host-side diameter.
 
 ## Placement & Creation
 *   **Creation Method**: Place as a grounded support, then connect the top end knot to a valid host shaft.
@@ -42,7 +42,7 @@
 *   **Knot Sliding**: End knot slides on the host shaft like a normal knot.
 *   **Lower Bound Clamp**: End knot must not slide below the host joint that starts the host shaft segment it is attached to.
 *   **Diameter Behavior**:
-    *   Main support-brace body follows active trunk diameter settings.
+    *   Main kickstand body follows active trunk diameter settings.
     *   Host-side knot follows host-diameter-based knot sizing.
     *   Terminal transition shaft continuously adapts between body diameter and host-side diameter.
 
@@ -54,15 +54,15 @@
 *   **Validation**:
     *   Top knot host type must be Trunk or Branch.
     *   Top knot may not cross below the host-joint lower bound.
-    *   Support brace remains grounded through Roots.
+    *   Kickstand remains grounded through Roots.
 
 ## Notes & Terminology
-*   **Terminology**: "Support brace" is a distinct type from [[Brace]].
+*   **Terminology**: "Kickstand" is a distinct type from [[Brace]].
 
 ## Grid Placement Addendum (Interactive Snapping Rules)
-*   **Scope**: These rules apply to manual Support Brace placement while Grid Mode is enabled.
+*   **Scope**: These rules apply to manual Kickstand placement while Grid Mode is enabled.
 *   **Root Locking**:
-    *   The support-brace root snaps to a valid grid node (not an arbitrary in-between position).
+    *   The kickstand root snaps to a valid grid node (not an arbitrary in-between position).
     *   Preview and committed placement use the same node decision so final placement matches preview.
 *   **Allowed Directional Targets**:
     *   Selection is restricted to three cardinal options around the host shaft: **Left**, **Front (toward camera)**, and **Right**.
@@ -72,7 +72,7 @@
     *   Mouse just outside the visible shaft on the right resolves to **Right**.
     *   Mouse just outside the visible shaft on the left resolves to **Left**.
 *   **Occupied Node Rule**:
-    *   If a candidate grid node is already occupied by another support root, that node is invalid for new Support Brace placement.
+    *   If a candidate grid node is already occupied by another support root, that node is invalid for new Kickstand placement.
     *   Placement does not overwrite/stack onto an occupied node.
 *   **Validity Feedback + Placement Blocking**:
     *   **Green preview** = valid node, placement allowed.

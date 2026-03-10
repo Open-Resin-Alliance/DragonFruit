@@ -1,6 +1,6 @@
 import type { Roots, Trunk, Leaf, Knot, Branch, Brace, Twig, Stick, SupportState } from '../types';
-import type { SupportBraceBuildResult } from '../SupportTypes/SupportBrace/types';
-import type { SupportBraceState } from '../SupportTypes/SupportBrace/types';
+import type { KickstandBuildResult } from '../SupportTypes/Kickstand/types';
+import type { KickstandState } from '../SupportTypes/Kickstand/types';
 
 export const SUPPORT_ADD_TRUNK = 'support:add-trunk' as const;
 export const SUPPORT_REMOVE_TRUNK = 'support:remove-trunk' as const;
@@ -22,8 +22,8 @@ export const SUPPORT_REMOVE_STICK = 'support:remove-stick' as const;
 export const SUPPORT_ADD_BRACE = 'support:add-brace' as const;
 export const SUPPORT_REMOVE_BRACE = 'support:remove-brace' as const;
 
-export const SUPPORT_ADD_SUPPORT_BRACE = 'support:add-support-brace' as const;
-export const SUPPORT_REMOVE_SUPPORT_BRACE = 'support:remove-support-brace' as const;
+export const SUPPORT_ADD_KICKSTAND = 'support:add-kickstand' as const;
+export const SUPPORT_REMOVE_KICKSTAND = 'support:remove-kickstand' as const;
 
 export const SUPPORT_REPLACE_TRUNK = 'support:replace-trunk' as const;
 export const SUPPORT_AUTO_BRACE_REPLACE = 'support:auto-brace-replace' as const;
@@ -43,8 +43,8 @@ export type SupportHistoryActionType =
   | typeof SUPPORT_REMOVE_STICK
   | typeof SUPPORT_ADD_BRACE
   | typeof SUPPORT_REMOVE_BRACE
-  | typeof SUPPORT_ADD_SUPPORT_BRACE
-  | typeof SUPPORT_REMOVE_SUPPORT_BRACE
+  | typeof SUPPORT_ADD_KICKSTAND
+  | typeof SUPPORT_REMOVE_KICKSTAND
   | typeof SUPPORT_REPLACE_TRUNK
   | typeof SUPPORT_AUTO_BRACE_REPLACE;
 
@@ -53,7 +53,7 @@ export interface SupportTrunkPayload {
   root?: Roots | null;
   branches?: Branch[];
   braces?: Brace[];
-  supportBraces?: SupportBraceBuildResult[];
+  kickstands?: KickstandBuildResult[];
   leaves?: Leaf[];
   knots?: Knot[];
 }
@@ -97,7 +97,7 @@ export interface SupportStickPayload {
 export interface SupportBranchRemovePayload {
   branches: Branch[];
   braces: Brace[];
-  supportBraces?: SupportBraceBuildResult[];
+  kickstands?: KickstandBuildResult[];
   leaves: Leaf[];
   knots: Knot[];
   trunkUpdate?: {
@@ -110,14 +110,14 @@ export interface SupportBranchRemovePayload {
   }[];
 }
 
-export interface SupportBracePayload {
+export interface BraceLinkPayload {
   brace: Brace;
   startKnot?: Knot | null;
   endKnot?: Knot | null;
 }
 
-export interface SupportSupportBracePayload {
-  build: SupportBraceBuildResult;
+export interface SupportKickstandPayload {
+  build: KickstandBuildResult;
 }
 
 export interface SupportReplaceTrunkPayload {
@@ -128,6 +128,6 @@ export interface SupportReplaceTrunkPayload {
 export interface SupportReplaceStatePayload {
   before: SupportState;
   after: SupportState;
-  supportBraceBefore?: SupportBraceState;
-  supportBraceAfter?: SupportBraceState;
+  kickstandBefore?: KickstandState;
+  kickstandAfter?: KickstandState;
 }

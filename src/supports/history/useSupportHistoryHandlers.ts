@@ -15,8 +15,8 @@ import {
   SUPPORT_REMOVE_BRACE,
   SUPPORT_UPDATE_TRUNK,
   SUPPORT_UPDATE_BRANCH,
-  SUPPORT_ADD_SUPPORT_BRACE,
-  SUPPORT_REMOVE_SUPPORT_BRACE,
+  SUPPORT_ADD_KICKSTAND,
+  SUPPORT_REMOVE_KICKSTAND,
   SUPPORT_REPLACE_TRUNK,
   SUPPORT_AUTO_BRACE_REPLACE,
   SupportLeafPayload,
@@ -24,16 +24,16 @@ import {
   SupportTwigPayload,
   SupportStickPayload,
   SupportBranchRemovePayload,
-  SupportBracePayload,
+  BraceLinkPayload,
   SupportTrunkPayload,
   SupportTrunkUpdatePayload,
   SupportBranchUpdatePayload,
   SupportReplaceTrunkPayload,
   SupportReplaceStatePayload,
-  SupportSupportBracePayload,
+  SupportKickstandPayload,
 } from './actionTypes';
 import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKnotById, removeRootById, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
-import { addSupportBrace, removeSupportBrace, setSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
+import { addKickstand, removeKickstand, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
 
 export function useSupportHistoryHandlers(enabled = true) {
   useEffect(() => {
@@ -106,7 +106,7 @@ export function useSupportHistoryHandlers(enabled = true) {
         return true;
       }),
       registerHistoryHandler(SUPPORT_ADD_BRACE, (action, direction) => {
-        const payload = action.payload as SupportBracePayload | undefined;
+        const payload = action.payload as BraceLinkPayload | undefined;
         if (!payload?.brace) return false;
         if (direction === 'undo') {
           removeBrace(payload.brace.id);
@@ -126,10 +126,10 @@ export function useSupportHistoryHandlers(enabled = true) {
           for (const knot of payload.knots ?? []) addKnot(knot);
           for (const leaf of payload.leaves ?? []) addLeaf(leaf);
           for (const brace of payload.braces ?? []) addBrace(brace);
-          for (const supportBrace of payload.supportBraces ?? []) {
-            addSupportBrace(supportBrace);
-            addRoot(supportBrace.root);
-            addKnot(supportBrace.hostKnot);
+          for (const kickstand of payload.kickstands ?? []) {
+            addKickstand(kickstand);
+            addRoot(kickstand.root);
+            addKnot(kickstand.hostKnot);
           }
           for (const branch of payload.branches ?? []) addBranch(branch);
         } else {
@@ -155,10 +155,10 @@ export function useSupportHistoryHandlers(enabled = true) {
           for (const knot of payload.knots ?? []) addKnot(knot);
           for (const leaf of payload.leaves ?? []) addLeaf(leaf);
           for (const brace of payload.braces ?? []) addBrace(brace);
-          for (const supportBrace of payload.supportBraces ?? []) {
-            addSupportBrace(supportBrace);
-            addRoot(supportBrace.root);
-            addKnot(supportBrace.hostKnot);
+          for (const kickstand of payload.kickstands ?? []) {
+            addKickstand(kickstand);
+            addRoot(kickstand.root);
+            addKnot(kickstand.hostKnot);
           }
           for (const branch of payload.branches ?? []) addBranch(branch);
           for (const u of payload.knotUpdates ?? []) {
@@ -200,7 +200,7 @@ export function useSupportHistoryHandlers(enabled = true) {
         return true;
       }),
       registerHistoryHandler(SUPPORT_REMOVE_BRACE, (action, direction) => {
-        const payload = action.payload as SupportBracePayload | undefined;
+        const payload = action.payload as BraceLinkPayload | undefined;
         if (!payload?.brace) return false;
         if (direction === 'undo') {
           if (payload.startKnot) addKnot(payload.startKnot);
@@ -211,29 +211,29 @@ export function useSupportHistoryHandlers(enabled = true) {
         }
         return true;
       }),
-      registerHistoryHandler(SUPPORT_ADD_SUPPORT_BRACE, (action, direction) => {
-        const payload = action.payload as SupportSupportBracePayload | undefined;
+      registerHistoryHandler(SUPPORT_ADD_KICKSTAND, (action, direction) => {
+        const payload = action.payload as SupportKickstandPayload | undefined;
         if (!payload?.build) return false;
         if (direction === 'undo') {
-          removeSupportBrace(payload.build.supportBrace.id);
+          removeKickstand(payload.build.kickstand.id);
           removeRootById(payload.build.root.id);
           removeKnotById(payload.build.hostKnot.id);
         } else {
-          addSupportBrace(payload.build);
+          addKickstand(payload.build);
           addRoot(payload.build.root);
           addKnot(payload.build.hostKnot);
         }
         return true;
       }),
-      registerHistoryHandler(SUPPORT_REMOVE_SUPPORT_BRACE, (action, direction) => {
-        const payload = action.payload as SupportSupportBracePayload | undefined;
+      registerHistoryHandler(SUPPORT_REMOVE_KICKSTAND, (action, direction) => {
+        const payload = action.payload as SupportKickstandPayload | undefined;
         if (!payload?.build) return false;
         if (direction === 'undo') {
-          addSupportBrace(payload.build);
+          addKickstand(payload.build);
           addRoot(payload.build.root);
           addKnot(payload.build.hostKnot);
         } else {
-          removeSupportBrace(payload.build.supportBrace.id);
+          removeKickstand(payload.build.kickstand.id);
           removeRootById(payload.build.root.id);
           removeKnotById(payload.build.hostKnot.id);
         }
@@ -274,13 +274,13 @@ export function useSupportHistoryHandlers(enabled = true) {
         if (!payload?.before || !payload?.after) return false;
         if (direction === 'undo') {
           setSnapshot(payload.before);
-          if (payload.supportBraceBefore) {
-            setSupportBraceSnapshot(payload.supportBraceBefore);
+          if (payload.kickstandBefore) {
+            setKickstandSnapshot(payload.kickstandBefore);
           }
         } else {
           setSnapshot(payload.after);
-          if (payload.supportBraceAfter) {
-            setSupportBraceSnapshot(payload.supportBraceAfter);
+          if (payload.kickstandAfter) {
+            setKickstandSnapshot(payload.kickstandAfter);
           }
         }
         return true;

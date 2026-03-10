@@ -2,13 +2,13 @@ import type { Joint, Segment } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getJointDiameter } from '../../constants';
 import * as THREE from 'three';
-import { assertSupportBraceHostKind, clampSupportBraceHostT } from './supportBraceRules';
+import { assertKickstandHostKind, clampKickstandHostT } from './kickstandRules';
 import {
-    getSupportBraceKnotDiameterMm,
-    getSupportBraceRootProfile,
-    resolveSupportBraceLayout,
-} from './supportBraceSettings';
-import type { SupportBraceBuildInput, SupportBraceBuildResult } from './types';
+    getKickstandKnotDiameterMm,
+    getKickstandRootProfile,
+    resolveKickstandLayout,
+} from './kickstandSettings';
+import type { KickstandBuildInput, KickstandBuildResult } from './types';
 
 function uuid() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -26,13 +26,13 @@ function createJoint(pos: { x: number; y: number; z: number }, diameter: number)
     };
 }
 
-function createRootAndJointHeights(input: SupportBraceBuildInput, rootTopZ: number) {
-    const layout = resolveSupportBraceLayout(input.layoutOverrides);
+function createRootAndJointHeights(input: KickstandBuildInput, rootTopZ: number) {
+    const layout = resolveKickstandLayout(input.layoutOverrides);
 
     const hostZ = input.host.pos.z;
     const rawRise = hostZ - rootTopZ;
 
-    // Support braces are grounded columns first. If the host is very low,
+    // Kickstands are grounded columns first. If the host is very low,
     // keep a tiny positive vertical chain and let the terminal segment angle as needed.
     const effectiveRise = Math.max(rawRise, layout.minJointSpacingMm * 2 + layout.minTerminalClearanceMm + 0.01);
 
@@ -62,16 +62,16 @@ function createRootAndJointHeights(input: SupportBraceBuildInput, rootTopZ: numb
     return { firstJointZ, secondJointZ, thirdJointZ, layout };
 }
 
-export function buildSupportBraceData(input: SupportBraceBuildInput): SupportBraceBuildResult {
-    assertSupportBraceHostKind(input.host.supportKind);
+export function buildKickstandData(input: KickstandBuildInput): KickstandBuildResult {
+    assertKickstandHostKind(input.host.supportKind);
 
-    const rootProfile = getSupportBraceRootProfile();
+    const rootProfile = getKickstandRootProfile();
     const bodyDiameterMm = Math.max(0.001, input.host.diameterMm);
     const jointDiameterMm = getJointDiameter(bodyDiameterMm);
 
     const rootId = uuid();
     const hostKnotId = uuid();
-    const supportBraceId = uuid();
+    const kickstandId = uuid();
 
     const root = {
         id: rootId,
@@ -142,18 +142,18 @@ export function buildSupportBraceData(input: SupportBraceBuildInput): SupportBra
         topJoint: joint3,
     };
 
-    const hostT = clampSupportBraceHostT(input.host.t, input.host.minT ?? 0);
+    const hostT = clampKickstandHostT(input.host.t, input.host.minT ?? 0);
 
     const hostKnot = {
         id: hostKnotId,
         parentShaftId: input.host.segmentId,
         t: hostT,
         pos: input.host.pos,
-        diameter: getSupportBraceKnotDiameterMm(input.host.diameterMm),
+        diameter: getKickstandKnotDiameterMm(input.host.diameterMm),
     };
 
-    const supportBrace = {
-        id: supportBraceId,
+    const kickstand = {
+        id: kickstandId,
         modelId: input.modelId,
         rootId,
         hostKnotId,
@@ -170,27 +170,27 @@ export function buildSupportBraceData(input: SupportBraceBuildInput): SupportBra
     return {
         root,
         hostKnot,
-        supportBrace,
+        kickstand,
     };
 }
 
-export function toSupportBracePreviewData(build: SupportBraceBuildResult): SupportData {
-    const lastIndex = build.supportBrace.segments.length - 1;
+export function toKickstandPreviewData(build: KickstandBuildResult): SupportData {
+    const lastIndex = build.kickstand.segments.length - 1;
 
-    const previewSegments = build.supportBrace.segments.map((segment, index) => {
+    const previewSegments = build.kickstand.segments.map((segment, index) => {
         if (index !== lastIndex) return segment;
         return {
             ...segment,
             topJoint: {
-                id: `preview-terminal-${build.supportBrace.id}`,
+                id: `preview-terminal-${build.kickstand.id}`,
                 pos: build.hostKnot.pos,
-                diameter: build.hostKnot.diameter ?? build.supportBrace.profile.terminalEndDiameterMm,
+                diameter: build.hostKnot.diameter ?? build.kickstand.profile.terminalEndDiameterMm,
             },
         };
     });
 
     return {
-        id: build.supportBrace.id,
+        id: build.kickstand.id,
         roots: build.root,
         segments: previewSegments,
         knot: build.hostKnot,

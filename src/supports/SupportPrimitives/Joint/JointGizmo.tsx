@@ -8,17 +8,17 @@ import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { Trunk, Branch, Twig, Stick, Joint } from '../../types';
-import { useSupportBraceStoreState, updateSupportBrace } from '../../SupportTypes/SupportBrace/supportBraceStore';
-import type { SupportBrace } from '../../SupportTypes/SupportBrace/types';
+import { useKickstandStoreState, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
+import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 
 export function JointGizmo() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
-    const supportBraceState = useSupportBraceStoreState();
+    const kickstandState = useKickstandStoreState();
     const selectedId = state.selectedId;
     const initialTrunkRef = useRef<Trunk | null>(null);
     const initialBranchRef = useRef<Branch | null>(null);
     const dragPosRef = useRef<THREE.Vector3 | null>(null);
-    const selectedJointParentRef = useRef<{ selectedId: string; kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'supportBrace'; supportId: string } | null>(null);
+    const selectedJointParentRef = useRef<{ selectedId: string; kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand'; supportId: string } | null>(null);
     const { isActive: isCurveMode } = useCurveInteractionState();
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
@@ -108,7 +108,7 @@ export function JointGizmo() {
      }, []);
 
     // Helper to find joint and parent
-    const findJointAndParent = useCallback((): { joint: Joint, trunk?: Trunk, branch?: Branch, twig?: Twig, stick?: Stick, supportBrace?: SupportBrace } | null => {
+    const findJointAndParent = useCallback((): { joint: Joint, trunk?: Trunk, branch?: Branch, twig?: Twig, stick?: Stick, kickstand?: Kickstand } | null => {
         if (!selectedId) return null;
 
         const findJointInSegments = (segments: Array<{ topJoint?: Joint; bottomJoint?: Joint }>) => {
@@ -146,10 +146,10 @@ export function JointGizmo() {
                     if (joint) return { joint, stick };
                 }
             } else {
-                const supportBrace = supportBraceState.supportBraces[cached.supportId];
-                if (supportBrace) {
-                    const joint = findJointInSegments(supportBrace.segments as any[]);
-                    if (joint) return { joint, supportBrace };
+                const kickstand = kickstandState.kickstands[cached.supportId];
+                if (kickstand) {
+                    const joint = findJointInSegments(kickstand.segments as any[]);
+                    if (joint) return { joint, kickstand };
                 }
             }
 
@@ -216,17 +216,17 @@ export function JointGizmo() {
             }
         }
 
-        // Search support braces
-        const supportBraces = Object.values(supportBraceState.supportBraces);
-        for (const supportBrace of supportBraces) {
-            for (const seg of supportBrace.segments) {
+        // Search kickstands
+        const kickstands = Object.values(kickstandState.kickstands);
+        for (const kickstand of kickstands) {
+            for (const seg of kickstand.segments) {
                 if (seg.topJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'supportBrace', supportId: supportBrace.id };
-                    return { joint: seg.topJoint, supportBrace };
+                    selectedJointParentRef.current = { selectedId, kind: 'kickstand', supportId: kickstand.id };
+                    return { joint: seg.topJoint, kickstand };
                 }
                 if (seg.bottomJoint?.id === selectedId) {
-                    selectedJointParentRef.current = { selectedId, kind: 'supportBrace', supportId: supportBrace.id };
-                    return { joint: seg.bottomJoint, supportBrace };
+                    selectedJointParentRef.current = { selectedId, kind: 'kickstand', supportId: kickstand.id };
+                    return { joint: seg.bottomJoint, kickstand };
                 }
             }
         }
@@ -234,11 +234,11 @@ export function JointGizmo() {
         selectedJointParentRef.current = null;
         
         return null;
-    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, supportBraceState.supportBraces]);
+    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, kickstandState.kickstands]);
 
     const result = findJointAndParent();
     if (!result) return null;
-    const { joint, trunk, branch, twig, stick, supportBrace } = result;
+    const { joint, trunk, branch, twig, stick, kickstand } = result;
 
     const handleMoveStart = () => {
         setJointGizmoInteractionFlags(true);
@@ -297,8 +297,8 @@ export function JointGizmo() {
                 contactConeB: nextConeB,
             };
             updateStick(newStick);
-        } else if (supportBrace) {
-            const root = state.roots[supportBrace.rootId];
+        } else if (kickstand) {
+            const root = state.roots[kickstand.rootId];
             const contextStart = root
                 ? {
                     x: root.transform.pos.x,
@@ -307,16 +307,16 @@ export function JointGizmo() {
                 }
                 : undefined;
 
-            const newSupportBrace = moveJoint(
-                supportBrace as unknown as Trunk,
+            const newKickstand = moveJoint(
+                kickstand as unknown as Trunk,
                 joint.id,
                 newPos,
                 undefined,
                 isCurveMode,
                 root,
                 contextStart,
-            ) as unknown as SupportBrace;
-            updateSupportBrace(newSupportBrace);
+            ) as unknown as Kickstand;
+            updateKickstand(newKickstand);
         }
     };
 

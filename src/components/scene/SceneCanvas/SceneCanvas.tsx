@@ -28,7 +28,7 @@ import { SupportRenderer } from '@/supports/SupportRenderer';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
-import { subscribeToSupportBraceStore, getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { subscribeToKickstandStore, getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
 import FootprintBorderRenderer from '@/supports/Rafts/Crenelated/rendering/FootprintBorderRenderer';
@@ -42,7 +42,7 @@ import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
-import { SupportBracePlacementController } from '@/supports/SupportTypes/SupportBrace/SupportBracePlacementController';
+import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/KickstandPlacementController';
 import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
 import { clearSelection, selectAllSupports } from '@/supports/interaction/SupportSelection';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
@@ -875,7 +875,7 @@ export function SceneCanvas({
   branchPlacementPreview,
   leafPlacementPreview,
   bracePlacementPreview,
-  supportBracePlacementPreview,
+  kickstandPlacementPreview,
   jointPlacementPreview,
   gpuPickingTest,
   selectionHighlightMode,
@@ -892,7 +892,7 @@ export function SceneCanvas({
   isBranchPlacementActive,
   isLeafPlacementActive,
   isBracePlacementActive,
-  isSupportBracePlacementActive,
+  isKickstandPlacementActive,
   branchTipPosition,
   branchHoverPosition,
   leafTipPosition,
@@ -993,7 +993,7 @@ export function SceneCanvas({
   branchPlacementPreview?: SupportData | null;
   leafPlacementPreview?: SupportData | null;
   bracePlacementPreview?: import('@/supports/SupportTypes/Brace/bracePlacementState').BracePreviewData | null;
-  supportBracePlacementPreview?: SupportData | null;
+  kickstandPlacementPreview?: SupportData | null;
   jointPlacementPreview?: { pos: { x: number; y: number; z: number }; diameter: number } | null;
   gpuPickingTest?: boolean;
   selectionHighlightMode?: SelectionHighlightMode;
@@ -1025,7 +1025,7 @@ export function SceneCanvas({
   isBranchPlacementActive?: boolean;
   isLeafPlacementActive?: boolean;
   isBracePlacementActive?: boolean;
-  isSupportBracePlacementActive?: boolean;
+  isKickstandPlacementActive?: boolean;
   branchTipPosition?: { x: number; y: number; z: number } | null;
   branchHoverPosition?: { x: number; y: number; z: number } | null;
   leafTipPosition?: { x: number; y: number; z: number } | null;
@@ -1088,10 +1088,10 @@ export function SceneCanvas({
     getSupportSnapshot,
   );
 
-  const supportBraceStateForBounds = React.useSyncExternalStore(
-    subscribeToSupportBraceStore,
-    getSupportBraceSnapshot,
-    getSupportBraceSnapshot,
+  const kickstandStateForBounds = React.useSyncExternalStore(
+    subscribeToKickstandStore,
+    getKickstandSnapshot,
+    getKickstandSnapshot,
   );
 
   const raftSettingsForBounds = React.useSyncExternalStore(
@@ -1584,12 +1584,12 @@ export function SceneCanvas({
       modelKnotIds.add(brace.startKnotId);
       modelKnotIds.add(brace.endKnotId);
     }
-    for (const supportBrace of Object.values(supportBraceStateForBounds.supportBraces)) {
-      if (supportBrace.modelId === modelId) modelKnotIds.add(supportBrace.hostKnotId);
+    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+      if (kickstand.modelId === modelId) modelKnotIds.add(kickstand.hostKnotId);
     }
 
     for (const knotId of modelKnotIds) {
-      const knot = supportStateForBounds.knots[knotId] ?? supportBraceStateForBounds.knots[knotId];
+      const knot = supportStateForBounds.knots[knotId] ?? kickstandStateForBounds.knots[knotId];
       if (!knot?.pos) continue;
       expandByRadius(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
     }
@@ -1649,9 +1649,9 @@ export function SceneCanvas({
       expandByRadius(getFinalSocketPosition(stick.contactConeB), Math.max(0.001, stick.contactConeB.profile.bodyDiameterMm / 2));
     }
 
-    for (const supportBrace of Object.values(supportBraceStateForBounds.supportBraces)) {
-      if (supportBrace.modelId !== modelId) continue;
-      for (const seg of supportBrace.segments) {
+    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+      if (kickstand.modelId !== modelId) continue;
+      for (const seg of kickstand.segments) {
         if (seg.topJoint?.pos) expandByRadius(seg.topJoint.pos, Math.max(0.001, (seg.topJoint.diameter ?? seg.diameter) / 2));
         if (seg.bottomJoint?.pos) expandByRadius(seg.bottomJoint.pos, Math.max(0.001, (seg.bottomJoint.diameter ?? seg.diameter) / 2));
       }
@@ -1691,7 +1691,7 @@ export function SceneCanvas({
     }
 
     return hasAny ? bounds : null;
-  }, [isGizmoDragging, isGizmoRetargeting, raftSettingsForBounds, supportBraceStateForBounds, supportStateForBounds]);
+  }, [isGizmoDragging, isGizmoRetargeting, kickstandStateForBounds, raftSettingsForBounds, supportStateForBounds]);
 
   const computeModelWorldBounds = React.useCallback((
     model: LoadedModel,
@@ -1822,7 +1822,7 @@ export function SceneCanvas({
     isBranchPlacementActive
     || isLeafPlacementActive
     || isBracePlacementActive
-    || isSupportBracePlacementActive,
+    || isKickstandPlacementActive,
   );
   const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
@@ -2504,13 +2504,13 @@ export function SceneCanvas({
       pushIfProjectedInside(brace.id, points);
     }
 
-    for (const supportBrace of Object.values(supportBraceStateForBounds.supportBraces)) {
-      const points = segmentPoints(supportBrace.segments);
-      pushIfProjectedInside(supportBrace.id, points);
+    for (const kickstand of Object.values(kickstandStateForBounds.kickstands)) {
+      const points = segmentPoints(kickstand.segments);
+      pushIfProjectedInside(kickstand.id, points);
     }
 
     return selectedSupportIds;
-  }, [supportBraceStateForBounds.supportBraces, supportStateForBounds]);
+  }, [kickstandStateForBounds.kickstands, supportStateForBounds]);
 
   const marqueeCandidateIdSet = React.useMemo(() => {
     if (!marqueeSelection || mode !== 'prepare') return new Set<string>();
@@ -5905,7 +5905,7 @@ export function SceneCanvas({
                 !isDraggingHandle &&
                 !isBranchPlacementActive &&
                 !isLeafPlacementActive &&
-                !isSupportBracePlacementActive &&
+                !isKickstandPlacementActive &&
                 !branchPlacementPreview && (
                   <SupportBuilder data={trunkPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
                 )}
@@ -5973,10 +5973,10 @@ export function SceneCanvas({
               {/* Render Brace Placement Preview */}
               {bracePlacementPreview && !isDraggingHandle && <BracePreviewRenderer preview={bracePlacementPreview} />}
 
-              {/* Render Support Brace Placement Preview */}
-              {supportBracePlacementPreview && !isDraggingHandle && (
+              {/* Render Kickstand Placement Preview */}
+              {kickstandPlacementPreview && !isDraggingHandle && (
                 <SupportBuilder
-                  data={supportBracePlacementPreview}
+                  data={kickstandPlacementPreview}
                   isPreview
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                 />
@@ -5996,8 +5996,8 @@ export function SceneCanvas({
               {/* Brace Placement Controller - handles snapping logic */}
               {mode === 'support' && <BracePlacementController />}
 
-              {/* Support Brace Placement Controller - handles Ctrl-hover preview and click placement */}
-              {mode === 'support' && <SupportBracePlacementController />}
+              {/* Kickstand Placement Controller - handles Ctrl-hover preview and click placement */}
+              {mode === 'support' && <KickstandPlacementController />}
 
               {/* LYS Ghost Viewer (Temporary) */}
               <GhostOverlay data={ghostData} visible={!!ghostData} />

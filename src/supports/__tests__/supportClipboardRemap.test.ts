@@ -8,9 +8,9 @@ import {
   type SupportClipboardPayload,
 } from '../PlacementLogic/supportClipboard';
 import {
-  getSupportBraceSnapshot,
-  setSupportBraceSnapshot,
-} from '../SupportTypes/SupportBrace/supportBraceStore';
+  getKickstandSnapshot,
+  setKickstandSnapshot,
+} from '../SupportTypes/Kickstand/kickstandStore';
 
 const SOURCE_MODEL_ID = 'model-source';
 const TARGET_MODEL_ID = 'model-target';
@@ -179,7 +179,7 @@ function makePayload(): SupportClipboardPayload {
         diameter: 0.9,
       },
     ],
-    supportBraceRoots: [
+    kickstandRoots: [
       {
         id: 'support-brace-root-source',
         modelId: SOURCE_MODEL_ID,
@@ -192,7 +192,7 @@ function makePayload(): SupportClipboardPayload {
         coneHeight: 0.8,
       },
     ],
-    supportBraceKnots: [
+    kickstandKnots: [
       {
         id: 'support-brace-knot-source',
         parentShaftId: 'support-brace-seg-source',
@@ -201,7 +201,7 @@ function makePayload(): SupportClipboardPayload {
         diameter: 0.7,
       },
     ],
-    supportBraces: [
+    kickstands: [
       {
         id: 'support-brace-source',
         modelId: SOURCE_MODEL_ID,
@@ -239,8 +239,8 @@ function makePayload(): SupportClipboardPayload {
 describe('support clipboard remap isolation', () => {
   beforeEach(() => {
     resetStore();
-    setSupportBraceSnapshot({
-      supportBraces: {},
+    setKickstandSnapshot({
+      kickstands: {},
       roots: {},
       knots: {},
       selectedId: null,
@@ -266,7 +266,7 @@ describe('support clipboard remap isolation', () => {
     assert.ok(pastedCount > 0);
 
     const state = getSnapshot();
-    const supportBraceState = getSupportBraceSnapshot();
+    const kickstandState = getKickstandSnapshot();
 
     const sourceIds = new Set<string>([
       ...payload.roots.map((item) => item.id),
@@ -281,10 +281,10 @@ describe('support clipboard remap isolation', () => {
       ...payload.branches.flatMap((item) => item.segments.map((segment) => segment.id)),
       ...payload.twigs.flatMap((item) => item.segments.map((segment) => segment.id)),
       ...payload.sticks.flatMap((item) => item.segments.map((segment) => segment.id)),
-      ...payload.supportBraceRoots.map((item) => item.id),
-      ...payload.supportBraceKnots.map((item) => item.id),
-      ...payload.supportBraces.map((item) => item.id),
-      ...payload.supportBraces.flatMap((item) => item.segments.map((segment) => segment.id)),
+      ...payload.kickstandRoots.map((item) => item.id),
+      ...payload.kickstandKnots.map((item) => item.id),
+      ...payload.kickstands.map((item) => item.id),
+      ...payload.kickstands.flatMap((item) => item.segments.map((segment) => segment.id)),
     ]);
 
     const sourceJointIds = new Set<string>([
@@ -292,7 +292,7 @@ describe('support clipboard remap isolation', () => {
       ...payload.branches.flatMap((item) => item.segments.flatMap((segment) => [segment.bottomJoint?.id, segment.topJoint?.id]).filter(Boolean) as string[]),
       ...payload.twigs.flatMap((item) => item.segments.flatMap((segment) => [segment.bottomJoint?.id, segment.topJoint?.id]).filter(Boolean) as string[]),
       ...payload.sticks.flatMap((item) => item.segments.flatMap((segment) => [segment.bottomJoint?.id, segment.topJoint?.id]).filter(Boolean) as string[]),
-      ...payload.supportBraces.flatMap((item) => item.segments.flatMap((segment) => [segment.bottomJoint?.id, segment.topJoint?.id]).filter(Boolean) as string[]),
+      ...payload.kickstands.flatMap((item) => item.segments.flatMap((segment) => [segment.bottomJoint?.id, segment.topJoint?.id]).filter(Boolean) as string[]),
       ...payload.trunks.map((item) => item.contactCone?.socketJointId).filter(Boolean) as string[],
       ...payload.branches.map((item) => item.contactCone?.socketJointId).filter(Boolean) as string[],
       ...payload.leaves.map((item) => item.contactCone?.socketJointId).filter(Boolean) as string[],
@@ -304,14 +304,14 @@ describe('support clipboard remap isolation', () => {
     const targetLeaves = Object.values(state.leaves).filter((item) => item.modelId === TARGET_MODEL_ID);
     const targetSticks = Object.values(state.sticks).filter((item) => item.modelId === TARGET_MODEL_ID);
     const targetBraces = Object.values(state.braces).filter((item) => item.modelId === TARGET_MODEL_ID);
-    const targetSupportBraces = Object.values(supportBraceState.supportBraces).filter((item) => item.modelId === TARGET_MODEL_ID);
+    const targetKickstands = Object.values(kickstandState.kickstands).filter((item) => item.modelId === TARGET_MODEL_ID);
 
     assert.ok(targetTrunks.length > 0);
     assert.ok(targetBranches.length > 0);
     assert.ok(targetLeaves.length > 0);
     assert.ok(targetSticks.length > 0);
     assert.ok(targetBraces.length > 0);
-    assert.ok(targetSupportBraces.length > 0);
+    assert.ok(targetKickstands.length > 0);
 
     for (const trunk of targetTrunks) {
       assert.ok(!sourceIds.has(trunk.rootId));
@@ -369,20 +369,20 @@ describe('support clipboard remap isolation', () => {
       }
     }
 
-    for (const supportBrace of targetSupportBraces) {
-      assert.ok(!sourceIds.has(supportBrace.rootId));
-      assert.ok(!sourceIds.has(supportBrace.hostKnotId));
-      assert.ok(!sourceIds.has(supportBrace.hostSegmentId));
-      for (const segment of supportBrace.segments) {
+    for (const kickstand of targetKickstands) {
+      assert.ok(!sourceIds.has(kickstand.rootId));
+      assert.ok(!sourceIds.has(kickstand.hostKnotId));
+      assert.ok(!sourceIds.has(kickstand.hostSegmentId));
+      for (const segment of kickstand.segments) {
         assert.ok(!sourceIds.has(segment.id));
       }
     }
 
-    for (const root of Object.values(supportBraceState.roots)) {
+    for (const root of Object.values(kickstandState.roots)) {
       assert.ok(!sourceIds.has(root.id));
     }
 
-    for (const knot of Object.values(supportBraceState.knots)) {
+    for (const knot of Object.values(kickstandState.knots)) {
       assert.ok(!sourceIds.has(knot.id));
       assert.ok(!sourceIds.has(knot.parentShaftId));
     }

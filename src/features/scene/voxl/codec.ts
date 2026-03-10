@@ -1,4 +1,4 @@
-import type { SupportBraceState } from '@/supports/SupportTypes/SupportBrace/types';
+import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import type { DragonfruitImportFormat, SupportState, Vec3 } from '@/supports/types';
 import { unzlibSync, zlibSync } from 'fflate';
 import {
@@ -73,6 +73,17 @@ function encodeRleU8(input: Uint8Array): Uint8Array {
 
   output.push(runCount, runValue);
   return new Uint8Array(output);
+}
+
+function tryEncodeRleU8(input: Uint8Array): Uint8Array | null {
+  try {
+    return encodeRleU8(input);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function decodeRleU8(encoded: Uint8Array, expectedSize: number): Uint8Array {
@@ -201,18 +212,18 @@ function emptyVec3(): Vec3 {
 
 export function buildSupportExportFromStores(
   supportState: SupportState,
-  supportBraceState: SupportBraceState,
+  kickstandState: KickstandState,
   source = 'dragonfruit-voxl',
 ): DragonfruitImportFormat {
-  const supportBraces = Object.values(supportBraceState.supportBraces)
-    .map((supportBrace) => {
-      const root = supportBraceState.roots[supportBrace.rootId];
-      const hostKnot = supportBraceState.knots[supportBrace.hostKnotId];
+  const kickstands = Object.values(kickstandState.kickstands)
+    .map((kickstand) => {
+      const root = kickstandState.roots[kickstand.rootId];
+      const hostKnot = kickstandState.knots[kickstand.hostKnotId];
       if (!root || !hostKnot) return null;
       return {
         root,
         hostKnot,
-        supportBrace,
+        kickstand,
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -232,7 +243,7 @@ export function buildSupportExportFromStores(
     sticks: Object.values(supportState.sticks),
     braces: Object.values(supportState.braces),
     knots: Object.values(supportState.knots),
-    supportBraces,
+    kickstands,
   };
 }
 
@@ -270,13 +281,16 @@ export function serializeVoxlDocument(document: VoxlDocumentV1, pretty = true, o
   }
 
   const rawBytes = textEncoder.encode(rawJson);
-  const rleBytes = encodeRleU8(rawBytes);
+  const rleBytes = compressionMode === 'zlib' ? null : tryEncodeRleU8(rawBytes);
   const zlibBytes = zlibSync(rawBytes, { level: 9 });
 
   let encoding: 'base64-raw' | 'base64-rle-u8' | 'base64-zlib' = 'base64-raw';
   let payloadBytes: Uint8Array = rawBytes;
 
   if (compressionMode === 'rle-u8') {
+    if (!rleBytes) {
+      throw new Error('VOXL RLE compression failed for this document.');
+    }
     encoding = 'base64-rle-u8';
     payloadBytes = rleBytes;
   } else if (compressionMode === 'zlib') {
@@ -285,9 +299,12 @@ export function serializeVoxlDocument(document: VoxlDocumentV1, pretty = true, o
   } else {
     const candidates: Array<{ encoding: 'base64-raw' | 'base64-rle-u8' | 'base64-zlib'; bytes: Uint8Array }> = [
       { encoding: 'base64-raw', bytes: rawBytes },
-      { encoding: 'base64-rle-u8', bytes: rleBytes },
       { encoding: 'base64-zlib', bytes: zlibBytes },
     ];
+
+    if (rleBytes) {
+      candidates.push({ encoding: 'base64-rle-u8', bytes: rleBytes });
+    }
 
     let best = candidates[0];
     for (let i = 1; i < candidates.length; i += 1) {

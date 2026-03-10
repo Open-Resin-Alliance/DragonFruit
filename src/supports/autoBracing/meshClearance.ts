@@ -9,7 +9,7 @@ const BRACE_CLEARANCE_SAMPLE_COUNT = 12;
  * Returns true if the centerline from posA to posB maintains model clearance.
  */
 export function linePassesMeshClearance(posA: Vec3, posB: Vec3, modelId: string, diameterMm: number): boolean {
-    const minClearance = AUTO_BRACING_HARD_RULES.supportBraceMeshClearanceMm + diameterMm / 2;
+    const minClearance = AUTO_BRACING_HARD_RULES.kickstandMeshClearanceMm + diameterMm / 2;
     const meshEntries = getAllMeshEntriesForAutoBrace();
 
     const entry = meshEntries.get(modelId);

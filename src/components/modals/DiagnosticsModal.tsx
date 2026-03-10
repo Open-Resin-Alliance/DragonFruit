@@ -3,7 +3,7 @@
 import React from 'react';
 import { X } from 'lucide-react';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
-import { getSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getPickingDiagnosticsSnapshot } from '@/components/picking/pickingDiagnostics';
 import {
   DIAGNOSTICS_BENCHMARK_PROGRESS_EVENT,
@@ -46,7 +46,7 @@ type SupportDiagnosticsStats = {
   twigs: number;
   sticks: number;
   braces: number;
-  supportBraces: number;
+  kickstands: number;
   knots: number;
   segmentCount: number;
   jointCount: number;
@@ -69,7 +69,7 @@ const EMPTY_SUPPORT_STATS: SupportDiagnosticsStats = {
   twigs: 0,
   sticks: 0,
   braces: 0,
-  supportBraces: 0,
+  kickstands: 0,
   knots: 0,
   segmentCount: 0,
   jointCount: 0,
@@ -118,7 +118,7 @@ function formatFps(value: number | null | undefined, digits = 1): string {
 
 function computeSupportDiagnostics(): SupportDiagnosticsStats {
   const supportState = getSupportSnapshot();
-  const supportBraceState = getSupportBraceSnapshot();
+  const kickstandState = getKickstandSnapshot();
   const picking = getPickingDiagnosticsSnapshot();
 
   const trunks = Object.values(supportState.trunks);
@@ -126,14 +126,14 @@ function computeSupportDiagnostics(): SupportDiagnosticsStats {
   const twigs = Object.values(supportState.twigs);
   const sticks = Object.values(supportState.sticks);
   const braces = Object.values(supportState.braces);
-  const supportBraces = Object.values(supportBraceState.supportBraces);
+  const kickstands = Object.values(kickstandState.kickstands);
 
   const segmentCount =
     trunks.reduce((sum, trunk) => sum + trunk.segments.length, 0)
     + branches.reduce((sum, branch) => sum + branch.segments.length, 0)
     + twigs.reduce((sum, twig) => sum + twig.segments.length, 0)
     + sticks.reduce((sum, stick) => sum + stick.segments.length, 0)
-    + supportBraces.reduce((sum, supportBrace) => sum + supportBrace.segments.length, 0)
+    + kickstands.reduce((sum, kickstand) => sum + kickstand.segments.length, 0)
     + braces.length;
 
   const uniqueJointIds = new Set<string>();
@@ -148,7 +148,7 @@ function computeSupportDiagnostics(): SupportDiagnosticsStats {
   branches.forEach((branch) => collectSegmentJoints(branch.segments));
   twigs.forEach((twig) => collectSegmentJoints(twig.segments));
   sticks.forEach((stick) => collectSegmentJoints(stick.segments));
-  supportBraces.forEach((supportBrace) => collectSegmentJoints(supportBrace.segments));
+  kickstands.forEach((kickstand) => collectSegmentJoints(kickstand.segments));
 
   const estimatedRenderablePrimitives =
     segmentCount
@@ -173,7 +173,7 @@ function computeSupportDiagnostics(): SupportDiagnosticsStats {
     twigs: twigs.length,
     sticks: sticks.length,
     braces: braces.length,
-    supportBraces: supportBraces.length,
+    kickstands: kickstands.length,
     knots: Object.keys(supportState.knots).length,
     segmentCount,
     jointCount: uniqueJointIds.size,
@@ -673,7 +673,7 @@ export function DiagnosticsModal({
                 <div>Twigs: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.twigs.toLocaleString()}</span></div>
                 <div>Sticks: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.sticks.toLocaleString()}</span></div>
                 <div>Braces: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.braces.toLocaleString()}</span></div>
-                <div>Support Braces: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.supportBraces.toLocaleString()}</span></div>
+                <div>Kickstands: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.kickstands.toLocaleString()}</span></div>
                 <div>Roots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.roots.toLocaleString()}</span></div>
                 <div>Knots: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.knots.toLocaleString()}</span></div>
                 <div>Segments: <span style={{ color: 'var(--text-strong)' }}>{stats.supportStats.segmentCount.toLocaleString()}</span></div>

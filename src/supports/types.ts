@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { ContactCone } from './SupportPrimitives/ContactCone/types';
 import type { ContactDiskProfile } from './SupportPrimitives/ContactCone/types';
-import type { SupportBraceBuildResult } from './SupportTypes/SupportBrace/types';
+import type { KickstandBuildResult } from './SupportTypes/Kickstand/types';
 
 export type SupportMode = 'prepare' | 'analysis' | 'support' | 'export' | 'printing';
 
@@ -216,5 +216,5 @@ export interface DragonfruitImportFormat {
     sticks?: Stick[];
     braces: Brace[];
     knots: Knot[];
-    supportBraces?: SupportBraceBuildResult[];
+    kickstands?: KickstandBuildResult[];
 }

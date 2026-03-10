@@ -55,9 +55,9 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
             modifier: 'ctrl',
             description: 'Hold to enter Leaf Placement Mode'
         },
-        SUPPORT_BRACE_PLACEMENT: {
+        KICKSTAND_PLACEMENT: {
             key: 'Control',
-            description: 'Hold to enter Support Brace Placement Mode'
+            description: 'Hold to enter Kickstand Placement Mode'
         },
         TEMP_SPOTLIGHT_HOLD: {
             key: 'p',
