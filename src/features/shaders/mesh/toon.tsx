@@ -34,6 +34,7 @@ export function ToonMaterial({
   useVertexColors,
   meshColor,
   hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
   toonSteps,
@@ -44,6 +45,7 @@ export function ToonMaterial({
   useVertexColors?: boolean;
   meshColor?: string;
   hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   toonSteps?: number;
@@ -53,7 +55,7 @@ export function ToonMaterial({
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
-    ? blendTintColor(baseColor, hoverTintColor, selectedStrength)
+    ? blendTintColor(baseColor, selectedTintColor, selectedStrength)
     : isHovered
       ? blendTintColor(baseColor, hoverTintColor, hoverStrength)
       : baseColor;

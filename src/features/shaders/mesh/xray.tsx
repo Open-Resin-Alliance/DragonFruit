@@ -7,6 +7,7 @@ export function XrayMaterial({
   useVertexColors,
   meshColor,
   hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
   materialRoughness,
@@ -18,6 +19,7 @@ export function XrayMaterial({
   useVertexColors?: boolean;
   meshColor?: string;
   hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   materialRoughness?: number;
@@ -28,7 +30,7 @@ export function XrayMaterial({
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
-    ? blendTintColor(baseColor, hoverTintColor, selectedStrength)
+    ? blendTintColor(baseColor, selectedTintColor, selectedStrength)
     : isHovered
       ? blendTintColor(baseColor, hoverTintColor, hoverStrength)
       : baseColor;

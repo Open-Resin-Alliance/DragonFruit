@@ -5,6 +5,7 @@ export function WireframeMaterial({
   isSelected,
   isHovered,
   hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
   clippingPlanes,
@@ -12,6 +13,7 @@ export function WireframeMaterial({
   isSelected: boolean;
   isHovered: boolean;
   hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   clippingPlanes: THREE.Plane[];
@@ -19,7 +21,7 @@ export function WireframeMaterial({
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const wireColor = isSelected
-    ? blendTintColor('#d0d0d0', hoverTintColor, selectedStrength)
+    ? blendTintColor('#d0d0d0', selectedTintColor, selectedStrength)
     : isHovered
       ? blendTintColor('#d0d0d0', hoverTintColor, hoverStrength)
       : '#d0d0d0';

@@ -51,7 +51,6 @@ import {
   saveWorkspaceCameraSettings,
   type CameraScopeMode,
   type WorkspaceCameraDefaults,
-  type WorkspaceSelectionHighlightDefaults,
 } from '@/components/settings/workspaceCameraPreferences';
 import {
   DEFAULT_VIEW3D_SETTINGS,
@@ -95,6 +94,10 @@ type SettingsModalProps = {
   onClose: () => void;
   meshColor: string;
   onMeshColorChange: (color: string) => void;
+  selectionColor: string;
+  onSelectionColorChange: (color: string) => void;
+  hoverColor: string;
+  onHoverColorChange: (color: string) => void;
   shaderType: MeshShaderType;
   onShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
@@ -137,6 +140,10 @@ export function SettingsModal({
   onClose,
   meshColor,
   onMeshColorChange,
+  selectionColor,
+  onSelectionColorChange,
+  hoverColor,
+  onHoverColorChange,
   shaderType,
   onShaderTypeChange,
   matcapVariant,
@@ -187,6 +194,8 @@ export function SettingsModal({
   const [draftHoverTintStrength, setDraftHoverTintStrength] = useState(hoverTintStrength);
   const [draftSelectedTintStrength, setDraftSelectedTintStrength] = useState(selectedTintStrength);
   const [draftSelectionHighlightMode, setDraftSelectionHighlightMode] = useState(selectionHighlightMode);
+  const [draftSelectionColor, setDraftSelectionColor] = useState(selectionColor);
+  const [draftHoverColor, setDraftHoverColor] = useState(hoverColor);
   const [draftCameraProjectionMode, setDraftCameraProjectionMode] = useState<CameraProjectionMode>(() => getSavedCameraProjectionSettings().mode);
   const [draftCameraFeelPreset, setDraftCameraFeelPreset] = useState<CameraFeelPreset>(() => getSavedCameraFeelSettings().preset);
   const [draftCameraScope, setDraftCameraScope] = useState<CameraScopeMode>(() => getSavedWorkspaceCameraSettings().scope);
@@ -197,7 +206,6 @@ export function SettingsModal({
   const [draftDebugPrimitivesPanelVisible, setDraftDebugPrimitivesPanelVisible] = useState<boolean>(() => debugPrimitivesPanelVisible);
   const [draftSpaceMouseSettings, setDraftSpaceMouseSettings] = useState<SpaceMouseSettings>(() => getSavedSpaceMouseSettings());
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
-  const [draftWorkspaceSelectionHighlightDefaults, setDraftWorkspaceSelectionHighlightDefaults] = useState<WorkspaceSelectionHighlightDefaults>(() => getSavedWorkspaceCameraSettings().selectionHighlightDefaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
   const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
 
@@ -217,6 +225,8 @@ export function SettingsModal({
     setDraftHoverTintStrength(hoverTintStrength);
     setDraftSelectedTintStrength(selectedTintStrength);
     setDraftSelectionHighlightMode(selectionHighlightMode);
+    setDraftSelectionColor(selectionColor);
+    setDraftHoverColor(hoverColor);
     setDraftCameraProjectionMode(getSavedCameraProjectionSettings().mode);
     setDraftCameraFeelPreset(getSavedCameraFeelSettings().preset);
     setDraftCameraScope(getSavedWorkspaceCameraSettings().scope);
@@ -227,7 +237,6 @@ export function SettingsModal({
     setDraftDebugPrimitivesPanelVisible(isDebugPrimitivesPanelVisibleEnabled());
     setDraftSpaceMouseSettings(getSavedSpaceMouseSettings());
     setDraftWorkspaceCameraDefaults(getSavedWorkspaceCameraSettings().defaults);
-    setDraftWorkspaceSelectionHighlightDefaults(getSavedWorkspaceCameraSettings().selectionHighlightDefaults);
     setDraftView3dSettings(view3dSettings ?? getSavedView3DSettings());
     setDraftSlicingPerformanceSettings(getSavedSlicingPerformanceSettings());
   }, [
@@ -237,10 +246,12 @@ export function SettingsModal({
     toonSteps,
     matcapVariant,
     materialRoughness,
-    meshColor,
+    heatmapColors,
     hoverTintStrength,
     selectedTintStrength,
     selectionHighlightMode,
+    selectionColor,
+    hoverColor,
     debugPrimitivesPanelVisible,
     view3dSettings,
     shaderType,
@@ -290,6 +301,8 @@ export function SettingsModal({
     setDraftHoverTintStrength(DEFAULT_HOVER_TINT_STRENGTH);
     setDraftSelectedTintStrength(DEFAULT_SELECTED_TINT_STRENGTH);
     setDraftSelectionHighlightMode('tint');
+    setDraftSelectionColor('#ec2a77');
+    setDraftHoverColor('#ec2a77');
     setDraftCameraProjectionMode(DEFAULT_CAMERA_PROJECTION_SETTINGS.mode);
     setDraftCameraFeelPreset(DEFAULT_CAMERA_FEEL_SETTINGS.preset);
     setDraftCameraScope(DEFAULT_WORKSPACE_CAMERA_SETTINGS.scope);
@@ -300,7 +313,6 @@ export function SettingsModal({
     setDraftDebugPrimitivesPanelVisible(false);
     setDraftSpaceMouseSettings(DEFAULT_SPACEMOUSE_SETTINGS);
     setDraftWorkspaceCameraDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.defaults);
-    setDraftWorkspaceSelectionHighlightDefaults(DEFAULT_WORKSPACE_CAMERA_SETTINGS.selectionHighlightDefaults);
     setDraftView3dSettings(DEFAULT_VIEW3D_SETTINGS);
     setDraftSlicingPerformanceSettings(DEFAULT_SLICING_PERFORMANCE_SETTINGS);
   }, []);
@@ -321,6 +333,8 @@ export function SettingsModal({
     onHoverTintStrengthChange(draftHoverTintStrength);
     onSelectedTintStrengthChange(draftSelectedTintStrength);
     onSelectionHighlightModeChange(draftSelectionHighlightMode);
+    onSelectionColorChange(draftSelectionColor);
+    onHoverColorChange(draftHoverColor);
 
     applyThemePreference(draftThemePreference);
     applyThemeCustomColors(draftThemeColors);
@@ -332,7 +346,7 @@ export function SettingsModal({
     saveWorkspaceCameraSettings({
       scope: draftCameraScope,
       defaults: draftWorkspaceCameraDefaults,
-      selectionHighlightDefaults: draftWorkspaceSelectionHighlightDefaults,
+      selectionHighlightDefaults: getSavedWorkspaceCameraSettings().selectionHighlightDefaults,
     });
     saveSlicingPerformanceSettings(draftSlicingPerformanceSettings);
     const normalized3dView = normalizeView3DSettings(draftView3dSettings);
@@ -357,6 +371,8 @@ export function SettingsModal({
     draftHoverTintStrength,
     draftSelectedTintStrength,
     draftSelectionHighlightMode,
+    draftSelectionColor,
+    draftHoverColor,
     draftCameraScope,
     draftThemePreset,
     draftShaderType,
@@ -369,7 +385,6 @@ export function SettingsModal({
     draftCameraProjectionMode,
     draftCameraFeelPreset,
     draftWorkspaceCameraDefaults,
-    draftWorkspaceSelectionHighlightDefaults,
     draftSlicingPerformanceSettings,
     draftView3dSettings,
     draftXrayOpacity,
@@ -386,6 +401,8 @@ export function SettingsModal({
     onHoverTintStrengthChange,
     onSelectedTintStrengthChange,
     onSelectionHighlightModeChange,
+    onSelectionColorChange,
+    onHoverColorChange,
     onDebugPrimitivesPanelVisibleChange,
     onView3dSettingsChange,
     onShaderTypeChange,
@@ -421,6 +438,17 @@ export function SettingsModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, handleCancel]);
 
+  const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
+    setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
+  }, []);
+
+  const handleWorkspaceCameraModeChange = React.useCallback((workspace: keyof WorkspaceCameraDefaults, mode: 'orthographic' | 'perspective') => {
+    setDraftWorkspaceCameraDefaults((prev) => ({
+      ...prev,
+      [workspace]: mode,
+    }));
+  }, []);
+
   if (!isOpen) return null;
 
   const tabMeta: Record<SettingsTabKey, { label: string; description: string; icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; tone: SettingsTabTone }> = {
@@ -432,7 +460,7 @@ export function SettingsModal({
     },
     camera: {
       label: 'Camera',
-      description: 'Projection and highlight behavior',
+      description: 'Projection and navigation behavior',
       icon: Camera,
       tone: 'primary',
     },
@@ -456,9 +484,9 @@ export function SettingsModal({
     },
     ui: {
       label: 'UI & Theme',
-      description: 'Theme mode and custom color tokens',
+      description: 'Selection behavior, theme, and custom UI tokens',
       icon: Palette,
-      tone: 'secondary',
+      tone: 'primary',
     },
     hotkeys: {
       label: 'Hotkeys',
@@ -494,24 +522,6 @@ export function SettingsModal({
 
   const sidebarTopTabs: SettingsTabKey[] = ['general', 'camera', 'workspaces', 'mesh', 'performance', 'spacemouse', 'ui', 'hotkeys'];
   const sidebarBottomTabs: SettingsTabKey[] = ['plugins', 'backups', 'about'];
-
-  const handleSpaceMouseChange = React.useCallback((partial: Partial<SpaceMouseSettings>) => {
-    setDraftSpaceMouseSettings((prev) => normalizeSpaceMouseSettings({ ...prev, ...partial }));
-  }, []);
-
-  const handleWorkspaceCameraModeChange = React.useCallback((workspace: keyof WorkspaceCameraDefaults, mode: 'orthographic' | 'perspective') => {
-    setDraftWorkspaceCameraDefaults((prev) => ({
-      ...prev,
-      [workspace]: mode,
-    }));
-  }, []);
-
-  const handleWorkspaceSelectionHighlightModeChange = React.useCallback((workspace: keyof WorkspaceSelectionHighlightDefaults, mode: SelectionHighlightMode) => {
-    setDraftWorkspaceSelectionHighlightDefaults((prev) => ({
-      ...prev,
-      [workspace]: mode,
-    }));
-  }, []);
 
   const ActiveTabIcon = tabMeta[activeTab].icon;
   const activeTabColor = tabMeta[activeTab].tone === 'secondary' ? 'var(--accent-secondary)' : 'var(--accent)';
@@ -703,14 +713,10 @@ export function SettingsModal({
                   onCameraFeelPresetChange={setDraftCameraFeelPreset}
                   workspaceCameraDefaults={draftWorkspaceCameraDefaults}
                   onWorkspaceCameraModeChange={handleWorkspaceCameraModeChange}
-                  selectionHighlightMode={draftSelectionHighlightMode}
-                  onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
                 />
               )}
               {activeTab === 'workspaces' && (
                 <WorkspacesSettingsTab
-                  workspaceSelectionHighlightDefaults={draftWorkspaceSelectionHighlightDefaults}
-                  onWorkspaceSelectionHighlightModeChange={handleWorkspaceSelectionHighlightModeChange}
                   view3dSettings={draftView3dSettings}
                   onView3dSettingsChange={setDraftView3dSettings}
                 />
@@ -741,10 +747,6 @@ export function SettingsModal({
                   onHeatmapContrastChange={setDraftHeatmapContrast}
                   heatmapColors={draftHeatmapColors}
                   onHeatmapColorChange={handleDraftHeatmapColorChange}
-                  hoverTintStrength={draftHoverTintStrength}
-                  onHoverTintStrengthChange={setDraftHoverTintStrength}
-                  selectedTintStrength={draftSelectedTintStrength}
-                  onSelectedTintStrengthChange={setDraftSelectedTintStrength}
                 />
               )}
               {activeTab === 'performance' && (
@@ -755,6 +757,16 @@ export function SettingsModal({
               )}
               {activeTab === 'ui' && (
                 <UISettingsTab
+                  selectionColor={draftSelectionColor}
+                  onSelectionColorChange={setDraftSelectionColor}
+                  hoverColor={draftHoverColor}
+                  onHoverColorChange={setDraftHoverColor}
+                  selectionHighlightMode={draftSelectionHighlightMode}
+                  onSelectionHighlightModeChange={setDraftSelectionHighlightMode}
+                  hoverTintStrength={draftHoverTintStrength}
+                  onHoverTintStrengthChange={setDraftHoverTintStrength}
+                  selectedTintStrength={draftSelectedTintStrength}
+                  onSelectedTintStrengthChange={setDraftSelectedTintStrength}
                   themePreset={draftThemePreset}
                   onThemePresetChange={setDraftThemePreset}
                   themePreference={draftThemePreference}

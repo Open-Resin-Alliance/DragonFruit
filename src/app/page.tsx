@@ -5759,9 +5759,11 @@ export default function Home() {
     // Skip camera changes during automatic re-slice flow to prevent flickering
     if (shouldReturnToPrintingAfterSliceRef.current) return;
 
-    if (workspaceCameraSettings.scope !== 'workspace') return;
+    const persistedWorkspaceCameraSettings = getSavedWorkspaceCameraSettings();
 
-    const workspaceProjectionMode = workspaceCameraSettings.defaults[scene.mode];
+    if (persistedWorkspaceCameraSettings.scope !== 'workspace') return;
+
+    const workspaceProjectionMode = persistedWorkspaceCameraSettings.defaults[scene.mode];
     const currentProjectionMode = getSavedCameraProjectionSettings().mode;
 
     if (workspaceProjectionMode !== currentProjectionMode) {
@@ -5770,21 +5772,14 @@ export default function Home() {
   }, [scene.mode, workspaceCameraSettings]);
 
   React.useEffect(() => {
-    // Skip selection highlight changes during automatic re-slice flow to prevent flickering
-    if (shouldReturnToPrintingAfterSliceRef.current) return;
-    
-    const workspaceSelectionHighlightMode = getSavedWorkspaceCameraSettings().selectionHighlightDefaults[scene.mode];
-    if (workspaceSelectionHighlightMode !== scene.selectionHighlightMode) {
-      scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
-    }
+    // Removed old per-workspace selection highlight override effect
+    // const workspaceSelectionHighlightMode = getSavedWorkspaceCameraSettings().selectionHighlightDefaults[scene.mode];
+    // if (workspaceSelectionHighlightMode !== scene.selectionHighlightMode) {
+    //   scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
+    // }
   }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'support') {
-      setIsSupportSpotlightHoldActive(false);
-      return;
-    }
-
     const isEditableTarget = (target: EventTarget | null) => {
       if (!(target instanceof HTMLElement)) return false;
       return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
@@ -6915,6 +6910,10 @@ export default function Home() {
       <TopBar
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
+        selectionColor={scene.selectionColor}
+        onSelectionColorChange={scene.setSelectionColor}
+        hoverColor={scene.hoverColor}
+        onHoverColorChange={scene.setHoverColor}
         shaderType={scene.shaderType}
         onShaderTypeChange={scene.setShaderType}
         matcapVariant={scene.matcapVariant}
@@ -7729,6 +7728,8 @@ export default function Home() {
             leafHoverPosition={supports.leafPlacement.hoverPosition}
             gpuPickingTest={false}
             selectionHighlightMode={effectiveSelectionHighlightMode}
+            selectionColor={scene.selectionColor}
+            hoverColor={scene.hoverColor}
             hoverTintStrength={scene.hoverTintStrength}
             selectedTintStrength={scene.selectedTintStrength}
             crossSectionMode={slicing.crossSectionMode}

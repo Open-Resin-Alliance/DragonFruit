@@ -5,8 +5,6 @@ import type { SupportMode } from '@/supports/types';
 import { Camera as CameraIcon } from 'lucide-react';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { CameraFeelPreset } from '@/components/settings/cameraFeelPreferences';
-import type { SelectionHighlightMode } from '@/components/selection';
-import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighlightDropdown';
 import type { CameraScopeMode, WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
 
 interface CameraSettingsTabProps {
@@ -18,8 +16,6 @@ interface CameraSettingsTabProps {
   onCameraFeelPresetChange: (preset: CameraFeelPreset) => void;
   workspaceCameraDefaults: WorkspaceCameraDefaults;
   onWorkspaceCameraModeChange: (workspace: SupportMode, mode: CameraProjectionMode) => void;
-  selectionHighlightMode: SelectionHighlightMode;
-  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
 }
 
 const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = [
@@ -38,8 +34,6 @@ export function CameraSettingsTab({
   onCameraFeelPresetChange,
   workspaceCameraDefaults,
   onWorkspaceCameraModeChange,
-  selectionHighlightMode,
-  onSelectionHighlightModeChange,
 }: CameraSettingsTabProps) {
   const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
   const usingGlobalScope = cameraScope === 'global';
@@ -69,7 +63,7 @@ export function CameraSettingsTab({
               Camera Defaults
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Global camera projection mode and selection highlight behavior.
+              Global camera projection mode and navigation behavior.
             </p>
           </div>
         </div>
@@ -324,23 +318,6 @@ export function CameraSettingsTab({
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Selection highlight mode
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                In Spotlight mode, DragonFruit combines spotlight and mesh tint together.
-              </div>
-            </div>
-            <SelectionHighlightDropdown
-              value={selectionHighlightMode}
-              onChange={onSelectionHighlightModeChange}
-              fullWidth={false}
-            />
-          </div>
-        </div>
       </section>
     </div>
   );

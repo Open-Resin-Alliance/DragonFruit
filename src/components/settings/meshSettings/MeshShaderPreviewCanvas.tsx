@@ -3,6 +3,7 @@
 import React from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import type { ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { MeshShaderMaterial, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
@@ -76,6 +77,7 @@ function normalizeGeometryToUnitSize(geometry: THREE.BufferGeometry) {
 function BuiltinPreviewMesh({
   shape,
   meshColor,
+  useVertexColors,
   shaderType,
   matcapVariant,
   flatUseVertexColors,
@@ -85,11 +87,18 @@ function BuiltinPreviewMesh({
   heatmapBlend,
   heatmapContrast,
   heatmapColors,
+  hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
+  isSelected,
+  isHovered,
+  onHoverChange,
+  onPress,
 }: {
   shape: 'cube' | 'sphere' | 'knot';
   meshColor: string;
+  useVertexColors: boolean;
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
@@ -99,8 +108,14 @@ function BuiltinPreviewMesh({
   heatmapBlend: number;
   heatmapContrast: number;
   heatmapColors?: string[];
+  hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
+  isSelected: boolean;
+  isHovered: boolean;
+  onHoverChange?: (hovered: boolean) => void;
+  onPress?: () => void;
 }) {
   const geom = React.useMemo(() => {
     let g: THREE.BufferGeometry;
@@ -129,10 +144,28 @@ function BuiltinPreviewMesh({
   return (
     shaderType === 'opaque_wire_mesh' ? (
       <group>
-        <mesh geometry={geom}>
+        <mesh
+          geometry={geom}
+          onPointerOver={(event: ThreeEvent<PointerEvent>) => {
+            event.stopPropagation();
+            onHoverChange?.(true);
+          }}
+          onPointerOut={(event: ThreeEvent<PointerEvent>) => {
+            event.stopPropagation();
+            onHoverChange?.(false);
+          }}
+          onClick={(event: ThreeEvent<MouseEvent>) => {
+            event.stopPropagation();
+            onPress?.();
+          }}
+        >
           <MeshShaderMaterial
             shaderType={'soft_clay'}
-            isSelected={false}
+            isSelected={isSelected}
+            isHovered={isHovered}
+            useVertexColors={useVertexColors}
+            hoverTintColor={hoverTintColor}
+            selectedTintColor={selectedTintColor}
             meshColor={meshColor}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
@@ -152,10 +185,28 @@ function BuiltinPreviewMesh({
         </mesh>
       </group>
     ) : (
-      <mesh geometry={geom}>
+      <mesh
+        geometry={geom}
+        onPointerOver={(event: ThreeEvent<PointerEvent>) => {
+          event.stopPropagation();
+          onHoverChange?.(true);
+        }}
+        onPointerOut={(event: ThreeEvent<PointerEvent>) => {
+          event.stopPropagation();
+          onHoverChange?.(false);
+        }}
+        onClick={(event: ThreeEvent<MouseEvent>) => {
+          event.stopPropagation();
+          onPress?.();
+        }}
+      >
         <MeshShaderMaterial
           shaderType={shaderType}
-          isSelected={false}
+          isSelected={isSelected}
+          isHovered={isHovered}
+          useVertexColors={useVertexColors}
+          hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           meshColor={meshColor}
           matcapVariant={matcapVariant}
           flatUseVertexColors={flatUseVertexColors}
@@ -166,6 +217,8 @@ function BuiltinPreviewMesh({
           heatmapBlend={heatmapBlend}
           heatmapContrast={heatmapContrast}
           heatmapColors={heatmapColors}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
         />
       </mesh>
     )
@@ -175,6 +228,7 @@ function BuiltinPreviewMesh({
 function StlPreviewMesh({
   url,
   meshColor,
+  useVertexColors,
   shaderType,
   matcapVariant,
   flatUseVertexColors,
@@ -184,11 +238,18 @@ function StlPreviewMesh({
   heatmapBlend,
   heatmapContrast,
   heatmapColors,
+  hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
+  isSelected,
+  isHovered,
+  onHoverChange,
+  onPress,
 }: {
   url: string;
   meshColor: string;
+  useVertexColors: boolean;
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
@@ -198,8 +259,14 @@ function StlPreviewMesh({
   heatmapBlend: number;
   heatmapContrast: number;
   heatmapColors?: string[];
+  hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
+  isSelected: boolean;
+  isHovered: boolean;
+  onHoverChange?: (hovered: boolean) => void;
+  onPress?: () => void;
 }) {
   const baseGeom = useLoader(STLLoader, url);
   const geom = React.useMemo(() => {
@@ -218,10 +285,28 @@ function StlPreviewMesh({
   return (
     shaderType === 'opaque_wire_mesh' ? (
       <group>
-        <mesh geometry={geom}>
+        <mesh
+          geometry={geom}
+          onPointerOver={(event: ThreeEvent<PointerEvent>) => {
+            event.stopPropagation();
+            onHoverChange?.(true);
+          }}
+          onPointerOut={(event: ThreeEvent<PointerEvent>) => {
+            event.stopPropagation();
+            onHoverChange?.(false);
+          }}
+          onClick={(event: ThreeEvent<MouseEvent>) => {
+            event.stopPropagation();
+            onPress?.();
+          }}
+        >
           <MeshShaderMaterial
             shaderType={'soft_clay'}
-            isSelected={false}
+            isSelected={isSelected}
+            isHovered={isHovered}
+            useVertexColors={useVertexColors}
+            hoverTintColor={hoverTintColor}
+            selectedTintColor={selectedTintColor}
             meshColor={meshColor}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
@@ -241,10 +326,28 @@ function StlPreviewMesh({
         </mesh>
       </group>
     ) : (
-      <mesh geometry={geom}>
+      <mesh
+        geometry={geom}
+        onPointerOver={(event: ThreeEvent<PointerEvent>) => {
+          event.stopPropagation();
+          onHoverChange?.(true);
+        }}
+        onPointerOut={(event: ThreeEvent<PointerEvent>) => {
+          event.stopPropagation();
+          onHoverChange?.(false);
+        }}
+        onClick={(event: ThreeEvent<MouseEvent>) => {
+          event.stopPropagation();
+          onPress?.();
+        }}
+      >
         <MeshShaderMaterial
           shaderType={shaderType}
-          isSelected={false}
+          isSelected={isSelected}
+          isHovered={isHovered}
+          useVertexColors={useVertexColors}
+          hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           meshColor={meshColor}
           matcapVariant={matcapVariant}
           flatUseVertexColors={flatUseVertexColors}
@@ -255,6 +358,8 @@ function StlPreviewMesh({
           heatmapBlend={heatmapBlend}
           heatmapContrast={heatmapContrast}
           heatmapColors={heatmapColors}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
         />
       </mesh>
     )
@@ -265,6 +370,7 @@ function PreviewContent({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
+  useVertexColors,
   toonSteps,
   meshColor,
   materialRoughness,
@@ -275,12 +381,19 @@ function PreviewContent({
   heatmapBlend,
   heatmapContrast,
   heatmapColors,
+  hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
+  isSelected,
+  isHovered,
+  onHoverChange,
+  onPress,
 }: {
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
+  useVertexColors: boolean;
   toonSteps: number;
   meshColor: string;
   materialRoughness: number;
@@ -291,8 +404,14 @@ function PreviewContent({
   heatmapBlend: number;
   heatmapContrast: number;
   heatmapColors?: string[];
+  hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
+  isSelected: boolean;
+  isHovered: boolean;
+  onHoverChange?: (hovered: boolean) => void;
+  onPress?: () => void;
 }) {
   const isStl = previewModel.startsWith('stl:');
   const stlUrl = isStl ? previewModel.slice('stl:'.length) : null;
@@ -314,6 +433,7 @@ function PreviewContent({
           <StlPreviewMesh
             url={stlUrl}
             meshColor={meshColor}
+            useVertexColors={useVertexColors}
             shaderType={shaderType}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
@@ -323,13 +443,20 @@ function PreviewContent({
             heatmapBlend={heatmapBlend}
             heatmapContrast={heatmapContrast}
             heatmapColors={heatmapColors}
+            hoverTintColor={hoverTintColor}
+            selectedTintColor={selectedTintColor}
             hoverTintStrength={hoverTintStrength}
             selectedTintStrength={selectedTintStrength}
+            isSelected={isSelected}
+            isHovered={isHovered}
+            onHoverChange={onHoverChange}
+            onPress={onPress}
           />
         ) : (
           <BuiltinPreviewMesh
             shape={builtinShape}
             meshColor={meshColor}
+            useVertexColors={useVertexColors}
             shaderType={shaderType}
             matcapVariant={matcapVariant}
             flatUseVertexColors={flatUseVertexColors}
@@ -339,8 +466,14 @@ function PreviewContent({
             heatmapBlend={heatmapBlend}
             heatmapContrast={heatmapContrast}
             heatmapColors={heatmapColors}
+            hoverTintColor={hoverTintColor}
+            selectedTintColor={selectedTintColor}
             hoverTintStrength={hoverTintStrength}
             selectedTintStrength={selectedTintStrength}
+            isSelected={isSelected}
+            isHovered={isHovered}
+            onHoverChange={onHoverChange}
+            onPress={onPress}
           />
         )}
       </group>
@@ -352,6 +485,7 @@ export function MeshShaderPreviewCanvas({
   shaderType,
   matcapVariant,
   flatUseVertexColors,
+  useVertexColors = true,
   toonSteps,
   meshColor,
   materialRoughness,
@@ -362,12 +496,20 @@ export function MeshShaderPreviewCanvas({
   heatmapBlend,
   heatmapContrast,
   heatmapColors,
+  hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
+  isSelected = false,
+  isHovered = false,
+  onHoverChange,
+  onPress,
+  onCanvasPress,
 }: {
   shaderType: MeshShaderType;
   matcapVariant: MatcapVariant;
   flatUseVertexColors: boolean;
+  useVertexColors?: boolean;
   toonSteps: number;
   meshColor: string;
   materialRoughness: number;
@@ -378,10 +520,17 @@ export function MeshShaderPreviewCanvas({
   heatmapBlend: number;
   heatmapContrast: number;
   heatmapColors?: string[];
+  hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
+  isSelected: boolean;
+  isHovered: boolean;
+  onHoverChange?: (hovered: boolean) => void;
+  onPress?: () => void;
+  onCanvasPress?: () => void;
 }) {
-  const cameraDistance = previewModel === 'knot' ? 8.2 : 5.6;
+  const cameraDistance = previewModel === 'knot' ? 7.2 : 5.6;
 
   return (
     <div className="w-full h-full relative">
@@ -389,6 +538,10 @@ export function MeshShaderPreviewCanvas({
         gl={{ alpha: true, antialias: true }}
         camera={{ position: [0, -cameraDistance, 0], fov: 35 }}
         dpr={[1, 2]}
+        onPointerMissed={() => {
+          onHoverChange?.(false);
+          onCanvasPress?.();
+        }}
       >
         <ZUpPreviewCamera distance={cameraDistance} />
         <OrbitControls
@@ -405,6 +558,7 @@ export function MeshShaderPreviewCanvas({
           shaderType={shaderType}
           matcapVariant={matcapVariant}
           flatUseVertexColors={flatUseVertexColors}
+          useVertexColors={useVertexColors}
           toonSteps={toonSteps}
           meshColor={meshColor}
           materialRoughness={materialRoughness}
@@ -415,8 +569,14 @@ export function MeshShaderPreviewCanvas({
           heatmapBlend={heatmapBlend}
           heatmapContrast={heatmapContrast}
           heatmapColors={heatmapColors}
+          hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
+          isSelected={isSelected}
+          isHovered={isHovered}
+          onHoverChange={onHoverChange}
+          onPress={onPress}
         />
       </Canvas>
     </div>

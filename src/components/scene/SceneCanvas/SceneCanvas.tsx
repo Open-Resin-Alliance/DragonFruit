@@ -897,6 +897,8 @@ export function SceneCanvas({
   branchHoverPosition,
   leafTipPosition,
   leafHoverPosition,
+  selectionColor,
+  hoverColor,
   hoverTintStrength,
   selectedTintStrength,
   children,
@@ -1028,6 +1030,8 @@ export function SceneCanvas({
   branchHoverPosition?: { x: number; y: number; z: number } | null;
   leafTipPosition?: { x: number; y: number; z: number } | null;
   leafHoverPosition?: { x: number; y: number; z: number } | null;
+  selectionColor?: string;
+  hoverColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
 
@@ -1535,8 +1539,9 @@ export function SceneCanvas({
 
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
   const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
-  const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
+  const hoverTintColor = hoverColor ?? '#ec2a77';
+  const selectedTintColor = selectionColor ?? '#ec2a77';
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
@@ -1887,22 +1892,9 @@ export function SceneCanvas({
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const resolveHoverTint = () => {
+    const resolveOutOfBoundsStripeColor = () => {
       const rootStyles = getComputedStyle(document.documentElement);
-      const accent = rootStyles.getPropertyValue('--accent').trim();
       const accentSecondary = rootStyles.getPropertyValue('--accent-secondary').trim();
-
-      if (!accent) {
-        setHoverTintColor('#ec2a77');
-      } else {
-        try {
-          const parsed = new THREE.Color();
-          parsed.setStyle(accent);
-          setHoverTintColor(parsed.getStyle());
-        } catch {
-          setHoverTintColor('#ec2a77');
-        }
-      }
 
       if (!accentSecondary) {
         setOutOfBoundsStripeColor('#b6ff2e');
@@ -1917,9 +1909,9 @@ export function SceneCanvas({
       }
     };
 
-    resolveHoverTint();
+    resolveOutOfBoundsStripeColor();
 
-    const observer = new MutationObserver(resolveHoverTint);
+    const observer = new MutationObserver(resolveOutOfBoundsStripeColor);
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class', 'style', 'data-theme'],
@@ -4906,6 +4898,7 @@ export function SceneCanvas({
                       onModelHoverPointChange={onModelHoverPointChange}
                       onModelHoverModelChange={onModelHoverModelChange}
                       hoverTintColor={hoverTintColor}
+                      selectedTintColor={selectedTintColor}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}

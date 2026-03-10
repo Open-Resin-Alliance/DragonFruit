@@ -34,10 +34,6 @@ type MeshSettingsTabProps = {
   onMaterialRoughnessChange: (value: number) => void;
   xrayOpacity: number;
   onXrayOpacityChange: (value: number) => void;
-  hoverTintStrength: number;
-  onHoverTintStrengthChange: (value: number) => void;
-  selectedTintStrength: number;
-  onSelectedTintStrengthChange: (value: number) => void;
   heatmapBlend: number;
   onHeatmapBlendChange: (value: number) => void;
   heatmapContrast: number;
@@ -65,10 +61,6 @@ export function MeshSettingsTab({
   onMaterialRoughnessChange,
   xrayOpacity,
   onXrayOpacityChange,
-  hoverTintStrength,
-  onHoverTintStrengthChange,
-  selectedTintStrength,
-  onSelectedTintStrengthChange,
   heatmapBlend,
   onHeatmapBlendChange,
   heatmapContrast,
@@ -395,37 +387,6 @@ export function MeshSettingsTab({
             </>
           )}
 
-          <div className="space-y-0.5">
-            <label className="text-xs text-neutral-400 flex justify-between">
-              <span>Hover Tint Strength</span>
-              <span className="text-neutral-300">{hoverTintStrength.toFixed(2)}</span>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={hoverTintStrength}
-              onChange={(e) => onHoverTintStrengthChange(parseFloat(e.target.value))}
-              className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-          </div>
-
-          <div className="space-y-0.5">
-            <label className="text-xs text-neutral-400 flex justify-between">
-              <span>Selected Tint Strength</span>
-              <span className="text-neutral-300">{selectedTintStrength.toFixed(2)}</span>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={selectedTintStrength}
-              onChange={(e) => onSelectedTintStrengthChange(parseFloat(e.target.value))}
-              className="w-full h-2 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-          </div>
         </div>
       </div>
     </div>

@@ -34,6 +34,20 @@ export const DEFAULT_WORKSPACE_CAMERA_SETTINGS: WorkspaceCameraSettings = {
 };
 
 let cachedWorkspaceCameraSettings: WorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+let hasHydratedWorkspaceCameraSettings = false;
+
+if (typeof window !== 'undefined') {
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY);
+    cachedWorkspaceCameraSettings = raw
+      ? normalizeWorkspaceCameraSettings(JSON.parse(raw))
+      : DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+  } catch {
+    cachedWorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+  }
+
+  hasHydratedWorkspaceCameraSettings = true;
+}
 
 function normalizeMode(input: unknown): CameraProjectionMode {
   return input === 'perspective' ? 'perspective' : 'orthographic';
@@ -86,12 +100,15 @@ export function getSavedWorkspaceCameraSettings(): WorkspaceCameraSettings {
     const raw = window.localStorage.getItem(WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY);
     if (!raw) {
       cachedWorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+      hasHydratedWorkspaceCameraSettings = true;
       return cachedWorkspaceCameraSettings;
     }
     cachedWorkspaceCameraSettings = normalizeWorkspaceCameraSettings(JSON.parse(raw));
+    hasHydratedWorkspaceCameraSettings = true;
     return cachedWorkspaceCameraSettings;
   } catch {
     cachedWorkspaceCameraSettings = DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+    hasHydratedWorkspaceCameraSettings = true;
     return cachedWorkspaceCameraSettings;
   }
 }
@@ -101,6 +118,7 @@ export function saveWorkspaceCameraSettings(settings: WorkspaceCameraSettings): 
 
   const normalized = normalizeWorkspaceCameraSettings(settings);
   cachedWorkspaceCameraSettings = normalized;
+  hasHydratedWorkspaceCameraSettings = true;
 
   try {
     window.localStorage.setItem(WORKSPACE_CAMERA_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
@@ -113,6 +131,7 @@ export function saveWorkspaceCameraSettings(settings: WorkspaceCameraSettings): 
 
 export function getWorkspaceCameraSettingsSnapshot(): WorkspaceCameraSettings {
   if (typeof window === 'undefined') return DEFAULT_WORKSPACE_CAMERA_SETTINGS;
+  if (!hasHydratedWorkspaceCameraSettings) return getSavedWorkspaceCameraSettings();
   return cachedWorkspaceCameraSettings;
 }
 

@@ -1,40 +1,25 @@
 'use client';
 
 import React from 'react';
-import type { SupportMode } from '@/supports/types';
-import type { SelectionHighlightMode } from '@/components/selection';
 import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
-import { NumberInput } from '@/components/ui/NumberInput';
-import type { WorkspaceSelectionHighlightDefaults } from '@/components/settings/workspaceCameraPreferences';
-import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import { Layers3 } from 'lucide-react';
+import { NumberInput } from '@/components/ui/NumberInput';
+import type { View3DSettings } from '@/components/settings/view3dPreferences';
 
 interface WorkspacesSettingsTabProps {
-  workspaceSelectionHighlightDefaults: WorkspaceSelectionHighlightDefaults;
-  onWorkspaceSelectionHighlightModeChange: (workspace: SupportMode, mode: SelectionHighlightMode) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
 }
 
-const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = [
-  { key: 'prepare', label: 'Prepare', hint: 'Model prep and transform workflows' },
-  { key: 'analysis', label: 'Analysis', hint: 'Island diagnostics and inspection tools' },
-  { key: 'support', label: 'Support', hint: 'Support placement and editing workspace' },
-  { key: 'export', label: 'Export', hint: 'Final output and export pipeline' },
-];
-
 export function WorkspacesSettingsTab({
-  workspaceSelectionHighlightDefaults,
-  onWorkspaceSelectionHighlightModeChange,
   view3dSettings,
   onView3dSettingsChange,
 }: WorkspacesSettingsTabProps) {
-  const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const isBuildVolumeManagedByPrinter = Boolean(activePrinterProfile);
@@ -482,103 +467,6 @@ export function WorkspacesSettingsTab({
         </div>
       </section>
 
-      <section
-        className="rounded-lg border p-3"
-        style={{
-          background: 'var(--surface-1)',
-          borderColor: 'var(--border-subtle)',
-        }}
-      >
-        <div className="flex items-start gap-2">
-          <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
-            }}
-          >
-            <Layers3 className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-          </span>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Workspace Selection Highlights
-            </h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Controls default selection emphasis when entering each workspace.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="grid grid-cols-2 gap-1.5 md:grid-cols-4">
-            {workspaceMeta.map((workspace) => {
-              const active = activeWorkspace === workspace.key;
-              return (
-                <button
-                  key={workspace.key}
-                  type="button"
-                  onClick={() => setActiveWorkspace(workspace.key)}
-                  className="h-10 rounded-md border px-2 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                  style={active
-                    ? {
-                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                        color: 'var(--accent-contrast)',
-                      }
-                    : {
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                        color: 'var(--text-muted)',
-                      }}
-                >
-                  {workspace.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} selection highlight
-            </div>
-            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
-            </div>
-
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {([
-                { key: 'tint', label: 'Mesh Tint' },
-                { key: 'spotlight', label: 'Spotlight' },
-                { key: 'fresnel', label: 'Fresnel' },
-                { key: 'none', label: 'None' },
-              ] as Array<{ key: SelectionHighlightMode; label: string }>).map((option) => {
-                const active = workspaceSelectionHighlightDefaults[activeWorkspace] === option.key;
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => onWorkspaceSelectionHighlightModeChange(activeWorkspace, option.key)}
-                    className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
-                    style={active
-                      ? {
-                          borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
-                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
-                          color: 'var(--accent-contrast)',
-                        }
-                      : {
-                          borderColor: 'var(--border-subtle)',
-                          background: 'var(--surface-1)',
-                          color: 'var(--text-muted)',
-                        }}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
   );
 }

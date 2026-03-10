@@ -15,6 +15,7 @@ export function MeshShaderMaterial({
   isHovered = false,
   useVertexColors = true,
   hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
   meshColor,
@@ -33,6 +34,7 @@ export function MeshShaderMaterial({
   isHovered?: boolean;
   useVertexColors?: boolean;
   hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   meshColor?: string;
@@ -53,6 +55,7 @@ export function MeshShaderMaterial({
           isSelected={isSelected}
           isHovered={isHovered}
           hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
           useVertexColors={useVertexColors && (flatUseVertexColors ?? true)}
@@ -67,6 +70,7 @@ export function MeshShaderMaterial({
           isSelected={isSelected}
           isHovered={isHovered}
           hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
           useVertexColors={useVertexColors}
@@ -82,6 +86,7 @@ export function MeshShaderMaterial({
           isSelected={isSelected}
           isHovered={isHovered}
           hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
           useVertexColors={useVertexColors}
@@ -100,6 +105,7 @@ export function MeshShaderMaterial({
           isSelected={isSelected}
           isHovered={isHovered}
           hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
           clippingPlanes={clippingPlanes}
@@ -112,6 +118,7 @@ export function MeshShaderMaterial({
           isSelected={isSelected}
           isHovered={isHovered}
           hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
           useVertexColors={useVertexColors}
@@ -128,6 +135,7 @@ export function MeshShaderMaterial({
           isSelected={isSelected}
           isHovered={isHovered}
           hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
           useVertexColors={useVertexColors}
@@ -147,6 +155,7 @@ export function MeshShaderMaterial({
           isSelected={isSelected}
           isHovered={isHovered}
           hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}
           selectedTintStrength={selectedTintStrength}
           useVertexColors={useVertexColors}
