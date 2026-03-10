@@ -12,10 +12,10 @@ interface TransformManagerProps {
 export function useTransformManager({ geom }: TransformManagerProps) {
   const [isTransforming, setIsTransforming] = useState<boolean>(false);
   const pendingTransformRef = useRef<{ pos: THREE.Vector3; rot: THREE.Euler; scl: THREE.Vector3 } | null>(null);
-  
+
   // Transform hooks
   const transformHook = useModelTransform();
-  const { transform, setPosition } = transformHook;
+  const { transform } = transformHook;
 
   // Auto-lift settings
   const [autoLift, setAutoLift] = useState(() => {
@@ -25,7 +25,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     }
     return false;
   });
-  
+
   const [liftDistance, setLiftDistance] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = window.localStorage.getItem('liftDistance');
@@ -47,38 +47,82 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     }
   }, [liftDistance]);
 
-  // Helper to find lowest world Z
-  const getLowestWorldZ = useCallback((): number | null => {
+  const buildTransformMatrix = useCallback((candidate: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }): THREE.Matrix4 | null => {
     if (!geom) return null;
-
-    const currentT = pendingTransformRef.current
-      ? {
-        position: pendingTransformRef.current.pos,
-        rotation: pendingTransformRef.current.rot,
-        scale: pendingTransformRef.current.scl
-      }
-      : transform;
 
     const bbox = geom.geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geom.geometry.getAttribute('position') as THREE.BufferAttribute);
     const center = bbox.getCenter(new THREE.Vector3());
 
     const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
-    
+
     const rotScaleMatrix = new THREE.Matrix4();
     rotScaleMatrix.compose(
       new THREE.Vector3(0, 0, 0),
-      quaternionFromGlobalEuler(currentT.rotation),
-      currentT.scale
+      quaternionFromGlobalEuler(candidate.rotation),
+      candidate.scale,
     );
 
     const posMatrix = new THREE.Matrix4();
-    posMatrix.makeTranslation(currentT.position.x, currentT.position.y, currentT.position.z);
+    posMatrix.makeTranslation(candidate.position.x, candidate.position.y, candidate.position.z);
 
-    const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
+    return posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
+  }, [geom]);
 
-    const z = computeLowestZ(geom.geometry, finalMatrix);
-    return z;
-  }, [geom, transform]);
+  const getLowestWorldZForTransform = useCallback((candidate: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }): number | null => {
+    if (!geom) return null;
+
+    const finalMatrix = buildTransformMatrix(candidate);
+    if (!finalMatrix) return null;
+
+    return computeLowestZ(geom.geometry, finalMatrix);
+  }, [buildTransformMatrix, geom]);
+
+  const alignTransformToAutoLift = useCallback((candidate: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }) => {
+    const lowestWorldZ = getLowestWorldZForTransform(candidate);
+    if (lowestWorldZ === null) {
+      return {
+        position: candidate.position.clone(),
+        rotation: candidate.rotation.clone(),
+        scale: candidate.scale.clone(),
+      };
+    }
+
+    const targetZ = autoLift ? liftDistance : 0.001;
+    const offset = targetZ - lowestWorldZ;
+    const nextPosition = candidate.position.clone();
+    nextPosition.z += offset;
+
+    return {
+      position: nextPosition,
+      rotation: candidate.rotation.clone(),
+      scale: candidate.scale.clone(),
+    };
+  }, [autoLift, getLowestWorldZForTransform, liftDistance]);
+
+  // Helper to find lowest world Z
+  const getLowestWorldZ = useCallback((): number | null => {
+    const currentT = pendingTransformRef.current
+      ? {
+          position: pendingTransformRef.current.pos,
+          rotation: pendingTransformRef.current.rot,
+          scale: pendingTransformRef.current.scl
+        }
+      : transform;
+
+    return getLowestWorldZForTransform(currentT);
+  }, [getLowestWorldZForTransform, transform]);
 
   // Auto-snap on lift distance change
   useEffect(() => {
@@ -149,11 +193,25 @@ export function useTransformManager({ geom }: TransformManagerProps) {
 
   // Handlers for transform
   const onTransformChange = useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
-    pendingTransformRef.current = { pos, rot, scl };
-    transformHook.setPosition(pos.x, pos.y, pos.z);
-    transformHook.setRotation(rot.x, rot.y, rot.z);
-    transformHook.setScale(scl.x, scl.y, scl.z);
-  }, [transformHook]);
+    const nextTransform = (
+      transformHook.autoSnapEnabled
+    )
+      ? alignTransformToAutoLift({ position: pos, rotation: rot, scale: scl })
+      : {
+          position: pos.clone(),
+          rotation: rot.clone(),
+          scale: scl.clone(),
+        };
+
+    pendingTransformRef.current = {
+      pos: nextTransform.position,
+      rot: nextTransform.rotation,
+      scl: nextTransform.scale,
+    };
+    transformHook.setPosition(nextTransform.position.x, nextTransform.position.y, nextTransform.position.z);
+    transformHook.setRotation(nextTransform.rotation.x, nextTransform.rotation.y, nextTransform.rotation.z);
+    transformHook.setScale(nextTransform.scale.x, nextTransform.scale.y, nextTransform.scale.z);
+  }, [alignTransformToAutoLift, transformHook]);
 
   const performAutoSnap = useCallback(() => {
      if (transformHook.autoSnapEnabled) {

@@ -4041,7 +4041,7 @@ export default function Home() {
   }, []);
 
   // Sync transform manager when active model changes
-  useEffect(() => {
+  React.useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
       const t = scene.activeModel.transform;
 
@@ -4071,14 +4071,13 @@ export default function Home() {
         return;
       }
 
-      console.log('[Home] Syncing transform from model:', {
-        id: scene.activeModelId,
-        pos: t.position,
-        ignoreAutoLift: scene.activeModel.ignoreAutoLift
-      });
+      const shouldSuppressAutoLiftDuringSync =
+        scene.activeModel.ignoreAutoLift && displayActiveModelId !== scene.activeModelId;
 
-      // If model requests to ignore auto-lift/snap (e.g. LYS import), disable it in the hook
-      if (scene.activeModel.ignoreAutoLift) {
+      // Some imported models need to keep their stored transform when first synced into
+      // the live transform manager. Only suppress auto-lift for that initial sync pass;
+      // once synchronized, the Modify tab settings should work normally again.
+      if (shouldSuppressAutoLiftDuringSync) {
         transformMgr.transformHook.setAutoSnapEnabled(false);
       } else {
         transformMgr.transformHook.setAutoSnapEnabled(true);
@@ -5956,6 +5955,10 @@ export default function Home() {
     // pendingTransformRef, so performAutoSnap can safely use current values.
     try {
       transformMgr.performAutoSnap();
+      // handleTransformEnd flushes the raw rotated transform first so support
+      // geometry can catch up. Once auto-lift adjusts Z, we need to let the
+      // normal persistence effect write that lifted result back to the model.
+      transformEndFlushedRef.current = false;
     } finally {
       postRotateLiftScheduledRef.current = false;
     }
@@ -7702,6 +7705,8 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            autoLift={transformMgr.autoLift}
+            liftDistance={transformMgr.liftDistance}
             onTransformStart={handleTransformStart}
             onGizmoTransformCommit={handleGizmoTransformCommit}
             onGizmoTransformGroupCommit={handleGizmoTransformGroupCommit}
