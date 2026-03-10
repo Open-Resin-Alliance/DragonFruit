@@ -9,63 +9,163 @@ import { checkShaftCollision } from '../CollisionUtils';
 import * as THREE from 'three';
 import { generateUuid } from '../../../utils/uuid';
 
-function applyGridSnapToCandidate(
+const MIN_TRUNK_CLEARANCE_MM = 0.5;
+const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
+const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
+const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
+
+function moveRootToXY(
+    candidate: TrunkBuildResult,
+    rootX: number,
+    rootY: number
+): TrunkBuildResult {
+    const nextRoot = {
+        ...candidate.root,
+        transform: {
+            ...candidate.root.transform,
+            pos: {
+                ...candidate.root.transform.pos,
+                x: rootX,
+                y: rootY,
+            },
+        },
+    };
+
+    return {
+        ...candidate,
+        root: nextRoot,
+        trunk: {
+            ...candidate.trunk,
+            segments: candidate.trunk.segments,
+        },
+        supportData: {
+            ...candidate.supportData,
+            roots: nextRoot,
+            segments: candidate.trunk.segments,
+        },
+    };
+}
+
+function buildNearestCandidateNodeKeys(preferredKey: string, maxRings: number): string[] {
+    const [gxRaw, gyRaw] = preferredKey.split(',');
+    const centerX = Number(gxRaw);
+    const centerY = Number(gyRaw);
+    const keys: string[] = [];
+
+    for (let ring = 0; ring <= maxRings; ring++) {
+        for (let dx = -ring; dx <= ring; dx++) {
+            for (let dy = -ring; dy <= ring; dy++) {
+                if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+                keys.push(`${centerX + dx},${centerY + dy}`);
+            }
+        }
+    }
+
+    return keys;
+}
+
+function applyGridSnapToNodeKey(
+    candidate: TrunkBuildResult,
+    settings: DecideGridPlacementArgs['settings'],
+    spacingMm: number,
+    nodeKey: string
+): TrunkBuildResult | null {
+    const snapped = gridSnappedXYFromKey(nodeKey, spacingMm);
+    const root = candidate.root;
+    const movedCandidate = moveRootToXY(candidate, snapped.x, snapped.y);
+    const lowestJoint = candidate.trunk.segments[0]?.topJoint;
+
+    if (snapped.x === root.transform.pos.x && snapped.y === root.transform.pos.y) {
+        return movedCandidate;
+    }
+
+    if (!lowestJoint) {
+        return movedCandidate;
+    }
+
+    const rootTop = getRootTopPosition(movedCandidate.root, settings);
+    const lateralShift = Math.hypot(lowestJoint.pos.x - snapped.x, lowestJoint.pos.y - snapped.y);
+    if (lateralShift <= 0.000001) {
+        return movedCandidate;
+    }
+
+    const minAngleRad = (settings.grid.minRoutedTrunkAngleDeg * Math.PI) / 180;
+    const requiredDrop = lateralShift * Math.tan(minAngleRad);
+    const maxInsertedJointZ = lowestJoint.pos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
+    const minInsertedJointZ = rootTop.z + MIN_INSERTED_BASE_SEGMENT_MM;
+
+    if (maxInsertedJointZ <= minInsertedJointZ) {
+        return null;
+    }
+
+    const insertedJointZ = Math.max(
+        minInsertedJointZ,
+        Math.min(lowestJoint.pos.z - requiredDrop, maxInsertedJointZ),
+    );
+
+    if (lowestJoint.pos.z - insertedJointZ + 0.000001 < requiredDrop) {
+        return null;
+    }
+
+    const insertedJoint = {
+        id: generateUuid(),
+        pos: {
+            x: snapped.x,
+            y: snapped.y,
+            z: insertedJointZ,
+        },
+        diameter: lowestJoint.diameter,
+    };
+
+    const insertedSegment: Segment = {
+        id: generateUuid(),
+        diameter: movedCandidate.trunk.segments[0]?.diameter ?? settings.shaft.diameterMm,
+        topJoint: insertedJoint,
+    };
+
+    const nextSegments = [insertedSegment, ...movedCandidate.trunk.segments];
+    return {
+        ...movedCandidate,
+        trunk: {
+            ...movedCandidate.trunk,
+            segments: nextSegments,
+        },
+        supportData: {
+            ...movedCandidate.supportData,
+            roots: movedCandidate.root,
+            segments: nextSegments,
+        },
+    };
+}
+
+function getPreferredNodeKey(
+    candidate: TrunkBuildResult,
+    spacingMm: number,
+    referenceXY?: { x: number; y: number }
+): string {
+    const root = candidate.root;
+    const refX = referenceXY?.x ?? root.transform.pos.x;
+    const refY = referenceXY?.y ?? root.transform.pos.y;
+    return gridNodeKeyFromXY(refX, refY, spacingMm);
+}
+
+function withSnappedRootOnly(
     candidate: TrunkBuildResult,
     spacingMm: number,
     referenceXY?: { x: number; y: number }
 ): TrunkBuildResult {
-    const root = candidate.root;
-    const refX = referenceXY?.x ?? root.transform.pos.x;
-    const refY = referenceXY?.y ?? root.transform.pos.y;
-    const key = gridNodeKeyFromXY(refX, refY, spacingMm);
+    const key = getPreferredNodeKey(candidate, spacingMm, referenceXY);
     const snapped = gridSnappedXYFromKey(key, spacingMm);
-
-    if (snapped.x === root.transform.pos.x && snapped.y === root.transform.pos.y) {
+    if (snapped.x === candidate.root.transform.pos.x && snapped.y === candidate.root.transform.pos.y) {
         return candidate;
     }
 
-    const dx = snapped.x - root.transform.pos.x;
-    const dy = snapped.y - root.transform.pos.y;
-
-    const socketJointId = candidate.trunk.contactCone?.socketJointId;
-
-    const nextSegments = candidate.trunk.segments.map((seg) => {
-        const nextTopJoint = seg.topJoint && (!socketJointId || seg.topJoint.id !== socketJointId)
-            ? {
-                ...seg.topJoint,
-                pos: {
-                    ...seg.topJoint.pos,
-                    x: seg.topJoint.pos.x + dx,
-                    y: seg.topJoint.pos.y + dy,
-                },
-            }
-            : seg.topJoint;
-
-        const nextBottomJoint = seg.bottomJoint && (!socketJointId || seg.bottomJoint.id !== socketJointId)
-            ? {
-                ...seg.bottomJoint,
-                pos: {
-                    ...seg.bottomJoint.pos,
-                    x: seg.bottomJoint.pos.x + dx,
-                    y: seg.bottomJoint.pos.y + dy,
-                },
-            }
-            : seg.bottomJoint;
-
-        if (nextTopJoint === seg.topJoint && nextBottomJoint === seg.bottomJoint) return seg;
-        return {
-            ...seg,
-            topJoint: nextTopJoint,
-            bottomJoint: nextBottomJoint,
-        };
-    });
-
     const nextRoot = {
-        ...root,
+        ...candidate.root,
         transform: {
-            ...root.transform,
+            ...candidate.root.transform,
             pos: {
-                ...root.transform.pos,
+                ...candidate.root.transform.pos,
                 x: snapped.x,
                 y: snapped.y,
             },
@@ -77,12 +177,12 @@ function applyGridSnapToCandidate(
         root: nextRoot,
         trunk: {
             ...candidate.trunk,
-            segments: nextSegments,
+            segments: candidate.trunk.segments,
         },
         supportData: {
             ...candidate.supportData,
             roots: nextRoot,
-            segments: nextSegments,
+            segments: candidate.trunk.segments,
         },
     };
 }
@@ -264,6 +364,27 @@ function getRootTopPosition(root: Roots, settings: DecideGridPlacementArgs['sett
     };
 }
 
+function trunkCollidesWithMesh(
+    candidate: TrunkBuildResult,
+    settings: DecideGridPlacementArgs['settings'],
+    mesh: THREE.Mesh
+): boolean {
+    const trunk = candidate.trunk;
+    const root = candidate.root;
+    const collisionRadius = settings.shaft.diameterMm / 2 + MIN_TRUNK_CLEARANCE_MM;
+    const raycaster = new THREE.Raycaster();
+
+    for (let segIndex = 0; segIndex < trunk.segments.length; segIndex++) {
+        const endpoints = getTrunkSegmentEndpointsWithSettings(trunk, root, segIndex, settings);
+        if (!endpoints) continue;
+
+        const hit = checkShaftCollision(endpoints.start, endpoints.end, collisionRadius, mesh, raycaster);
+        if (hit.hit) return true;
+    }
+
+    return false;
+}
+
 export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacementDecision {
     const { settings, snapshot, candidate, tipPos, tipNormal, modelId, mesh } = args;
 
@@ -278,20 +399,47 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     const spacingMm = settings.grid.spacingMm;
 
     const socketPos = candidate.trunk.contactCone ? getFinalSocketPosition(candidate.trunk.contactCone) : null;
-    const snappedCandidate = applyGridSnapToCandidate(
+    const preferredNodeKey = getPreferredNodeKey(
         candidate,
         spacingMm,
         socketPos ? { x: socketPos.x, y: socketPos.y } : undefined
     );
-    const nodeKey = gridNodeKeyFromXY(snappedCandidate.root.transform.pos.x, snappedCandidate.root.transform.pos.y, spacingMm);
+    const candidateNodeKeys = buildNearestCandidateNodeKeys(preferredNodeKey, MAX_NEAREST_NODE_SEARCH_RINGS);
 
-    const host = findHostTrunkAtNode(snapshot, modelId, nodeKey, spacingMm);
-    if (!host) {
+    for (const nodeKey of candidateNodeKeys) {
+        const nodeCandidate = applyGridSnapToNodeKey(candidate, settings, spacingMm, nodeKey);
+        if (!nodeCandidate) continue;
+        const host = findHostTrunkAtNode(snapshot, modelId, nodeKey, spacingMm);
+        if (host) continue;
+        if (mesh && trunkCollidesWithMesh(nodeCandidate, settings, mesh)) continue;
+
         return {
             kind: 'place_trunk',
-            trunkBuild: snappedCandidate,
+            trunkBuild: nodeCandidate,
             nodeKey,
         };
+    }
+
+    const nodeKey = preferredNodeKey;
+    const host = findHostTrunkAtNode(snapshot, modelId, nodeKey, spacingMm);
+    const snappedCandidate = applyGridSnapToNodeKey(
+        candidate,
+        settings,
+        spacingMm,
+        nodeKey,
+    ) ?? withSnappedRootOnly(
+        candidate,
+        spacingMm,
+        socketPos ? { x: socketPos.x, y: socketPos.y } : undefined
+    );
+    if (!host) {
+        return mesh && trunkCollidesWithMesh(snappedCandidate, settings, mesh)
+            ? { kind: 'reject', nodeKey, reason: 'COLLISION_WITH_MODEL' }
+            : {
+                kind: 'place_trunk',
+                trunkBuild: snappedCandidate,
+                nodeKey,
+            };
     }
 
     const hostSegment: Segment | undefined = host.trunk.segments[0];
@@ -349,3 +497,5 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
         supportData,
     };
 }
+
+

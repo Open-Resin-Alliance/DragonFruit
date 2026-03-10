@@ -38,6 +38,7 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
         spacingMm: coerceNumber((mergedGridRaw as any).spacingMm, defaults.grid.spacingMm),
         minBranchAngleDeg: coerceNumber((mergedGridRaw as any).minBranchAngleDeg, defaults.grid.minBranchAngleDeg),
         attachSearchStepMm: coerceNumber((mergedGridRaw as any).attachSearchStepMm, defaults.grid.attachSearchStepMm),
+        minRoutedTrunkAngleDeg: coerceNumber((mergedGridRaw as any).minRoutedTrunkAngleDeg, defaults.grid.minRoutedTrunkAngleDeg),
     };
 
     const mergedAutoBracing = normalizeAutoBracingSettings({

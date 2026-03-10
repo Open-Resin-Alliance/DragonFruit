@@ -57,6 +57,7 @@ const DETAIL_PRESET: SupportPreset = {
             spacingMm: 4.0,
             minBranchAngleDeg: 45,
             attachSearchStepMm: 2.0,
+            minRoutedTrunkAngleDeg: 60,
         },
         meshToMesh: {
             stickVsTwigCutoffMm: 5.0,
@@ -122,6 +123,7 @@ const ANCHOR_PRESET: SupportPreset = {
             spacingMm: 4.0,
             minBranchAngleDeg: 45,
             attachSearchStepMm: 2.0,
+            minRoutedTrunkAngleDeg: 60,
         },
         meshToMesh: {
             stickVsTwigCutoffMm: 5.0,
