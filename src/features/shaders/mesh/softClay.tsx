@@ -24,7 +24,7 @@ export function SoftClayMaterial({
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
 }) {
-  const baseColor = useVertexColors ? '#ffffff' : (meshColor ?? '#a3a3a3');
+  const baseColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected

@@ -104,6 +104,7 @@ export function MeshShaderMaterial({
         <WireframeMaterial
           isSelected={isSelected}
           isHovered={isHovered}
+          meshColor={meshColor}
           hoverTintColor={hoverTintColor}
           selectedTintColor={selectedTintColor}
           hoverTintStrength={hoverTintStrength}

@@ -4,6 +4,7 @@ import { blendTintColor, clampTintStrength } from './tint';
 export function WireframeMaterial({
   isSelected,
   isHovered,
+  meshColor,
   hoverTintColor,
   selectedTintColor,
   hoverTintStrength,
@@ -12,19 +13,21 @@ export function WireframeMaterial({
 }: {
   isSelected: boolean;
   isHovered: boolean;
+  meshColor?: string;
   hoverTintColor?: string;
   selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   clippingPlanes: THREE.Plane[];
 }) {
+  const baseWireColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const wireColor = isSelected
-    ? blendTintColor('#d0d0d0', selectedTintColor, selectedStrength)
+    ? blendTintColor(baseWireColor, selectedTintColor, selectedStrength)
     : isHovered
-      ? blendTintColor('#d0d0d0', hoverTintColor, hoverStrength)
-      : '#d0d0d0';
+      ? blendTintColor(baseWireColor, hoverTintColor, hoverStrength)
+      : baseWireColor;
 
   return (
     <meshBasicMaterial
