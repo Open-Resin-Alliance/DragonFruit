@@ -9,29 +9,62 @@ export interface FlatteningPlane {
 }
 
 export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): FlatteningPlane[] {
+  console.time('computeFlatteningPlanes');
+  console.time('1. extract and decimate vertices');
   // 1. Get all vertices from the geometry
   const positionAttribute = geometry.getAttribute('position');
-  if (!positionAttribute) return [];
-
-  const points: THREE.Vector3[] = [];
-  const vertexCount = positionAttribute.count;
-  for (let i = 0; i < vertexCount; i++) {
-    points.push(new THREE.Vector3().fromBufferAttribute(positionAttribute, i));
+  if (!positionAttribute) {
+    console.timeEnd('1. extract and decimate vertices');
+    console.timeEnd('computeFlatteningPlanes');
+    return [];
   }
 
+  const posArray = positionAttribute.array;
+  const vertexCount = positionAttribute.count;
+
+  // Compute a grid size based on the model's bounding box
+  if (!geometry.boundingBox) geometry.computeBoundingBox();
+  const bbox = geometry.boundingBox!;
+  const maxDim = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z);
+  
+  // A 40x40x40 grid ensures we never process more than a few thousand points
+  const cellSize = Math.max(0.1, maxDim / 40.0);
+  const invCellSize = 1.0 / cellSize;
+
+  const cellMap = new Set<string>();
+  const points: THREE.Vector3[] = [];
+
+  for (let i = 0; i < vertexCount; i++) {
+    const x = posArray[i * 3];
+    const y = posArray[i * 3 + 1];
+    const z = posArray[i * 3 + 2];
+    
+    // Map to a 3D grid cell
+    const cx = Math.round(x * invCellSize);
+    const cy = Math.round(y * invCellSize);
+    const cz = Math.round(z * invCellSize);
+    const hash = `${cx},${cy},${cz}`;
+    
+    // Only keep ONE exact original point per cell
+    if (!cellMap.has(hash)) {
+      cellMap.add(hash);
+      points.push(new THREE.Vector3(x, y, z));
+    }
+  }
+
+  console.timeEnd('1. extract and decimate vertices');
+  console.log(`Grid decimated from ${vertexCount} geometries to ${points.length} convex hull candidate points.`);
+
+  console.time('2. ConvexHull generation');
   // 2. Generate Convex Hull
   const hull = new ConvexHull().setFromPoints(points);
+  console.timeEnd('2. ConvexHull generation');
 
+  console.time('3. Process and group faces');
   // 3. Process faces and group coplanar ones
-  // In a ConvexHull, the faces are already well-defined triangles.
-  // The PrusaSlicer approach merges adjacent coplanar triangles into larger polygons.
-  // For a basic implementation, we can just take the raw hull faces if the hull isn't too complex,
-  // or we can just merge them based on normal.
-  
   const faces = hull.faces;
   const coplanarGroups = new Map<string, THREE.Vector3[]>();
   
-  // A helper to generate a string key for a normal (rounded to group nearly identical normals)
   const getNormalKey = (normal: THREE.Vector3) => {
     return `${normal.x.toFixed(3)},${normal.y.toFixed(3)},${normal.z.toFixed(3)}`;
   };
@@ -46,48 +79,40 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
     
     const groupPoints = coplanarGroups.get(key)!;
     
-    // Add the 3 vertices of this face
     let edge = face.edge;
     do {
       groupPoints.push(edge.vertex.point);
       edge = edge.next;
     } while (edge !== face.edge);
   });
+  console.timeEnd('3. Process and group faces');
 
+  console.time('4. Create planes');
   const planes: FlatteningPlane[] = [];
-
-  // Minimum area filter (in mm^2) to ignore tiny facets
   const MIN_AREA = 5.0;
 
   coplanarGroups.forEach((groupPoints, keyStr) => {
     const [nx, ny, nz] = keyStr.split(',').map(parseFloat);
     const normal = new THREE.Vector3(nx, ny, nz).normalize();
 
-    // To calculate the area of the projected polygon and find its boundary, 
-    // we take the ConvexHull of just these coplanar points.
-    // Since points are already on the 3D hull, their 2D projection on this plane is a convex polygon.
-    
-    // 1. Calculate centroid
     const center = new THREE.Vector3();
     groupPoints.forEach(p => center.add(p));
     center.divideScalar(groupPoints.length);
 
-    // 2. We can just use the points directly if we render them as a triangle fan,
-    // but to get the true area and a clean polygon, we sort them angularly around the center.
-    // Create a local coordinate system on the plane
     const up = Math.abs(normal.y) > 0.99 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
     const right = new THREE.Vector3().crossVectors(normal, up).normalize();
     const upLocal = new THREE.Vector3().crossVectors(right, normal).normalize();
 
-    // Unique points (avoid exact duplicates)
-    const uniquePoints: THREE.Vector3[] = [];
+    // Unique points (avoid exact duplicates) using an O(N) spatial hash instead of O(N^2) distance checks
+    const uniquePointsMap = new Map<string, THREE.Vector3>();
     groupPoints.forEach(p => {
-      if (!uniquePoints.some(up => up.distanceToSquared(p) < 0.0001)) {
-        uniquePoints.push(p);
+      const hash = `${Math.round(p.x * 100)},${Math.round(p.y * 100)},${Math.round(p.z * 100)}`;
+      if (!uniquePointsMap.has(hash)) {
+        uniquePointsMap.set(hash, p);
       }
     });
+    const uniquePoints = Array.from(uniquePointsMap.values());
 
-    // Sort radially
     uniquePoints.sort((a, b) => {
       const dirA = new THREE.Vector3().subVectors(a, center);
       const dirB = new THREE.Vector3().subVectors(b, center);
@@ -96,7 +121,6 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
       return angleA - angleB;
     });
 
-    // 3. Shoelace formula for area of a 3D planar polygon
     let area = 0;
     for (let i = 0; i < uniquePoints.length; i++) {
       const p1 = uniquePoints[i];
@@ -107,12 +131,10 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
     area = Math.abs(area * 0.5);
 
     if (area >= MIN_AREA) {
-      // Shrink the polygon slightly so it doesn't z-fight with the edge
       const shrunkPoints = uniquePoints.map(p => {
         return new THREE.Vector3().lerpVectors(p, center, 0.1);
       });
 
-      // Push it slightly outwards along the normal
       shrunkPoints.forEach(p => p.addScaledVector(normal, 0.1));
       
       const planeCenter = new THREE.Vector3();
@@ -127,10 +149,9 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
       });
     }
   });
+  console.timeEnd('4. Create planes');
 
-  // Sort by area descending so the biggest faces are most obviously clickable
   planes.sort((a, b) => b.area - a.area);
-  
-  // Return top N to avoid making the scene too heavy if it's a crazy shape
+  console.timeEnd('computeFlatteningPlanes');
   return planes.slice(0, 254);
 }

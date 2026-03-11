@@ -118,7 +118,7 @@ export function PlaceOnFaceTool({ models, activeModelId, activeTransform, onFace
       <group position={meshLocalOffset}>
         <PlaceOnFaceOverlay
           active={!animState} // Disable interaction while animating
-          geometry={activeModel.geometry.geometry}
+          geometry={activeModel.geometry}
           onFaceSelect={handleFaceSelect}
         />
       </group>

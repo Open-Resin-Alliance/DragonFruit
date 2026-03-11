@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
-import { computeFlatteningPlanes, FlatteningPlane } from '../logic/computeFlatteningPlanes';
+import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
+import type { FlatteningPlane } from '../logic/computeFlatteningPlanes';
 
 interface PlaceOnFaceOverlayProps {
-  geometry: THREE.BufferGeometry;
+  geometry: GeometryWithBounds;
   onFaceSelect: (normal: THREE.Vector3) => void;
   active: boolean;
 }
@@ -11,12 +12,7 @@ interface PlaceOnFaceOverlayProps {
 export function PlaceOnFaceOverlay({ geometry, onFaceSelect, active }: PlaceOnFaceOverlayProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
-  // Compute the simplified planes from the geometry's convex hull.
-  // We only recompute if the geometry changes.
-  const planes = useMemo(() => {
-    if (!geometry) return [];
-    return computeFlatteningPlanes(geometry);
-  }, [geometry]);
+  const planes = geometry.flatteningPlanes || [];
 
   if (!active || planes.length === 0) {
     return null;
