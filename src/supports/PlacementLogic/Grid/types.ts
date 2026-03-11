@@ -41,6 +41,7 @@ export type GridPlacementDecision =
         kind: 'reject';
         nodeKey: GridNodeKey;
         reason: GridPlacementRejectReason;
+        trunkBuild?: TrunkBuildResult;
     };
 
 export interface DecideGridPlacementArgs {

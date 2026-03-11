@@ -50,7 +50,6 @@ const DETAIL_PRESET: SupportPreset = {
             ballDiameterMm: 1.2,
             maxRotationDeg: 45,
             maxSlideMm: 5,
-            defaultJointCount: 1,
         },
         grid: {
             enabled: false,
@@ -116,7 +115,6 @@ const ANCHOR_PRESET: SupportPreset = {
             ballDiameterMm: 2.0,
             maxRotationDeg: 45,
             maxSlideMm: 5,
-            defaultJointCount: 1,
         },
         grid: {
             enabled: false,

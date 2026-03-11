@@ -798,6 +798,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             for (const segment of trunk.segments) {
                 if (segment.type === 'bezier') {
+                    if (segment.bottomJoint) {
+                        currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
+                    }
                     if (segment.topJoint) {
                         currentStart = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
                     } else if (trunk.contactCone) {
@@ -808,6 +811,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 }
 
                 let endPoint: THREE.Vector3;
+                if (segment.bottomJoint) {
+                    currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
+                }
                 if (segment.topJoint) {
                     endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
                 } else if (trunk.contactCone) {

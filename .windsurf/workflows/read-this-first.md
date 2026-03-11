@@ -22,6 +22,18 @@ When you make changes in this codebase, you must follow my organization rules:
     - Builders/composition logic for that feature
     - Feature-specific helpers/types (only if they truly belong to that feature)
 
+- **Avoid monolithic files.**
+  - Do not let one file quietly become the owner of dozens of unrelated helpers or responsibilities.
+  - Prefer small, coherent files that are easy to edit safely.
+  - The goal is to make it hard for one mistake to break a huge swath of logic.
+  - If a file starts owning too many different concerns, split it.
+
+- **Keep feature logic physically close together.**
+  - If the logic belongs to supports, keep it inside the supports area.
+  - If the logic belongs to a specific support type, keep it close to that support type unless it is truly shared.
+  - Do not scatter related feature logic across broad top-level folders just because the files are all “hooks” or all “routes” or all “utils”.
+  - Organize by where a future edit would naturally be looked for first.
+
 - **Shared / cross-cutting logic goes in shared domain folders, not inside random feature folders.**
   - If multiple support types will use the same logic, it belongs in an existing shared domain area (example: placement solvers, snapping/interaction, settings, primitives).
 
@@ -30,6 +42,11 @@ When you make changes in this codebase, you must follow my organization rules:
 
 - **Before you implement, inspect existing structure and match it.**
   - If you’re not sure where something belongs, look at the closest existing feature and mirror that pattern.
+
+- **Prefer easy-to-follow edit boundaries.**
+  - File structure should make it obvious what to call, where to call it, and where to edit it.
+  - A change to one feature should ideally stay local to that feature’s files unless the logic is genuinely shared.
+  - Favor structure that reduces the blast radius of mistakes.
 
 ### Concrete example (based on your `src/supports` structure)
 
@@ -51,6 +68,13 @@ So if we create a new support type (example: `Brace`), the correct approach is:
 - Add a new folder: `src/supports/SupportTypes/Brace/`
 - Put Brace-specific renderer, creation/interaction logic, and builder/composition logic inside that folder
 - Only put something in `interaction/` or `PlacementLogic/` if it’s truly shared across multiple support types
+
+This same philosophy applies even when not creating a new support type:
+
+- keep support-related logic in the supports domain
+- keep trunk-specific logic near trunk files
+- keep branch-specific logic near branch files
+- only move logic into a shared area when it is actually shared
 
 ## Prompt: “Follow instructions literally (questions vs. code changes)”
 
@@ -76,6 +100,10 @@ When I propose an idea or plan, you must:
 - Offer better alternatives when you see them, and explain tradeoffs (pros/cons, risk, complexity, performance, maintainability).
 - Ask clarifying questions when needed to avoid building the wrong thing.
 - Still follow the “questions vs. code changes” rule: do not change code unless I explicitly ask you to (or I approve after you propose options).
+
+
+Read this file next to fully understand how supports are structured:
+- `1_Documentation/AnatomyOfSupports/Anatomy-of-Supports.md`
 
 Afterwards I dont need a synopsis of what you read. Simply say "understood" then wait for further instructions.
 

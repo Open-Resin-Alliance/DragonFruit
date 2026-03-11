@@ -1608,7 +1608,9 @@ export function toggleSegmentCurve(segmentId: string) {
 
         // Get Start Position (Approximation for initialization)
         let startPos: THREE.Vector3;
-        if (targetSegmentIndex === 0) {
+        if (segment.bottomJoint) {
+            startPos = toVector3(segment.bottomJoint.pos);
+        } else if (targetSegmentIndex === 0) {
             if (targetTrunkId) {
                 const root = state.roots[(newContainer as Trunk).rootId];
                 if (root) {
@@ -1629,11 +1631,10 @@ export function toggleSegmentCurve(segmentId: string) {
                 const knot = state.knots[(newContainer as Branch).parentKnotId];
                 startPos = knot && knot.pos ? toVector3(knot.pos) : new THREE.Vector3();
             } else {
-                startPos = segment.bottomJoint ? toVector3(segment.bottomJoint.pos) : new THREE.Vector3();
+                startPos = new THREE.Vector3();
             }
         } else {
             const prevSeg = newContainer.segments[targetSegmentIndex - 1];
-            // Start is prevSeg.topJoint.pos
             if (prevSeg.topJoint) {
                 startPos = toVector3(prevSeg.topJoint.pos);
             } else {

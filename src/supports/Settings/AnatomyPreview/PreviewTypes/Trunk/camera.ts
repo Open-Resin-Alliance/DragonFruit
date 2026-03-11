@@ -57,8 +57,6 @@ export const SUPPORT_CAMERA_FOCUS_MAP: Record<string, CameraFocusState> = {
 
     'shaft.diameterMm': TRUNK_FOCUS_STATE,
 
-    'joint.defaultJointCount': TRUNK_FOCUS_STATE,
-
     'roots.diameterMm': ROOTS_FOCUS_STATE,
     'roots.diskHeightMm': ROOTS_FOCUS_STATE,
     'roots.coneHeightMm': ROOTS_FOCUS_STATE,

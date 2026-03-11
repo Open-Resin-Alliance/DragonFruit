@@ -1,5 +1,6 @@
 import type { Knot, Roots, Segment, SupportState, Trunk, Vec3 } from '../../types';
 import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
+import type { SnappedTrunkRouteResult } from '../../SupportTypes/Trunk/trunkRouteTypes';
 import { buildBranchData } from '../../SupportTypes/Branch/branchBuilder';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './gridMath';
 import type { DecideGridPlacementArgs, GridPlacementDecision } from './types';
@@ -11,14 +12,88 @@ import { generateUuid } from '../../../utils/uuid';
 
 const MIN_TRUNK_CLEARANCE_MM = 0.5;
 const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
-const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
-const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
+
+function withResolvedSnappedRoute(
+    candidate: TrunkBuildResult,
+    args: {
+        snappedRootPos: Vec3;
+        snappedNodeKey: string | null;
+        snappedValidity: SnappedTrunkRouteResult['snappedValidity'];
+        validity?: SnappedTrunkRouteResult['validity'];
+        error?: SnappedTrunkRouteResult['error'];
+    }
+): TrunkBuildResult {
+    const nextError = args.error ?? candidate.route.error;
+    const nextValidity = args.validity ?? candidate.route.validity;
+    return {
+        ...candidate,
+        route: {
+            ...candidate.route,
+            snappedRootPos: args.snappedRootPos,
+            snappedNodeKey: args.snappedNodeKey,
+            snappedValidity: args.snappedValidity,
+            validity: nextValidity,
+            error: nextError,
+        },
+        error: nextError,
+        warning: nextError ? undefined : candidate.warning,
+        supportData: {
+            ...candidate.supportData,
+            error: nextError,
+            warning: nextError ? undefined : candidate.supportData.warning,
+        },
+    };
+}
 
 function moveRootToXY(
     candidate: TrunkBuildResult,
     rootX: number,
     rootY: number
 ): TrunkBuildResult {
+    const dx = rootX - candidate.root.transform.pos.x;
+    const dy = rootY - candidate.root.transform.pos.y;
+
+    if (dx === 0 && dy === 0) {
+        return candidate;
+    }
+
+    const socketJointId = candidate.trunk.contactCone?.socketJointId;
+    const nextSegments = candidate.trunk.segments.map((seg) => {
+        const nextTopJoint =
+            seg.topJoint && (!socketJointId || seg.topJoint.id !== socketJointId)
+                ? {
+                    ...seg.topJoint,
+                    pos: {
+                        ...seg.topJoint.pos,
+                        x: seg.topJoint.pos.x + dx,
+                        y: seg.topJoint.pos.y + dy,
+                    },
+                }
+                : seg.topJoint;
+
+        const nextBottomJoint =
+            seg.bottomJoint && (!socketJointId || seg.bottomJoint.id !== socketJointId)
+                ? {
+                    ...seg.bottomJoint,
+                    pos: {
+                        ...seg.bottomJoint.pos,
+                        x: seg.bottomJoint.pos.x + dx,
+                        y: seg.bottomJoint.pos.y + dy,
+                    },
+                }
+                : seg.bottomJoint;
+
+        if (nextTopJoint === seg.topJoint && nextBottomJoint === seg.bottomJoint) {
+            return seg;
+        }
+
+        return {
+            ...seg,
+            topJoint: nextTopJoint,
+            bottomJoint: nextBottomJoint,
+        };
+    });
+
     const nextRoot = {
         ...candidate.root,
         transform: {
@@ -34,14 +109,32 @@ function moveRootToXY(
     return {
         ...candidate,
         root: nextRoot,
+        route: {
+            ...candidate.route,
+            basePos: {
+                ...candidate.route.basePos,
+                x: rootX,
+                y: rootY,
+            },
+            joints: candidate.route.joints.map((joint) => ({
+                ...joint,
+                x: joint.x + dx,
+                y: joint.y + dy,
+            })),
+            constructionJoints: candidate.route.constructionJoints.map((joint) => ({
+                ...joint,
+                x: joint.x + dx,
+                y: joint.y + dy,
+            })),
+        },
         trunk: {
             ...candidate.trunk,
-            segments: candidate.trunk.segments,
+            segments: nextSegments,
         },
         supportData: {
             ...candidate.supportData,
             roots: nextRoot,
-            segments: candidate.trunk.segments,
+            segments: nextSegments,
         },
     };
 }
@@ -64,78 +157,40 @@ function buildNearestCandidateNodeKeys(preferredKey: string, maxRings: number): 
     return keys;
 }
 
+function getResolvedSnappedNodeKey(candidate: TrunkBuildResult): string | null {
+    const route = candidate.route as Partial<SnappedTrunkRouteResult>;
+    return route.snappedNodeKey ?? null;
+}
+
+function hasResolvedSnappedRoot(candidate: TrunkBuildResult): boolean {
+    return getResolvedSnappedNodeKey(candidate) != null;
+}
+
+function getResolvedSnappedRootPos(candidate: TrunkBuildResult): Vec3 | null {
+    const route = candidate.route as Partial<SnappedTrunkRouteResult>;
+    return route.snappedRootPos ?? null;
+}
+
+function getResolvedSnappedValidity(candidate: TrunkBuildResult): SnappedTrunkRouteResult['snappedValidity'] | null {
+    const route = candidate.route as Partial<SnappedTrunkRouteResult>;
+    return route.snappedValidity ?? null;
+}
+
+function getDefaultSnappedValidity(candidate: TrunkBuildResult): SnappedTrunkRouteResult['snappedValidity'] {
+    if (candidate.route.validity === 'hard_invalid') {
+        return 'hard_invalid';
+    }
+    return candidate.route.validity === 'route_invalid' ? 'invalid_assisted' : 'valid';
+}
+
 function applyGridSnapToNodeKey(
     candidate: TrunkBuildResult,
-    settings: DecideGridPlacementArgs['settings'],
     spacingMm: number,
     nodeKey: string
-): TrunkBuildResult | null {
+): TrunkBuildResult {
     const snapped = gridSnappedXYFromKey(nodeKey, spacingMm);
-    const root = candidate.root;
     const movedCandidate = moveRootToXY(candidate, snapped.x, snapped.y);
-    const lowestJoint = candidate.trunk.segments[0]?.topJoint;
-
-    if (snapped.x === root.transform.pos.x && snapped.y === root.transform.pos.y) {
-        return movedCandidate;
-    }
-
-    if (!lowestJoint) {
-        return movedCandidate;
-    }
-
-    const rootTop = getRootTopPosition(movedCandidate.root, settings);
-    const lateralShift = Math.hypot(lowestJoint.pos.x - snapped.x, lowestJoint.pos.y - snapped.y);
-    if (lateralShift <= 0.000001) {
-        return movedCandidate;
-    }
-
-    const minAngleRad = (settings.grid.minRoutedTrunkAngleDeg * Math.PI) / 180;
-    const requiredDrop = lateralShift * Math.tan(minAngleRad);
-    const maxInsertedJointZ = lowestJoint.pos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
-    const minInsertedJointZ = rootTop.z + MIN_INSERTED_BASE_SEGMENT_MM;
-
-    if (maxInsertedJointZ <= minInsertedJointZ) {
-        return null;
-    }
-
-    const insertedJointZ = Math.max(
-        minInsertedJointZ,
-        Math.min(lowestJoint.pos.z - requiredDrop, maxInsertedJointZ),
-    );
-
-    if (lowestJoint.pos.z - insertedJointZ + 0.000001 < requiredDrop) {
-        return null;
-    }
-
-    const insertedJoint = {
-        id: generateUuid(),
-        pos: {
-            x: snapped.x,
-            y: snapped.y,
-            z: insertedJointZ,
-        },
-        diameter: lowestJoint.diameter,
-    };
-
-    const insertedSegment: Segment = {
-        id: generateUuid(),
-        diameter: movedCandidate.trunk.segments[0]?.diameter ?? settings.shaft.diameterMm,
-        topJoint: insertedJoint,
-    };
-
-    const nextSegments = [insertedSegment, ...movedCandidate.trunk.segments];
-    return {
-        ...movedCandidate,
-        trunk: {
-            ...movedCandidate.trunk,
-            segments: nextSegments,
-        },
-        supportData: {
-            ...movedCandidate.supportData,
-            roots: movedCandidate.root,
-            segments: nextSegments,
-        },
-    };
+    return movedCandidate;
 }
 
 function getPreferredNodeKey(
@@ -147,44 +202,6 @@ function getPreferredNodeKey(
     const refX = referenceXY?.x ?? root.transform.pos.x;
     const refY = referenceXY?.y ?? root.transform.pos.y;
     return gridNodeKeyFromXY(refX, refY, spacingMm);
-}
-
-function withSnappedRootOnly(
-    candidate: TrunkBuildResult,
-    spacingMm: number,
-    referenceXY?: { x: number; y: number }
-): TrunkBuildResult {
-    const key = getPreferredNodeKey(candidate, spacingMm, referenceXY);
-    const snapped = gridSnappedXYFromKey(key, spacingMm);
-    if (snapped.x === candidate.root.transform.pos.x && snapped.y === candidate.root.transform.pos.y) {
-        return candidate;
-    }
-
-    const nextRoot = {
-        ...candidate.root,
-        transform: {
-            ...candidate.root.transform,
-            pos: {
-                ...candidate.root.transform.pos,
-                x: snapped.x,
-                y: snapped.y,
-            },
-        },
-    };
-
-    return {
-        ...candidate,
-        root: nextRoot,
-        trunk: {
-            ...candidate.trunk,
-            segments: candidate.trunk.segments,
-        },
-        supportData: {
-            ...candidate.supportData,
-            roots: nextRoot,
-            segments: candidate.trunk.segments,
-        },
-    };
 }
 
 function getTrunkSegmentEndpointsWithSettings(
@@ -204,7 +221,9 @@ function getTrunkSegmentEndpointsWithSettings(
     if (!segment) return null;
 
     let start: Vec3;
-    if (segmentIndex === 0) {
+    if (segment.bottomJoint) {
+        start = segment.bottomJoint.pos;
+    } else if (segmentIndex === 0) {
         start = {
             x: basePos.x,
             y: basePos.y,
@@ -351,19 +370,6 @@ function findHostTrunkAtNode(snapshot: SupportState, modelId: string, nodeKey: s
     return null;
 }
 
-function getRootTopPosition(root: Roots, settings: DecideGridPlacementArgs['settings']): Vec3 {
-    const diskHeight = settings.roots.diskHeightMm;
-    const flareEnabled = settings.baseFlare?.enabled;
-    const coneHeight = flareEnabled ? settings.baseFlare.heightMm : settings.roots.coneHeightMm;
-    const effectiveConeHeight = flareEnabled ? coneHeight : 0;
-
-    return {
-        x: root.transform.pos.x,
-        y: root.transform.pos.y,
-        z: root.transform.pos.z + diskHeight + effectiveConeHeight,
-    };
-}
-
 function trunkCollidesWithMesh(
     candidate: TrunkBuildResult,
     settings: DecideGridPlacementArgs['settings'],
@@ -391,60 +397,92 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     if (!settings.grid?.enabled) {
         return {
             kind: 'place_trunk',
-            trunkBuild: candidate,
+            trunkBuild: withResolvedSnappedRoute(candidate, {
+                snappedRootPos: getResolvedSnappedRootPos(candidate) ?? candidate.root.transform.pos,
+                snappedNodeKey: 'disabled',
+                snappedValidity: getResolvedSnappedValidity(candidate) ?? getDefaultSnappedValidity(candidate),
+            }),
             nodeKey: 'disabled',
         };
     }
 
     const spacingMm = settings.grid.spacingMm;
+    const resolvedNodeKey = getResolvedSnappedNodeKey(candidate);
+    const preferredReference = candidate.route.unsnappedBottomPos ?? candidate.root.transform.pos;
 
-    const socketPos = candidate.trunk.contactCone ? getFinalSocketPosition(candidate.trunk.contactCone) : null;
-    const preferredNodeKey = getPreferredNodeKey(
+    const preferredNodeKey = resolvedNodeKey ?? getPreferredNodeKey(
         candidate,
         spacingMm,
-        socketPos ? { x: socketPos.x, y: socketPos.y } : undefined
+        { x: preferredReference.x, y: preferredReference.y }
     );
     const candidateNodeKeys = buildNearestCandidateNodeKeys(preferredNodeKey, MAX_NEAREST_NODE_SEARCH_RINGS);
 
     for (const nodeKey of candidateNodeKeys) {
-        const nodeCandidate = applyGridSnapToNodeKey(candidate, settings, spacingMm, nodeKey);
-        if (!nodeCandidate) continue;
+        const nodeCandidate = hasResolvedSnappedRoot(candidate) && nodeKey === resolvedNodeKey
+            ? candidate
+            : applyGridSnapToNodeKey(candidate, spacingMm, nodeKey);
         const host = findHostTrunkAtNode(snapshot, modelId, nodeKey, spacingMm);
         if (host) continue;
         if (mesh && trunkCollidesWithMesh(nodeCandidate, settings, mesh)) continue;
 
         return {
             kind: 'place_trunk',
-            trunkBuild: nodeCandidate,
+            trunkBuild: withResolvedSnappedRoute(nodeCandidate, {
+                snappedRootPos: getResolvedSnappedRootPos(nodeCandidate) ?? nodeCandidate.root.transform.pos,
+                snappedNodeKey: nodeKey,
+                snappedValidity: getResolvedSnappedValidity(nodeCandidate) ?? getDefaultSnappedValidity(nodeCandidate),
+            }),
             nodeKey,
         };
     }
 
     const nodeKey = preferredNodeKey;
     const host = findHostTrunkAtNode(snapshot, modelId, nodeKey, spacingMm);
-    const snappedCandidate = applyGridSnapToNodeKey(
-        candidate,
-        settings,
-        spacingMm,
-        nodeKey,
-    ) ?? withSnappedRootOnly(
-        candidate,
-        spacingMm,
-        socketPos ? { x: socketPos.x, y: socketPos.y } : undefined
-    );
+    const snappedCandidate = hasResolvedSnappedRoot(candidate) && nodeKey === resolvedNodeKey
+        ? candidate
+        : applyGridSnapToNodeKey(
+            candidate,
+            spacingMm,
+            nodeKey,
+        );
     if (!host) {
         return mesh && trunkCollidesWithMesh(snappedCandidate, settings, mesh)
-            ? { kind: 'reject', nodeKey, reason: 'COLLISION_WITH_MODEL' }
+            ? {
+                kind: 'reject',
+                nodeKey,
+                reason: 'COLLISION_WITH_MODEL',
+                trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+                    snappedRootPos: getResolvedSnappedRootPos(snappedCandidate) ?? snappedCandidate.root.transform.pos,
+                    snappedNodeKey: nodeKey,
+                    snappedValidity: 'hard_invalid',
+                    validity: 'hard_invalid',
+                    error: 'COLLISION_WITH_MODEL',
+                }),
+            }
             : {
                 kind: 'place_trunk',
-                trunkBuild: snappedCandidate,
+                trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+                    snappedRootPos: getResolvedSnappedRootPos(snappedCandidate) ?? snappedCandidate.root.transform.pos,
+                    snappedNodeKey: nodeKey,
+                    snappedValidity: getResolvedSnappedValidity(snappedCandidate) ?? getDefaultSnappedValidity(snappedCandidate),
+                }),
                 nodeKey,
             };
     }
 
     const hostSegment: Segment | undefined = host.trunk.segments[0];
     if (!hostSegment) {
-        return { kind: 'reject', nodeKey, reason: 'NO_HOST_SEGMENT' };
+        return {
+            kind: 'reject',
+            nodeKey,
+            reason: 'NO_HOST_SEGMENT',
+            trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+                snappedRootPos: getResolvedSnappedRootPos(snappedCandidate) ?? snappedCandidate.root.transform.pos,
+                snappedNodeKey: nodeKey,
+                snappedValidity: 'hard_invalid',
+                validity: 'hard_invalid',
+            }),
+        };
     }
 
     const minAngleDeg = settings.grid.minBranchAngleDeg;
@@ -463,7 +501,17 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
     });
 
     if (!selectedKnot) {
-        return { kind: 'reject', nodeKey, reason: mesh ? 'COLLISION_WITH_MODEL' : 'NO_VALID_ATTACHMENT' };
+        return {
+            kind: 'reject',
+            nodeKey,
+            reason: mesh ? 'COLLISION_WITH_MODEL' : 'NO_VALID_ATTACHMENT',
+            trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+                snappedRootPos: getResolvedSnappedRootPos(snappedCandidate) ?? snappedCandidate.root.transform.pos,
+                snappedNodeKey: nodeKey,
+                snappedValidity: mesh ? 'hard_invalid' : getDefaultSnappedValidity(snappedCandidate),
+                error: mesh ? 'COLLISION_WITH_MODEL' : snappedCandidate.route.error,
+            }),
+        };
     }
 
     const { branch, supportData } = buildBranchData({
@@ -480,7 +528,11 @@ export function decideGridPlacement(args: DecideGridPlacementArgs): GridPlacemen
             kind: 'replace_trunk',
             nodeKey,
             hostTrunkId: host.trunkId,
-            trunkBuild: snappedCandidate,
+            trunkBuild: withResolvedSnappedRoute(snappedCandidate, {
+                snappedRootPos: getResolvedSnappedRootPos(snappedCandidate) ?? snappedCandidate.root.transform.pos,
+                snappedNodeKey: nodeKey,
+                snappedValidity: getResolvedSnappedValidity(snappedCandidate) ?? getDefaultSnappedValidity(snappedCandidate),
+            }),
             promoteKnot: selectedKnot,
             promoteBranch: branch,
             oldTrunkKnot: null,

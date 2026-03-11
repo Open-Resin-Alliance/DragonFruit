@@ -104,6 +104,10 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     const joints: React.ReactNode[] = [];
 
     trunk.segments.forEach((seg, index) => {
+        if (seg.bottomJoint) {
+            currentStart = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
+        }
+
         let endPoint: THREE.Vector3;
         
         if (seg.topJoint) {

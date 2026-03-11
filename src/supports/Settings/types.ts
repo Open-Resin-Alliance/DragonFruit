@@ -88,7 +88,6 @@ export interface JointProfile {
     ballDiameterMm: number;
     maxRotationDeg: number;
     maxSlideMm: number;
-    defaultJointCount: number;
 }
 
 export interface GridSettings {
@@ -160,7 +159,6 @@ export function createDefaultSettings(): SupportSettings {
             ballDiameterMm: DEFAULT_JOINT_BALL_DIAMETER_MM,
             maxRotationDeg: DEFAULT_JOINT_MAX_ROTATION_DEG,
             maxSlideMm: DEFAULT_JOINT_MAX_SLIDE_MM,
-            defaultJointCount: DEFAULT_JOINT_DEFAULT_COUNT,
         },
         grid: {
             enabled: DEFAULT_GRID_ENABLED,

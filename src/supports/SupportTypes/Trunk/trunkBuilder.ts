@@ -16,12 +16,110 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { calculateStandardPlacement } from '../../PlacementLogic/StandardPlacement';
 import { calculateSmartPlacement } from '../../PlacementLogic/SmartPlacement';
 import type { LimitationCode, WarningCode } from '../../types';
+import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
+import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
+
+const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
+const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
 
 function uuidv4() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
         const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
+}
+
+function distanceXY(a: Vec3, b: Vec3): number {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+function withInsertedRootTransition(args: {
+    basePos: Vec3;
+    rootTopZ: number;
+    firstJointOrSocketPos: Vec3;
+    minAngleDeg: number;
+}): Vec3[] | null {
+    const { basePos, rootTopZ, firstJointOrSocketPos, minAngleDeg } = args;
+    const lateralShift = distanceXY(basePos, firstJointOrSocketPos);
+    if (lateralShift <= 0.000001) {
+        return [];
+    }
+
+    const minAngleRad = (minAngleDeg * Math.PI) / 180;
+    const requiredDrop = lateralShift * Math.tan(minAngleRad);
+    const maxInsertedJointZ = firstJointOrSocketPos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
+    const minInsertedJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
+
+    if (maxInsertedJointZ <= minInsertedJointZ) {
+        return null;
+    }
+
+    const insertedJointZ = Math.max(
+        minInsertedJointZ,
+        Math.min(firstJointOrSocketPos.z - requiredDrop, maxInsertedJointZ),
+    );
+
+    if (firstJointOrSocketPos.z - insertedJointZ + 0.000001 < requiredDrop) {
+        return null;
+    }
+
+    return [{
+        x: basePos.x,
+        y: basePos.y,
+        z: insertedJointZ,
+    }];
+}
+
+function withCentralStraightSupportJoint(args: {
+    basePos: Vec3;
+    rootTopZ: number;
+    socketPos: Vec3;
+}): Vec3[] {
+    const { basePos, rootTopZ, socketPos } = args;
+    const availableRise = socketPos.z - rootTopZ;
+    if (availableRise <= MIN_INSERTED_TRANSITION_SEGMENT_MM + MIN_INSERTED_BASE_SEGMENT_MM) {
+        return [];
+    }
+
+    const minJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
+    const maxJointZ = socketPos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
+    const preferredJointZ = rootTopZ + availableRise * 0.65;
+    const jointZ = Math.max(minJointZ, Math.min(preferredJointZ, maxJointZ));
+
+    return [{
+        x: basePos.x,
+        y: basePos.y,
+        z: jointZ,
+    }];
+}
+
+function normalizeFirstConstructionJoint(args: {
+    basePos: Vec3;
+    rootTopZ: number;
+    socketPos: Vec3;
+    routeJoints: Vec3[];
+    constructionJoints: Vec3[];
+}): Vec3[] {
+    const { basePos, rootTopZ, socketPos, routeJoints, constructionJoints } = args;
+    const firstTarget = routeJoints[0] ?? socketPos;
+    const availableRise = firstTarget.z - rootTopZ;
+    if (availableRise <= MIN_INSERTED_TRANSITION_SEGMENT_MM + MIN_INSERTED_BASE_SEGMENT_MM) {
+        return [];
+    }
+
+    const minJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
+    const maxJointZ = firstTarget.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
+    const preferredJointZ = rootTopZ + availableRise * 0.65;
+    const jointZ = Math.max(minJointZ, Math.min(preferredJointZ, maxJointZ));
+
+    const firstJoint: Vec3 = {
+        x: basePos.x,
+        y: basePos.y,
+        z: jointZ,
+    };
+    return [firstJoint];
 }
 
 export interface TrunkBuildInput {
@@ -34,7 +132,6 @@ export interface TrunkBuildInput {
         rootsDiskHeightMm?: number;
         rootsConeHeightMm?: number;
         shaftDiameterMm?: number;
-        jointCount?: number;
         tipContactDiameterMm?: number;
         tipBodyDiameterMm?: number;
         tipLengthMm?: number;
@@ -47,6 +144,7 @@ export interface TrunkBuildResult {
     trunk: Trunk;
     // For SupportBuilder (generic format)
     supportData: SupportData;
+    route: TrunkRouteResult | SnappedTrunkRouteResult;
     error?: LimitationCode;
     warning?: WarningCode;
 }
@@ -56,7 +154,7 @@ export interface TrunkBuildResult {
  * 
  * A trunk consists of:
  * - Roots (disk + cone + sphere at base)
- * - 2 Segments with 1 Joint between them
+ * - Route-driven shaft segments and joints
  * - ContactCone at the tip
  */
 export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
@@ -103,125 +201,66 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         ? calculateSmartPlacement({ ...placementInput, mesh, modelId })
         : calculateStandardPlacement(placementInput);
 
-    const { basePos, socketPos: placementSocketPos, joints, jointPos, error, warning, angle, coneAxis } = placement;
+    const routeJoints = placement.joints ? [...placement.joints] : [];
+    const isStraightSupport = routeJoints.length === 0;
+    const initialConstructionJoints = placement.constructionJoints ? [...placement.constructionJoints] : [];
+    const fallbackConstructionJoints = isStraightSupport
+        ? withCentralStraightSupportJoint({
+            basePos: placement.basePos,
+            rootTopZ: rootsTopZ,
+            socketPos: placement.socketPos,
+        })
+        : initialConstructionJoints;
+    const normalizedConstructionJoints = normalizeFirstConstructionJoint({
+        basePos: placement.basePos,
+        rootTopZ: rootsTopZ,
+        socketPos: placement.socketPos,
+        routeJoints,
+        constructionJoints: initialConstructionJoints.length > 0
+            ? initialConstructionJoints
+            : fallbackConstructionJoints,
+    });
 
-    // Normalize joints list (Top to Bottom order expected from SmartPlacement)
-    // If SmartPlacement provided joints, use them.
-    // Otherwise, generate joints based on the 'jointCount' setting.
-    let jointPositions: Vec3[] = joints || (jointPos ? [jointPos] : []);
-
-    if (!joints) {
-        // Standard/Preview Placement Strategy with Joint Count
-        const count = overrides?.jointCount ?? settings.joint.defaultJointCount;
-
-        if (count > 0) {
-            // Need to clear the legacy single joint if we are generating multiple
-            // But if count is explicitly requested, we probably want to ignore the 'jointPos' derived from StandardPlacement default.
-            // StandardPlacement returns 1 joint by default.
-            // If we have an override count, we should replace it.
-            jointPositions = []; // Reset
-
-            // Distribute 'count' joints evenly between Roots Top and Socket Bottom
-            const startZ = rootsTopZ;
-            const endZ = placementSocketPos.z;
-            const totalHeight = endZ - startZ;
-
-            // We want 'count' internal points.
-            // Segments = count + 1.
-            // Step = totalHeight / (count + 1).
-            const step = totalHeight / (count + 1);
-
-            for (let i = 1; i <= count; i++) {
-                jointPositions.push({
-                    x: basePos.x,
-                    y: basePos.y,
-                    z: startZ + (step * i)
-                });
-            }
+    const routeBase: TrunkRouteResult = {
+        kind: isStraightSupport ? 'straight' : 'routed',
+        basePos: placement.basePos,
+        socketPos: placement.socketPos,
+        unsnappedBottomPos: placement.unsnappedBottomPos ?? placement.basePos,
+        joints: routeJoints,
+        constructionJoints: normalizedConstructionJoints,
+        validity: placement.error ? 'hard_invalid' : 'valid',
+        error: placement.error,
+        warning: placement.warning,
+        angle: placement.angle,
+        coneAxis: placement.coneAxis,
+    };
+    const route: TrunkRouteResult | SnappedTrunkRouteResult = placement.snappedNodeKey
+        ? {
+            ...routeBase,
+            snappedNodeKey: placement.snappedNodeKey,
+            snappedRootPos: settings.grid.enabled
+                ? {
+                    ...gridSnappedXYFromKey(placement.snappedNodeKey, settings.grid.spacingMm),
+                    z: routeBase.basePos.z,
+                }
+                : routeBase.basePos,
+            snappedValidity: placement.error
+                ? 'hard_invalid'
+                : routeBase.unsnappedBottomPos.x === routeBase.basePos.x && routeBase.unsnappedBottomPos.y === routeBase.basePos.y
+                    ? 'valid'
+                    : 'invalid_assisted',
+            validity: placement.error
+                ? 'hard_invalid'
+                : routeBase.unsnappedBottomPos.x === routeBase.basePos.x && routeBase.unsnappedBottomPos.y === routeBase.basePos.y
+                    ? 'valid'
+                    : 'route_invalid',
         }
+        : routeBase;
 
-        // Ensure consistent order. 
-        // Logic below creates segments connected to topJoints using this array.
-        // It creates joints, then segments. 
-        // Lower segments logic: createdJoints.forEach(joint => push segment)
-        // If jointPositions is [Bottom, ..., Top]
-        // createdJoints is [Bottom, ..., Top]
-        // segment 1: topJoint = BottomJoint. This is the Very Bottom Segment? No.
-        // The logic at line 204: topJoint = joint.
-        // This segment connects FROM ??? TO 'joint'.
-        // Wait, line 204 loops createdJoints.
-        // createSegments has Top Segment (Socket -> ?).
-        // Then subsequent segments connect to these joints.
-
-        // Let's trace Standard logic (1 joint):
-        // jointPos = middle.
-        // jointPositions = [middle].
-        // createdJoints = [middle].
-        // Top Seg: Socket -> First Knee? (Wait, logic line 154 says topJoint: socketJoint).
-        // That Top Seg (id X) has topJoint=SocketJoint. It has NO bottomJoint specified?
-        // Ah, Trunk Renderer/Data structure usually implies segments span between joints.
-
-        // Actually, SupportBuilder sees 'topJoint' property on a segment.
-        // It assumes segment goes TO that topJoint? 
-        // Line 208 in SupportBuilder: if (seg.topJoint) endPoint = seg.topJoint.pos.
-        // So 'topJoint' means the UPPER END of the segment.
-
-        // Back to trunkBuilder:
-        // Top Segment (line 196): topJoint = SocketJoint. 
-        // This means it ends at the socket. Where does it start?
-        // SupportBuilder logic: currentStart = Roots Top (initially).
-        // Then it iterates segments.
-        // Segment 1 (Top Seg): ends at Socket. Starts at Roots.
-        // That draws ONE segment from Roots to Socket.
-
-        // Lower Segments (line 204):
-        // For each createdJoint (knee), make a segment with topJoint = knee.
-        // So this segment ends at the knee.
-        // Where does it start? SupportBuilder daisy-chains.
-
-        // ORDER MATTERS IN SUPPORTBUILDER.
-        // SupportBuilder iterates data.segments array.
-        // 1. currentStart = Roots Top.
-        // 2. data.segments[0]. Ends at topJoint. Draws line Start->End. Start becomes End.
-        // 3. data.segments[1]. Ends at its topJoint. Draws line Start->End.
-
-        // So segments must be ordered Bottom -> Top for SupportBuilder to draw correctly 
-        // (if it starts at roots).
-
-        // Let's look at trunkBuilder line 214: createdSegments.reverse().
-        // BEFORE REVERSE:
-        // [Top Segment (ends at Socket)]
-        // [Seg (ends at Joint 1)]
-        // [Seg (ends at Joint 2)]
-
-        // AFTER REVERSE:
-        // [Seg (ends at Joint 2), Seg (ends at Joint 1), Top Segment (ends at Socket)]
-
-        // This implies SupportBuilder processes Bottom -> Top.
-        // So the first segment should end at the LOWEST joint.
-        // The last segment should end at the SOCKET.
-
-        // So we need:
-        // Joint 1 = Lowest. Joint 2 = Higher.
-        // Segments: 
-        // - Seg A ends at Joint 1.
-        // - Seg B ends at Joint 2.
-        // - TopSeg ends at Socket.
-
-        // If we push Segments in order: TopSeg, then JointSegs.
-        // We want JointSegs to correspond to joints Top -> Bottom?
-        // If createdJoints is [J_top, J_mid, J_bot]
-        // Segments created: TopSeg(Socket), Seg(J_top), Seg(J_mid), Seg(J_bot).
-        // Reverse: Seg(J_bot), Seg(J_mid), Seg(J_top), TopSeg(Socket).
-        // This looks correct.
-
-        // So createdJoints should be ordered Top -> Bottom (High Z -> Low Z).
-        // jointPositions should be Top -> Bottom.
-
-        // My loop generates 1..count (Low -> High).
-        // So I need to reverse it to be Top -> Bottom.
-        jointPositions.reverse();
-    }
+    const { basePos, socketPos: placementSocketPos, joints, constructionJoints, error, warning, angle, coneAxis } = route;
+    const routeJointPositions: Vec3[] = [...joints];
+    const constructionJointPositions: Vec3[] = [...constructionJoints];
+    const jointPositions: Vec3[] = [...constructionJointPositions, ...routeJointPositions];
 
     // Generate IDs
     const rootId = uuidv4();
@@ -271,26 +310,36 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         diameter: jointDiameter
     };
 
-    // 2. Create Top Segment (Socket Joint -> First Knee Joint)
-    createdSegments.push({
-        id: uuidv4(),
-        diameter: shaftDiameter,
-        topJoint: socketJoint // Explicit connection to the Socket Joint
-    });
-
-    // 3. Create Lower Segments
-    // Each knee joint spawns a segment below it.
-    createdJoints.forEach(joint => {
+    // 2. Create Segments
+    if (isStraightSupport && createdJoints.length === 1) {
         createdSegments.push({
             id: uuidv4(),
             diameter: shaftDiameter,
-            topJoint: joint
+            topJoint: createdJoints[0]
         });
-    });
+        createdSegments.push({
+            id: uuidv4(),
+            diameter: shaftDiameter,
+            bottomJoint: createdJoints[0],
+            topJoint: socketJoint
+        });
+    } else {
+        createdJoints.forEach((joint, index) => {
+            createdSegments.push({
+                id: uuidv4(),
+                diameter: shaftDiameter,
+                bottomJoint: index > 0 ? createdJoints[index - 1] : undefined,
+                topJoint: joint
+            });
+        });
 
-    // Current order: [Top, NextDown, ..., Bottom]
-    // Standard format expects [Bottom, Top] order (mostly convention, but good to preserve)
-    createdSegments.reverse();
+        createdSegments.push({
+            id: uuidv4(),
+            diameter: shaftDiameter,
+            bottomJoint: createdJoints.length > 0 ? createdJoints[createdJoints.length - 1] : undefined,
+            topJoint: socketJoint
+        });
+    }
 
     // Build Root
     const root: Roots = {
@@ -337,5 +386,5 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         angle: angle // Required for gradient color
     };
 
-    return { root, trunk, supportData, error, warning };
+    return { root, trunk, supportData, route, error, warning };
 }

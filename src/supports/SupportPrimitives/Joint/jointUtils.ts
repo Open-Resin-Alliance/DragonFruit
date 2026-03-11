@@ -55,7 +55,9 @@ export function splitShaft(
 
         // Find Start Point
         let startPos: Vec3;
-        if (segIndex === 0) {
+        if (originalSegment.bottomJoint) {
+            startPos = originalSegment.bottomJoint.pos;
+        } else if (segIndex === 0) {
             const rPos = root.transform.pos;
             const startZ = rPos.z + root.diskHeight + root.coneHeight;
             startPos = { x: rPos.x, y: rPos.y, z: startZ };

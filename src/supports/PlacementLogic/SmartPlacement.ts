@@ -3,142 +3,172 @@ import { Vec3 } from '../types';
 import { calculateStandardPlacement, TrunkPlacementInput, TrunkPlacementResult } from './StandardPlacement';
 import { checkShaftCollision } from './CollisionUtils';
 import { getSettings } from '../Settings';
+import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './Grid/gridMath';
+import {
+    BestCostEntry,
+    distance3D,
+    distanceXY,
+    isBetterSearchState,
+    positionKey,
+    QueuedNode,
+    queueSortValue,
+} from './smartPlacementSearchUtils';
+import { evaluateResolvedRoute } from './smartPlacementRouteEvaluation';
+import { buildCandidateNodes } from './smartPlacementCandidateSearch';
 
 export interface SmartPlacementInput extends TrunkPlacementInput {
     mesh: THREE.Mesh;
     modelId: string;
 }
 
-interface SearchNode {
-    pos: Vec3;
-    joints: Vec3[];
-    totalLength: number;
-    totalLateral: number;
-}
-
-interface CandidateNode {
-    pos: Vec3;
-    score: number;
-}
-
-interface QueuedNode extends SearchNode {
-    score: number;
-}
-
-const MAX_INTERNAL_JOINTS = 3;
+const MAX_SEARCH_EXPANSIONS = 160;
 const SEARCH_RADII_MM = [2, 4, 6, 8, 10, 12, 16, 20, 24];
 const SEARCH_DROPS_MM = [2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 40];
-const SEARCH_ANGLES = 16;
-const POSITION_KEY_MM = 0.5;
 const MIN_SEGMENT_LENGTH_MM = 0.5;
+const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
+const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
+const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
 
-function distanceXY(a: Vec3, b: Vec3): number {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.sqrt(dx * dx + dy * dy);
-}
+function buildNearestCandidateNodeKeys(preferredKey: string, maxRings: number): string[] {
+    const [gxRaw, gyRaw] = preferredKey.split(',');
+    const centerX = Number(gxRaw);
+    const centerY = Number(gyRaw);
+    const keys: string[] = [];
 
-function distance3D(a: Vec3, b: Vec3): number {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    const dz = a.z - b.z;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-function segmentAngleFromHorizontalDeg(start: Vec3, end: Vec3): number {
-    const horizontal = distanceXY(start, end);
-    const verticalDrop = start.z - end.z;
-    if (verticalDrop <= 0) return -Infinity;
-    return Math.atan2(verticalDrop, Math.max(horizontal, 0.0001)) * (180 / Math.PI);
-}
-
-function segmentSatisfiesMinAngle(start: Vec3, end: Vec3, minAngleDeg: number): boolean {
-    return segmentAngleFromHorizontalDeg(start, end) >= minAngleDeg;
-}
-
-function positionKey(pos: Vec3): string {
-    const qx = Math.round(pos.x / POSITION_KEY_MM);
-    const qy = Math.round(pos.y / POSITION_KEY_MM);
-    const qz = Math.round(pos.z / POSITION_KEY_MM);
-    return `${qx},${qy},${qz}`;
-}
-
-function queueSortValue(node: QueuedNode): number {
-    return node.joints.length * 100000 + node.score;
-}
-
-function buildCandidateNodes(args: {
-    current: SearchNode;
-    socketPos: Vec3;
-    blockPoint: Vec3;
-    rootTopZ: number;
-    mesh: THREE.Mesh;
-    collisionRadius: number;
-    minAngleDeg: number;
-    maxTotalLateralMm: number;
-}): CandidateNode[] {
-    const { current, socketPos, blockPoint, rootTopZ, mesh, collisionRadius, minAngleDeg, maxTotalLateralMm } = args;
-    const candidates: CandidateNode[] = [];
-    const seen = new Set<string>();
-    const anchorPoints: Vec3[] = [current.pos];
-
-    if (distanceXY(current.pos, blockPoint) > 0.25 || Math.abs(current.pos.z - blockPoint.z) > 0.25) {
-        anchorPoints.push(blockPoint);
-    }
-
-    for (const anchor of anchorPoints) {
-        for (const radius of SEARCH_RADII_MM) {
-            const requiredDrop = radius * Math.tan((minAngleDeg * Math.PI) / 180);
-
-            for (const drop of SEARCH_DROPS_MM) {
-                const targetDrop = Math.max(drop, requiredDrop);
-                const nextZ = current.pos.z - targetDrop;
-
-                if (nextZ <= rootTopZ + 0.25) continue;
-
-                for (let angleIdx = 0; angleIdx < SEARCH_ANGLES; angleIdx++) {
-                    const angleRad = (angleIdx / SEARCH_ANGLES) * Math.PI * 2;
-                    const candidate: Vec3 = {
-                        x: anchor.x + Math.cos(angleRad) * radius,
-                        y: anchor.y + Math.sin(angleRad) * radius,
-                        z: nextZ,
-                    };
-
-                    const key = positionKey(candidate);
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-
-                    if (distance3D(current.pos, candidate) < MIN_SEGMENT_LENGTH_MM) continue;
-                    if (!segmentSatisfiesMinAngle(current.pos, candidate, minAngleDeg)) continue;
-
-                    const lateralFromSocket = distanceXY(socketPos, candidate);
-                    if (lateralFromSocket > maxTotalLateralMm) continue;
-
-                    const segmentCollision = checkShaftCollision(current.pos, candidate, collisionRadius, mesh);
-                    if (segmentCollision.hit) continue;
-
-                    const rootTopTarget: Vec3 = { x: candidate.x, y: candidate.y, z: rootTopZ };
-                    const descentCollision = checkShaftCollision(candidate, rootTopTarget, collisionRadius, mesh);
-                    const downwardProgress = descentCollision.point ? Math.max(0, blockPoint.z - descentCollision.point.z) : (candidate.z - rootTopZ + 20);
-                    const anchorPenalty = anchor === current.pos ? 0 : 2;
-                    const candidateScore =
-                        lateralFromSocket * 5 +
-                        distance3D(current.pos, candidate) * 0.75 +
-                        current.totalLateral * 2 +
-                        anchorPenalty -
-                        downwardProgress * 1.5;
-
-                    candidates.push({
-                        pos: candidate,
-                        score: candidateScore,
-                    });
-                }
+    for (let ring = 0; ring <= maxRings; ring++) {
+        for (let dx = -ring; dx <= ring; dx++) {
+            for (let dy = -ring; dy <= ring; dy++) {
+                if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+                keys.push(`${centerX + dx},${centerY + dy}`);
             }
         }
     }
 
-    candidates.sort((a, b) => a.score - b.score);
-    return candidates;
+    return keys;
+}
+
+function withInsertedRootTransition(args: {
+    basePos: Vec3;
+    rootTopZ: number;
+    firstJointOrSocketPos: Vec3;
+    minAngleDeg: number;
+}): Vec3[] | null {
+    const { basePos, rootTopZ, firstJointOrSocketPos, minAngleDeg } = args;
+    const lateralShift = distanceXY(basePos, firstJointOrSocketPos);
+    if (lateralShift <= 0.000001) {
+        return [];
+    }
+
+    const minAngleRad = (minAngleDeg * Math.PI) / 180;
+    const requiredDrop = lateralShift * Math.tan(minAngleRad);
+    const maxInsertedJointZ = firstJointOrSocketPos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
+    const minInsertedJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
+
+    if (maxInsertedJointZ <= minInsertedJointZ) {
+        return null;
+    }
+
+    const insertedJointZ = Math.max(
+        minInsertedJointZ,
+        Math.min(firstJointOrSocketPos.z - requiredDrop, maxInsertedJointZ),
+    );
+
+    if (firstJointOrSocketPos.z - insertedJointZ + 0.000001 < requiredDrop) {
+        return null;
+    }
+
+    return [{
+        x: basePos.x,
+        y: basePos.y,
+        z: insertedJointZ,
+    }];
+}
+
+function segmentCollidesChain(points: Vec3[], collisionRadius: number, mesh: THREE.Mesh): boolean {
+    for (let i = 0; i < points.length - 1; i++) {
+        const hit = checkShaftCollision(points[i], points[i + 1], collisionRadius, mesh);
+        if (hit.hit) return true;
+    }
+    return false;
+}
+
+function totalSegmentLateral(points: Vec3[]): number {
+    let total = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+        total += distanceXY(points[i], points[i + 1]);
+    }
+    return total;
+}
+
+function resolvedRouteWouldExceedLateralLimit(args: {
+    socketPos: Vec3;
+    rootTopZ: number;
+    joints: Vec3[];
+    maxTotalLateralMm: number;
+    spacingMm: number;
+    gridEnabled: boolean;
+}): boolean {
+    const unsnappedBottomPos = args.joints[args.joints.length - 1] ?? {
+        x: args.socketPos.x,
+        y: args.socketPos.y,
+        z: 0,
+    };
+    const candidateNodeKeys = args.gridEnabled
+        ? buildNearestCandidateNodeKeys(
+            gridNodeKeyFromXY(unsnappedBottomPos.x, unsnappedBottomPos.y, args.spacingMm),
+            MAX_NEAREST_NODE_SEARCH_RINGS,
+        )
+        : ['disabled'];
+
+    let bestLateral = Number.POSITIVE_INFINITY;
+    for (const nodeKey of candidateNodeKeys) {
+        const snappedXY = args.gridEnabled
+            ? gridSnappedXYFromKey(nodeKey, args.spacingMm)
+            : { x: unsnappedBottomPos.x, y: unsnappedBottomPos.y };
+        const chainPoints: Vec3[] = [
+            { x: snappedXY.x, y: snappedXY.y, z: args.rootTopZ },
+            ...args.joints,
+            args.socketPos,
+        ];
+        bestLateral = Math.min(bestLateral, totalSegmentLateral(chainPoints));
+    }
+
+    return bestLateral > args.maxTotalLateralMm;
+}
+
+function evaluateBestSnapDistance(args: {
+    socketPos: Vec3;
+    joints: Vec3[];
+    spacingMm: number;
+    gridEnabled: boolean;
+}): number {
+    const unsnappedBottomPos = args.joints[args.joints.length - 1] ?? {
+        x: args.socketPos.x,
+        y: args.socketPos.y,
+        z: 0,
+    };
+    const candidateNodeKeys = args.gridEnabled
+        ? buildNearestCandidateNodeKeys(
+            gridNodeKeyFromXY(unsnappedBottomPos.x, unsnappedBottomPos.y, args.spacingMm),
+            MAX_NEAREST_NODE_SEARCH_RINGS,
+        )
+        : ['disabled'];
+
+    let bestSnapDistance = Number.POSITIVE_INFINITY;
+    for (const nodeKey of candidateNodeKeys) {
+        const snappedXY = args.gridEnabled
+            ? gridSnappedXYFromKey(nodeKey, args.spacingMm)
+            : { x: unsnappedBottomPos.x, y: unsnappedBottomPos.y };
+        bestSnapDistance = Math.min(
+            bestSnapDistance,
+            distanceXY(
+                { x: snappedXY.x, y: snappedXY.y, z: 0 },
+                unsnappedBottomPos,
+            ),
+        );
+    }
+
+    return bestSnapDistance;
 }
 
 /**
@@ -175,56 +205,45 @@ export function calculateSmartPlacement(input: SmartPlacementInput): TrunkPlacem
         return standard;
     }
 
-    const tryDirectDescent = (node: SearchNode): TrunkPlacementResult | null => {
-        const targetRootTop: Vec3 = {
-            x: node.pos.x,
-            y: node.pos.y,
-            z: rootTopZ,
-        };
-
-        if (!segmentSatisfiesMinAngle(node.pos, targetRootTop, minRoutedTrunkAngleDeg)) {
-            return null;
-        }
-
-        const collision = checkShaftCollision(node.pos, targetRootTop, collisionRadius, mesh);
-        if (collision.hit) return null;
-
-        return {
-            socketPos: standard.socketPos,
-            joints: node.joints,
-            basePos: {
-                x: node.pos.x,
-                y: node.pos.y,
-                z: 0,
-            },
-            warning: standard.warning,
-            angle: standard.angle,
-            coneAxis: standard.coneAxis
-        };
-    };
-
     const searchRoute = (): TrunkPlacementResult | null => {
         const start: QueuedNode = {
             pos: standard.socketPos,
             joints: [],
             totalLength: 0,
             totalLateral: 0,
+            verticalDrop: 0,
+            bestSnapDistance: 0,
             score: 0,
         };
 
         const queue: QueuedNode[] = [start];
-        const bestCostByKey = new Map<string, number>();
+        const bestCostByKey = new Map<string, BestCostEntry>();
+        let expansions = 0;
 
-        while (queue.length > 0) {
+        while (queue.length > 0 && expansions < MAX_SEARCH_EXPANSIONS) {
             queue.sort((a, b) => queueSortValue(a) - queueSortValue(b));
             const current = queue.shift()!;
-            const directResult = tryDirectDescent(current);
-            if (directResult) {
-                return directResult;
-            }
-
-            if (current.joints.length >= MAX_INTERNAL_JOINTS) {
-                continue;
+            expansions += 1;
+            const resolvedRoute = evaluateResolvedRoute({
+                node: current,
+                socketPos: standard.socketPos,
+                rootTopZ,
+                gridEnabled: settings.grid.enabled,
+                spacingMm: settings.grid.spacingMm,
+                maxNearestNodeSearchRings: MAX_NEAREST_NODE_SEARCH_RINGS,
+                minRoutedTrunkAngleDeg,
+                collisionRadius,
+                mesh,
+                warning: standard.warning,
+                angle: standard.angle,
+                coneAxis: standard.coneAxis,
+                buildNearestCandidateNodeKeys,
+                withInsertedRootTransition,
+                segmentCollidesChain,
+                totalSegmentLateral,
+            });
+            if (resolvedRoute) {
+                return resolvedRoute.result;
             }
 
             const blockedTarget: Vec3 = {
@@ -246,27 +265,72 @@ export function calculateSmartPlacement(input: SmartPlacementInput): TrunkPlacem
                 collisionRadius,
                 minAngleDeg: minRoutedTrunkAngleDeg,
                 maxTotalLateralMm,
+                searchRadiiMm: SEARCH_RADII_MM,
+                searchDropsMm: SEARCH_DROPS_MM,
+                searchAngles: 16,
+                minSegmentLengthMm: MIN_SEGMENT_LENGTH_MM,
             });
 
             for (let i = nextCandidates.length - 1; i >= 0; i--) {
                 const candidate = nextCandidates[i];
                 const nextJoints = [...current.joints, candidate.pos];
                 const key = positionKey(candidate.pos);
+                const bestSnapDistance = evaluateBestSnapDistance({
+                    socketPos: standard.socketPos,
+                    joints: nextJoints,
+                    spacingMm: settings.grid.spacingMm,
+                    gridEnabled: settings.grid.enabled,
+                });
+                const directDescentTarget: Vec3 = {
+                    x: candidate.pos.x,
+                    y: candidate.pos.y,
+                    z: rootTopZ,
+                };
+                const directDescentCollision = checkShaftCollision(candidate.pos, directDescentTarget, collisionRadius, mesh);
+                const directDescentBonus = !directDescentCollision.hit ? 24 : 0;
                 const nextScore =
                     candidate.score +
-                    current.totalLength * 0.5 +
-                    nextJoints.length * 1000;
+                    current.totalLength * 3 +
+                    current.totalLateral * 10 +
+                    nextJoints.length * 18 -
+                    (current.verticalDrop + Math.max(0, current.pos.z - candidate.pos.z)) * 2 +
+                    bestSnapDistance * 20 -
+                    directDescentBonus;
+                const nextVerticalDrop = current.verticalDrop + Math.max(0, current.pos.z - candidate.pos.z);
+                const nextTotalLength = current.totalLength + distance3D(current.pos, candidate.pos);
+                const nextTotalLateral = current.totalLateral + distanceXY(current.pos, candidate.pos);
+                const nextState: BestCostEntry = {
+                    score: nextScore,
+                    totalLength: nextTotalLength,
+                    totalLateral: nextTotalLateral,
+                    verticalDrop: nextVerticalDrop,
+                    bestSnapDistance,
+                    jointCount: nextJoints.length,
+                };
                 const bestCost = bestCostByKey.get(key);
-                if (bestCost != null && bestCost <= nextScore) {
+                if (!isBetterSearchState(nextState, bestCost)) {
                     continue;
                 }
 
-                bestCostByKey.set(key, nextScore);
+                if (resolvedRouteWouldExceedLateralLimit({
+                    socketPos: standard.socketPos,
+                    rootTopZ,
+                    joints: nextJoints,
+                    maxTotalLateralMm,
+                    spacingMm: settings.grid.spacingMm,
+                    gridEnabled: settings.grid.enabled,
+                })) {
+                    continue;
+                }
+
+                bestCostByKey.set(key, nextState);
                 queue.push({
                     pos: candidate.pos,
                     joints: nextJoints,
-                    totalLength: current.totalLength + distance3D(current.pos, candidate.pos),
-                    totalLateral: current.totalLateral + distanceXY(current.pos, candidate.pos),
+                    totalLength: nextTotalLength,
+                    totalLateral: nextTotalLateral,
+                    verticalDrop: nextVerticalDrop,
+                    bestSnapDistance,
                     score: nextScore,
                 });
             }
