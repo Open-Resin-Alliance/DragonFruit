@@ -1,5 +1,5 @@
 import React from 'react';
-import { Hand, Move3D, Paintbrush2, LayoutGrid } from 'lucide-react';
+import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
 
 interface TransformToolbarProps {
@@ -10,9 +10,10 @@ interface TransformToolbarProps {
 export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) {
   const [hoveredMode, setHoveredMode] = React.useState<TransformMode | null>(null);
 
-  const buttons: Array<{ mode: TransformMode; label: string; icon: React.ReactNode; hint: string }> = [
+  const buttons: Array<{ mode: TransformMode; label: string; icon: React.ReactNode; hint: string; widthStr?: string }> = [
     { mode: 'select', label: 'Select', icon: <Hand className="w-4 h-4" />, hint: 'Select and inspect model' },
     { mode: 'transform', label: 'Modify', icon: <Move3D className="w-4 h-4" />, hint: 'Move, rotate, and scale' },
+    { mode: 'placeOnFace', label: 'Place on Face', icon: <ArrowDownToLine className="w-4 h-4" />, hint: 'Orient flat against plate', widthStr: '115px' },
     { mode: 'smoothing', label: 'Smooth', icon: <Paintbrush2 className="w-4 h-4" />, hint: 'Sculpt and smooth surface' },
     { mode: 'arrange', label: 'Arrange', icon: <LayoutGrid className="w-4 h-4" />, hint: 'Auto-arrange models on plate' },
   ];
@@ -35,7 +36,9 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
       }}
     >
       <div
-        className="relative grid grid-cols-4 items-center rounded-full px-1 py-1"
+        className={`relative grid items-center rounded-full px-1 py-1 ${
+          buttons.length === 5 ? 'grid-cols-5' : 'grid-cols-4'
+        }`}
         style={{
           background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',
           backdropFilter: 'blur(12px)',
@@ -44,7 +47,7 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
         <div
           className="pointer-events-none absolute left-1 top-1 bottom-1 rounded-full transition-transform duration-300 ease-out"
           style={{
-            width: 'calc((100% - 8px) / 4)',
+            width: `calc((100% - 8px) / ${buttons.length})`,
             transform: `translateX(${activeIndex * 100}%)`,
             background: 'var(--accent-secondary)',
             boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',

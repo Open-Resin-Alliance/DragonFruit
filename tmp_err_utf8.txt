@@ -1,0 +1,9 @@
+﻿src/components/picking/PickingProvider.tsx(59,12): error TS2339: Property 'parentId' does not exist on type 'PickingResult'.
+  Property 'parentId' does not exist on type 'PickingMiss'.
+src/components/picking/PickingProvider.tsx(59,27): error TS2339: Property 'parentId' does not exist on type 'PickingResult'.
+  Property 'parentId' does not exist on type 'PickingMiss'.
+src/components/picking/PickingProvider.tsx(60,12): error TS2339: Property 'gizmoHandle' does not exist on type 'PickingResult'.
+  Property 'gizmoHandle' does not exist on type 'PickingMiss'.
+src/components/picking/PickingProvider.tsx(60,30): error TS2339: Property 'gizmoHandle' does not exist on type 'PickingResult'.
+  Property 'gizmoHandle' does not exist on type 'PickingMiss'.
+src/components/settings/meshSettings/MeshShaderPreviewSlot.tsx(42,8): error TS2739: Type '{ shaderType: MeshShaderType; matcapVariant: MatcapVariant; flatUseVertexColors: boolean; toonSteps: number; meshColor: string; materialRoughness: number; ... 8 more ...; selectedTintStrength: number; }' is missing the following properties from type '{ shaderType: MeshShaderType; matcapVariant: MatcapVariant; flatUseVertexColors: boolean; useVertexColors?: boolean | undefined; toonSteps: number; ... 17 more ...; onCanvasPress?: (() => void) | undefined; }': isSelected, isHovered

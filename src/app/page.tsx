@@ -36,6 +36,7 @@ import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
+import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
@@ -55,6 +56,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import {
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
@@ -6908,6 +6910,27 @@ export default function Home() {
     setDuplicateTotalCopies(targetCopies);
   }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
 
+  const handlePlaceOnFace = React.useCallback(
+    (modelId: string, newEuler: THREE.Euler) => {
+      const activeModel = scene.models.find((m) => m.id === modelId);
+      if (!activeModel) return;
+
+      const nextTransform = {
+        position: activeModel.transform.position.clone(),
+        rotation: newEuler,
+        scale: activeModel.transform.scale.clone()
+      };
+
+      transformMgr.onTransformChange(nextTransform.position, nextTransform.rotation, nextTransform.scale);
+      
+      // Formalize the transform update so it gets saved to history/persistent state and triggers auto-lift
+      handleTransformEnd('rotate', nextTransform);
+
+      transformMgr.setTransformMode('transform');
+    },
+    [scene.models, transformMgr]
+  );
+
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
       <TopBar
@@ -7766,6 +7789,14 @@ export default function Home() {
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
+            )}
+            {scene.mode === 'prepare' && transformMgr.transformMode === 'placeOnFace' && (
+              <PlaceOnFaceTool
+                models={scene.models}
+                activeModelId={displayActiveModelId}
+                activeTransform={transformMgr.transform}
+                onFaceSelect={handlePlaceOnFace}
+              />
             )}
           </SceneCanvas>
 
