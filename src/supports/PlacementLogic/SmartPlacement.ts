@@ -4,6 +4,7 @@ import { calculateStandardPlacement, TrunkPlacementInput, TrunkPlacementResult }
 import { checkShaftCollision } from './CollisionUtils';
 import { getSettings } from '../Settings';
 import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './Grid/gridMath';
+import { buildNearestCandidateNodeKeys } from './Grid/nearestCandidateNodeKeys';
 import {
     BestCostEntry,
     distance3D,
@@ -28,24 +29,6 @@ const MIN_SEGMENT_LENGTH_MM = 0.5;
 const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
 const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
 const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
-
-function buildNearestCandidateNodeKeys(preferredKey: string, maxRings: number): string[] {
-    const [gxRaw, gyRaw] = preferredKey.split(',');
-    const centerX = Number(gxRaw);
-    const centerY = Number(gyRaw);
-    const keys: string[] = [];
-
-    for (let ring = 0; ring <= maxRings; ring++) {
-        for (let dx = -ring; dx <= ring; dx++) {
-            for (let dy = -ring; dy <= ring; dy++) {
-                if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
-                keys.push(`${centerX + dx},${centerY + dy}`);
-            }
-        }
-    }
-
-    return keys;
-}
 
 function withInsertedRootTransition(args: {
     basePos: Vec3;

@@ -13,14 +13,12 @@ import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/cont
 import { getJointDiameter } from '../../constants';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
-import { calculateStandardPlacement } from '../../PlacementLogic/StandardPlacement';
+import { calculateStandardPlacement, type TrunkPlacementResult } from '../../PlacementLogic/StandardPlacement';
 import { calculateSmartPlacement } from '../../PlacementLogic/SmartPlacement';
 import type { LimitationCode, WarningCode } from '../../types';
 import type { SnappedTrunkRouteResult, TrunkRouteResult } from './trunkRouteTypes';
 import { gridSnappedXYFromKey } from '../../PlacementLogic/Grid/gridMath';
-
-const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
-const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
+import { normalizeFirstConstructionJoint, withCentralStraightSupportJoint } from './trunkConstructionJoints';
 
 function uuidv4() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -29,97 +27,20 @@ function uuidv4() {
     });
 }
 
-function distanceXY(a: Vec3, b: Vec3): number {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-function withInsertedRootTransition(args: {
-    basePos: Vec3;
-    rootTopZ: number;
-    firstJointOrSocketPos: Vec3;
-    minAngleDeg: number;
-}): Vec3[] | null {
-    const { basePos, rootTopZ, firstJointOrSocketPos, minAngleDeg } = args;
-    const lateralShift = distanceXY(basePos, firstJointOrSocketPos);
-    if (lateralShift <= 0.000001) {
-        return [];
-    }
-
-    const minAngleRad = (minAngleDeg * Math.PI) / 180;
-    const requiredDrop = lateralShift * Math.tan(minAngleRad);
-    const maxInsertedJointZ = firstJointOrSocketPos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
-    const minInsertedJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
-
-    if (maxInsertedJointZ <= minInsertedJointZ) {
-        return null;
-    }
-
-    const insertedJointZ = Math.max(
-        minInsertedJointZ,
-        Math.min(firstJointOrSocketPos.z - requiredDrop, maxInsertedJointZ),
-    );
-
-    if (firstJointOrSocketPos.z - insertedJointZ + 0.000001 < requiredDrop) {
-        return null;
-    }
-
-    return [{
-        x: basePos.x,
-        y: basePos.y,
-        z: insertedJointZ,
-    }];
-}
-
-function withCentralStraightSupportJoint(args: {
-    basePos: Vec3;
-    rootTopZ: number;
-    socketPos: Vec3;
-}): Vec3[] {
-    const { basePos, rootTopZ, socketPos } = args;
-    const availableRise = socketPos.z - rootTopZ;
-    if (availableRise <= MIN_INSERTED_TRANSITION_SEGMENT_MM + MIN_INSERTED_BASE_SEGMENT_MM) {
-        return [];
-    }
-
-    const minJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
-    const maxJointZ = socketPos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
-    const preferredJointZ = rootTopZ + availableRise * 0.65;
-    const jointZ = Math.max(minJointZ, Math.min(preferredJointZ, maxJointZ));
-
-    return [{
-        x: basePos.x,
-        y: basePos.y,
-        z: jointZ,
-    }];
-}
-
-function normalizeFirstConstructionJoint(args: {
-    basePos: Vec3;
-    rootTopZ: number;
-    socketPos: Vec3;
-    routeJoints: Vec3[];
-    constructionJoints: Vec3[];
-}): Vec3[] {
-    const { basePos, rootTopZ, socketPos, routeJoints, constructionJoints } = args;
-    const firstTarget = routeJoints[0] ?? socketPos;
-    const availableRise = firstTarget.z - rootTopZ;
-    if (availableRise <= MIN_INSERTED_TRANSITION_SEGMENT_MM + MIN_INSERTED_BASE_SEGMENT_MM) {
-        return [];
-    }
-
-    const minJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
-    const maxJointZ = firstTarget.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
-    const preferredJointZ = rootTopZ + availableRise * 0.65;
-    const jointZ = Math.max(minJointZ, Math.min(preferredJointZ, maxJointZ));
-
-    const firstJoint: Vec3 = {
-        x: basePos.x,
-        y: basePos.y,
-        z: jointZ,
+function buildTipProfile(
+    settings: ReturnType<typeof getSettings>,
+    overrides: TrunkBuildInput['overrides'],
+): SupportTipProfile {
+    return {
+        type: 'disk',
+        contactDiameterMm: overrides?.tipContactDiameterMm ?? settings.tip.contactDiameterMm,
+        bodyDiameterMm: overrides?.tipBodyDiameterMm ?? settings.tip.bodyDiameterMm,
+        lengthMm: overrides?.tipLengthMm ?? settings.tip.lengthMm,
+        penetrationMm: settings.tip.penetrationMm,
+        diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
+        maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
+        standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4),
     };
-    return [firstJoint];
 }
 
 export interface TrunkBuildInput {
@@ -162,22 +83,8 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
 
     // Read current settings
     const settings = getSettings();
-    const contactDiameter = overrides?.tipContactDiameterMm ?? settings.tip.contactDiameterMm;
-    const length = overrides?.tipLengthMm ?? settings.tip.lengthMm;
+    const tipProfile = buildTipProfile(settings, overrides);
     const tipDiskLengthOverrideMm = overrides?.tipDiskLengthOverrideMm;
-
-    const tipProfile: SupportTipProfile = {
-        type: 'disk', // Updated from 'cone' to match new type definition
-        contactDiameterMm: contactDiameter,
-        bodyDiameterMm: overrides?.tipBodyDiameterMm ?? settings.tip.bodyDiameterMm,
-        lengthMm: length,
-        penetrationMm: settings.tip.penetrationMm,
-        // Disk-specific props (dynamic standoff). Do NOT hardcode preview values here.
-        // Preview-only visuals should use `diskLengthOverride` instead.
-        diskThicknessMm: settings.tip.diskThicknessMm ?? 0.1,
-        maxStandoffMm: settings.tip.maxStandoffMm ?? 1.5,
-        standoffAngleThreshold: settings.tip.standoffAngleThreshold ?? (Math.PI / 4)
-    };
 
     const shaftDiameter = overrides?.shaftDiameterMm ?? settings.shaft.diameterMm;
     const rootsDiameter = overrides?.rootsDiameterMm ?? settings.roots.diameterMm;
@@ -201,6 +108,19 @@ export function buildTrunkData(input: TrunkBuildInput): TrunkBuildResult {
         ? calculateSmartPlacement({ ...placementInput, mesh, modelId })
         : calculateStandardPlacement(placementInput);
 
+    return buildTrunkDataFromPlacement(input, placement);
+}
+
+export function buildTrunkDataFromPlacement(input: TrunkBuildInput, placement: TrunkPlacementResult): TrunkBuildResult {
+    const { tipPos, tipNormal, modelId, overrides } = input;
+    const settings = getSettings();
+    const tipProfile = buildTipProfile(settings, overrides);
+    const tipDiskLengthOverrideMm = overrides?.tipDiskLengthOverrideMm;
+    const shaftDiameter = overrides?.shaftDiameterMm ?? settings.shaft.diameterMm;
+    const rootsDiameter = overrides?.rootsDiameterMm ?? settings.roots.diameterMm;
+    const diskHeight = overrides?.rootsDiskHeightMm ?? settings.roots.diskHeightMm;
+    const coneHeight = overrides?.rootsConeHeightMm ?? settings.roots.coneHeightMm;
+    const rootsTopZ = diskHeight + coneHeight;
     const routeJoints = placement.joints ? [...placement.joints] : [];
     const isStraightSupport = routeJoints.length === 0;
     const initialConstructionJoints = placement.constructionJoints ? [...placement.constructionJoints] : [];

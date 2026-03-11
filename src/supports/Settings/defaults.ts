@@ -33,7 +33,6 @@ export const DEFAULT_BASE_FLARE_HEIGHT_MM = 1.5;
 export const DEFAULT_JOINT_BALL_DIAMETER_MM = 1.5;
 export const DEFAULT_JOINT_MAX_ROTATION_DEG = 45;
 export const DEFAULT_JOINT_MAX_SLIDE_MM = 5;
-export const DEFAULT_JOINT_DEFAULT_COUNT = 1;
 
 // --- Grid ---
 export const DEFAULT_GRID_ENABLED = false;

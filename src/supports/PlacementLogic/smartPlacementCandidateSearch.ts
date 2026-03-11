@@ -7,7 +7,7 @@ import {
     distanceXY,
     positionKey,
     SearchNode,
-    segmentSatisfiesMaxAngleFromVertical,
+    segmentSatisfiesLengthAwareMaxAngleFromVertical,
 } from './smartPlacementSearchUtils';
 
 export interface BuildCandidateNodesArgs {
@@ -72,7 +72,7 @@ export function buildCandidateNodes(args: BuildCandidateNodesArgs): CandidateNod
                     seen.add(key);
 
                     if (distance3D(current.pos, candidate) < minSegmentLengthMm) continue;
-                    if (!segmentSatisfiesMaxAngleFromVertical(current.pos, candidate, 90 - minAngleDeg)) continue;
+                    if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(current.pos, candidate, 90 - minAngleDeg)) continue;
 
                     const lateralFromSocket = distanceXY(socketPos, candidate);
                     if (lateralFromSocket > maxTotalLateralMm) continue;

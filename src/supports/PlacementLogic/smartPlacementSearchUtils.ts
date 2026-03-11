@@ -70,6 +70,53 @@ export function segmentSatisfiesMaxAngleFromVertical(start: Vec3, end: Vec3, max
     return segmentAngleFromVerticalDeg(start, end) <= maxAngleFromVerticalDeg;
 }
 
+const LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM = 5;
+const LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG = 15;
+const LENGTH_AWARE_UPPER_SPAN_TIGHTEN_DEGREES_PER_MM = 3;
+
+export function getLengthAwareMaxAngleFromVerticalDeg(
+    segmentLengthMm: number,
+    baseMaxAngleFromVerticalDeg: number
+): number {
+    if (segmentLengthMm <= LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM) {
+        return baseMaxAngleFromVerticalDeg;
+    }
+
+    const excessLength = segmentLengthMm - LENGTH_AWARE_UPPER_SPAN_TIGHTEN_START_MM;
+    const tightened = baseMaxAngleFromVerticalDeg - excessLength * LENGTH_AWARE_UPPER_SPAN_TIGHTEN_DEGREES_PER_MM;
+    return Math.max(
+        LENGTH_AWARE_UPPER_SPAN_MIN_MAX_ANGLE_FROM_VERTICAL_DEG,
+        Math.min(baseMaxAngleFromVerticalDeg, tightened),
+    );
+}
+
+export function segmentSatisfiesLengthAwareMaxAngleFromVertical(
+    start: Vec3,
+    end: Vec3,
+    baseMaxAngleFromVerticalDeg: number
+): boolean {
+    const segmentLengthMm = distance3D(start, end);
+    const allowedMaxAngle = getLengthAwareMaxAngleFromVerticalDeg(segmentLengthMm, baseMaxAngleFromVerticalDeg);
+    return segmentSatisfiesMaxAngleFromVertical(start, end, allowedMaxAngle);
+}
+
+export function chainSatisfiesLengthAwareUpperSpanRule(
+    points: Vec3[],
+    baseMaxAngleFromVerticalDeg: number
+): boolean {
+    if (points.length < 3) {
+        return true;
+    }
+
+    for (let i = 0; i < points.length - 1; i++) {
+        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(points[i], points[i + 1], baseMaxAngleFromVerticalDeg)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 export function positionKey(pos: Vec3): string {
     const qx = Math.round(pos.x / POSITION_KEY_MM);
     const qy = Math.round(pos.y / POSITION_KEY_MM);

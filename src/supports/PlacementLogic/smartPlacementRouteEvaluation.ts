@@ -4,10 +4,11 @@ import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './Grid/gridMath';
 import type { TrunkPlacementResult } from './StandardPlacement';
 import { simplifyRouteJoints } from './smartPlacementSimplification';
 import {
+    chainSatisfiesLengthAwareUpperSpanRule,
     distanceXY,
     RouteEvaluationMetrics,
     SearchNode,
-    segmentSatisfiesMaxAngleFromVertical,
+    segmentSatisfiesLengthAwareMaxAngleFromVertical,
 } from './smartPlacementSearchUtils';
 
 export interface RouteEvaluation extends RouteEvaluationMetrics {
@@ -108,7 +109,12 @@ export function evaluateResolvedRoute(args: EvaluateResolvedRouteArgs): RouteEva
             socketPos,
         ];
 
-        if (!segmentSatisfiesMaxAngleFromVertical(node.pos, rootTopTarget, 90 - minRoutedTrunkAngleDeg) && insertedRootJoints.length === 0) {
+        if (!segmentSatisfiesLengthAwareMaxAngleFromVertical(node.pos, rootTopTarget, 90 - minRoutedTrunkAngleDeg) && insertedRootJoints.length === 0) {
+            continue;
+        }
+
+        const upperSpanPoints = [resolvedJoints[0] ?? rootTopTarget, ...resolvedJoints.slice(1), socketPos];
+        if (!chainSatisfiesLengthAwareUpperSpanRule(upperSpanPoints, 90 - minRoutedTrunkAngleDeg)) {
             continue;
         }
 

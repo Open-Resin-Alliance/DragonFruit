@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { checkShaftCollision } from './CollisionUtils';
-import { distanceXY, segmentSatisfiesMaxAngleFromVertical } from './smartPlacementSearchUtils';
+import {
+    chainSatisfiesLengthAwareUpperSpanRule,
+    distanceXY,
+    segmentSatisfiesMaxAngleFromVertical,
+} from './smartPlacementSearchUtils';
 
 export interface SimplifyRouteJointsArgs {
     routeJoints: Vec3[];
@@ -18,8 +22,9 @@ function chainIsValid(args: {
     collisionRadius: number;
     mesh: THREE.Mesh;
     maxAngleFromVerticalDeg: number;
+    constructionJointCount: number;
 }): boolean {
-    const { points, collisionRadius, mesh, maxAngleFromVerticalDeg } = args;
+    const { points, collisionRadius, mesh, maxAngleFromVerticalDeg, constructionJointCount } = args;
 
     for (let i = 0; i < points.length - 1; i++) {
         if (!segmentSatisfiesMaxAngleFromVertical(points[i], points[i + 1], maxAngleFromVerticalDeg)) {
@@ -29,6 +34,12 @@ function chainIsValid(args: {
         if (hit.hit) {
             return false;
         }
+    }
+
+    const upperSpanStartIndex = Math.min(points.length - 1, Math.max(0, constructionJointCount));
+    const upperSpanPoints = points.slice(upperSpanStartIndex);
+    if (!chainSatisfiesLengthAwareUpperSpanRule(upperSpanPoints, maxAngleFromVerticalDeg)) {
+        return false;
     }
 
     return true;
@@ -102,6 +113,7 @@ export function simplifyRouteJoints(args: SimplifyRouteJointsArgs): Vec3[] {
                 collisionRadius,
                 mesh,
                 maxAngleFromVerticalDeg,
+                constructionJointCount: constructionJoints.length,
             })) {
                 continue;
             }
