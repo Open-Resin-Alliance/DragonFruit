@@ -36,7 +36,6 @@ interface CapturedConfig {
         rootsDiameterMm: number;
         rootsDiskHeightMm: number;
         rootsConeHeightMm: number;
-        jointCount: number;
     };
 }
 
@@ -77,7 +76,6 @@ function SceneMonitor({
                 rootsDiameterMm: 0,
                 rootsDiskHeightMm: 0,
                 rootsConeHeightMm: 0,
-                jointCount: 0
             }
         });
     });
@@ -313,7 +311,6 @@ function PreviewContent({
         rootsDiameterMm: settings.roots.diameterMm,
         rootsDiskHeightMm: settings.roots.diskHeightMm,
         rootsConeHeightMm: settings.roots.coneHeightMm,
-        jointCount: settings.joint.defaultJointCount,
         shaftDiameterMm: settings.shaft.diameterMm,
     });
 
@@ -341,7 +338,6 @@ function PreviewContent({
             rootsDiameterMm: settings.roots.diameterMm,
             rootsDiskHeightMm: settings.roots.diskHeightMm,
             rootsConeHeightMm: settings.roots.coneHeightMm,
-            jointCount: settings.joint.defaultJointCount,
             tipContactDiameterMm: tipContact,
             tipLengthMm: tipLength,
             shaftDiameterMm: shaftDiameter,
@@ -350,7 +346,6 @@ function PreviewContent({
         settings.roots.diameterMm,
         settings.roots.diskHeightMm,
         settings.roots.coneHeightMm,
-        settings.joint.defaultJointCount,
         settings.tip.contactDiameterMm,
         settings.tip.lengthMm,
         settings.shaft.diameterMm,
@@ -418,7 +413,6 @@ function PreviewContent({
                 rootsDiameterMm: s.rootsDiameterMm ?? prev.rootsDiameterMm,
                 rootsDiskHeightMm: s.rootsDiskHeightMm ?? prev.rootsDiskHeightMm,
                 rootsConeHeightMm: s.rootsConeHeightMm ?? prev.rootsConeHeightMm,
-                jointCount: s.jointCount ?? prev.jointCount,
                 tipContactDiameterMm: s.tipContactDiameterMm ?? prev.tipContactDiameterMm,
                 tipLengthMm: s.tipLengthMm ?? prev.tipLengthMm,
                 shaftDiameterMm: prev.shaftDiameterMm,
@@ -727,7 +721,6 @@ function PreviewContent({
                                 rootsDiameterMm: liveConfig.rootsDiameterMm,
                                 rootsDiskHeightMm: liveConfig.rootsDiskHeightMm,
                                 rootsConeHeightMm: liveConfig.rootsConeHeightMm,
-                                jointCount: liveConfig.jointCount,
                                 tipContactDiameterMm: liveConfig.tipContactDiameterMm,
                                 tipLengthMm: liveConfig.tipLengthMm,
                             }

@@ -3,11 +3,155 @@ import { Vec3 } from '../types';
 import { calculateStandardPlacement, TrunkPlacementInput, TrunkPlacementResult } from './StandardPlacement';
 import { checkShaftCollision } from './CollisionUtils';
 import { getSettings } from '../Settings';
-import { LimitationCode } from '../types';
+import { gridNodeKeyFromXY, gridSnappedXYFromKey } from './Grid/gridMath';
+import { buildNearestCandidateNodeKeys } from './Grid/nearestCandidateNodeKeys';
+import {
+    BestCostEntry,
+    distance3D,
+    distanceXY,
+    isBetterSearchState,
+    positionKey,
+    QueuedNode,
+    queueSortValue,
+} from './smartPlacementSearchUtils';
+import { evaluateResolvedRoute } from './smartPlacementRouteEvaluation';
+import { buildCandidateNodes } from './smartPlacementCandidateSearch';
 
 export interface SmartPlacementInput extends TrunkPlacementInput {
     mesh: THREE.Mesh;
     modelId: string;
+}
+
+const MAX_SEARCH_EXPANSIONS = 160;
+const SEARCH_RADII_MM = [2, 4, 6, 8, 10, 12, 16, 20, 24];
+const SEARCH_DROPS_MM = [2, 4, 6, 8, 12, 16, 20, 24, 28, 32, 40];
+const MIN_SEGMENT_LENGTH_MM = 0.5;
+const MAX_NEAREST_NODE_SEARCH_RINGS = 4;
+const MIN_INSERTED_BASE_SEGMENT_MM = 1.0;
+const MIN_INSERTED_TRANSITION_SEGMENT_MM = 0.5;
+
+function withInsertedRootTransition(args: {
+    basePos: Vec3;
+    rootTopZ: number;
+    firstJointOrSocketPos: Vec3;
+    minAngleDeg: number;
+}): Vec3[] | null {
+    const { basePos, rootTopZ, firstJointOrSocketPos, minAngleDeg } = args;
+    const lateralShift = distanceXY(basePos, firstJointOrSocketPos);
+    if (lateralShift <= 0.000001) {
+        return [];
+    }
+
+    const minAngleRad = (minAngleDeg * Math.PI) / 180;
+    const requiredDrop = lateralShift * Math.tan(minAngleRad);
+    const maxInsertedJointZ = firstJointOrSocketPos.z - MIN_INSERTED_TRANSITION_SEGMENT_MM;
+    const minInsertedJointZ = rootTopZ + MIN_INSERTED_BASE_SEGMENT_MM;
+
+    if (maxInsertedJointZ <= minInsertedJointZ) {
+        return null;
+    }
+
+    const insertedJointZ = Math.max(
+        minInsertedJointZ,
+        Math.min(firstJointOrSocketPos.z - requiredDrop, maxInsertedJointZ),
+    );
+
+    if (firstJointOrSocketPos.z - insertedJointZ + 0.000001 < requiredDrop) {
+        return null;
+    }
+
+    return [{
+        x: basePos.x,
+        y: basePos.y,
+        z: insertedJointZ,
+    }];
+}
+
+function segmentCollidesChain(points: Vec3[], collisionRadius: number, mesh: THREE.Mesh): boolean {
+    for (let i = 0; i < points.length - 1; i++) {
+        const hit = checkShaftCollision(points[i], points[i + 1], collisionRadius, mesh);
+        if (hit.hit) return true;
+    }
+    return false;
+}
+
+function totalSegmentLateral(points: Vec3[]): number {
+    let total = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+        total += distanceXY(points[i], points[i + 1]);
+    }
+    return total;
+}
+
+function resolvedRouteWouldExceedLateralLimit(args: {
+    socketPos: Vec3;
+    rootTopZ: number;
+    joints: Vec3[];
+    maxTotalLateralMm: number;
+    spacingMm: number;
+    gridEnabled: boolean;
+}): boolean {
+    const unsnappedBottomPos = args.joints[args.joints.length - 1] ?? {
+        x: args.socketPos.x,
+        y: args.socketPos.y,
+        z: 0,
+    };
+    const candidateNodeKeys = args.gridEnabled
+        ? buildNearestCandidateNodeKeys(
+            gridNodeKeyFromXY(unsnappedBottomPos.x, unsnappedBottomPos.y, args.spacingMm),
+            MAX_NEAREST_NODE_SEARCH_RINGS,
+        )
+        : ['disabled'];
+
+    let bestLateral = Number.POSITIVE_INFINITY;
+    for (const nodeKey of candidateNodeKeys) {
+        const snappedXY = args.gridEnabled
+            ? gridSnappedXYFromKey(nodeKey, args.spacingMm)
+            : { x: unsnappedBottomPos.x, y: unsnappedBottomPos.y };
+        const chainPoints: Vec3[] = [
+            { x: snappedXY.x, y: snappedXY.y, z: args.rootTopZ },
+            ...args.joints,
+            args.socketPos,
+        ];
+        bestLateral = Math.min(bestLateral, totalSegmentLateral(chainPoints));
+    }
+
+    return bestLateral > args.maxTotalLateralMm;
+}
+
+function evaluateBestSnapDistance(args: {
+    socketPos: Vec3;
+    joints: Vec3[];
+    spacingMm: number;
+    gridEnabled: boolean;
+}): number {
+    const unsnappedBottomPos = args.joints[args.joints.length - 1] ?? {
+        x: args.socketPos.x,
+        y: args.socketPos.y,
+        z: 0,
+    };
+    const candidateNodeKeys = args.gridEnabled
+        ? buildNearestCandidateNodeKeys(
+            gridNodeKeyFromXY(unsnappedBottomPos.x, unsnappedBottomPos.y, args.spacingMm),
+            MAX_NEAREST_NODE_SEARCH_RINGS,
+        )
+        : ['disabled'];
+
+    let bestSnapDistance = Number.POSITIVE_INFINITY;
+    for (const nodeKey of candidateNodeKeys) {
+        const snappedXY = args.gridEnabled
+            ? gridSnappedXYFromKey(nodeKey, args.spacingMm)
+            : { x: unsnappedBottomPos.x, y: unsnappedBottomPos.y };
+        bestSnapDistance = Math.min(
+            bestSnapDistance,
+            distanceXY(
+                { x: snappedXY.x, y: snappedXY.y, z: 0 },
+                unsnappedBottomPos,
+            ),
+        );
+    }
+
+    return bestSnapDistance;
 }
 
 /**
@@ -20,199 +164,169 @@ export function calculateSmartPlacement(input: SmartPlacementInput): TrunkPlacem
     const { mesh } = input;
     const settings = getSettings();
     const shaftRadius = settings.shaft.diameterMm / 2;
-
-    // SAFETY MARGIN: 0.25mm
-    // We test with a slightly thicker shaft to prevent fusing due to light bloom.
     const collisionRadius = shaftRadius + 0.25;
-
-    // 1. Run Standard Placement first to get the baseline
     const standard = calculateStandardPlacement(input);
-
-    // If standard placement is already invalid due to angle, we can't fix it with bending
     if (standard.error === 'ANGLE_TOO_STEEP') {
         return standard;
     }
-
-    // 2. Check for Collisions in the Standard Path (Vertical Drop)
-    // Path: Socket -> Base (Z=0)
-
-    // We use a "virtual base" at Z=0 for the check
-    const targetBase: Vec3 = { ...standard.basePos, z: 0 };
-
-    // Check collision from Socket to Floor
-    const collision = checkShaftCollision(
+    const rootTopZ = input.rootsTopZ;
+    const minRoutedTrunkAngleDeg = settings.grid.minRoutedTrunkAngleDeg;
+    const maxTotalLateralMm = Math.max(18, settings.grid.spacingMm * 5);
+    const initialRootTopTarget: Vec3 = {
+        x: standard.basePos.x,
+        y: standard.basePos.y,
+        z: rootTopZ,
+    };
+    const initialCollision = checkShaftCollision(
         standard.socketPos,
-        targetBase,
-        collisionRadius, // Use inflated radius
+        initialRootTopTarget,
+        collisionRadius,
         mesh
     );
 
-    // If no collision, or collision is far away (e.g. floor), Standard is fine.
-    // Wait, checkShaftCollision intersects the MESH. 
-    // If it returns hit=false, it means we didn't hit the mesh (Clear path to floor).
-    // If it returns hit=true, we hit the mesh.
-
-    if (!collision.hit || !collision.point) {
+    if (!initialCollision.hit || !initialCollision.point) {
         return standard;
     }
 
-    // --- SMART SOLVER START ---
-    // STRATEGY: Iterative "Compass" Solver
-    // When blocked, check multiple directions to find a clear path to the floor.
+    const searchRoute = (): TrunkPlacementResult | null => {
+        const start: QueuedNode = {
+            pos: standard.socketPos,
+            joints: [],
+            totalLength: 0,
+            totalLateral: 0,
+            verticalDrop: 0,
+            bestSnapDistance: 0,
+            score: 0,
+        };
 
-    const joints: Vec3[] = [];
-    let currentStart = standard.socketPos;
-    const MAX_JOINTS = 3;
+        const queue: QueuedNode[] = [start];
+        const bestCostByKey = new Map<string, BestCostEntry>();
+        let expansions = 0;
 
-    // Configuration
-    const KNEE_OFFSET_MM = 15; // Increased search radius to clear obstacles
-    const SEARCH_ANGLES = 8; // Check 8 directions (45 degrees)
-
-    for (let i = 0; i < MAX_JOINTS; i++) {
-        // 1. Try to go straight down to floor (Z=0)
-        const targetBase: Vec3 = { x: currentStart.x, y: currentStart.y, z: 0 };
-        const colToFloor = checkShaftCollision(currentStart, targetBase, collisionRadius, mesh);
-
-        if (!colToFloor.hit || !colToFloor.point) {
-            // Path is clear! We made it to the floor.
-            return {
+        while (queue.length > 0 && expansions < MAX_SEARCH_EXPANSIONS) {
+            queue.sort((a, b) => queueSortValue(a) - queueSortValue(b));
+            const current = queue.shift()!;
+            expansions += 1;
+            const resolvedRoute = evaluateResolvedRoute({
+                node: current,
                 socketPos: standard.socketPos,
-                joints: joints,
-                basePos: targetBase,
-                warning: standard.warning, // Preserve warning from standard placement
+                rootTopZ,
+                gridEnabled: settings.grid.enabled,
+                spacingMm: settings.grid.spacingMm,
+                maxNearestNodeSearchRings: MAX_NEAREST_NODE_SEARCH_RINGS,
+                minRoutedTrunkAngleDeg,
+                collisionRadius,
+                mesh,
+                warning: standard.warning,
                 angle: standard.angle,
-                coneAxis: standard.coneAxis
-            };
-        }
-
-        // 2. Collision detected. We need to find a way around.
-        const hitPoint = colToFloor.point;
-
-        // "Compass Check": Try multiple directions and distances around the collision point
-        // We want to find the "Best Turn".
-
-        let bestCandidate: { pos: Vec3, score: number } | null = null;
-
-        // Search Parameters
-        // 1. Radii: Try small nudges first, then big swings.
-        const RADII = [2, 5, 10, 15, 20]; // Added 2mm for "micro-offsets"
-        // 2. Heights: Try turning "Early" (High) vs "Late" (Low/At Collision).
-        // We assume 'currentStart' is higher than 'hitPoint'.
-        const startZ = currentStart.z;
-        const hitZ = hitPoint.z;
-        const distZ = startZ - hitZ;
-
-        // Constraints
-        // Use user setting but cap it? Or just use it?
-        // User setting: "Max Angle From Vertical". 
-        // If user sets 80, we allow up to 80.
-        // If user sets 45, we allow up to 45 (stricter).
-        // For Smart Placement, we probably want to respect the user's wish.
-        // However, if we go too flat, we fail.
-        const MAX_ANGLE_DEG = settings.shaft.maxAngleDeg ?? 80;
-
-        const MAX_HORIZONTAL_SEGMENT_MM = 2;
-
-        // Define heights to test relative to start
-        const HEIGHT_RATIOS = [0.1, 0.5, 0.9]; // 10% down (High), 50% (Mid), 90% (Low)
-
-        // Loop Order: We want the "Tightest" valid path.
-        for (const radius of RADII) {
-            for (const ratio of HEIGHT_RATIOS) {
-                let searchZ = startZ - (distZ * ratio);
-
-                // --- ANGLE CONSTRAINT ENFORCEMENT ---
-                // Calculate Vertical Drop
-                let drop = startZ - searchZ;
-                // Ensure non-zero drop to avoid divide-by-zero
-                if (drop < 0.001) drop = 0.001;
-
-                // Current Angle (0=Vertical, 90=Horizontal)
-                const angleRad = Math.atan(radius / drop);
-                const angleDeg = angleRad * (180 / Math.PI);
-
-                // Logic: If too flat (> 70) AND too long (> 2mm), we must lower the Z.
-                if (angleDeg > MAX_ANGLE_DEG && radius > MAX_HORIZONTAL_SEGMENT_MM) {
-                    // Calculate required drop for MAX_ANGLE
-                    // tan(max) = radius / requiredDrop
-                    // requiredDrop = radius / tan(max)
-                    const maxRad = MAX_ANGLE_DEG * (Math.PI / 180);
-                    const requiredDrop = radius / Math.tan(maxRad);
-
-                    // Update Search Z to satisfy angle
-                    searchZ = startZ - requiredDrop;
-
-                    // If this pushes us below the floor (or too deep), this radius might be invalid
-                    // but we let the collision check handle it (Start -> Joint -> Floor)
-                }
-
-                // 8 Compass Angles
-                for (let angleIdx = 0; angleIdx < SEARCH_ANGLES; angleIdx++) {
-                    const angleRad = (angleIdx / SEARCH_ANGLES) * Math.PI * 2;
-                    const dirX = Math.cos(angleRad);
-                    const dirY = Math.sin(angleRad);
-
-                    // Proposed Knee Position
-                    const kneePosVec = new THREE.Vector3(hitPoint.x, hitPoint.y, searchZ)
-                        .add(new THREE.Vector3(dirX, dirY, 0).multiplyScalar(radius));
-
-                    const kneePos: Vec3 = { x: kneePosVec.x, y: kneePosVec.y, z: kneePosVec.z };
-
-                    // CHECK 1: Is Start -> Knee clear?
-                    const leg1Col = checkShaftCollision(currentStart, kneePos, collisionRadius, mesh);
-                    if (leg1Col.hit) continue;
-
-                    // CHECK 2: Is Knee -> Floor clear?
-                    const floorPos: Vec3 = { x: kneePos.x, y: kneePos.y, z: 0 };
-                    const leg2Col = checkShaftCollision(kneePos, floorPos, collisionRadius, mesh);
-
-                    // Scoring
-                    let score = 0;
-                    if (!leg2Col.hit) {
-                        score = 1000; // Clear path to floor
-                        // Penalty for large radius (prefer tight turns)
-                        score -= radius;
-                    } else if (leg2Col.point && leg2Col.point.z < hitZ - 5) {
-                        // Progress (getting deeper)
-                        score = 500 + (hitZ - leg2Col.point.z);
-                    } else {
-                        score = 10;
-                    }
-
-                    if (!bestCandidate || score > bestCandidate.score) {
-                        bestCandidate = { pos: kneePos, score };
-                    }
-
-                    // If we found a clear path to floor, this is likely good enough.
-                    // Since we iterate Radii from Small->Large, the first 1000 is the "Tightest Winner".
-                    if (score >= 900) break;
-                }
-                if (bestCandidate && bestCandidate.score >= 900) break;
+                coneAxis: standard.coneAxis,
+                buildNearestCandidateNodeKeys,
+                withInsertedRootTransition,
+                segmentCollidesChain,
+                totalSegmentLateral,
+            });
+            if (resolvedRoute) {
+                return resolvedRoute.result;
             }
-            if (bestCandidate && bestCandidate.score >= 900) break;
+
+            const blockedTarget: Vec3 = {
+                x: current.pos.x,
+                y: current.pos.y,
+                z: rootTopZ,
+            };
+            const blockCollision = checkShaftCollision(current.pos, blockedTarget, collisionRadius, mesh);
+            if (!blockCollision.hit || !blockCollision.point) {
+                continue;
+            }
+
+            const nextCandidates = buildCandidateNodes({
+                current,
+                socketPos: standard.socketPos,
+                blockPoint: blockCollision.point,
+                rootTopZ,
+                mesh,
+                collisionRadius,
+                minAngleDeg: minRoutedTrunkAngleDeg,
+                maxTotalLateralMm,
+                searchRadiiMm: SEARCH_RADII_MM,
+                searchDropsMm: SEARCH_DROPS_MM,
+                searchAngles: 16,
+                minSegmentLengthMm: MIN_SEGMENT_LENGTH_MM,
+            });
+
+            for (let i = nextCandidates.length - 1; i >= 0; i--) {
+                const candidate = nextCandidates[i];
+                const nextJoints = [...current.joints, candidate.pos];
+                const key = positionKey(candidate.pos);
+                const bestSnapDistance = evaluateBestSnapDistance({
+                    socketPos: standard.socketPos,
+                    joints: nextJoints,
+                    spacingMm: settings.grid.spacingMm,
+                    gridEnabled: settings.grid.enabled,
+                });
+                const directDescentTarget: Vec3 = {
+                    x: candidate.pos.x,
+                    y: candidate.pos.y,
+                    z: rootTopZ,
+                };
+                const directDescentCollision = checkShaftCollision(candidate.pos, directDescentTarget, collisionRadius, mesh);
+                const directDescentBonus = !directDescentCollision.hit ? 24 : 0;
+                const nextScore =
+                    candidate.score +
+                    current.totalLength * 3 +
+                    current.totalLateral * 10 +
+                    nextJoints.length * 18 -
+                    (current.verticalDrop + Math.max(0, current.pos.z - candidate.pos.z)) * 2 +
+                    bestSnapDistance * 20 -
+                    directDescentBonus;
+                const nextVerticalDrop = current.verticalDrop + Math.max(0, current.pos.z - candidate.pos.z);
+                const nextTotalLength = current.totalLength + distance3D(current.pos, candidate.pos);
+                const nextTotalLateral = current.totalLateral + distanceXY(current.pos, candidate.pos);
+                const nextState: BestCostEntry = {
+                    score: nextScore,
+                    totalLength: nextTotalLength,
+                    totalLateral: nextTotalLateral,
+                    verticalDrop: nextVerticalDrop,
+                    bestSnapDistance,
+                    jointCount: nextJoints.length,
+                };
+                const bestCost = bestCostByKey.get(key);
+                if (!isBetterSearchState(nextState, bestCost)) {
+                    continue;
+                }
+
+                if (resolvedRouteWouldExceedLateralLimit({
+                    socketPos: standard.socketPos,
+                    rootTopZ,
+                    joints: nextJoints,
+                    maxTotalLateralMm,
+                    spacingMm: settings.grid.spacingMm,
+                    gridEnabled: settings.grid.enabled,
+                })) {
+                    continue;
+                }
+
+                bestCostByKey.set(key, nextState);
+                queue.push({
+                    pos: candidate.pos,
+                    joints: nextJoints,
+                    totalLength: nextTotalLength,
+                    totalLateral: nextTotalLateral,
+                    verticalDrop: nextVerticalDrop,
+                    bestSnapDistance,
+                    score: nextScore,
+                });
+            }
         }
 
-        if (bestCandidate) {
-            // We found a valid step
-            joints.push(bestCandidate.pos);
-            currentStart = bestCandidate.pos;
-            console.log(`[SmartPlacement] Step ${i + 1}: Best candidate score ${bestCandidate.score}`);
+        return null;
+    };
 
-            // If we found the floor (Score 1000), we can technically break the loop next iter,
-            // or return immediately here?
-            // The loop structure checks "Path to Floor" at the start of next iteration.
-            // So if we found a clear path, the next loop will verify it and return.
-            // BUT, we updated `currentStart` to `kneePos`.
-            // The next loop will check `kneePos` -> `floor`.
-            // Since we verified `leg2Col` was clear for Score 1000, the next loop is guaranteed to succeed.
-        } else {
-            // No valid directions found! Stuck.
-            console.log('[SmartPlacement] Failed: No valid directions found');
-            break;
-        }
+    const routed = searchRoute();
+    if (routed) {
+        return routed;
     }
 
-    // If we exited loop without returning, we failed to find a path
     return {
         ...standard,
         error: 'COLLISION_WITH_MODEL'

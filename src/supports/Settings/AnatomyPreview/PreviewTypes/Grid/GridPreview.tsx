@@ -55,7 +55,6 @@ export function GridPreview({
                         data={data}
                         isPreview={ANATOMY_CONFIG.rendering.showAsGhostPreview}
                         raftOverride={{ bottomMode: 'off', thickness: 0 }}
-                        highlightJoints={previewState.activeSettingKey === 'joint.defaultJointCount'}
                         anatomyOverrides={mergedOverrides}
                     />
                 );

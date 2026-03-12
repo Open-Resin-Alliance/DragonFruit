@@ -4,12 +4,14 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { accelerateGeometry } from '@/utils/bvh';
+import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 
 export type GeometryWithBounds = {
   geometry: THREE.BufferGeometry;
   bbox: THREE.Box3;
   center: THREE.Vector3;
   size: THREE.Vector3;
+  flatteningPlanes: FlatteningPlane[];
 };
 
 export interface ProcessGeometryOptions {
@@ -50,7 +52,12 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
       const center = bbox.getCenter(new THREE.Vector3());
       const size = bbox.getSize(new THREE.Vector3());
 
-      resolve({ geometry, bbox, center, size });
+      console.log(`[${new Date().toISOString()}] [processGeometry] Computing Flattening Planes`);
+      const startPlanes = performance.now();
+      const flatteningPlanes = computeFlatteningPlanes(geometry);
+      console.log(`[${new Date().toISOString()}] [processGeometry] Flattening Planes finished. Took ${(performance.now() - startPlanes).toFixed(2)}ms`);
+
+      resolve({ geometry, bbox, center, size, flatteningPlanes });
     } catch (e) {
       reject(e);
     }

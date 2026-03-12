@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { Vec3, LimitationCode, WarningCode } from '../types';
 import type { SupportTipProfile } from '../SupportPrimitives/ContactCone/types';
 import { getSocketPosition } from '../SupportPrimitives/ContactCone';
@@ -16,8 +15,10 @@ export interface TrunkPlacementInput {
 export interface TrunkPlacementResult {
     basePos: Vec3;
     socketPos: Vec3;
-    jointPos?: Vec3; // Legacy/Standard single joint
+    unsnappedBottomPos?: Vec3;
+    snappedNodeKey?: string | null;
     joints?: Vec3[]; // New: List of all joints for multi-segment paths
+    constructionJoints?: Vec3[];
     error?: LimitationCode; // Block placement
     warning?: WarningCode; // Allow with warning
     angle?: number; // Surface angle in degrees (0=Up, 90=Vert, 180=Down)
@@ -27,7 +28,6 @@ export interface TrunkPlacementResult {
 /**
  * Standard Placement Strategy:
  * - Base is placed directly below the socket (vertical drop).
- * - Joint is placed at the midpoint between the roots and the socket.
  * - Ignores surface normal for direction (always vertical).
  * - Checks angle:
  *   - < 90 deg (Upward): Error.
@@ -35,7 +35,7 @@ export interface TrunkPlacementResult {
  *   - > 100 deg (Downward): OK.
  */
 export function calculateStandardPlacement(input: TrunkPlacementInput): TrunkPlacementResult {
-    const { tipPos, tipNormal, tipProfile, rootsTopZ } = input;
+    const { tipPos, tipNormal, tipProfile } = input;
     let error: LimitationCode | undefined;
     let warning: WarningCode | undefined;
 
@@ -88,23 +88,13 @@ export function calculateStandardPlacement(input: TrunkPlacementInput): TrunkPla
         z: 0 
     };
 
-    // 3. Calculate Joint Position
-    // Default: Midpoint between roots top and socket
-    const jointZ = (rootsTopZ + socketPos.z) / 2;
-    
-    // Ensure joint is not below roots or above socket
-    const safeJointZ = Math.max(rootsTopZ, Math.min(jointZ, socketPos.z));
-
-    const jointPos: Vec3 = { 
-        x: basePos.x, 
-        y: basePos.y, 
-        z: safeJointZ 
-    };
-
     return {
         basePos,
         socketPos,
-        jointPos,
+        unsnappedBottomPos: basePos,
+        snappedNodeKey: null,
+        joints: [],
+        constructionJoints: [],
         error,
         warning,
         angle: surfaceAngleFromUpDeg, // Verified

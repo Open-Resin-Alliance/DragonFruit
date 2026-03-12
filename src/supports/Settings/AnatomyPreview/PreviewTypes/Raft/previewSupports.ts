@@ -26,9 +26,6 @@ export function buildRaftPreviewSupports(args: { previewHeightMm: number; circle
             tipPos,
             tipNormal,
             modelId: `anatomy-preview-raft-${i}`,
-            overrides: {
-                jointCount: 0,
-            },
         });
 
         return built.supportData;

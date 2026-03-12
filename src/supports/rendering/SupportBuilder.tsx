@@ -234,6 +234,10 @@ export function SupportBuilder({
     const shaftDiameter = data.segments[0]?.diameter ?? 1.0;
 
     const renderedSegments = data.segments.map((seg, index) => {
+        if (seg.bottomJoint) {
+            currentStart = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
+        }
+
         let endPoint: THREE.Vector3;
 
         if (seg.topJoint) {

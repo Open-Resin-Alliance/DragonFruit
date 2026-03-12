@@ -13,7 +13,6 @@ import {
     updateTipProfile,
     updateShaftProfile,
     updateRootsProfile,
-    updateJointProfile,
     updateGridSettings,
     updateAutoBracingSettings,
 } from './state';
@@ -449,17 +448,6 @@ export function SupportSidebar() {
                                                     'shaft.diameterMm',
                                                     compactInputClass
                                                 )}
-                                            />
-                                        </div>
-                                    )}
-
-                                    {(activeKind === 'trunk' || activeKind === 'branch') && (
-                                        <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('joint.defaultJointCount')}>
-                                            <div className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>Default joints</div>
-                                            <NumberInput
-                                                value={settings.joint.defaultJointCount}
-                                                onChange={(val) => updateJointProfile({ defaultJointCount: val })}
-                                                className={compactInputClass}
                                             />
                                         </div>
                                     )}

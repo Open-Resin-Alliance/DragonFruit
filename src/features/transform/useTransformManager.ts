@@ -111,6 +111,20 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     };
   }, [autoLift, getLowestWorldZForTransform, liftDistance]);
 
+  const resolveLiveTransform = useCallback((candidate: {
+    position: THREE.Vector3;
+    rotation: THREE.Euler;
+    scale: THREE.Vector3;
+  }) => (
+    transformHook.autoSnapEnabled
+      ? alignTransformToAutoLift(candidate)
+      : {
+          position: candidate.position.clone(),
+          rotation: candidate.rotation.clone(),
+          scale: candidate.scale.clone(),
+        }
+  ), [alignTransformToAutoLift, transformHook.autoSnapEnabled]);
+
   // Helper to find lowest world Z
   const getLowestWorldZ = useCallback((): number | null => {
     const currentT = pendingTransformRef.current
@@ -193,15 +207,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
 
   // Handlers for transform
   const onTransformChange = useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
-    const nextTransform = (
-      transformHook.autoSnapEnabled
-    )
-      ? alignTransformToAutoLift({ position: pos, rotation: rot, scale: scl })
-      : {
-          position: pos.clone(),
-          rotation: rot.clone(),
-          scale: scl.clone(),
-        };
+    const nextTransform = resolveLiveTransform({ position: pos, rotation: rot, scale: scl });
 
     pendingTransformRef.current = {
       pos: nextTransform.position,
@@ -211,7 +217,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     transformHook.setPosition(nextTransform.position.x, nextTransform.position.y, nextTransform.position.z);
     transformHook.setRotation(nextTransform.rotation.x, nextTransform.rotation.y, nextTransform.rotation.z);
     transformHook.setScale(nextTransform.scale.x, nextTransform.scale.y, nextTransform.scale.z);
-  }, [alignTransformToAutoLift, transformHook]);
+  }, [resolveLiveTransform, transformHook]);
 
   const performAutoSnap = useCallback(() => {
      if (transformHook.autoSnapEnabled) {
@@ -242,6 +248,7 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     onTransformChange,
     performAutoSnap,
     pendingTransformRef,
-    getLowestWorldZ
+    getLowestWorldZ,
+    resolveLiveTransform
   };
 }

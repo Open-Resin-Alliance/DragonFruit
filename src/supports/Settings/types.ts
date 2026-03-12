@@ -25,11 +25,11 @@ import {
     DEFAULT_JOINT_BALL_DIAMETER_MM,
     DEFAULT_JOINT_MAX_ROTATION_DEG,
     DEFAULT_JOINT_MAX_SLIDE_MM,
-    DEFAULT_JOINT_DEFAULT_COUNT,
     DEFAULT_GRID_ENABLED,
     DEFAULT_GRID_SPACING_MM,
     DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG,
     DEFAULT_GRID_ATTACH_SEARCH_STEP_MM,
+    DEFAULT_GRID_MIN_ROUTED_TRUNK_ANGLE_DEG,
     DEFAULT_MESH_TO_MESH_STICK_VS_TWIG_CUTOFF_MM,
 } from './defaults';
 import {
@@ -87,7 +87,6 @@ export interface JointProfile {
     ballDiameterMm: number;
     maxRotationDeg: number;
     maxSlideMm: number;
-    defaultJointCount: number;
 }
 
 export interface GridSettings {
@@ -95,6 +94,7 @@ export interface GridSettings {
     spacingMm: number;
     minBranchAngleDeg: number;
     attachSearchStepMm: number;
+    minRoutedTrunkAngleDeg: number;
 }
 
 export interface MeshToMeshSettings {
@@ -158,13 +158,13 @@ export function createDefaultSettings(): SupportSettings {
             ballDiameterMm: DEFAULT_JOINT_BALL_DIAMETER_MM,
             maxRotationDeg: DEFAULT_JOINT_MAX_ROTATION_DEG,
             maxSlideMm: DEFAULT_JOINT_MAX_SLIDE_MM,
-            defaultJointCount: DEFAULT_JOINT_DEFAULT_COUNT,
         },
         grid: {
             enabled: DEFAULT_GRID_ENABLED,
             spacingMm: DEFAULT_GRID_SPACING_MM,
             minBranchAngleDeg: DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG,
             attachSearchStepMm: DEFAULT_GRID_ATTACH_SEARCH_STEP_MM,
+            minRoutedTrunkAngleDeg: DEFAULT_GRID_MIN_ROUTED_TRUNK_ANGLE_DEG,
         },
         meshToMesh: {
             stickVsTwigCutoffMm: DEFAULT_MESH_TO_MESH_STICK_VS_TWIG_CUTOFF_MM,

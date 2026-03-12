@@ -158,6 +158,13 @@ export function useTrunkPlacementV2() {
         }
 
         // reject
+        if (decision.trunkBuild) {
+            setPreviewData(decision.trunkBuild.supportData);
+            setPreviewError(decision.trunkBuild.error || null);
+            setPreviewWarning(decision.trunkBuild.warning || null);
+            return;
+        }
+
         setPreviewData((prev) => (prev === null ? prev : null));
         setPreviewError(
             decision.reason === 'KNOT_ABOVE_TIP'

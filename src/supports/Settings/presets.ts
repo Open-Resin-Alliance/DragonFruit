@@ -50,13 +50,13 @@ const DETAIL_PRESET: SupportPreset = {
             ballDiameterMm: 1.2,
             maxRotationDeg: 45,
             maxSlideMm: 5,
-            defaultJointCount: 1,
         },
         grid: {
             enabled: false,
             spacingMm: 4.0,
             minBranchAngleDeg: 45,
             attachSearchStepMm: 2.0,
+            minRoutedTrunkAngleDeg: 60,
         },
         meshToMesh: {
             stickVsTwigCutoffMm: 5.0,
@@ -115,13 +115,13 @@ const ANCHOR_PRESET: SupportPreset = {
             ballDiameterMm: 2.0,
             maxRotationDeg: 45,
             maxSlideMm: 5,
-            defaultJointCount: 1,
         },
         grid: {
             enabled: false,
             spacingMm: 4.0,
             minBranchAngleDeg: 45,
             attachSearchStepMm: 2.0,
+            minRoutedTrunkAngleDeg: 60,
         },
         meshToMesh: {
             stickVsTwigCutoffMm: 5.0,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Hand, Move3D, Paintbrush2, LayoutGrid } from 'lucide-react';
+import { Hand, Move3D, Paintbrush2, LayoutGrid, ArrowDownToLine } from 'lucide-react';
 import type { TransformMode } from '@/hooks/useModelTransform';
 
 interface TransformToolbarProps {
@@ -13,6 +13,7 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
   const buttons: Array<{ mode: TransformMode; label: string; icon: React.ReactNode; hint: string }> = [
     { mode: 'select', label: 'Select', icon: <Hand className="w-4 h-4" />, hint: 'Select and inspect model' },
     { mode: 'transform', label: 'Modify', icon: <Move3D className="w-4 h-4" />, hint: 'Move, rotate, and scale' },
+    { mode: 'placeOnFace', label: 'On-Face', icon: <ArrowDownToLine className="w-4 h-4" />, hint: 'Orient flat against plate' },
     { mode: 'smoothing', label: 'Smooth', icon: <Paintbrush2 className="w-4 h-4" />, hint: 'Sculpt and smooth surface' },
     { mode: 'arrange', label: 'Arrange', icon: <LayoutGrid className="w-4 h-4" />, hint: 'Auto-arrange models on plate' },
   ];
@@ -35,7 +36,9 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
       }}
     >
       <div
-        className="relative grid grid-cols-4 items-center rounded-full px-1 py-1"
+        className={`relative grid items-center rounded-full px-1 py-1 ${
+          buttons.length === 5 ? 'grid-cols-5' : 'grid-cols-4'
+        }`}
         style={{
           background: 'color-mix(in srgb, var(--surface-0), var(--surface-1) 50%)',
           backdropFilter: 'blur(12px)',
@@ -44,7 +47,7 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
         <div
           className="pointer-events-none absolute left-1 top-1 bottom-1 rounded-full transition-transform duration-300 ease-out"
           style={{
-            width: 'calc((100% - 8px) / 4)',
+            width: `calc((100% - 8px) / ${buttons.length})`,
             transform: `translateX(${activeIndex * 100}%)`,
             background: 'var(--accent-secondary)',
             boxShadow: '0 2px 12px color-mix(in srgb, var(--accent-secondary), transparent 50%)',
@@ -61,7 +64,7 @@ export function TransformToolbar({ mode, onModeChange }: TransformToolbarProps) 
               onClick={() => handleModeClick(btn.mode)}
               onMouseEnter={() => setHoveredMode(btn.mode)}
               onMouseLeave={() => setHoveredMode((prev) => (prev === btn.mode ? null : prev))}
-              className={`relative z-[1] flex w-[98px] items-center justify-center gap-1.5 rounded-full px-3 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] ${
+              className={`relative z-[1] flex w-[112px] items-center justify-center gap-1.5 rounded-full px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 active:scale-[0.98] ${
                 active
                   ? 'scale-[1.01]'
                   : 'hover:-translate-y-[1px] hover:shadow-[0_4px_14px_rgba(0,0,0,0.22)]'

@@ -87,7 +87,6 @@ export function TrunkPreview({
                     rootsDiskHeightMm: liveConfig.rootsDiskHeightMm,
                     rootsConeHeightMm: liveConfig.rootsConeHeightMm,
                     shaftDiameterMm: liveConfig.shaftDiameterMm,
-                    jointCount: liveConfig.jointCount,
                     tipContactDiameterMm: liveConfig.tipContactDiameterMm,
                     tipBodyDiameterMm: liveConfig.shaftDiameterMm,
                     tipLengthMm: liveConfig.tipLengthMm,
@@ -171,7 +170,6 @@ export function TrunkPreview({
             data={supportData}
             isPreview={ANATOMY_CONFIG.rendering.showAsGhostPreview}
             raftOverride={{ bottomMode: 'off', thickness: 0 }}
-            highlightJoints={previewState.activeSettingKey === 'joint.defaultJointCount'}
             anatomyOverrides={anatomyOverrides}
         />
     );

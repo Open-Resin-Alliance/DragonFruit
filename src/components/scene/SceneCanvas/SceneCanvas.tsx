@@ -5323,7 +5323,11 @@ export function SceneCanvas({
                 />
               )}
 
-              {!hideRaftPrimitives && !isGizmoDragging && !isGizmoRetargeting && (
+              {!hideRaftPrimitives
+                && !isGizmoDragging
+                && !isGizmoRetargeting
+                && !(transformMode === 'placeOnFace' && disableRaycast)
+                && (
                 <FootprintBorderRenderer
                   modelGeometry={activeModel ? activeModel.geometry : null}
                   modelTransform={activeModelTransform}

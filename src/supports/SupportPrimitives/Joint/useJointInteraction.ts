@@ -4,6 +4,7 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { getTrunks, getBranches, updateTrunk, updateBranch, getSelectedId, getTrunkById, getRootById, getBranchById, getKnotById, setInteractionWarning } from '../../state';
 import { moveJoint } from './jointUtils';
+import { getTrunkSegmentEndpoints } from '../Knot/knotUtils';
 import { Vec3, Trunk, Branch } from '../../types';
 import { getKickstandSnapshot, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
@@ -191,9 +192,12 @@ export function useJointInteraction(enabled: boolean = true) {
                         const root = getRootById(trunk.rootId) ?? undefined;
                         let contextStart: Vec3 | undefined;
                         if (root) {
-                            const rPos = root.transform.pos;
-                            const startZ = rPos.z + root.diskHeight + root.coneHeight;
-                            contextStart = { x: rPos.x, y: rPos.y, z: startZ };
+                            const bottomSegIndex = trunk.segments.findIndex((s) => s.topJoint?.id === activeJointId.current);
+                            if (bottomSegIndex !== -1) {
+                                const bottomSeg = trunk.segments[bottomSegIndex];
+                                const endpoints = getTrunkSegmentEndpoints(trunk, bottomSeg, bottomSegIndex, root);
+                                contextStart = endpoints?.start;
+                            }
                         }
 
                         const resolved = moveJoint(
@@ -321,9 +325,12 @@ export function useJointInteraction(enabled: boolean = true) {
                         const root = getRootById(trunk.rootId) ?? undefined;
                         let contextStart: Vec3 | undefined;
                         if (root) {
-                            const rPos = root.transform.pos;
-                            const startZ = rPos.z + root.diskHeight + root.coneHeight;
-                            contextStart = { x: rPos.x, y: rPos.y, z: startZ };
+                            const bottomSegIndex = trunk.segments.findIndex((s) => s.topJoint?.id === activeJointId.current);
+                            if (bottomSegIndex !== -1) {
+                                const bottomSeg = trunk.segments[bottomSegIndex];
+                                const endpoints = getTrunkSegmentEndpoints(trunk, bottomSeg, bottomSegIndex, root);
+                                contextStart = endpoints?.start;
+                            }
                         }
 
                         const newTrunk = moveJoint(

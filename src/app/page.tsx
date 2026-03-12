@@ -36,6 +36,7 @@ import { PrintingPanel } from '@/features/printing/components/PrintingPanel';
 import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetricsDebugModal';
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
+import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
 import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
@@ -55,6 +56,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
+import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import {
   type HullCacheEntry,
   type ArrangeModel as HighPrecisionArrangeModel,
@@ -4112,7 +4114,7 @@ export default function Home() {
       transformMgr.transformHook.setRotation(0, 0, 0);
       transformMgr.transformHook.setScale(1, 1, 1);
     }
-  }, [displayActiveModelId, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
+  }, [displayActiveModelId, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
@@ -6908,6 +6910,17 @@ export default function Home() {
     setDuplicateTotalCopies(targetCopies);
   }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
 
+  const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
+    ensurePendingTransformHistoryForActiveModel('rotate');
+    transformMgr.setIsTransforming(true);
+  }, [ensurePendingTransformHistoryForActiveModel, transformMgr]);
+
+  const handlePlaceOnFace = React.useCallback((modelId: string) => {
+    if (scene.activeModelId !== modelId) return;
+    handleTransformEnd('rotate');
+    transformMgr.setTransformMode('transform');
+  }, [handleTransformEnd, scene.activeModelId, transformMgr]);
+
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
       <TopBar
@@ -7766,6 +7779,17 @@ export default function Home() {
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />
+            )}
+            {scene.mode === 'prepare' && transformMgr.transformMode === 'placeOnFace' && (
+              <PlaceOnFaceTool
+                models={scene.models}
+                activeModelId={displayActiveModelId}
+                activeTransform={transformMgr.transform}
+                onAnimationStart={handlePlaceOnFaceAnimationStart}
+                onAnimatedTransformChange={handleTransformChange}
+                resolveAnimatedTransform={transformMgr.resolveLiveTransform}
+                onFaceSelect={handlePlaceOnFace}
+              />
             )}
           </SceneCanvas>
 

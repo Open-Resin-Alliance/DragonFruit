@@ -44,7 +44,9 @@ export function getTrunkSegmentEndpoints(
     const rootTopZ = diskHeight + coneHeight;
 
     let startVec: THREE.Vector3;
-    if (segmentIndex === 0) {
+    if (segment.bottomJoint) {
+        startVec = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
+    } else if (segmentIndex === 0) {
         startVec = basePos.clone().add(new THREE.Vector3(0, 0, rootTopZ));
     } else {
         const prev = trunk.segments[segmentIndex - 1];
