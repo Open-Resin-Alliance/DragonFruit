@@ -90,6 +90,7 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
   console.time('4. Create planes');
   const planes: FlatteningPlane[] = [];
   const MIN_AREA = 5.0;
+  const OVERLAY_SURFACE_OFFSET_MM = 0.2;
 
   coplanarGroups.forEach((groupPoints, keyStr) => {
     const [nx, ny, nz] = keyStr.split(',').map(parseFloat);
@@ -135,7 +136,9 @@ export function computeFlatteningPlanes(geometry: THREE.BufferGeometry): Flatten
         return new THREE.Vector3().lerpVectors(p, center, 0.1);
       });
 
-      shrunkPoints.forEach(p => p.addScaledVector(normal, 0.1));
+      // Push clickable face overlays slightly off the model surface to avoid
+      // z-fighting/clipping while hovering.
+      shrunkPoints.forEach(p => p.addScaledVector(normal, OVERLAY_SURFACE_OFFSET_MM));
       
       const planeCenter = new THREE.Vector3();
       shrunkPoints.forEach(p => planeCenter.add(p));

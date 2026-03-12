@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
 import type { FlatteningPlane } from '../logic/computeFlatteningPlanes';
 
+const OVERLAY_RENDER_BIAS_MM = 0.12;
+
 interface PlaceOnFaceOverlayProps {
   geometry: GeometryWithBounds;
   onFaceSelect: (normal: THREE.Vector3) => void;
@@ -62,13 +64,18 @@ function PlanePolygon({
     // The vertices in computeFlatteningPlanes are already sorted angularly around the center.
     const pts = plane.vertices;
     if (pts.length < 3) return null;
+    const normal = plane.normal.clone().normalize();
 
     const vertices: number[] = [];
     // Triangle fan starting from vertex 0
     for (let i = 1; i < pts.length - 1; i++) {
-        vertices.push(pts[0].x, pts[0].y, pts[0].z);
-        vertices.push(pts[i].x, pts[i].y, pts[i].z);
-        vertices.push(pts[i+1].x, pts[i+1].y, pts[i+1].z);
+      const p0 = pts[0].clone().addScaledVector(normal, OVERLAY_RENDER_BIAS_MM);
+      const p1 = pts[i].clone().addScaledVector(normal, OVERLAY_RENDER_BIAS_MM);
+      const p2 = pts[i + 1].clone().addScaledVector(normal, OVERLAY_RENDER_BIAS_MM);
+
+      vertices.push(p0.x, p0.y, p0.z);
+      vertices.push(p1.x, p1.y, p1.z);
+      vertices.push(p2.x, p2.y, p2.z);
     }
     
     const bufferGeo = new THREE.BufferGeometry();
@@ -93,6 +100,9 @@ function PlanePolygon({
         side={THREE.DoubleSide}
         depthTest={true}
         depthWrite={false}
+        polygonOffset
+        polygonOffsetFactor={-2}
+        polygonOffsetUnits={-2}
       />
     </mesh>
   );

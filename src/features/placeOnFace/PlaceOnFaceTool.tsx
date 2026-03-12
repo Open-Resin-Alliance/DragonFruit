@@ -37,6 +37,13 @@ export function PlaceOnFaceTool({
   const { scene } = useThree();
   const toolGroupRef = useRef<THREE.Group>(null);
   const targetMeshGroupRef = useRef<THREE.Group | null>(null);
+  const tempQuatRef = useRef(new THREE.Quaternion());
+  const tempEulerRef = useRef(new THREE.Euler(0, 0, 0, 'ZYX'));
+  const tempCandidateRef = useRef<ModelTransform>({
+    position: new THREE.Vector3(),
+    rotation: new THREE.Euler(0, 0, 0, 'ZYX'),
+    scale: new THREE.Vector3(1, 1, 1),
+  });
 
   const [animState, setAnimState] = useState<AnimState | null>(null);
 
@@ -82,16 +89,22 @@ export function PlaceOnFaceTool({
   useFrame(() => {
     if (!animState || !toolGroupRef.current) return;
 
-    const durationMs = 350;
+    const durationMs = 240;
     const elapsed = performance.now() - animState.startTime;
     const t = Math.min(elapsed / durationMs, 1.0);
-    const easeT = 1 - Math.pow(1 - t, 3);
-    const currentQuat = animState.startQuat.clone().slerp(animState.targetQuat, easeT);
-    const animatedEuler = new THREE.Euler().setFromQuaternion(currentQuat, 'ZYX');
+    const easeT = t * t * (3 - (2 * t));
+
+    const currentQuat = tempQuatRef.current.copy(animState.startQuat).slerp(animState.targetQuat, easeT);
+    const animatedEuler = tempEulerRef.current.setFromQuaternion(currentQuat, 'ZYX');
+    const candidate = tempCandidateRef.current;
+    candidate.position.copy(animState.startPosition);
+    candidate.rotation.copy(animatedEuler);
+    candidate.scale.copy(animState.scale);
+
     const resolvedTransform = resolveAnimatedTransform({
-      position: animState.startPosition.clone(),
-      rotation: animatedEuler,
-      scale: animState.scale.clone(),
+      position: candidate.position,
+      rotation: candidate.rotation,
+      scale: candidate.scale,
     });
     const resolvedQuat = quaternionFromGlobalEuler(resolvedTransform.rotation);
 
@@ -105,13 +118,14 @@ export function PlaceOnFaceTool({
       targetMeshGroupRef.current.scale.copy(resolvedTransform.scale);
     }
 
-    onAnimatedTransformChange(
-      resolvedTransform.position.clone(),
-      resolvedTransform.rotation.clone(),
-      resolvedTransform.scale.clone(),
-    );
-
     if (t >= 1.0) {
+      // Commit to the transform manager once at the end to avoid heavy
+      // per-frame React/store churn during high-refresh animations.
+      onAnimatedTransformChange(
+        resolvedTransform.position.clone(),
+        resolvedTransform.rotation.clone(),
+        resolvedTransform.scale.clone(),
+      );
       setAnimState(null);
       onFaceSelect(animState.modelId);
     }
