@@ -4,8 +4,8 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { getBranches, getKnotById, getLeaves, getRootById, getTrunks, getTwigs, getSticks, getBraces, setInteractionWarning, updateKnot, updateBranch, getBranchById, subscribe } from '../../state';
 import { Branch, Brace, Knot, Roots, Trunk, Twig, Stick, Vec3 } from '../../types';
-import { getSupportBraceSnapshot } from '../../SupportTypes/SupportBrace/supportBraceStore';
-import type { SupportBrace } from '../../SupportTypes/SupportBrace/types';
+import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
+import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, projectOntoSegment } from './knotUtils';
 import { getSettings } from '../../Settings';
 import { solveKnotConstraint } from '../../PlacementLogic/JointConstraintSolver';
@@ -16,7 +16,7 @@ import { getBezierPointAtT } from '../../Curves/BezierUtils';
 
 interface ActiveHost {
     segmentId: string;
-    containerType: 'trunk' | 'branch' | 'twig' | 'stick' | 'leafCone' | 'brace' | 'supportBrace';
+    containerType: 'trunk' | 'branch' | 'twig' | 'stick' | 'leafCone' | 'brace' | 'kickstand';
     trunk?: Trunk;
     branch?: Branch;
     twig?: Twig;
@@ -25,9 +25,9 @@ interface ActiveHost {
     parentKnot?: Knot;
     leafId?: string;
     brace?: Brace;
-    supportBrace?: SupportBrace;
-    supportBraceRoot?: Roots;
-    supportBraceHostKnot?: Knot;
+    kickstand?: Kickstand;
+    kickstandRoot?: Roots;
+    kickstandHostKnot?: Knot;
     start: THREE.Vector3;
     end: THREE.Vector3;
     // Topology Map: BranchID -> 'UP' (Knot Z < Joint Z) or 'DOWN' (Knot Z > Joint Z)
@@ -47,7 +47,7 @@ export function useKnotInteraction(enabled: boolean = true) {
     const elasticState = useRef<Record<string, ElasticChainInitialState>>({});
 
     // Segment→host lookup cache: rebuilt whenever support state changes
-    type SegmentHostEntry = { containerType: 'trunk'; entityId: string } | { containerType: 'branch'; entityId: string } | { containerType: 'supportBrace'; entityId: string } | { containerType: 'twig'; entityId: string } | { containerType: 'stick'; entityId: string };
+    type SegmentHostEntry = { containerType: 'trunk'; entityId: string } | { containerType: 'branch'; entityId: string } | { containerType: 'kickstand'; entityId: string } | { containerType: 'twig'; entityId: string } | { containerType: 'stick'; entityId: string };
     const segmentHostMapRef = useRef<Map<string, SegmentHostEntry>>(new Map());
 
     useEffect(() => {
@@ -59,8 +59,8 @@ export function useKnotInteraction(enabled: boolean = true) {
             for (const branch of getBranches()) {
                 for (const seg of branch.segments) map.set(seg.id, { containerType: 'branch', entityId: branch.id });
             }
-            for (const supportBrace of Object.values(getSupportBraceSnapshot().supportBraces)) {
-                for (const seg of supportBrace.segments) map.set(seg.id, { containerType: 'supportBrace', entityId: supportBrace.id });
+            for (const kickstand of Object.values(getKickstandSnapshot().kickstands)) {
+                for (const seg of kickstand.segments) map.set(seg.id, { containerType: 'kickstand', entityId: kickstand.id });
             }
             for (const twig of getTwigs()) {
                 for (const seg of twig.segments) map.set(seg.id, { containerType: 'twig', entityId: twig.id });
@@ -284,14 +284,14 @@ export function useKnotInteraction(enabled: boolean = true) {
                     const parentKnot = getKnotById(branch.parentKnotId) || undefined;
                     host = { segmentId: knot.parentShaftId, containerType: 'branch', branch, parentKnot, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
                 }
-            } else if (cacheEntry.containerType === 'supportBrace') {
-                const supportBraceState = getSupportBraceSnapshot();
-                const supportBrace = supportBraceState.supportBraces[cacheEntry.entityId];
-                if (supportBrace) {
-                    const supportBraceRoot = supportBraceState.roots[supportBrace.rootId];
-                    const supportBraceHostKnot = supportBraceState.knots[supportBrace.hostKnotId];
-                    if (supportBraceRoot && supportBraceHostKnot) {
-                        host = { segmentId: knot.parentShaftId, containerType: 'supportBrace', supportBrace, supportBraceRoot, supportBraceHostKnot, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
+            } else if (cacheEntry.containerType === 'kickstand') {
+                const kickstandState = getKickstandSnapshot();
+                const kickstand = kickstandState.kickstands[cacheEntry.entityId];
+                if (kickstand) {
+                    const kickstandRoot = kickstandState.roots[kickstand.rootId];
+                    const kickstandHostKnot = kickstandState.knots[kickstand.hostKnotId];
+                    if (kickstandRoot && kickstandHostKnot) {
+                        host = { segmentId: knot.parentShaftId, containerType: 'kickstand', kickstand, kickstandRoot, kickstandHostKnot, start: new THREE.Vector3(), end: new THREE.Vector3(), initialTopology: {} };
                     }
                 }
             } else if (cacheEntry.containerType === 'twig') {
@@ -397,27 +397,27 @@ export function useKnotInteraction(enabled: boolean = true) {
             if (!startKnot || !endKnot) return;
             host.start.set(startKnot.pos.x, startKnot.pos.y, startKnot.pos.z);
             host.end.set(endKnot.pos.x, endKnot.pos.y, endKnot.pos.z);
-        } else if (host.containerType === 'supportBrace' && host.supportBrace && host.supportBraceRoot && host.supportBraceHostKnot) {
-            const segIdx = host.supportBrace.segments.findIndex((s) => s.id === host.segmentId);
+        } else if (host.containerType === 'kickstand' && host.kickstand && host.kickstandRoot && host.kickstandHostKnot) {
+            const segIdx = host.kickstand.segments.findIndex((s) => s.id === host.segmentId);
             if (segIdx === -1) return;
 
-            const rootTopZ = host.supportBraceRoot.transform.pos.z + host.supportBraceRoot.diskHeight + host.supportBraceRoot.coneHeight;
+            const rootTopZ = host.kickstandRoot.transform.pos.z + host.kickstandRoot.diskHeight + host.kickstandRoot.coneHeight;
 
             let startPos: Vec3;
             if (segIdx === 0) {
                 startPos = {
-                    x: host.supportBraceRoot.transform.pos.x,
-                    y: host.supportBraceRoot.transform.pos.y,
+                    x: host.kickstandRoot.transform.pos.x,
+                    y: host.kickstandRoot.transform.pos.y,
                     z: rootTopZ,
                 };
             } else {
-                const prevSeg = host.supportBrace.segments[segIdx - 1];
+                const prevSeg = host.kickstand.segments[segIdx - 1];
                 if (!prevSeg.topJoint) return;
                 startPos = prevSeg.topJoint.pos;
             }
 
-            const seg = host.supportBrace.segments[segIdx];
-            const endPos = seg.topJoint?.pos ?? host.supportBraceHostKnot.pos;
+            const seg = host.kickstand.segments[segIdx];
+            const endPos = seg.topJoint?.pos ?? host.kickstandHostKnot.pos;
 
             host.start.set(startPos.x, startPos.y, startPos.z);
             host.end.set(endPos.x, endPos.y, endPos.z);
@@ -488,26 +488,26 @@ export function useKnotInteraction(enabled: boolean = true) {
                     diameter: host.brace.profile.diameter,
                 });
             }
-        } else if (host.containerType === 'supportBrace' && host.supportBrace && host.supportBraceRoot && host.supportBraceHostKnot) {
-            const rootTopZ = host.supportBraceRoot.transform.pos.z + host.supportBraceRoot.diskHeight + host.supportBraceRoot.coneHeight;
+        } else if (host.containerType === 'kickstand' && host.kickstand && host.kickstandRoot && host.kickstandHostKnot) {
+            const rootTopZ = host.kickstandRoot.transform.pos.z + host.kickstandRoot.diskHeight + host.kickstandRoot.coneHeight;
 
-            for (let idx = 0; idx < host.supportBrace.segments.length; idx++) {
-                const seg = host.supportBrace.segments[idx];
+            for (let idx = 0; idx < host.kickstand.segments.length; idx++) {
+                const seg = host.kickstand.segments[idx];
 
                 let startPos: Vec3;
                 if (idx === 0) {
                     startPos = {
-                        x: host.supportBraceRoot.transform.pos.x,
-                        y: host.supportBraceRoot.transform.pos.y,
+                        x: host.kickstandRoot.transform.pos.x,
+                        y: host.kickstandRoot.transform.pos.y,
                         z: rootTopZ,
                     };
                 } else {
-                    const prevSeg = host.supportBrace.segments[idx - 1];
+                    const prevSeg = host.kickstand.segments[idx - 1];
                     if (!prevSeg.topJoint) continue;
                     startPos = prevSeg.topJoint.pos;
                 }
 
-                const endPos = seg.topJoint?.pos ?? host.supportBraceHostKnot.pos;
+                const endPos = seg.topJoint?.pos ?? host.kickstandHostKnot.pos;
                 out.push({
                     segmentId: seg.id,
                     start: new THREE.Vector3(startPos.x, startPos.y, startPos.z),
@@ -1070,9 +1070,9 @@ export function useKnotInteraction(enabled: boolean = true) {
                     bestDiameter = seg.diameter;
                 }
             }
-        } else if (host.containerType === 'supportBrace') {
-            if (host.supportBrace) {
-                const seg = host.supportBrace.segments.find(s => s.id === host.segmentId);
+        } else if (host.containerType === 'kickstand') {
+            if (host.kickstand) {
+                const seg = host.kickstand.segments.find(s => s.id === host.segmentId);
                 if (seg?.type === 'bezier') {
                     const proj = projectOntoBezierCurve(
                         raycaster.ray,
@@ -1098,7 +1098,7 @@ export function useKnotInteraction(enabled: boolean = true) {
         };
 
         // Update diameter when crossing into a segment with a different diameter
-        if (host.containerType === 'trunk' || host.containerType === 'branch' || host.containerType === 'twig' || host.containerType === 'stick' || host.containerType === 'brace' || host.containerType === 'supportBrace') {
+        if (host.containerType === 'trunk' || host.containerType === 'branch' || host.containerType === 'twig' || host.containerType === 'stick' || host.containerType === 'brace' || host.containerType === 'kickstand') {
             finalKnot.diameter = bestDiameter + 0.1;
         }
 

@@ -116,7 +116,7 @@ src/supports/
 | Twig | ContactCone + Shaft + ContactCone (both ends touch model) |
 | Stick | Shafts + Joints + ContactCone (no roots, vertical) |
 | Brace | Knot + Shaft + Knot (horizontal stabilizer; two knots, one on each host) |
-| Support Brace | Root + Shafts/Joints + Host Knot (rooted auxiliary support attached to trunk/branch shaft) |
+| Kickstand | Root + Shafts/Joints + Host Knot (rooted auxiliary support attached to trunk/branch shaft) |
 
 Each support type has a `*Builder.ts` that defines what primitives it uses. The `SupportBuilder.tsx` renders any combination.
 
@@ -199,11 +199,11 @@ Trunks now support an **adaptive stepwise diameter profile** driven only by **br
 
 ---
 
-## Support Brace: History + Cascade Delete + Raft Sync (V2)
+## Kickstand: History + Cascade Delete + Raft Sync (V2)
 
 Authoritative files:
 
-- `src/supports/SupportTypes/SupportBrace/`
+- `src/supports/SupportTypes/Kickstand/`
 - `src/supports/history/actionTypes.ts`
 - `src/supports/history/useSupportHistoryHandlers.ts`
 - `src/supports/state.ts`
@@ -212,22 +212,22 @@ Authoritative files:
 Current contract:
 
 1. **Placement history parity**
-   - Support Brace placement pushes a dedicated history action (`support:add-support-brace`).
-   - Undo/redo removes/restores Support Brace + root + host knot atomically.
+   - Kickstand placement pushes a dedicated history action (`support:add-kickstand`).
+   - Undo/redo removes/restores Kickstand + root + host knot atomically.
 
 2. **Recursive host delete behavior**
-   - If a host support (trunk/branch path) is deleted, attached Support Braces are deleted recursively.
-   - Removal snapshots include Support Brace build payloads so undo can restore dependents in the same action.
+   - If a host support (trunk/branch path) is deleted, attached Kickstands are deleted recursively.
+   - Removal snapshots include Kickstand build payloads so undo can restore dependents in the same action.
 
 3. **Raft synchronization rule (critical)**
    - Raft footprint derives from global `supportState.roots`.
-   - Any Support Brace root no longer referenced by an active trunk or active Support Brace must be pruned from global roots to prevent persistent raft islands.
-   - `SupportRenderer` performs this orphan-root pruning as part of the Support Brace root/knot backfill effect.
+   - Any Kickstand root no longer referenced by an active trunk or active Kickstand must be pruned from global roots to prevent persistent raft islands.
+   - `SupportRenderer` performs this orphan-root pruning as part of the Kickstand root/knot backfill effect.
 
 4. **Interaction parity with core support hosts**
-   - Support Brace segment IDs are now valid host IDs for knot drag and manual brace snapping paths.
-   - Knot interaction resolves Support Brace segment endpoints using Support Brace root top + segment joints + host knot fallback.
-   - Brace placement target collection includes Support Brace segments so braces can be authored/edited against Support Brace shafts directly.
+   - Kickstand segment IDs are now valid host IDs for knot drag and manual brace snapping paths.
+   - Knot interaction resolves Kickstand segment endpoints using Kickstand root top + segment joints + host knot fallback.
+   - Brace placement target collection includes Kickstand segments so braces can be authored/edited against Kickstand shafts directly.
 
 ---
 
@@ -334,12 +334,12 @@ Current behavioral contract:
    - Host-derived diameter updates are still applied.
    - Trunk host endpoint reconstruction used by normalization now derives root top from imported root geometry (`root.diskHeight` + `root.coneHeight`) rather than live global root settings, preventing import-time knot drift when current presets differ.
 
-8. **Support Brace source classification + host graph integration**
-   - Grounded single-parent supports with explicit parent endpoint hints are classified as Support Brace candidates for Lychee `type:1` and `type:0` variants.
-   - Imported Support Braces are registered into the host projection graph so later regular braces can resolve to Support Brace segments.
+8. **Kickstand source classification + host graph integration**
+   - Grounded single-parent supports with explicit parent endpoint hints are classified as Kickstand candidates for Lychee `type:1` and `type:0` variants.
+   - Imported Kickstands are registered into the host projection graph so later regular braces can resolve to Kickstand segments.
 
-9. **Support Brace shape parity policy (Lychee join-length driven)**
-   - Support Brace import computes host attach using join-length-biased probing and applies layout overrides derived from Lychee join-length semantics for closer top-angle parity.
+9. **Kickstand shape parity policy (Lychee join-length driven)**
+   - Kickstand import computes host attach using join-length-biased probing and applies layout overrides derived from Lychee join-length semantics for closer top-angle parity.
 
 10. **Brace diameter parity policy**
 

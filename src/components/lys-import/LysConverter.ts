@@ -19,9 +19,9 @@ export class LysConverter {
     for (const twig of data.twigs || []) twig.modelId = modelId;
     for (const stick of data.sticks || []) stick.modelId = modelId;
     for (const brace of data.braces) brace.modelId = modelId;
-    for (const supportBraceBuild of data.supportBraces || []) {
-      supportBraceBuild.root.modelId = modelId;
-      supportBraceBuild.supportBrace.modelId = modelId;
+    for (const kickstandBuild of data.kickstands || []) {
+      kickstandBuild.root.modelId = modelId;
+      kickstandBuild.kickstand.modelId = modelId;
     }
   }
 
@@ -107,10 +107,10 @@ export class LysConverter {
       shiftPos(knot.pos);
     }
 
-    for (const supportBraceBuild of data.supportBraces || []) {
-      shiftPos(supportBraceBuild.root.transform?.pos);
-      shiftPos(supportBraceBuild.hostKnot.pos);
-      for (const seg of supportBraceBuild.supportBrace.segments) {
+    for (const kickstandBuild of data.kickstands || []) {
+      shiftPos(kickstandBuild.root.transform?.pos);
+      shiftPos(kickstandBuild.hostKnot.pos);
+      for (const seg of kickstandBuild.kickstand.segments) {
         shiftJoint(seg.bottomJoint);
         shiftJoint(seg.topJoint);
         if (seg.type === 'bezier') {

@@ -1,6 +1,6 @@
 import type { SupportState } from '../types';
 import { setSnapshot } from '../state';
-import { getSupportBraceSnapshot, setSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
+import { getKickstandSnapshot, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
 
 type SupportCollectionsState = Pick<
     SupportState,
@@ -106,10 +106,10 @@ export function getSupportsForModel(state: SupportCollectionsState, modelId: str
 export function deleteSupportsForModel(state: SupportState, modelId: string): number {
     const ids = getSupportsForModel(state, modelId);
 
-    const supportBraceSnapshot = getSupportBraceSnapshot();
-    const supportBraceIdsToRemove = Object.values(supportBraceSnapshot.supportBraces)
-        .filter((supportBrace) => supportBrace.modelId === modelId)
-        .map((supportBrace) => supportBrace.id);
+    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstandIdsToRemove = Object.values(kickstandSnapshot.kickstands)
+        .filter((kickstand) => kickstand.modelId === modelId)
+        .map((kickstand) => kickstand.id);
 
     const hasMainSupportEntities = ids.roots.length > 0
         || ids.trunks.length > 0
@@ -119,7 +119,7 @@ export function deleteSupportsForModel(state: SupportState, modelId: string): nu
         || ids.twigs.length > 0
         || ids.sticks.length > 0;
 
-    if (!hasMainSupportEntities && supportBraceIdsToRemove.length === 0) {
+    if (!hasMainSupportEntities && kickstandIdsToRemove.length === 0) {
         return 0;
     }
 
@@ -197,22 +197,22 @@ export function deleteSupportsForModel(state: SupportState, modelId: string): nu
 
     setSnapshot(nextState);
 
-    if (supportBraceIdsToRemove.length > 0) {
-        const supportBraceIdsSet = new Set(supportBraceIdsToRemove);
-        const supportBraceRootIdsToRemove = new Set<string>();
-        const supportBraceKnotIdsToRemove = new Set<string>();
+    if (kickstandIdsToRemove.length > 0) {
+        const kickstandIdsSet = new Set(kickstandIdsToRemove);
+        const kickstandRootIdsToRemove = new Set<string>();
+        const kickstandKnotIdsToRemove = new Set<string>();
 
-        for (const supportBraceId of supportBraceIdsToRemove) {
-            const supportBrace = supportBraceSnapshot.supportBraces[supportBraceId];
-            if (!supportBrace) continue;
-            supportBraceRootIdsToRemove.add(supportBrace.rootId);
-            supportBraceKnotIdsToRemove.add(supportBrace.hostKnotId);
+        for (const kickstandId of kickstandIdsToRemove) {
+            const kickstand = kickstandSnapshot.kickstands[kickstandId];
+            if (!kickstand) continue;
+            kickstandRootIdsToRemove.add(kickstand.rootId);
+            kickstandKnotIdsToRemove.add(kickstand.hostKnotId);
         }
 
-        setSupportBraceSnapshot({
-            supportBraces: filterRecord(supportBraceSnapshot.supportBraces, (id) => supportBraceIdsSet.has(id)),
-            roots: filterRecord(supportBraceSnapshot.roots, (id) => supportBraceRootIdsToRemove.has(id)),
-            knots: filterRecord(supportBraceSnapshot.knots, (id) => supportBraceKnotIdsToRemove.has(id)),
+        setKickstandSnapshot({
+            kickstands: filterRecord(kickstandSnapshot.kickstands, (id) => kickstandIdsSet.has(id)),
+            roots: filterRecord(kickstandSnapshot.roots, (id) => kickstandRootIdsToRemove.has(id)),
+            knots: filterRecord(kickstandSnapshot.knots, (id) => kickstandKnotIdsToRemove.has(id)),
             selectedId: null,
         });
     }
@@ -224,7 +224,7 @@ export function deleteSupportsForModel(state: SupportState, modelId: string): nu
         + ids.twigs.length
         + ids.sticks.length;
 
-    removedCount += supportBraceIdsToRemove.length;
+    removedCount += kickstandIdsToRemove.length;
 
     // Keep count semantics close to historical behavior, where root removals were
     // typically cascaded from shaft removals (not counted as explicit removals).

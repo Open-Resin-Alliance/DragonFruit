@@ -18,8 +18,8 @@ import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
-import { getSupportBraceSnapshot, setSupportBraceSnapshot } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
-import type { SupportBraceState } from '@/supports/SupportTypes/SupportBrace/types';
+import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import type { KickstandState } from '@/supports/SupportTypes/Kickstand/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import {
   DEFAULT_VIEW3D_SETTINGS,
@@ -86,7 +86,7 @@ type SceneSnapshot = {
   activeModelId: string | null;
   selectedModelIds: string[];
   supportState?: SupportState;
-  supportBraceState?: SupportBraceState;
+  kickstandState?: KickstandState;
 };
 
 type SceneSnapshotCaptureOptions = {
@@ -146,7 +146,7 @@ function captureSceneSnapshot(
           // Store immutable store snapshots by reference for speed.
           // They are deep-cloned on restore in applySceneSnapshot.
           supportState: getSnapshot(),
-          supportBraceState: getSupportBraceSnapshot(),
+          kickstandState: getKickstandSnapshot(),
         }
       : {}),
   };
@@ -548,7 +548,7 @@ function voxlSupportsContainData(document: VoxlDocumentV1): boolean {
     || (supports.sticks?.length ?? 0) > 0
     || supports.braces.length > 0
     || supports.knots.length > 0
-    || (supports.supportBraces?.length ?? 0) > 0;
+    || (supports.kickstands?.length ?? 0) > 0;
 }
 
 function countSupportEntries(payload: DragonfruitImportFormat | null | undefined): number {
@@ -561,7 +561,7 @@ function countSupportEntries(payload: DragonfruitImportFormat | null | undefined
     + (payload.sticks?.length ?? 0)
     + payload.braces.length
     + payload.knots.length
-    + (payload.supportBraces?.length ?? 0);
+    + (payload.kickstands?.length ?? 0);
 }
 
 export interface LoadedModel {
@@ -999,9 +999,9 @@ export function useSceneCollectionManager() {
   const [selectionHighlightMode, setSelectionHighlightMode] = useState<SelectionHighlightMode>('spotlight');
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
-    if (snapshot.supportState && snapshot.supportBraceState) {
+    if (snapshot.supportState && snapshot.kickstandState) {
       setSupportSnapshot(clonePlainObject(snapshot.supportState));
-      setSupportBraceSnapshot(clonePlainObject(snapshot.supportBraceState));
+      setKickstandSnapshot(clonePlainObject(snapshot.kickstandState));
     } else {
       const currentModels = modelsRef.current;
       const nextById = new Map(snapshot.models.map((model) => [model.id, model] as const));
@@ -1653,12 +1653,12 @@ export function useSceneCollectionManager() {
     if (existing.length === 0) return;
 
     const supportStateBeforeDelete = getSnapshot();
-    const supportBraceSnapshotBefore = getSupportBraceSnapshot();
+    const kickstandSnapshotBefore = getKickstandSnapshot();
 
-    const supportBraceCountByModel = new Map<string, number>();
-    for (const supportBrace of Object.values(supportBraceSnapshotBefore.supportBraces)) {
-      const current = supportBraceCountByModel.get(supportBrace.modelId) ?? 0;
-      supportBraceCountByModel.set(supportBrace.modelId, current + 1);
+    const kickstandCountByModel = new Map<string, number>();
+    for (const kickstand of Object.values(kickstandSnapshotBefore.kickstands)) {
+      const current = kickstandCountByModel.get(kickstand.modelId) ?? 0;
+      kickstandCountByModel.set(kickstand.modelId, current + 1);
     }
 
     const supportsByModel = new Map<string, ReturnType<typeof getSupportsForModel>>();
@@ -1668,7 +1668,7 @@ export function useSceneCollectionManager() {
       const supportIds = getSupportsForModel(supportStateBeforeDelete, model.id);
       supportsByModel.set(model.id, supportIds);
 
-      const supportBraceCount = supportBraceCountByModel.get(model.id) ?? 0;
+      const kickstandCount = kickstandCountByModel.get(model.id) ?? 0;
       const supportPrimitiveCount = supportIds.roots.length
         + supportIds.trunks.length
         + supportIds.branches.length
@@ -1676,7 +1676,7 @@ export function useSceneCollectionManager() {
         + supportIds.leaves.length
         + supportIds.twigs.length
         + supportIds.sticks.length
-        + supportBraceCount;
+        + kickstandCount;
 
       supportPrimitiveCountByModel.set(model.id, supportPrimitiveCount);
     }
@@ -1704,7 +1704,7 @@ export function useSceneCollectionManager() {
 
       if (hasMainSupports) return true;
 
-      return (supportBraceCountByModel.get(modelId) ?? 0) > 0;
+      return (kickstandCountByModel.get(modelId) ?? 0) > 0;
     };
 
     const includeSupportHistory = existing.some((model) => modelHasSupports(model.id));
@@ -1745,10 +1745,10 @@ export function useSceneCollectionManager() {
           || remaining.twigs.length > 0
           || remaining.sticks.length > 0;
 
-        const hasRemainingSupportBraces = Object.values(getSupportBraceSnapshot().supportBraces)
-          .some((supportBrace) => supportBrace.modelId === modelId);
+        const hasRemainingKickstands = Object.values(getKickstandSnapshot().kickstands)
+          .some((kickstand) => kickstand.modelId === modelId);
 
-        if (hasRemainingMainSupports || hasRemainingSupportBraces) {
+        if (hasRemainingMainSupports || hasRemainingKickstands) {
           totalRemovedSupports += deleteSupportsForModel(getSnapshot(), modelId);
         }
       }
@@ -1778,7 +1778,7 @@ export function useSceneCollectionManager() {
     if (existingModelIds.length === 0) return 0;
 
     const supportStateBefore = getSnapshot();
-    const supportBraceStateBefore = getSupportBraceSnapshot();
+    const kickstandStateBefore = getKickstandSnapshot();
 
     const hasSupportsForModel = (modelId: string) => {
       const supportIds = getSupportsForModel(supportStateBefore, modelId);
@@ -1792,8 +1792,8 @@ export function useSceneCollectionManager() {
 
       if (hasMainSupports) return true;
 
-      return Object.values(supportBraceStateBefore.supportBraces)
-        .some((supportBrace) => supportBrace.modelId === modelId);
+      return Object.values(kickstandStateBefore.kickstands)
+        .some((kickstand) => kickstand.modelId === modelId);
     };
 
     const targetIds = existingModelIds.filter((modelId) => hasSupportsForModel(modelId));
@@ -2019,7 +2019,7 @@ export function useSceneCollectionManager() {
       }
 
       payload.knots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
-      payload.supportBraceKnots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
+      payload.kickstandKnots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
       const expandSegments = (segments: Array<any>) => {
         segments.forEach((segment) => {
@@ -2059,8 +2059,8 @@ export function useSceneCollectionManager() {
         expand(stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
       });
 
-      payload.supportBraces.forEach((supportBrace) => {
-        expandSegments(supportBrace.segments as any[]);
+      payload.kickstands.forEach((kickstand) => {
+        expandSegments(kickstand.segments as any[]);
       });
 
       return hasAny ? { minX, maxX, minY, maxY } : null;

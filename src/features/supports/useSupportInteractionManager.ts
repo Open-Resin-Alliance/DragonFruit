@@ -5,7 +5,7 @@ import { useTrunkPlacementV2 } from '@/supports/SupportTypes/Trunk/useTrunkPlace
 import { useBranchPlacement } from '@/supports/SupportTypes/Branch/useBranchPlacement';
 import { useLeafPlacement } from '@/supports/SupportTypes/Leaf/useLeafPlacement';
 import { useBracePlacement } from '@/supports/SupportTypes/Brace/useBracePlacement';
-import { useSupportBracePlacement } from '@/supports/SupportTypes/SupportBrace/useSupportBracePlacement';
+import { useKickstandPlacement } from '@/supports/SupportTypes/Kickstand/useKickstandPlacement';
 import { useInteractionStatus } from '@/supports/interaction/useInteractionStatus';
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
@@ -36,9 +36,9 @@ import {
 } from '@/supports/state';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
-import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_SUPPORT_BRACE } from '@/supports/history/actionTypes';
+import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_KICKSTAND } from '@/supports/history/actionTypes';
 import { clearSelection, getMultiSelectedSupportIds, selectAllSupports } from '@/supports/interaction/SupportSelection';
-import { getSupportBraceSnapshot, removeSupportBrace } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getKickstandSnapshot, removeKickstand } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
@@ -65,13 +65,13 @@ function resolveSupportCategoryFromSnapshot(id: string) {
   if (snapshot.twigs[id]) return 'twig' as const;
   if (snapshot.sticks[id]) return 'stick' as const;
   if (snapshot.braces[id]) return 'brace' as const;
-  if (getSupportBraceSnapshot().supportBraces[id]) return 'brace' as const;
+  if (getKickstandSnapshot().kickstands[id]) return 'brace' as const;
   return null;
 }
 
 function collectAllSupportIds() {
   const snapshot = getSnapshot();
-  const supportBraceSnapshot = getSupportBraceSnapshot();
+  const kickstandSnapshot = getKickstandSnapshot();
 
   return [
     ...Object.keys(snapshot.trunks),
@@ -80,7 +80,7 @@ function collectAllSupportIds() {
     ...Object.keys(snapshot.twigs),
     ...Object.keys(snapshot.sticks),
     ...Object.keys(snapshot.braces),
-    ...Object.keys(supportBraceSnapshot.supportBraces),
+    ...Object.keys(kickstandSnapshot.kickstands),
   ];
 }
 
@@ -88,7 +88,7 @@ function resolveSupportOwnerFromSegmentId(segmentId: string): { category: 'trunk
   if (!segmentId) return null;
 
   const snapshot = getSnapshot();
-  const supportBraceSnapshot = getSupportBraceSnapshot();
+  const kickstandSnapshot = getKickstandSnapshot();
 
   if (segmentId.startsWith('braceSegment:')) {
     const braceId = segmentId.slice('braceSegment:'.length);
@@ -119,9 +119,9 @@ function resolveSupportOwnerFromSegmentId(segmentId: string): { category: 'trunk
     }
   }
 
-  for (const supportBrace of Object.values(supportBraceSnapshot.supportBraces)) {
-    if (supportBrace.segments.some((segment) => segment.id === segmentId)) {
-      return { category: 'brace', id: supportBrace.id };
+  for (const kickstand of Object.values(kickstandSnapshot.kickstands)) {
+    if (kickstand.segments.some((segment) => segment.id === segmentId)) {
+      return { category: 'brace', id: kickstand.id };
     }
   }
 
@@ -131,13 +131,13 @@ function resolveSupportOwnerFromSegmentId(segmentId: string): { category: 'trunk
 function resolveSupportOwnerFromJointId(jointId: string): { category: 'brace'; id: string } | null {
   if (!jointId) return null;
 
-  const supportBraceSnapshot = getSupportBraceSnapshot();
-  for (const supportBrace of Object.values(supportBraceSnapshot.supportBraces)) {
-    const ownsJoint = supportBrace.segments.some((segment) =>
+  const kickstandSnapshot = getKickstandSnapshot();
+  for (const kickstand of Object.values(kickstandSnapshot.kickstands)) {
+    const ownsJoint = kickstand.segments.some((segment) =>
       segment.bottomJoint?.id === jointId || segment.topJoint?.id === jointId,
     );
     if (ownsJoint) {
-      return { category: 'brace', id: supportBrace.id };
+      return { category: 'brace', id: kickstand.id };
     }
   }
 
@@ -150,7 +150,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const branchPlacement = useBranchPlacement();
   const leafPlacement = useLeafPlacement();
   const bracePlacement = useBracePlacement();
-  const supportBracePlacement = useSupportBracePlacement();
+  const kickstandPlacement = useKickstandPlacement();
 
   const altDownRef = useRef(false);
 
@@ -191,7 +191,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
-    if (supportBracePlacement.isActive) {
+    if (kickstandPlacement.isActive) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
       leafPlacement.onModelHover(null);
@@ -210,7 +210,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       // Normal trunk placement preview
       trunkPlacementV2.onSupportHover(hit);
     }
-  }, [isPlacementDisabled, trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, supportBracePlacement.isActive, jointCreationState.isActive]);
+  }, [isPlacementDisabled, trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, kickstandPlacement.isActive, jointCreationState.isActive]);
 
   // Handler for MODEL click (trunk placement, or branch tip placement)
   const onModelClick = useCallback((hit: THREE.Intersection) => {
@@ -222,7 +222,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
-    if (supportBracePlacement.isActive) {
+    if (kickstandPlacement.isActive) {
       return;
     }
 
@@ -238,7 +238,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       // Normal trunk placement
       trunkPlacementV2.onSupportClick(hit);
     }
-  }, [trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, supportBracePlacement.isActive, jointCreationState.isActive]);
+  }, [trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, kickstandPlacement.isActive, jointCreationState.isActive]);
 
   // Handler for SUPPORT hover (branch base preview when hovering existing support shafts)
   // NOTE: We do NOT check isPlacementDisabled here because branch placement
@@ -273,9 +273,9 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if (category === 'joint') {
         const result = removeJointById(id);
         if (!result) {
-          const supportBraceOwner = resolveSupportOwnerFromJointId(id);
-          if (!supportBraceOwner) return false;
-          return deleteSelectionByCategoryAndId(supportBraceOwner.category, supportBraceOwner.id, recordHistory);
+          const kickstandOwner = resolveSupportOwnerFromJointId(id);
+          if (!kickstandOwner) return false;
+          return deleteSelectionByCategoryAndId(kickstandOwner.category, kickstandOwner.id, recordHistory);
         }
         if (result.kind === 'trunk') {
           if (recordHistory) {
@@ -314,7 +314,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
               root: snapshots.root ?? undefined,
               branches: snapshots.branches,
               braces: snapshots.braces,
-              supportBraces: snapshots.supportBraces,
+              kickstands: snapshots.kickstands,
               leaves: snapshots.leaves,
               knots: snapshots.knots,
             },
@@ -411,15 +411,15 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           return true;
         }
 
-        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
-        const supportBrace = supportBraces.find((sb) => sb.hostKnotId === id);
-        if (supportBrace) {
-          const supportBraceSnapshots = removeSupportBrace(supportBrace.id);
-          if (!supportBraceSnapshots) return false;
+        const kickstands = Object.values(getKickstandSnapshot().kickstands);
+        const kickstand = kickstands.find((ks) => ks.hostKnotId === id);
+        if (kickstand) {
+          const kickstandSnapshots = removeKickstand(kickstand.id);
+          if (!kickstandSnapshots) return false;
           if (recordHistory) {
             pushHistory({
-              type: SUPPORT_REMOVE_SUPPORT_BRACE,
-              payload: { build: supportBraceSnapshots },
+              type: SUPPORT_REMOVE_KICKSTAND,
+              payload: { build: kickstandSnapshots },
             });
           }
           setSelectedId(null);
@@ -498,12 +498,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       }
 
       if (category === 'brace') {
-        const supportBraceSnapshots = removeSupportBrace(id);
-        if (supportBraceSnapshots) {
+        const kickstandSnapshots = removeKickstand(id);
+        if (kickstandSnapshots) {
           if (recordHistory) {
             pushHistory({
-              type: SUPPORT_REMOVE_SUPPORT_BRACE,
-              payload: { build: supportBraceSnapshots },
+              type: SUPPORT_REMOVE_KICKSTAND,
+              payload: { build: kickstandSnapshots },
             });
           }
           setSelectedId(null);
@@ -548,8 +548,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         const braces = getBraces();
         if (braces.some(br => br.startKnotId === id || br.endKnotId === id)) return true;
 
-        const supportBraces = Object.values(getSupportBraceSnapshot().supportBraces);
-        if (supportBraces.some((sb) => sb.hostKnotId === id)) return true;
+        const kickstands = Object.values(getKickstandSnapshot().kickstands);
+        if (kickstands.some((ks) => ks.hostKnotId === id)) return true;
 
         return false;
       }
@@ -565,7 +565,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       const multiSelectedIds = Array.from(new Set(getMultiSelectedSupportIds()));
       if (multiSelectedIds.length > 0) {
         const beforeSupportSnapshot = structuredClone(getSnapshot());
-        const beforeSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
+        const beforeKickstandSnapshot = structuredClone(getKickstandSnapshot());
         let anyDeleted = false;
         for (const supportId of multiSelectedIds) {
           const category = resolveSupportCategoryFromSnapshot(supportId);
@@ -576,7 +576,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
         if (anyDeleted) {
           const afterSupportSnapshot = structuredClone(getSnapshot());
-          const afterSupportBraceSnapshot = structuredClone(getSupportBraceSnapshot());
+          const afterKickstandSnapshot = structuredClone(getKickstandSnapshot());
 
           pushHistory({
             type: SUPPORT_AUTO_BRACE_REPLACE,
@@ -584,8 +584,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
             payload: {
               before: beforeSupportSnapshot,
               after: afterSupportSnapshot,
-              supportBraceBefore: beforeSupportBraceSnapshot,
-              supportBraceAfter: afterSupportBraceSnapshot,
+              kickstandBefore: beforeKickstandSnapshot,
+              kickstandAfter: afterKickstandSnapshot,
             },
           });
         }
@@ -676,7 +676,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     branchPlacement,
     leafPlacement,
     bracePlacement,
-    supportBracePlacement,
+    kickstandPlacement,
     jointCreationState,
     isPlacementDisabled,
     globalSelectedId,
@@ -694,6 +694,6 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     branchPreview: branchPlacement.previewData,
     leafPreview: leafPlacement.previewData,
     bracePreview: bracePlacement.preview,
-    supportBracePreview: supportBracePlacement.previewData,
+    kickstandPreview: kickstandPlacement.previewData,
   };
 }

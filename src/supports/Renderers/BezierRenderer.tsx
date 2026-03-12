@@ -190,7 +190,7 @@ export function BezierRenderer({
             }));
         }
 
-        // Ctrl is reserved for Support Brace placement and should not re-select segments.
+        // Ctrl is reserved for Kickstand placement and should not re-select segments.
         if (ctrlDown) return;
 
         // UX: for curved segments, a direct click should select the segment immediately

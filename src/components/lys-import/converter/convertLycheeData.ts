@@ -16,8 +16,8 @@ import {
 } from '../../../supports/types';
 import { SupportSettings } from '../../../supports/Settings';
 import { getJointDiameter } from '../../../supports/constants';
-import { buildSupportBraceData } from '../../../supports/SupportTypes/SupportBrace/supportBraceBuilder';
-import type { SupportBraceBuildResult, SupportBracePlacementLayout } from '../../../supports/SupportTypes/SupportBrace/types';
+import { buildKickstandData } from '../../../supports/SupportTypes/Kickstand/kickstandBuilder';
+import type { KickstandBuildResult, KickstandPlacementLayout } from '../../../supports/SupportTypes/Kickstand/types';
 import {
   applyWorldXYPlacementToSlice,
   inferLeafTipEndpoint,
@@ -39,7 +39,7 @@ import { HostEntry, LycheeData, LycheeSupport } from './types';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 
 export function convertLycheeData(data: LycheeData, settings: SupportSettings, mesh?: THREE.Mesh): DragonfruitImportFormat {
-  const result: DragonfruitImportFormat & { supportBraces: SupportBraceBuildResult[] } = {
+  const result: DragonfruitImportFormat & { kickstands: KickstandBuildResult[] } = {
     version: 1,
     meta: {
       source: 'lychee_conversion',
@@ -54,7 +54,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
     sticks: [],
     braces: [],
     knots: [],
-    supportBraces: [],
+    kickstands: [],
   };
 
   if (!data.objects?.present?.byId || !data.supports?.present?.byId) {
@@ -159,7 +159,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
     const rootCandidates: { id: string; s: LycheeSupport }[] = [];
     const branchCandidates: { id: string; s: LycheeSupport; parentIds: string[] }[] = [];
     const braceCandidates: { id: string; s: LycheeSupport; parentIds: string[] }[] = [];
-    const supportBraceCandidates: { id: string; s: LycheeSupport; parentIds: string[] }[] = [];
+    const kickstandCandidates: { id: string; s: LycheeSupport; parentIds: string[] }[] = [];
 
     for (const { id, s } of supportsForObject) {
       const parentIds = inferParentIds(s);
@@ -183,12 +183,12 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
         const hasExplicitSingleParentHint = explicitSingleParentHintCount >= 1;
         const baseIsGrounded = Number.isFinite(s.base?.z) && Math.abs((s.base?.z as number)) <= 0.2;
         const supportType = (s as any)?.type;
-        // Lychee can encode single-parent support braces as either type 1 or type 0.
-        const isSupportBraceSourceType = !Number.isFinite(supportType) || supportType === 1 || supportType === 0;
+        // Lychee can encode single-parent kickstands as either type 1 or type 0.
+        const isKickstandSourceType = !Number.isFinite(supportType) || supportType === 1 || supportType === 0;
         const isObjectTouching = s.isBaseTip === true;
 
-        if (hasExplicitSingleParentHint && baseIsGrounded && isSupportBraceSourceType && !isMiniSupport(s) && !isObjectTouching) {
-          supportBraceCandidates.push({ id, s, parentIds });
+        if (hasExplicitSingleParentHint && baseIsGrounded && isKickstandSourceType && !isMiniSupport(s) && !isObjectTouching) {
+          kickstandCandidates.push({ id, s, parentIds });
         } else {
           branchCandidates.push({ id, s, parentIds });
         }
@@ -205,7 +205,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
       twigs: result.twigs?.length || 0,
       sticks: result.sticks?.length || 0,
       knots: result.knots.length,
-      supportBraces: result.supportBraces.length,
+      kickstands: result.kickstands.length,
     };
 
     const pickTwigContactDiameter = (endpointSettings: any): number => {
@@ -632,18 +632,18 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
       console.warn(`[LysConverter] Child ${id} (object ${objectId}) refers to unknown/unprocessed parent ${String(parentId)}. Skipping.`);
     });
 
-    for (const { id, s, parentIds } of supportBraceCandidates) {
+    for (const { id, s, parentIds } of kickstandCandidates) {
       if (!s.base || !s.tip || parentIds.length === 0) continue;
 
       const parentId = parentIds[0];
       const parentHost = hostsByLycheeId.get(parentId);
       if (!parentHost) {
-        console.warn(`[LysConverter] Support brace candidate ${id} (object ${objectId}) refers to unknown parent ${String(parentId)}. Skipping.`);
+        console.warn(`[LysConverter] Kickstand candidate ${id} (object ${objectId}) refers to unknown parent ${String(parentId)}. Skipping.`);
         continue;
       }
 
-      if (parentHost.kind === 'supportBrace') {
-        console.warn(`[LysConverter] Support brace candidate ${id} (object ${objectId}) cannot attach to support-brace parent ${String(parentId)}. Skipping.`);
+      if (parentHost.kind === 'kickstand') {
+        console.warn(`[LysConverter] Kickstand candidate ${id} (object ${objectId}) cannot attach to kickstand parent ${String(parentId)}. Skipping.`);
         continue;
       }
 
@@ -652,7 +652,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
 
       const endpointRoles = pickAttachAndTipFromParentHints(s, parentId, parentHost, pA, pB);
       if (!endpointRoles) {
-        console.warn(`[LysConverter] Support brace candidate ${id} (object ${objectId}) could not project onto parent ${String(parentId)}. Skipping.`);
+        console.warn(`[LysConverter] Kickstand candidate ${id} (object ${objectId}) could not project onto parent ${String(parentId)}. Skipping.`);
         continue;
       }
 
@@ -669,7 +669,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
         : null;
       const targetAttachHeight = Math.max(visibleJoinLength ?? 0, parentVisibleJoinLength ?? 0);
 
-      // Lychee support braces are rooted columns. When joinLength is authored,
+      // Lychee kickstands are rooted columns. When joinLength is authored,
       // seek host contact near that column height to avoid collapsing the host
       // attach point to a low endpoint-only projection.
       if (targetAttachHeight > 1e-4) {
@@ -695,7 +695,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
 
       const hostPos = hostProjection.pointOnLine;
 
-      let layoutOverrides: Partial<SupportBracePlacementLayout> | undefined;
+      let layoutOverrides: Partial<KickstandPlacementLayout> | undefined;
       if (Number.isFinite(visibleJoinLength as number) && (visibleJoinLength as number) > 1e-4) {
         const rootTopZ = rootBaseWorld.z + rootDefaults.diskHeightMm + rootDefaults.coneHeightMm;
         const hostRise = hostPos.z - rootTopZ;
@@ -713,7 +713,7 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
         }
       }
 
-      const build = buildSupportBraceData({
+      const build = buildKickstandData({
         modelId: objectId,
         rootPos: {
           x: rootBaseWorld.x,
@@ -731,11 +731,11 @@ export function convertLycheeData(data: LycheeData, settings: SupportSettings, m
         layoutOverrides,
       });
 
-      result.supportBraces.push(build);
+      result.kickstands.push(build);
       hostsByLycheeId.set(id, {
-        kind: 'supportBrace',
-        shaftId: build.supportBrace.id,
-        supportBrace: build.supportBrace,
+        kind: 'kickstand',
+        shaftId: build.kickstand.id,
+        kickstand: build.kickstand,
         root: build.root,
         hostKnot: build.hostKnot,
       });

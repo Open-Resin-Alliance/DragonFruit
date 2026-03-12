@@ -1,43 +1,43 @@
 import { useSyncExternalStore } from 'react';
-import type { SupportBraceBuildResult, SupportBraceState } from './types';
+import type { KickstandBuildResult, KickstandState } from './types';
 import * as THREE from 'three';
 import type { Vec3, Segment, BezierSegment } from '../../types';
 
 const listeners = new Set<() => void>();
 
-const initialState: SupportBraceState = {
-    supportBraces: {},
+const initialState: KickstandState = {
+    kickstands: {},
     roots: {},
     knots: {},
     selectedId: null,
 };
 
-let state: SupportBraceState = { ...initialState };
+let state: KickstandState = { ...initialState };
 
 function notify() {
     listeners.forEach((listener) => listener());
 }
 
-export function subscribeToSupportBraceStore(listener: () => void) {
+export function subscribeToKickstandStore(listener: () => void) {
     listeners.add(listener);
     return () => listeners.delete(listener);
 }
 
-export function getSupportBraceSnapshot(): SupportBraceState {
+export function getKickstandSnapshot(): KickstandState {
     return state;
 }
 
-export function setSupportBraceSnapshot(next: SupportBraceState) {
+export function setKickstandSnapshot(next: KickstandState) {
     state = next;
     notify();
 }
 
-export function resetSupportBraceStore() {
+export function resetKickstandStore() {
     state = { ...initialState };
     notify();
 }
 
-export function setSupportBraceSelectedId(id: string | null) {
+export function setKickstandSelectedId(id: string | null) {
     if (state.selectedId === id) return;
     state = {
         ...state,
@@ -46,12 +46,12 @@ export function setSupportBraceSelectedId(id: string | null) {
     notify();
 }
 
-export function addSupportBrace(build: SupportBraceBuildResult) {
+export function addKickstand(build: KickstandBuildResult) {
     state = {
         ...state,
-        supportBraces: {
-            ...state.supportBraces,
-            [build.supportBrace.id]: build.supportBrace,
+        kickstands: {
+            ...state.kickstands,
+            [build.kickstand.id]: build.kickstand,
         },
         roots: {
             ...state.roots,
@@ -65,35 +65,35 @@ export function addSupportBrace(build: SupportBraceBuildResult) {
     notify();
 }
 
-export function updateSupportBrace(buildOrSupportBrace: SupportBraceBuildResult | SupportBraceState['supportBraces'][string]) {
-    if ('supportBrace' in buildOrSupportBrace) {
-        addSupportBrace(buildOrSupportBrace);
+export function updateKickstand(buildOrKickstand: KickstandBuildResult | KickstandState['kickstands'][string]) {
+    if ('kickstand' in buildOrKickstand) {
+        addKickstand(buildOrKickstand);
         return;
     }
 
-    const supportBrace = buildOrSupportBrace;
-    if (!state.supportBraces[supportBrace.id]) return;
+    const kickstand = buildOrKickstand;
+    if (!state.kickstands[kickstand.id]) return;
 
     state = {
         ...state,
-        supportBraces: {
-            ...state.supportBraces,
-            [supportBrace.id]: supportBrace,
+        kickstands: {
+            ...state.kickstands,
+            [kickstand.id]: kickstand,
         },
     };
     notify();
 }
 
-export function removeSupportBrace(id: string): SupportBraceBuildResult | null {
-    const supportBrace = state.supportBraces[id];
-    if (!supportBrace) return null;
+export function removeKickstand(id: string): KickstandBuildResult | null {
+    const kickstand = state.kickstands[id];
+    if (!kickstand) return null;
 
-    const root = state.roots[supportBrace.rootId];
-    const hostKnot = state.knots[supportBrace.hostKnotId];
+    const root = state.roots[kickstand.rootId];
+    const hostKnot = state.knots[kickstand.hostKnotId];
     if (!root || !hostKnot) return null;
 
-    const remainingBraces = { ...state.supportBraces };
-    delete remainingBraces[supportBrace.id];
+    const remainingKickstands = { ...state.kickstands };
+    delete remainingKickstands[kickstand.id];
 
     const remainingRoots = { ...state.roots };
     delete remainingRoots[root.id];
@@ -103,7 +103,7 @@ export function removeSupportBrace(id: string): SupportBraceBuildResult | null {
 
     state = {
         ...state,
-        supportBraces: remainingBraces,
+        kickstands: remainingKickstands,
         roots: remainingRoots,
         knots: remainingKnots,
         selectedId: state.selectedId === id ? null : state.selectedId,
@@ -111,7 +111,7 @@ export function removeSupportBrace(id: string): SupportBraceBuildResult | null {
     notify();
 
     return {
-        supportBrace,
+        kickstand,
         root,
         hostKnot,
     };
@@ -159,7 +159,7 @@ function transformSegment(segment: Segment, matrix: THREE.Matrix4, normalMatrix:
     return next;
 }
 
-export function transformSupportBracesForModel(
+export function transformKickstandsForModel(
     modelId: string,
     deltaMatrix: THREE.Matrix4,
     touchedRootIds?: Set<string>,
@@ -170,36 +170,36 @@ export function transformSupportBracesForModel(
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
     let changed = false;
-    let nextSupportBraces = state.supportBraces;
+    let nextKickstands = state.kickstands;
     let nextRoots = state.roots;
     let nextKnots = state.knots;
 
-    for (const supportBrace of Object.values(state.supportBraces)) {
+    for (const kickstand of Object.values(state.kickstands)) {
         const isConnectedToTouchedGraph = !!(
-            (touchedRootIds && touchedRootIds.has(supportBrace.rootId))
-            || (touchedKnotIds && touchedKnotIds.has(supportBrace.hostKnotId))
-            || (touchedSegmentIds && supportBrace.segments.some((segment) => touchedSegmentIds.has(segment.id)))
+            (touchedRootIds && touchedRootIds.has(kickstand.rootId))
+            || (touchedKnotIds && touchedKnotIds.has(kickstand.hostKnotId))
+            || (touchedSegmentIds && kickstand.segments.some((segment) => touchedSegmentIds.has(segment.id)))
         );
 
-        if (supportBrace.modelId !== modelId && !isConnectedToTouchedGraph) continue;
+        if (kickstand.modelId !== modelId && !isConnectedToTouchedGraph) continue;
 
         if (!changed) {
-            nextSupportBraces = { ...state.supportBraces };
+            nextKickstands = { ...state.kickstands };
             nextRoots = { ...state.roots };
             nextKnots = { ...state.knots };
             changed = true;
         }
 
-        const hostKnot = state.knots[supportBrace.hostKnotId];
+        const hostKnot = state.knots[kickstand.hostKnotId];
 
-        const transformedSupportBrace = {
-            ...supportBrace,
-            segments: supportBrace.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+        const transformedKickstand = {
+            ...kickstand,
+            segments: kickstand.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
         };
 
-        nextSupportBraces[supportBrace.id] = transformedSupportBrace;
+        nextKickstands[kickstand.id] = transformedKickstand;
 
-        const root = state.roots[supportBrace.rootId];
+        const root = state.roots[kickstand.rootId];
         if (root) {
             nextRoots[root.id] = {
                 ...root,
@@ -224,30 +224,30 @@ export function transformSupportBracesForModel(
 
     state = {
         ...state,
-        supportBraces: nextSupportBraces,
+        kickstands: nextKickstands,
         roots: nextRoots,
         knots: nextKnots,
     };
     notify();
 }
 
-export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4, preserveRootZ = false): boolean {
+export function transformAllKickstands(deltaMatrix: THREE.Matrix4, preserveRootZ = false): boolean {
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
-    const supportBraceEntries = Object.values(state.supportBraces);
-    if (supportBraceEntries.length === 0) return false;
+    const kickstandEntries = Object.values(state.kickstands);
+    if (kickstandEntries.length === 0) return false;
 
-    const nextSupportBraces = { ...state.supportBraces };
+    const nextKickstands = { ...state.kickstands };
     const nextRoots = { ...state.roots };
     const nextKnots = { ...state.knots };
 
-    for (const supportBrace of supportBraceEntries) {
-        nextSupportBraces[supportBrace.id] = {
-            ...supportBrace,
-            segments: supportBrace.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
+    for (const kickstand of kickstandEntries) {
+        nextKickstands[kickstand.id] = {
+            ...kickstand,
+            segments: kickstand.segments.map((segment) => transformSegment(segment, deltaMatrix, normalMatrix)),
         };
 
-        const root = state.roots[supportBrace.rootId];
+        const root = state.roots[kickstand.rootId];
         if (root) {
             nextRoots[root.id] = {
                 ...root,
@@ -260,7 +260,7 @@ export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4, preserveRo
             };
         }
 
-        const hostKnot = state.knots[supportBrace.hostKnotId];
+        const hostKnot = state.knots[kickstand.hostKnotId];
         if (hostKnot) {
             nextKnots[hostKnot.id] = {
                 ...hostKnot,
@@ -271,7 +271,7 @@ export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4, preserveRo
 
     state = {
         ...state,
-        supportBraces: nextSupportBraces,
+        kickstands: nextKickstands,
         roots: nextRoots,
         knots: nextKnots,
     };
@@ -279,28 +279,28 @@ export function transformAllSupportBraces(deltaMatrix: THREE.Matrix4, preserveRo
     return true;
 }
 
-export function reassignAllSupportBraceModelIds(modelId: string): boolean {
+export function reassignAllKickstandModelIds(modelId: string): boolean {
     if (!modelId) return false;
 
     let changed = false;
-    let nextSupportBraces = state.supportBraces;
+    let nextKickstands = state.kickstands;
     let nextRoots = state.roots;
 
-    for (const supportBrace of Object.values(state.supportBraces)) {
-        if (supportBrace.modelId === modelId) continue;
+    for (const kickstand of Object.values(state.kickstands)) {
+        if (kickstand.modelId === modelId) continue;
 
         if (!changed) {
-            nextSupportBraces = { ...state.supportBraces };
+            nextKickstands = { ...state.kickstands };
             nextRoots = { ...state.roots };
             changed = true;
         }
 
-        nextSupportBraces[supportBrace.id] = {
-            ...supportBrace,
+        nextKickstands[kickstand.id] = {
+            ...kickstand,
             modelId,
         };
 
-        const root = state.roots[supportBrace.rootId];
+        const root = state.roots[kickstand.rootId];
         if (root && root.modelId !== modelId) {
             nextRoots[root.id] = {
                 ...root,
@@ -313,17 +313,17 @@ export function reassignAllSupportBraceModelIds(modelId: string): boolean {
 
     state = {
         ...state,
-        supportBraces: nextSupportBraces,
+        kickstands: nextKickstands,
         roots: nextRoots,
     };
     notify();
     return true;
 }
 
-export function useSupportBraceStoreState() {
+export function useKickstandStoreState() {
     return useSyncExternalStore(
-        subscribeToSupportBraceStore,
-        getSupportBraceSnapshot,
-        getSupportBraceSnapshot,
+        subscribeToKickstandStore,
+        getKickstandSnapshot,
+        getKickstandSnapshot,
     );
 }

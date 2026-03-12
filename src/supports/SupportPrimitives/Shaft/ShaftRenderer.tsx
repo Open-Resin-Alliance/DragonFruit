@@ -134,7 +134,7 @@ export function ShaftRenderer({
             }));
         }
 
-        // Ctrl is reserved for Support Brace placement and should not re-select segments.
+        // Ctrl is reserved for Kickstand placement and should not re-select segments.
         if (ctrlDown) return;
 
         // When not in an editable context, let parent support handlers own the click.

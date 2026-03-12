@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import { getSnapshot, loadFromLychee, resetStore, transformAllSupportsForSingleModel, transformSupportsForModel } from '../state';
-import { getSupportBraceSnapshot } from '../SupportTypes/SupportBrace/supportBraceStore';
+import { getKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
 import type { DragonfruitImportFormat } from '../types';
 
 function makeBaseData(): DragonfruitImportFormat {
@@ -59,7 +59,7 @@ function makeBaseData(): DragonfruitImportFormat {
         diameter: 1.1,
       },
     ],
-    supportBraces: [
+    kickstands: [
       {
         root: {
           id: 'support-brace-root-1',
@@ -79,7 +79,7 @@ function makeBaseData(): DragonfruitImportFormat {
           pos: { x: 1, y: 2, z: 9 },
           diameter: 1,
         },
-        supportBrace: {
+        kickstand: {
           id: 'support-brace-1',
           modelId: 'model-1',
           rootId: 'support-brace-root-1',
@@ -132,25 +132,25 @@ test('transformSupportsForModel keeps support roots grounded during pure Z trans
   transformSupportsForModel('model-1', before, after);
 
   const snapshot = getSnapshot();
-  const supportBraceSnapshot = getSupportBraceSnapshot();
+  const kickstandSnapshot = getKickstandSnapshot();
 
   assert.equal(snapshot.roots['root-1']?.transform.pos.z, 0, 'Main support root should remain grounded on Z translation');
   assert.equal(snapshot.trunks['trunk-1']?.segments[0]?.topJoint?.pos.z, 15, 'Trunk top should follow model Z translation');
 
   assert.equal(
-    supportBraceSnapshot.roots['support-brace-root-1']?.transform.pos.z,
+    kickstandSnapshot.roots['support-brace-root-1']?.transform.pos.z,
     0,
-    'Support brace root should remain grounded on Z translation',
+    'Kickstand root should remain grounded on Z translation',
   );
   assert.equal(
-    supportBraceSnapshot.supportBraces['support-brace-1']?.segments[0]?.topJoint?.pos.z,
+    kickstandSnapshot.kickstands['support-brace-1']?.segments[0]?.topJoint?.pos.z,
     11,
-    'Support brace shaft should follow model Z translation',
+    'Kickstand shaft should follow model Z translation',
   );
   assert.equal(
-    supportBraceSnapshot.knots['support-brace-host-knot-1']?.pos.z,
+    kickstandSnapshot.knots['support-brace-host-knot-1']?.pos.z,
     14,
-    'Support brace host knot should follow model Z translation',
+    'Kickstand host knot should follow model Z translation',
   );
 
   resetStore();

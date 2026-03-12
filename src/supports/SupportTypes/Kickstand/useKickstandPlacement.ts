@@ -2,50 +2,50 @@ import { useEffect } from 'react';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
-import { supportBracePlacementStore, useSupportBracePlacementState } from './supportBracePlacementState';
+import { kickstandPlacementStore, useKickstandPlacementState } from './kickstandPlacementState';
 
-export function useSupportBracePlacement() {
+export function useKickstandPlacement() {
     const { getHotkey } = useHotkeyConfig();
-    const binding = getHotkey('SUPPORTS', 'SUPPORT_BRACE_PLACEMENT');
-    const SUPPORT_BRACE_KEY = binding.key;
-    const SUPPORT_BRACE_MODIFIER = binding.modifier;
+    const binding = getHotkey('SUPPORTS', 'KICKSTAND_PLACEMENT');
+    const KICKSTAND_KEY = binding.key;
+    const KICKSTAND_MODIFIER = binding.modifier;
 
     const { isGizmoActive } = useInteractionStatus();
-    const state = useSupportBracePlacementState();
+    const state = useKickstandPlacementState();
 
     useEffect(() => {
         const down = (e: KeyboardEvent) => {
             const matches = matchesConfiguredHotkeyDown(e, {
-                key: SUPPORT_BRACE_KEY,
-                modifier: SUPPORT_BRACE_MODIFIER,
+                key: KICKSTAND_KEY,
+                modifier: KICKSTAND_MODIFIER,
             });
 
             if (matches) {
                 e.preventDefault();
-                supportBracePlacementStore.setHotkeyActive(true);
+                kickstandPlacementStore.setHotkeyActive(true);
             }
         };
 
         const up = (e: KeyboardEvent) => {
             const matches = matchesConfiguredHotkeyUp(e, {
-                key: SUPPORT_BRACE_KEY,
-                modifier: SUPPORT_BRACE_MODIFIER,
+                key: KICKSTAND_KEY,
+                modifier: KICKSTAND_MODIFIER,
             });
 
             if (matches) {
                 e.preventDefault();
-                supportBracePlacementStore.setHotkeyActive(false);
+                kickstandPlacementStore.setHotkeyActive(false);
             }
         };
 
         const blur = () => {
-            supportBracePlacementStore.setHotkeyActive(false);
+            kickstandPlacementStore.setHotkeyActive(false);
         };
 
         const pointerMove = (e: PointerEvent) => {
-            const snapshot = supportBracePlacementStore.getSnapshot();
+            const snapshot = kickstandPlacementStore.getSnapshot();
             if (snapshot.hotkeyActive && !e.ctrlKey) {
-                supportBracePlacementStore.setHotkeyActive(false);
+                kickstandPlacementStore.setHotkeyActive(false);
             }
         };
 
@@ -62,11 +62,11 @@ export function useSupportBracePlacement() {
             window.removeEventListener('blur', blur);
             window.removeEventListener('pointermove', pointerMove, true);
         };
-    }, [SUPPORT_BRACE_KEY, SUPPORT_BRACE_MODIFIER]);
+    }, [KICKSTAND_KEY, KICKSTAND_MODIFIER]);
 
     useEffect(() => {
         if (isGizmoActive && state.hotkeyActive) {
-            supportBracePlacementStore.setHotkeyActive(false);
+            kickstandPlacementStore.setHotkeyActive(false);
         }
     }, [isGizmoActive, state.hotkeyActive]);
 
