@@ -10,7 +10,10 @@ interface PlaceOnFaceToolProps {
   models: LoadedModel[];
   activeModelId: string | null;
   activeTransform?: ModelTransform;
-  onFaceSelect: (modelId: string, newEuler: THREE.Euler) => void;
+  onAnimationStart: () => void;
+  onAnimatedTransformChange: (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => void;
+  resolveAnimatedTransform: (candidate: ModelTransform) => ModelTransform;
+  onFaceSelect: (modelId: string) => void;
 }
 
 interface AnimState {
@@ -18,9 +21,19 @@ interface AnimState {
   targetQuat: THREE.Quaternion;
   startTime: number;
   modelId: string;
+  startPosition: THREE.Vector3;
+  scale: THREE.Vector3;
 }
 
-export function PlaceOnFaceTool({ models, activeModelId, activeTransform, onFaceSelect }: PlaceOnFaceToolProps) {
+export function PlaceOnFaceTool({
+  models,
+  activeModelId,
+  activeTransform,
+  onAnimationStart,
+  onAnimatedTransformChange,
+  resolveAnimatedTransform,
+  onFaceSelect,
+}: PlaceOnFaceToolProps) {
   const { scene } = useThree();
   const toolGroupRef = useRef<THREE.Group>(null);
   const targetMeshGroupRef = useRef<THREE.Group | null>(null);
@@ -47,21 +60,23 @@ export function PlaceOnFaceTool({ models, activeModelId, activeTransform, onFace
     (normal: THREE.Vector3) => {
       if (animState || !activeModel || !activeModelId || !transform) return; // Prevent multiple clicks during animation
 
-      // Calculate the target rotation
       const targetWorldNormal = new THREE.Vector3(0, 0, -1);
       const currentWorldQuat = quaternionFromGlobalEuler(transform.rotation);
       const currentWorldNormal = normal.clone().applyQuaternion(currentWorldQuat).normalize();
       const deltaQuat = new THREE.Quaternion().setFromUnitVectors(currentWorldNormal, targetWorldNormal);
       const targetQuat = deltaQuat.multiply(currentWorldQuat);
 
+      onAnimationStart();
       setAnimState({
         startQuat: currentWorldQuat.clone(),
         targetQuat,
         startTime: performance.now(),
         modelId: activeModelId,
+        startPosition: transform.position.clone(),
+        scale: transform.scale.clone(),
       });
     },
-    [activeModel, animState, activeModelId]
+    [activeModel, animState, activeModelId, onAnimationStart, transform]
   );
 
   useFrame(() => {
@@ -69,27 +84,36 @@ export function PlaceOnFaceTool({ models, activeModelId, activeTransform, onFace
 
     const durationMs = 350;
     const elapsed = performance.now() - animState.startTime;
-    let t = Math.min(elapsed / durationMs, 1.0);
-    
-    // Cubic ease-out function
+    const t = Math.min(elapsed / durationMs, 1.0);
     const easeT = 1 - Math.pow(1 - t, 3);
-    
-    // Interpolate
     const currentQuat = animState.startQuat.clone().slerp(animState.targetQuat, easeT);
-    
-    // Apply to our overlay group
-    toolGroupRef.current.quaternion.copy(currentQuat);
+    const animatedEuler = new THREE.Euler().setFromQuaternion(currentQuat, 'ZYX');
+    const resolvedTransform = resolveAnimatedTransform({
+      position: animState.startPosition.clone(),
+      rotation: animatedEuler,
+      scale: animState.scale.clone(),
+    });
+    const resolvedQuat = quaternionFromGlobalEuler(resolvedTransform.rotation);
 
-    // Apply directly to the StlMesh group to bypass React lag
+    toolGroupRef.current.position.copy(resolvedTransform.position);
+    toolGroupRef.current.quaternion.copy(resolvedQuat);
+    toolGroupRef.current.scale.copy(resolvedTransform.scale);
+
     if (targetMeshGroupRef.current) {
-      targetMeshGroupRef.current.quaternion.copy(currentQuat);
+      targetMeshGroupRef.current.position.copy(resolvedTransform.position);
+      targetMeshGroupRef.current.quaternion.copy(resolvedQuat);
+      targetMeshGroupRef.current.scale.copy(resolvedTransform.scale);
     }
 
+    onAnimatedTransformChange(
+      resolvedTransform.position.clone(),
+      resolvedTransform.rotation.clone(),
+      resolvedTransform.scale.clone(),
+    );
+
     if (t >= 1.0) {
-      // Done animating
-      const finalEuler = new THREE.Euler().setFromQuaternion(currentQuat, 'ZYX');
       setAnimState(null);
-      onFaceSelect(animState.modelId, finalEuler);
+      onFaceSelect(animState.modelId);
     }
   });
 

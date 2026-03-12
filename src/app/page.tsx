@@ -4114,7 +4114,7 @@ export default function Home() {
       transformMgr.transformHook.setRotation(0, 0, 0);
       transformMgr.transformHook.setScale(1, 1, 1);
     }
-  }, [displayActiveModelId, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform, transformMgr.transform, transformMgr.transformHook]);
+  }, [displayActiveModelId, invalidatePendingTransformHistory, isFiniteTransform, scene.activeModel, scene.activeModelId, scene.updateModelTransform]);
 
   // Sync transform changes from manager back to model store (persistence)
   // This ensures that any change (gizmo, auto-lift, inputs) is saved to the model
@@ -6910,26 +6910,16 @@ export default function Home() {
     setDuplicateTotalCopies(targetCopies);
   }, [duplicateLayoutMode, duplicateSpacingMm, getModelSupportAwareDimensionsMm, isDuplicating, scene]);
 
-  const handlePlaceOnFace = React.useCallback(
-    (modelId: string, newEuler: THREE.Euler) => {
-      const activeModel = scene.models.find((m) => m.id === modelId);
-      if (!activeModel) return;
+  const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
+    ensurePendingTransformHistoryForActiveModel('rotate');
+    transformMgr.setIsTransforming(true);
+  }, [ensurePendingTransformHistoryForActiveModel, transformMgr]);
 
-      const nextTransform = {
-        position: activeModel.transform.position.clone(),
-        rotation: newEuler,
-        scale: activeModel.transform.scale.clone()
-      };
-
-      transformMgr.onTransformChange(nextTransform.position, nextTransform.rotation, nextTransform.scale);
-      
-      // Formalize the transform update so it gets saved to history/persistent state and triggers auto-lift
-      handleTransformEnd('rotate', nextTransform);
-
-      transformMgr.setTransformMode('transform');
-    },
-    [scene.models, transformMgr]
-  );
+  const handlePlaceOnFace = React.useCallback((modelId: string) => {
+    if (scene.activeModelId !== modelId) return;
+    handleTransformEnd('rotate');
+    transformMgr.setTransformMode('transform');
+  }, [handleTransformEnd, scene.activeModelId, transformMgr]);
 
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
@@ -7795,6 +7785,9 @@ export default function Home() {
                 models={scene.models}
                 activeModelId={displayActiveModelId}
                 activeTransform={transformMgr.transform}
+                onAnimationStart={handlePlaceOnFaceAnimationStart}
+                onAnimatedTransformChange={handleTransformChange}
+                resolveAnimatedTransform={transformMgr.resolveLiveTransform}
                 onFaceSelect={handlePlaceOnFace}
               />
             )}
