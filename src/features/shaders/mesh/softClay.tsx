@@ -7,6 +7,7 @@ export function SoftClayMaterial({
   useVertexColors,
   meshColor,
   hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
   materialRoughness,
@@ -17,16 +18,17 @@ export function SoftClayMaterial({
   useVertexColors?: boolean;
   meshColor?: string;
   hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   materialRoughness?: number;
   clippingPlanes: THREE.Plane[];
 }) {
-  const baseColor = useVertexColors ? '#ffffff' : (meshColor ?? '#a3a3a3');
+  const baseColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
-    ? blendTintColor(baseColor, hoverTintColor, selectedStrength)
+    ? blendTintColor(baseColor, selectedTintColor, selectedStrength)
     : isHovered
       ? blendTintColor(baseColor, hoverTintColor, hoverStrength)
       : baseColor;

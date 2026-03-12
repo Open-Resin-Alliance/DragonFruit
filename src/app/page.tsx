@@ -90,7 +90,12 @@ import {
 import type { HistoryDebugEvent } from '@/history/types';
 import { formatHistoryLabel } from '@/history/formatHistoryLabel';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
-import { getSavedWorkspaceCameraSettings } from '@/components/settings/workspaceCameraPreferences';
+import {
+  getSavedWorkspaceCameraSettings,
+  getWorkspaceCameraSettingsServerSnapshot,
+  getWorkspaceCameraSettingsSnapshot,
+  subscribeToWorkspaceCameraSettings,
+} from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
   getActiveMaterialProfile,
@@ -398,6 +403,11 @@ export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
+  const workspaceCameraSettings = React.useSyncExternalStore(
+    subscribeToWorkspaceCameraSettings,
+    getWorkspaceCameraSettingsSnapshot,
+    getWorkspaceCameraSettingsServerSnapshot,
+  );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
@@ -4031,7 +4041,7 @@ export default function Home() {
   }, []);
 
   // Sync transform manager when active model changes
-  useEffect(() => {
+  React.useEffect(() => {
     if (scene.activeModelId && scene.activeModel) {
       const t = scene.activeModel.transform;
 
@@ -4061,14 +4071,13 @@ export default function Home() {
         return;
       }
 
-      console.log('[Home] Syncing transform from model:', {
-        id: scene.activeModelId,
-        pos: t.position,
-        ignoreAutoLift: scene.activeModel.ignoreAutoLift
-      });
+      const shouldSuppressAutoLiftDuringSync =
+        scene.activeModel.ignoreAutoLift && displayActiveModelId !== scene.activeModelId;
 
-      // If model requests to ignore auto-lift/snap (e.g. LYS import), disable it in the hook
-      if (scene.activeModel.ignoreAutoLift) {
+      // Some imported models need to keep their stored transform when first synced into
+      // the live transform manager. Only suppress auto-lift for that initial sync pass;
+      // once synchronized, the Modify tab settings should work normally again.
+      if (shouldSuppressAutoLiftDuringSync) {
         transformMgr.transformHook.setAutoSnapEnabled(false);
       } else {
         transformMgr.transformHook.setAutoSnapEnabled(true);
@@ -5748,31 +5757,28 @@ export default function Home() {
   React.useEffect(() => {
     // Skip camera changes during automatic re-slice flow to prevent flickering
     if (shouldReturnToPrintingAfterSliceRef.current) return;
-    
-    const workspaceProjectionMode = getSavedWorkspaceCameraSettings().defaults[scene.mode];
+
+    const persistedWorkspaceCameraSettings = getSavedWorkspaceCameraSettings();
+
+    if (persistedWorkspaceCameraSettings.scope !== 'workspace') return;
+
+    const workspaceProjectionMode = persistedWorkspaceCameraSettings.defaults[scene.mode];
     const currentProjectionMode = getSavedCameraProjectionSettings().mode;
 
     if (workspaceProjectionMode !== currentProjectionMode) {
       saveCameraProjectionSettings({ mode: workspaceProjectionMode });
     }
-  }, [scene.mode]);
+  }, [scene.mode, workspaceCameraSettings]);
 
   React.useEffect(() => {
-    // Skip selection highlight changes during automatic re-slice flow to prevent flickering
-    if (shouldReturnToPrintingAfterSliceRef.current) return;
-    
-    const workspaceSelectionHighlightMode = getSavedWorkspaceCameraSettings().selectionHighlightDefaults[scene.mode];
-    if (workspaceSelectionHighlightMode !== scene.selectionHighlightMode) {
-      scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
-    }
+    // Removed old per-workspace selection highlight override effect
+    // const workspaceSelectionHighlightMode = getSavedWorkspaceCameraSettings().selectionHighlightDefaults[scene.mode];
+    // if (workspaceSelectionHighlightMode !== scene.selectionHighlightMode) {
+    //   scene.setSelectionHighlightMode(workspaceSelectionHighlightMode);
+    // }
   }, [scene.mode, scene.selectionHighlightMode, scene.setSelectionHighlightMode]);
 
   React.useEffect(() => {
-    if (scene.mode !== 'support') {
-      setIsSupportSpotlightHoldActive(false);
-      return;
-    }
-
     const isEditableTarget = (target: EventTarget | null) => {
       if (!(target instanceof HTMLElement)) return false;
       return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
@@ -5949,6 +5955,10 @@ export default function Home() {
     // pendingTransformRef, so performAutoSnap can safely use current values.
     try {
       transformMgr.performAutoSnap();
+      // handleTransformEnd flushes the raw rotated transform first so support
+      // geometry can catch up. Once auto-lift adjusts Z, we need to let the
+      // normal persistence effect write that lifted result back to the model.
+      transformEndFlushedRef.current = false;
     } finally {
       postRotateLiftScheduledRef.current = false;
     }
@@ -6903,6 +6913,10 @@ export default function Home() {
       <TopBar
         meshColor={scene.meshColor}
         onMeshColorChange={scene.setMeshColor}
+        selectionColor={scene.selectionColor}
+        onSelectionColorChange={scene.setSelectionColor}
+        hoverColor={scene.hoverColor}
+        onHoverColorChange={scene.setHoverColor}
         shaderType={scene.shaderType}
         onShaderTypeChange={scene.setShaderType}
         matcapVariant={scene.matcapVariant}
@@ -7691,6 +7705,8 @@ export default function Home() {
             voxelOpacity={islands.voxelOpacity}
             transformMode={transformMgr.transformMode}
             transform={transformMgr.transform}
+            autoLift={transformMgr.autoLift}
+            liftDistance={transformMgr.liftDistance}
             onTransformStart={handleTransformStart}
             onGizmoTransformCommit={handleGizmoTransformCommit}
             onGizmoTransformGroupCommit={handleGizmoTransformGroupCommit}
@@ -7717,6 +7733,8 @@ export default function Home() {
             leafHoverPosition={supports.leafPlacement.hoverPosition}
             gpuPickingTest={false}
             selectionHighlightMode={effectiveSelectionHighlightMode}
+            selectionColor={scene.selectionColor}
+            hoverColor={scene.hoverColor}
             hoverTintStrength={scene.hoverTintStrength}
             selectedTintStrength={scene.selectedTintStrength}
             crossSectionMode={slicing.crossSectionMode}

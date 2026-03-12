@@ -1,29 +1,44 @@
 'use client';
 
 import React from 'react';
+import type { SupportMode } from '@/supports/types';
 import { Camera as CameraIcon } from 'lucide-react';
 import type { CameraProjectionMode } from '@/components/settings/cameraProjectionPreferences';
 import type { CameraFeelPreset } from '@/components/settings/cameraFeelPreferences';
-import type { SelectionHighlightMode } from '@/components/selection';
-import { SelectionHighlightDropdown } from '@/components/controls/SelectionHighlightDropdown';
+import type { CameraScopeMode, WorkspaceCameraDefaults } from '@/components/settings/workspaceCameraPreferences';
 
 interface CameraSettingsTabProps {
+  cameraScope: CameraScopeMode;
+  onCameraScopeChange: (scope: CameraScopeMode) => void;
   cameraProjectionMode: CameraProjectionMode;
   onCameraProjectionModeChange: (mode: CameraProjectionMode) => void;
   cameraFeelPreset: CameraFeelPreset;
   onCameraFeelPresetChange: (preset: CameraFeelPreset) => void;
-  selectionHighlightMode: SelectionHighlightMode;
-  onSelectionHighlightModeChange: (mode: SelectionHighlightMode) => void;
+  workspaceCameraDefaults: WorkspaceCameraDefaults;
+  onWorkspaceCameraModeChange: (workspace: SupportMode, mode: CameraProjectionMode) => void;
 }
 
+const workspaceMeta: Array<{ key: SupportMode; label: string; hint: string }> = [
+  { key: 'prepare', label: 'Prepare', hint: 'Model prep and transform workflows' },
+  { key: 'analysis', label: 'Analysis', hint: 'Island diagnostics and inspection tools' },
+  { key: 'support', label: 'Support', hint: 'Support placement and editing workspace' },
+  { key: 'export', label: 'Export', hint: 'Final output and export pipeline' },
+];
+
 export function CameraSettingsTab({
+  cameraScope,
+  onCameraScopeChange,
   cameraProjectionMode,
   onCameraProjectionModeChange,
   cameraFeelPreset,
   onCameraFeelPresetChange,
-  selectionHighlightMode,
-  onSelectionHighlightModeChange,
+  workspaceCameraDefaults,
+  onWorkspaceCameraModeChange,
 }: CameraSettingsTabProps) {
+  const [activeWorkspace, setActiveWorkspace] = React.useState<SupportMode>('prepare');
+  const usingGlobalScope = cameraScope === 'global';
+  const usingWorkspaceScope = cameraScope === 'workspace';
+
   return (
     <div className="space-y-3">
       <section
@@ -48,7 +63,7 @@ export function CameraSettingsTab({
               Camera Defaults
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Global camera projection mode and selection highlight behavior.
+              Global camera projection mode and navigation behavior.
             </p>
           </div>
         </div>
@@ -57,10 +72,70 @@ export function CameraSettingsTab({
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                Camera scope
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Choose one global projection mode for every workspace, or set projection defaults per workspace.
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onCameraScopeChange('global')}
+                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={usingGlobalScope
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent-contrast)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                Global
+              </button>
+              <button
+                type="button"
+                onClick={() => onCameraScopeChange('workspace')}
+                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={usingWorkspaceScope
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent-contrast)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                Workspace
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="mt-2 rounded-md border p-2.5 transition-opacity"
+          aria-disabled={!usingGlobalScope}
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-0)',
+            opacity: usingGlobalScope ? 1 : 0.35,
+            pointerEvents: usingGlobalScope ? 'auto' : 'none',
+          }}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
                 Projection mode
               </div>
               <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                Immediate camera mode (independent from per-workspace defaults).
+                Use one projection mode everywhere when global scope is active.
               </div>
             </div>
             <div className="flex items-center gap-1.5">
@@ -87,6 +162,101 @@ export function CameraSettingsTab({
                 onClick={() => onCameraProjectionModeChange('perspective')}
                 className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
                 style={cameraProjectionMode === 'perspective'
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent-contrast)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                Perspective
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="mt-2 rounded-md border p-2.5 transition-opacity"
+          aria-disabled={!usingWorkspaceScope}
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'var(--surface-0)',
+            opacity: usingWorkspaceScope ? 1 : 0.35,
+            pointerEvents: usingWorkspaceScope ? 'auto' : 'none',
+          }}
+        >
+          <div>
+            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Workspace camera defaults
+            </div>
+            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Pick the default projection mode used when you enter each workspace.
+            </div>
+          </div>
+
+          <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4">
+            {workspaceMeta.map((workspace) => {
+              const active = activeWorkspace === workspace.key;
+              return (
+                <button
+                  key={workspace.key}
+                  type="button"
+                  onClick={() => setActiveWorkspace(workspace.key)}
+                  className="h-10 rounded-md border px-2 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                  style={active
+                    ? {
+                        borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                        color: 'var(--accent-contrast)',
+                      }
+                    : {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                        color: 'var(--text-muted)',
+                      }}
+                >
+                  {workspace.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.label} default camera
+            </div>
+            <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              {workspaceMeta.find((workspace) => workspace.key === activeWorkspace)?.hint}
+            </div>
+
+            <div className="mt-2 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'orthographic')}
+                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={workspaceCameraDefaults[activeWorkspace] === 'orthographic'
+                  ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                      color: 'var(--accent-contrast)',
+                    }
+                  : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+              >
+                Ortho
+              </button>
+              <button
+                type="button"
+                onClick={() => onWorkspaceCameraModeChange(activeWorkspace, 'perspective')}
+                className="h-10 min-w-[120px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                style={workspaceCameraDefaults[activeWorkspace] === 'perspective'
                   ? {
                       borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
                       background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
@@ -148,23 +318,6 @@ export function CameraSettingsTab({
           </div>
         </div>
 
-        <div className="mt-2 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                Selection highlight mode
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                In Spotlight mode, DragonFruit combines spotlight and mesh tint together.
-              </div>
-            </div>
-            <SelectionHighlightDropdown
-              value={selectionHighlightMode}
-              onChange={onSelectionHighlightModeChange}
-              fullWidth={false}
-            />
-          </div>
-        </div>
       </section>
     </div>
   );

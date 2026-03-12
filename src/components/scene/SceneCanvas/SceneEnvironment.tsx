@@ -94,7 +94,7 @@ export function Lights({
   return (
     <>
       <ambientLight intensity={ambientIntensity} />
-      <directionalLight position={[0, 0, 12]} intensity={directionalIntensity} color="#ffd8ef" />
+      <directionalLight position={[0, 0, 12]} intensity={directionalIntensity} color="#ffffff" />
       <directionalLight position={[0, 0, -12]} intensity={directionalIntensity * 0.15} color="#90a7ff" />
       <hemisphereLight args={['#f6e8ff', '#3e415c', ambientIntensity * 0.6]} />
       <CameraHeadlight intensity={clampedHeadlightIntensity} />
