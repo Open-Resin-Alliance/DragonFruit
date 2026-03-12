@@ -58,6 +58,7 @@ export function StlMesh({
   onModelHoverModelChange,
   revealGhostOpacity,
   hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
   supportNonSelectedOpacity,
@@ -114,6 +115,7 @@ export function StlMesh({
   onModelHoverModelChange?: (modelId: string | null) => void;
   revealGhostOpacity?: number;
   hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   supportNonSelectedOpacity?: number;
@@ -304,22 +306,23 @@ export function StlMesh({
   });
 
   const interactionLodColor = React.useMemo(() => {
-    const base = new THREE.Color(hasVertexColorAttribute ? '#ffffff' : (meshColor ?? '#a3a3a3'));
-    const tint = new THREE.Color(hoverTintColor ?? '#ec2a77');
+    const base = new THREE.Color(meshColor ?? '#a3a3a3');
+    const hoverTint = new THREE.Color(hoverTintColor ?? meshColor ?? '#a3a3a3');
+    const selectedTint = new THREE.Color(selectedTintColor ?? meshColor ?? '#a3a3a3');
 
     const selectionStrength = Math.min(1, Math.max(0, selectedTintStrength ?? 0.75));
     const hoverStrength = Math.min(1, Math.max(0, hoverTintStrength ?? 0.5));
 
     if (isSelected) {
-      return base.clone().lerp(tint, selectionStrength).getStyle();
+      return base.clone().lerp(selectedTint, selectionStrength).getStyle();
     }
 
     if (isHoveredModel || isMarqueeHovered) {
-      return base.clone().lerp(tint, hoverStrength).getStyle();
+      return base.clone().lerp(hoverTint, hoverStrength).getStyle();
     }
 
     return base.getStyle();
-  }, [hasVertexColorAttribute, hoverTintColor, hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, meshColor, selectedTintStrength]);
+  }, [hoverTintColor, hoverTintStrength, isHoveredModel, isMarqueeHovered, isSelected, meshColor, selectedTintColor, selectedTintStrength]);
 
   const outOfBoundsMaterial = React.useMemo(() => {
     if (!showOutOfBoundsOverlay || !outOfBoundsMin || !outOfBoundsMax) return null;
@@ -619,6 +622,7 @@ export function StlMesh({
             isHovered={isHoveredModel || isMarqueeHovered}
             useVertexColors={hasVertexColorAttribute}
             hoverTintColor={hoverTintColor}
+            selectedTintColor={selectedTintColor}
             hoverTintStrength={hoverTintStrength}
             selectedTintStrength={selectedTintStrength}
             meshColor={meshColor}

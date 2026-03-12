@@ -96,6 +96,7 @@ import {
   isBoundsOutsideVolume,
   shouldUsePreciseBoundsForTransform,
 } from '@/utils/modelBounds';
+import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
 const Canvas = dynamic(() => import('@react-three/fiber').then(m => m.Canvas), { ssr: false });
@@ -857,6 +858,8 @@ export function SceneCanvas({
   voxelOpacity,
   transformMode,
   transform,
+  autoLift = false,
+  liftDistance = 5,
   onTransformChange,
   onTransformStart,
   onGizmoTransformCommit,
@@ -897,6 +900,8 @@ export function SceneCanvas({
   branchHoverPosition,
   leafTipPosition,
   leafHoverPosition,
+  selectionColor,
+  hoverColor,
   hoverTintStrength,
   selectedTintStrength,
   children,
@@ -954,6 +959,8 @@ export function SceneCanvas({
   voxelOpacity?: number;
   transformMode?: TransformMode;
   transform?: ModelTransform;
+  autoLift?: boolean;
+  liftDistance?: number;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   onTransformStart?: (
     operation: 'move' | 'rotate' | 'scale',
@@ -1028,6 +1035,8 @@ export function SceneCanvas({
   branchHoverPosition?: { x: number; y: number; z: number } | null;
   leafTipPosition?: { x: number; y: number; z: number } | null;
   leafHoverPosition?: { x: number; y: number; z: number } | null;
+  selectionColor?: string;
+  hoverColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
 
@@ -1134,6 +1143,40 @@ export function SceneCanvas({
     }
     return map;
   }, [models]);
+
+  const alignLiveTransformToLift = React.useCallback((model: LoadedModel | null | undefined, candidate: ModelTransform | null) => {
+    if (!model || !candidate) return candidate;
+
+    const geometry = model.geometry?.geometry;
+    if (!geometry) return candidate;
+
+    const bbox = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
+    const center = bbox.getCenter(new THREE.Vector3());
+
+    const offsetMatrix = new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z);
+    const rotScaleMatrix = new THREE.Matrix4();
+    rotScaleMatrix.compose(
+      new THREE.Vector3(0, 0, 0),
+      quaternionFromGlobalEuler(candidate.rotation),
+      candidate.scale,
+    );
+
+    const posMatrix = new THREE.Matrix4().makeTranslation(candidate.position.x, candidate.position.y, candidate.position.z);
+    const finalMatrix = posMatrix.multiply(rotScaleMatrix).multiply(offsetMatrix);
+    const lowestWorldZ = computeLowestZ(geometry, finalMatrix);
+    const targetZ = autoLift ? liftDistance : 0.001;
+    const offset = targetZ - lowestWorldZ;
+
+    if (!Number.isFinite(offset) || Math.abs(offset) <= 1e-5) {
+      return candidate;
+    }
+
+    return {
+      position: candidate.position.clone().add(new THREE.Vector3(0, 0, offset)),
+      rotation: candidate.rotation.clone(),
+      scale: candidate.scale.clone(),
+    };
+  }, [autoLift, liftDistance]);
 
   const supportColorsByModelId = React.useMemo(() => {
     const fallbackColor = meshColor ?? '#a3a3a3';
@@ -1535,8 +1578,9 @@ export function SceneCanvas({
 
   const [isCameraBelowBuildPlate, setIsCameraBelowBuildPlate] = React.useState(false);
   const [buildPlateOpacity, setBuildPlateOpacity] = React.useState(1);
-  const [hoverTintColor, setHoverTintColor] = React.useState<string>('#ec2a77');
   const [outOfBoundsStripeColor, setOutOfBoundsStripeColor] = React.useState<string>('#b6ff2e');
+  const hoverTintColor = hoverColor ?? '#ec2a77';
+  const selectedTintColor = selectionColor ?? '#ec2a77';
 
   const computeSupportAndRaftWorldBounds = React.useCallback((modelId: string): THREE.Box3 | null => {
     // During active gizmo drags, keep bounds work minimal to preserve interaction FPS.
@@ -1887,22 +1931,9 @@ export function SceneCanvas({
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const resolveHoverTint = () => {
+    const resolveOutOfBoundsStripeColor = () => {
       const rootStyles = getComputedStyle(document.documentElement);
-      const accent = rootStyles.getPropertyValue('--accent').trim();
       const accentSecondary = rootStyles.getPropertyValue('--accent-secondary').trim();
-
-      if (!accent) {
-        setHoverTintColor('#ec2a77');
-      } else {
-        try {
-          const parsed = new THREE.Color();
-          parsed.setStyle(accent);
-          setHoverTintColor(parsed.getStyle());
-        } catch {
-          setHoverTintColor('#ec2a77');
-        }
-      }
 
       if (!accentSecondary) {
         setOutOfBoundsStripeColor('#b6ff2e');
@@ -1917,9 +1948,9 @@ export function SceneCanvas({
       }
     };
 
-    resolveHoverTint();
+    resolveOutOfBoundsStripeColor();
 
-    const observer = new MutationObserver(resolveHoverTint);
+    const observer = new MutationObserver(resolveOutOfBoundsStripeColor);
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class', 'style', 'data-theme'],
@@ -4837,10 +4868,13 @@ export function SceneCanvas({
                   && model.id === duplicatePreviewModel.id,
                 );
                 // Use props.transform if active (for smooth drag), else model.transform
-                const activeTransformForRender = liveDragTransformRef.current
+                const rawActiveTransformForRender = liveDragTransformRef.current
                   ?? (isMultiGizmoSelection
                     ? (liveActiveTransformForMultiPreview ?? model.transform)
                     : (transform ?? model.transform));
+                const activeTransformForRender = isActive
+                  ? (alignLiveTransformToLift(model, rawActiveTransformForRender) ?? rawActiveTransformForRender)
+                  : rawActiveTransformForRender;
                 const transformToUse = isActive
                   ? (duplicateActivePreviewTransform ?? activeTransformForRender)
                   : (multiGizmoPreviewTransformsById[model.id] ?? model.transform);
@@ -4906,6 +4940,7 @@ export function SceneCanvas({
                       onModelHoverPointChange={onModelHoverPointChange}
                       onModelHoverModelChange={onModelHoverModelChange}
                       hoverTintColor={hoverTintColor}
+                      selectedTintColor={selectedTintColor}
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}
@@ -5407,20 +5442,25 @@ export function SceneCanvas({
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live) {
+                        const correctedLive = alignLiveTransformToLift(activeModel ?? null, live) ?? live;
+                        activeGroupRef.current.position.copy(correctedLive.position);
+                        activeGroupRef.current.quaternion.copy(new THREE.Quaternion().setFromEuler(correctedLive.rotation));
+                        activeGroupRef.current.scale.copy(correctedLive.scale);
+                        applySupportGroupDelta();
                         if (isMultiGizmoSelection && gizmoGroupStartSnapshot?.operation === 'move') {
                           const immediatePreviewByModelId = buildMultiSelectionTransformsFromActive(gizmoGroupStartSnapshot, {
-                            position: live.position.clone(),
-                            rotation: live.rotation.clone(),
-                            scale: live.scale.clone(),
+                            position: correctedLive.position.clone(),
+                            rotation: correctedLive.rotation.clone(),
+                            scale: correctedLive.scale.clone(),
                           });
                           applyImmediateMultiPreview(gizmoGroupStartSnapshot, immediatePreviewByModelId);
                           setMultiGizmoAnchorPosition(computeCenterFromTransforms(immediatePreviewByModelId));
                         }
 
                         queueLiveDragTransform({
-                          position: live.position.clone(),
-                          rotation: live.rotation.clone(),
-                          scale: live.scale.clone(),
+                          position: correctedLive.position.clone(),
+                          rotation: correctedLive.rotation.clone(),
+                          scale: correctedLive.scale.clone(),
                         });
                         updateDragCornerCagesNow();
                       }
@@ -5571,16 +5611,26 @@ export function SceneCanvas({
                   }}
                   onRotate={(axis, angle) => {
                     if (activeGroupRef.current) {
-                      const worldAxis = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
-                      const quaternion = new THREE.Quaternion().setFromAxisAngle(worldAxis, -angle);
+                      const rotationAxis =
+                        axis === 'x'
+                          ? new THREE.Vector3(1, 0, 0)
+                          : axis === 'y'
+                            ? new THREE.Vector3(0, 1, 0)
+                            : new THREE.Vector3(0, 0, 1);
+                      const quaternion = new THREE.Quaternion().setFromAxisAngle(rotationAxis, -angle);
                       activeGroupRef.current.quaternion.premultiply(quaternion);
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live) {
+                        const correctedLive = alignLiveTransformToLift(activeModel ?? null, live) ?? live;
+                        activeGroupRef.current.position.copy(correctedLive.position);
+                        activeGroupRef.current.quaternion.copy(new THREE.Quaternion().setFromEuler(correctedLive.rotation));
+                        activeGroupRef.current.scale.copy(correctedLive.scale);
+                        applySupportGroupDelta();
                         queueLiveDragTransform({
-                          position: live.position.clone(),
-                          rotation: live.rotation.clone(),
-                          scale: live.scale.clone(),
+                          position: correctedLive.position.clone(),
+                          rotation: correctedLive.rotation.clone(),
+                          scale: correctedLive.scale.clone(),
                         });
                       }
                     }
@@ -5714,58 +5764,34 @@ export function SceneCanvas({
                     }
                     return true;
                   }}
-                  onScale={(axis, factor) => {
+                  onScale={(_axis, value) => {
                     if (activeGroupRef.current) {
-                      if (isMultiGizmoSelection && gizmoGroupStartSnapshot?.operation === 'scale' && activeModelId) {
-                        const activeBefore = gizmoGroupStartSnapshot.beforeByModelId[activeModelId];
-                        if (activeBefore) {
-                          const ratio = new THREE.Vector3(1, 1, 1);
-                          if (axis === 'uniform') {
-                            ratio.set(factor, factor, factor);
-                          } else if (axis === 'x') {
-                            ratio.set(factor, 1, 1);
-                          } else if (axis === 'y') {
-                            ratio.set(1, factor, 1);
-                          } else if (axis === 'z') {
-                            ratio.set(1, 1, factor);
-                          }
-
-                          const pivot = gizmoGroupStartSnapshot.pivot;
-                          const offset = activeBefore.position.clone().sub(pivot);
-                          offset.set(offset.x * ratio.x, offset.y * ratio.y, offset.z * ratio.z);
-
-                          activeGroupRef.current.position.copy(pivot.clone().add(offset));
-                          activeGroupRef.current.scale.set(
-                            activeBefore.scale.x * ratio.x,
-                            activeBefore.scale.y * ratio.y,
-                            activeBefore.scale.z * ratio.z,
-                          );
-                        }
-                      } else if (axis === 'uniform') {
-                        activeGroupRef.current.scale.copy(initialScaleRef.current).multiplyScalar(factor);
-                      } else {
-                        activeGroupRef.current.scale.copy(initialScaleRef.current);
-                        if (axis === 'x') activeGroupRef.current.scale.x *= factor;
-                        if (axis === 'y') activeGroupRef.current.scale.y *= factor;
-                        if (axis === 'z') activeGroupRef.current.scale.z *= factor;
-                      }
+                      const scalarValue = Number(value);
+                      const safeScalar = Number.isFinite(scalarValue) ? scalarValue : 1;
+                      const nextScale = initialScaleRef.current.clone().multiplyScalar(Math.max(0.0001, safeScalar));
+                      activeGroupRef.current.scale.copy(nextScale);
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live) {
+                        const correctedLive = alignLiveTransformToLift(activeModel ?? null, live) ?? live;
+                        activeGroupRef.current.position.copy(correctedLive.position);
+                        activeGroupRef.current.quaternion.copy(new THREE.Quaternion().setFromEuler(correctedLive.rotation));
+                        activeGroupRef.current.scale.copy(correctedLive.scale);
+                        applySupportGroupDelta();
                         if (isMultiGizmoSelection && gizmoGroupStartSnapshot?.operation === 'scale') {
                           const immediatePreviewByModelId = buildMultiSelectionTransformsFromActive(gizmoGroupStartSnapshot, {
-                            position: live.position.clone(),
-                            rotation: live.rotation.clone(),
-                            scale: live.scale.clone(),
+                            position: correctedLive.position.clone(),
+                            rotation: correctedLive.rotation.clone(),
+                            scale: correctedLive.scale.clone(),
                           });
                           applyImmediateMultiPreview(gizmoGroupStartSnapshot, immediatePreviewByModelId);
                           setMultiGizmoAnchorPosition(computeCenterFromTransforms(immediatePreviewByModelId));
                         }
 
                         queueLiveDragTransform({
-                          position: live.position.clone(),
-                          rotation: live.rotation.clone(),
-                          scale: live.scale.clone(),
+                          position: correctedLive.position.clone(),
+                          rotation: correctedLive.rotation.clone(),
+                          scale: correctedLive.scale.clone(),
                         });
                         updateDragCornerCagesNow();
                       }

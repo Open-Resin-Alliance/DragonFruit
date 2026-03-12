@@ -8,6 +8,7 @@ export function OverhangHeatmapMaterial({
     useVertexColors,
     meshColor,
     hoverTintColor,
+    selectedTintColor,
     hoverTintStrength,
     selectedTintStrength,
     materialRoughness,
@@ -21,6 +22,7 @@ export function OverhangHeatmapMaterial({
     useVertexColors?: boolean;
     meshColor?: string;
     hoverTintColor?: string;
+    selectedTintColor?: string;
     hoverTintStrength?: number;
     selectedTintStrength?: number;
     materialRoughness?: number;
@@ -29,11 +31,11 @@ export function OverhangHeatmapMaterial({
     heatmapContrast?: number;
     heatmapColors?: string[];
 }) {
-    const baseColor = useVertexColors ? '#ffffff' : (meshColor ?? '#a3a3a3');
+    const baseColor = meshColor ?? '#a3a3a3';
     const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
     const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
     const tintColor = isSelected
-        ? blendTintColor(baseColor, hoverTintColor, selectedStrength)
+        ? blendTintColor(baseColor, selectedTintColor, selectedStrength)
         : isHovered
             ? blendTintColor(baseColor, hoverTintColor, hoverStrength)
             : baseColor;

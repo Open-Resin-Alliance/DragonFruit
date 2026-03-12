@@ -5,6 +5,7 @@ export function FlatUnlitMaterial({
   isSelected,
   isHovered,
   hoverTintColor,
+  selectedTintColor,
   hoverTintStrength,
   selectedTintStrength,
   useVertexColors,
@@ -14,22 +15,23 @@ export function FlatUnlitMaterial({
   isSelected: boolean;
   isHovered: boolean;
   hoverTintColor?: string;
+  selectedTintColor?: string;
   hoverTintStrength?: number;
   selectedTintStrength?: number;
   useVertexColors?: boolean;
   meshColor?: string;
   clippingPlanes: THREE.Plane[];
 }) {
-  const baseFlatColor = meshColor ?? '#ffffff';
+  const baseFlatColor = meshColor ?? '#a3a3a3';
   const selectedStrength = clampTintStrength(selectedTintStrength, 0.75);
   const hoverStrength = clampTintStrength(hoverTintStrength, 0.5);
   const tintColor = isSelected
-    ? blendTintColor('#ffffff', hoverTintColor, selectedStrength)
+    ? blendTintColor(baseFlatColor, selectedTintColor, selectedStrength)
     : isHovered
-      ? blendTintColor('#ffffff', hoverTintColor, hoverStrength)
-      : '#ffffff';
+      ? blendTintColor(baseFlatColor, hoverTintColor, hoverStrength)
+      : baseFlatColor;
   const flatColor = isSelected
-    ? blendTintColor(baseFlatColor, hoverTintColor, selectedStrength)
+    ? blendTintColor(baseFlatColor, selectedTintColor, selectedStrength)
     : isHovered
       ? blendTintColor(baseFlatColor, hoverTintColor, hoverStrength)
       : baseFlatColor;

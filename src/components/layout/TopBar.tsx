@@ -30,6 +30,10 @@ import type { View3DSettings } from '@/components/settings/view3dPreferences';
 interface TopBarProps {
   meshColor: string;
   onMeshColorChange: (color: string) => void;
+  selectionColor: string;
+  onSelectionColorChange: (color: string) => void;
+  hoverColor: string;
+  onHoverColorChange: (color: string) => void;
   shaderType: MeshShaderType;
   onShaderTypeChange: (shaderType: MeshShaderType) => void;
   matcapVariant: MatcapVariant;
@@ -78,6 +82,10 @@ interface TopBarProps {
 export function TopBar({
   meshColor,
   onMeshColorChange,
+  selectionColor,
+  onSelectionColorChange,
+  hoverColor,
+  onHoverColorChange,
   shaderType,
   onShaderTypeChange,
   matcapVariant,
@@ -798,6 +806,10 @@ export function TopBar({
         onClose={() => setIsSettingsOpen(false)}
         meshColor={meshColor}
         onMeshColorChange={onMeshColorChange}
+        selectionColor={selectionColor}
+        onSelectionColorChange={onSelectionColorChange}
+        hoverColor={hoverColor}
+        onHoverColorChange={onHoverColorChange}
         shaderType={shaderType}
         onShaderTypeChange={onShaderTypeChange}
         matcapVariant={matcapVariant}
