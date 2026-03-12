@@ -4,7 +4,7 @@ import React from 'react';
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { getSnapshot as getSupportSnapshot, subscribe as subscribeSupportState } from '@/supports/state';
-import { getSupportBraceSnapshot, subscribeToSupportBraceStore } from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+import { getKickstandSnapshot, subscribeToKickstandStore } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 
 type ModelSupportsModalProps = {
   isOpen: boolean;
@@ -21,7 +21,7 @@ type ModelSupportGroups = {
   sticks: string[];
   braces: string[];
   knots: string[];
-  supportBraces: string[];
+  kickstands: string[];
 };
 
 const EMPTY_GROUPS: ModelSupportGroups = {
@@ -33,7 +33,7 @@ const EMPTY_GROUPS: ModelSupportGroups = {
   sticks: [],
   braces: [],
   knots: [],
-  supportBraces: [],
+  kickstands: [],
 };
 
 function pluralize(label: string, count: number) {
@@ -46,7 +46,7 @@ function sortIds(ids: string[]): string[] {
 
 export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModalProps) {
   const supportSnapshot = React.useSyncExternalStore(subscribeSupportState, getSupportSnapshot, getSupportSnapshot);
-  const supportBraceSnapshot = React.useSyncExternalStore(subscribeToSupportBraceStore, getSupportBraceSnapshot, getSupportBraceSnapshot);
+  const kickstandSnapshot = React.useSyncExternalStore(subscribeToKickstandStore, getKickstandSnapshot, getKickstandSnapshot);
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
 
   React.useEffect(() => {
@@ -71,7 +71,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
     const twigs = sortIds(Object.values(supportSnapshot.twigs).filter((item) => item.modelId === modelId).map((item) => item.id));
     const sticks = sortIds(Object.values(supportSnapshot.sticks).filter((item) => item.modelId === modelId).map((item) => item.id));
     const braces = sortIds(Object.values(supportSnapshot.braces).filter((item) => item.modelId === modelId).map((item) => item.id));
-    const supportBraces = sortIds(Object.values(supportBraceSnapshot.supportBraces).filter((item) => item.modelId === modelId).map((item) => item.id));
+    const kickstands = sortIds(Object.values(kickstandSnapshot.kickstands).filter((item) => item.modelId === modelId).map((item) => item.id));
 
     const knots = sortIds(Object.values(supportSnapshot.knots).filter((item) => {
       const parent = item.parentShaftId;
@@ -99,9 +99,9 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
       sticks,
       braces,
       knots,
-      supportBraces,
+      kickstands,
     };
-  }, [model?.id, supportBraceSnapshot.supportBraces, supportSnapshot.braces, supportSnapshot.branches, supportSnapshot.knots, supportSnapshot.leaves, supportSnapshot.roots, supportSnapshot.sticks, supportSnapshot.trunks, supportSnapshot.twigs]);
+  }, [kickstandSnapshot.kickstands, model?.id, supportSnapshot.braces, supportSnapshot.branches, supportSnapshot.knots, supportSnapshot.leaves, supportSnapshot.roots, supportSnapshot.sticks, supportSnapshot.trunks, supportSnapshot.twigs]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -118,7 +118,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
       sticks: groups.sticks.length,
       braces: groups.braces.length,
       knots: groups.knots.length,
-      supportBraces: groups.supportBraces.length,
+      kickstands: groups.kickstands.length,
     };
   }, [groups]);
 
@@ -130,7 +130,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
       + summaryStats.twigs
       + summaryStats.sticks
       + summaryStats.braces
-      + summaryStats.supportBraces;
+      + summaryStats.kickstands;
   }, [summaryStats]);
 
   const groupRows = React.useMemo(() => {
@@ -142,7 +142,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
       { key: 'twigs', label: 'Twigs', ids: groups.twigs },
       { key: 'sticks', label: 'Sticks', ids: groups.sticks },
       { key: 'braces', label: 'Braces', ids: groups.braces },
-      { key: 'supportBraces', label: 'Support Braces', ids: groups.supportBraces },
+      { key: 'kickstands', label: 'Kickstands', ids: groups.kickstands },
       { key: 'knots', label: 'Knots', ids: groups.knots },
     ] as const;
   }, [groups]);
@@ -215,7 +215,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            {[ 
+            {[
               ['Roots', summaryStats.roots],
               ['Trunks', summaryStats.trunks],
               ['Branches', summaryStats.branches],
@@ -223,7 +223,7 @@ export function ModelSupportsModal({ isOpen, onClose, model }: ModelSupportsModa
               ['Twigs', summaryStats.twigs],
               ['Sticks', summaryStats.sticks],
               ['Braces', summaryStats.braces],
-              ['Support Braces', summaryStats.supportBraces],
+              ['Kickstands', summaryStats.kickstands],
               ['Knots', summaryStats.knots],
             ].map(([label, count]) => (
               <div

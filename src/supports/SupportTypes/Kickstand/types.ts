@@ -1,24 +1,24 @@
 import type { Knot, Roots, Segment, SupportEntity, Vec3 } from '../../types';
 
-export type SupportBraceHostKind = 'trunk' | 'branch';
+export type KickstandHostKind = 'trunk' | 'branch';
 
-export interface SupportBraceHostTarget {
+export interface KickstandHostTarget {
     segmentId: string;
-    supportKind: SupportBraceHostKind;
+    supportKind: KickstandHostKind;
     t: number;
     pos: Vec3;
     diameterMm: number;
     minT?: number;
 }
 
-export interface SupportBracePlacementLayout {
+export interface KickstandPlacementLayout {
     firstJointHeightRatio: number;
     secondJointHeightRatio: number;
     minJointSpacingMm: number;
     minTerminalClearanceMm: number;
 }
 
-export interface SupportBrace extends SupportEntity {
+export interface Kickstand extends SupportEntity {
     rootId: string;
     hostKnotId: string;
     hostSegmentId: string;
@@ -32,21 +32,21 @@ export interface SupportBrace extends SupportEntity {
     };
 }
 
-export interface SupportBraceBuildInput {
+export interface KickstandBuildInput {
     modelId: string;
     rootPos: Vec3;
-    host: SupportBraceHostTarget;
-    layoutOverrides?: Partial<SupportBracePlacementLayout>;
+    host: KickstandHostTarget;
+    layoutOverrides?: Partial<KickstandPlacementLayout>;
 }
 
-export interface SupportBraceBuildResult {
+export interface KickstandBuildResult {
     root: Roots;
     hostKnot: Knot;
-    supportBrace: SupportBrace;
+    kickstand: Kickstand;
 }
 
-export interface SupportBraceState {
-    supportBraces: Record<string, SupportBrace>;
+export interface KickstandState {
+    kickstands: Record<string, Kickstand>;
     roots: Record<string, Roots>;
     knots: Record<string, Knot>;
     selectedId: string | null;

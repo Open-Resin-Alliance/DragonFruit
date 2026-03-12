@@ -7,7 +7,7 @@ import {
   Segment,
   Vec3,
 } from '../../../supports/types';
-import type { SupportBraceBuildResult } from '../../../supports/SupportTypes/SupportBrace/types';
+import type { KickstandBuildResult } from '../../../supports/SupportTypes/Kickstand/types';
 import { getFinalSocketPosition } from '../../../supports/SupportPrimitives/ContactCone';
 import { findClosestSegment } from '../../../supports/SupportPrimitives/Joint/jointUtils';
 import {
@@ -247,8 +247,8 @@ export function resolveSupportOwnerId(
 }
 
 export function applyWorldXYPlacementToSlice(
-  data: DragonfruitImportFormat & { supportBraces?: SupportBraceBuildResult[] },
-  start: { roots: number; trunks: number; branches: number; leaves: number; twigs: number; sticks: number; knots: number; supportBraces: number },
+  data: DragonfruitImportFormat & { kickstands?: KickstandBuildResult[] },
+  start: { roots: number; trunks: number; branches: number; leaves: number; twigs: number; sticks: number; knots: number; kickstands: number },
   offsetX: number,
   offsetY: number,
 ): void {
@@ -337,13 +337,13 @@ export function applyWorldXYPlacementToSlice(
     shiftPos(data.knots[i].pos);
   }
 
-  for (let i = start.supportBraces; i < (data.supportBraces?.length || 0); i++) {
-    const build = data.supportBraces![i];
+  for (let i = start.kickstands; i < (data.kickstands?.length || 0); i++) {
+    const build = data.kickstands![i];
 
     shiftPos(build.root?.transform?.pos);
     shiftPos(build.hostKnot?.pos);
 
-    for (const seg of build.supportBrace?.segments || []) {
+    for (const seg of build.kickstand?.segments || []) {
       shiftJoint(seg.bottomJoint);
       shiftJoint(seg.topJoint);
       if (seg.type === 'bezier') {
@@ -405,8 +405,8 @@ export function projectPointToBranch(
   };
 }
 
-function projectPointToSupportBraceHost(
-  host: Extract<HostEntry, { kind: 'supportBrace' }>,
+function projectPointToKickstandHost(
+  host: Extract<HostEntry, { kind: 'kickstand' }>,
   point: THREE.Vector3
 ): { t: number; pointOnLine: Vec3; segmentId: string } | null {
   const rootTopZ = host.root.transform.pos.z + host.root.diskHeight + host.root.coneHeight;
@@ -419,7 +419,7 @@ function projectPointToSupportBraceHost(
 
   const hostKnotPos = new THREE.Vector3(host.hostKnot.pos.x, host.hostKnot.pos.y, host.hostKnot.pos.z);
 
-  for (const seg of host.supportBrace.segments) {
+  for (const seg of host.kickstand.segments) {
     const endPoint = seg.topJoint
       ? new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z)
       : hostKnotPos;
@@ -473,7 +473,7 @@ export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: 
     };
   }
 
-  const projection = projectPointToSupportBraceHost(host, point);
+  const projection = projectPointToKickstandHost(host, point);
   if (!projection) return null;
 
   return {
@@ -579,7 +579,7 @@ function projectPointToHostPreferredSide(
     return { ...projected, parentShaftId: segment.id };
   }
 
-  const segments = host.supportBrace.segments;
+  const segments = host.kickstand.segments;
   if (segments.length === 0) return null;
 
   const targetIndex = preferredSide === 'base' ? 0 : segments.length - 1;

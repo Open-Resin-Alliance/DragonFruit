@@ -4,7 +4,7 @@ import {
   Branch,
   Knot,
 } from '../../../supports/types';
-import type { SupportBrace } from '../../../supports/SupportTypes/SupportBrace/types';
+import type { Kickstand } from '../../../supports/SupportTypes/Kickstand/types';
 
 export interface LycheeVector {
   x: number;
@@ -70,4 +70,4 @@ export interface LycheeData {
 export type HostEntry =
   | { kind: 'trunk'; shaftId: string; trunk: Trunk; root: Roots }
   | { kind: 'branch'; shaftId: string; branch: Branch; parentKnot: Knot }
-  | { kind: 'supportBrace'; shaftId: string; supportBrace: SupportBrace; root: Roots; hostKnot: Knot };
+  | { kind: 'kickstand'; shaftId: string; kickstand: Kickstand; root: Roots; hostKnot: Knot };

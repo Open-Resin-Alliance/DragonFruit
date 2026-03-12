@@ -53,7 +53,7 @@ export const AUTO_BRACING_HARD_RULES = {
     minGroupSize: 3,
     minAxisSeparationDeg: 50,
     targetAxisSeparationDeg: 90,
-    supportBraceMeshClearanceMm: 0.5,
+    kickstandMeshClearanceMm: 0.5,
 };
 
 function precisionFromStep(step: number): number {

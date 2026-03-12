@@ -111,9 +111,9 @@ import {
 } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import {
-  getSupportBraceSnapshot,
-  subscribeToSupportBraceStore,
-} from '@/supports/SupportTypes/SupportBrace/supportBraceStore';
+  getKickstandSnapshot,
+  subscribeToKickstandStore,
+} from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { bracePlacementStore } from '@/supports/SupportTypes/Brace/bracePlacementState';
 import { getRaftSettings, subscribeToRaftStore } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
@@ -147,10 +147,10 @@ type HomeSupportCollectionsSnapshot = Pick<
   'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'roots' | 'knots'
 >;
 
-type HomeSupportBraceSnapshot = ReturnType<typeof getSupportBraceSnapshot>;
-type HomeSupportBraceCollectionsSnapshot = Pick<
-  HomeSupportBraceSnapshot,
-  'supportBraces' | 'roots' | 'knots'
+type HomeKickstandSnapshot = ReturnType<typeof getKickstandSnapshot>;
+type HomeKickstandCollectionsSnapshot = Pick<
+  HomeKickstandSnapshot,
+  'kickstands' | 'roots' | 'knots'
 >;
 
 const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = {
@@ -164,14 +164,14 @@ const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = 
   knots: {},
 };
 
-const EMPTY_HOME_SUPPORT_BRACE_COLLECTIONS_SNAPSHOT: HomeSupportBraceCollectionsSnapshot = {
-  supportBraces: {},
+const EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT: HomeKickstandCollectionsSnapshot = {
+  kickstands: {},
   roots: {},
   knots: {},
 };
 
 let cachedHomeSupportCollectionsSnapshot: HomeSupportCollectionsSnapshot | null = null;
-let cachedHomeSupportBraceCollectionsSnapshot: HomeSupportBraceCollectionsSnapshot | null = null;
+let cachedHomeKickstandCollectionsSnapshot: HomeKickstandCollectionsSnapshot | null = null;
 
 function getHomeSupportCollectionsSnapshot(): HomeSupportCollectionsSnapshot {
   const snapshot = getSupportSnapshot();
@@ -206,26 +206,26 @@ function getHomeSupportCollectionsSnapshot(): HomeSupportCollectionsSnapshot {
   return next;
 }
 
-function getHomeSupportBraceCollectionsSnapshot(): HomeSupportBraceCollectionsSnapshot {
-  const snapshot = getSupportBraceSnapshot();
-  const cached = cachedHomeSupportBraceCollectionsSnapshot;
+function getHomeKickstandCollectionsSnapshot(): HomeKickstandCollectionsSnapshot {
+  const snapshot = getKickstandSnapshot();
+  const cached = cachedHomeKickstandCollectionsSnapshot;
 
   if (
     cached
-    && cached.supportBraces === snapshot.supportBraces
+    && cached.kickstands === snapshot.kickstands
     && cached.roots === snapshot.roots
     && cached.knots === snapshot.knots
   ) {
     return cached;
   }
 
-  const next: HomeSupportBraceCollectionsSnapshot = {
-    supportBraces: snapshot.supportBraces,
+  const next: HomeKickstandCollectionsSnapshot = {
+    kickstands: snapshot.kickstands,
     roots: snapshot.roots,
     knots: snapshot.knots,
   };
 
-  cachedHomeSupportBraceCollectionsSnapshot = next;
+  cachedHomeKickstandCollectionsSnapshot = next;
   return next;
 }
 
@@ -417,7 +417,7 @@ export default function Home() {
   const pendingSupportSyncReleasePerfRef = React.useRef<number | null>(null);
   const supportSyncFallbackTimeoutRef = React.useRef<number | null>(null);
   const lastSupportStoreUpdatePerfRef = React.useRef<number>(0);
-  const lastSupportBraceStoreUpdatePerfRef = React.useRef<number>(0);
+  const lastKickstandStoreUpdatePerfRef = React.useRef<number>(0);
   const transformDebugTimelineRef = React.useRef<{
     lastOperation: 'move' | 'rotate' | 'scale' | null;
     dragReleasedAt: { perfMs: number; epochMs: number } | null;
@@ -425,7 +425,7 @@ export default function Home() {
     storeUpdateStartedAt: { perfMs: number; epochMs: number } | null;
     storeUpdatedAt: { perfMs: number; epochMs: number } | null;
     supportStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
-    supportBraceStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
+    kickstandStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
     activeModelStoreObservedAt: { perfMs: number; epochMs: number } | null;
   }>({
     lastOperation: null,
@@ -434,7 +434,7 @@ export default function Home() {
     storeUpdateStartedAt: null,
     storeUpdatedAt: null,
     supportStoreUpdatedAt: null,
-    supportBraceStoreUpdatedAt: null,
+    kickstandStoreUpdatedAt: null,
     activeModelStoreObservedAt: null,
   });
   const activeModelStoreTransformKeyRef = React.useRef<string | null>(null);
@@ -763,10 +763,10 @@ export default function Home() {
     trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT),
     trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT),
   );
-  const supportBraceStateSnapshot = React.useSyncExternalStore(
-    subscribeToSupportBraceStore,
-    trackSupportCollectionsInHome ? getHomeSupportBraceCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_BRACE_COLLECTIONS_SNAPSHOT),
-    trackSupportCollectionsInHome ? getHomeSupportBraceCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_BRACE_COLLECTIONS_SNAPSHOT),
+  const kickstandStateSnapshot = React.useSyncExternalStore(
+    subscribeToKickstandStore,
+    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : (() => EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT),
+    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : (() => EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT),
   );
   const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const bracePlacementSnapshot = React.useSyncExternalStore(
@@ -784,12 +784,12 @@ export default function Home() {
   }, [supportStateSnapshot]);
 
   React.useEffect(() => {
-    transformDebugTimelineRef.current.supportBraceStoreUpdatedAt = {
+    transformDebugTimelineRef.current.kickstandStoreUpdatedAt = {
       perfMs: performance.now(),
       epochMs: Date.now(),
     };
-    lastSupportBraceStoreUpdatePerfRef.current = transformDebugTimelineRef.current.supportBraceStoreUpdatedAt.perfMs;
-  }, [supportBraceStateSnapshot]);
+    lastKickstandStoreUpdatePerfRef.current = transformDebugTimelineRef.current.kickstandStoreUpdatedAt.perfMs;
+  }, [kickstandStateSnapshot]);
 
   React.useEffect(() => {
     if (!holdSupportDragDeltaUntilSupportSync) return;
@@ -799,7 +799,7 @@ export default function Home() {
 
     const synced =
       lastSupportStoreUpdatePerfRef.current > releasedAt
-      || lastSupportBraceStoreUpdatePerfRef.current > releasedAt;
+      || lastKickstandStoreUpdatePerfRef.current > releasedAt;
 
     if (!synced) return;
 
@@ -809,7 +809,7 @@ export default function Home() {
       window.clearTimeout(supportSyncFallbackTimeoutRef.current);
       supportSyncFallbackTimeoutRef.current = null;
     }
-  }, [holdSupportDragDeltaUntilSupportSync, supportBraceStateSnapshot, supportStateSnapshot]);
+  }, [holdSupportDragDeltaUntilSupportSync, kickstandStateSnapshot, supportStateSnapshot]);
 
   React.useEffect(() => {
     const activeModel = scene.models.find((m) => m.id === scene.activeModelId);
@@ -891,7 +891,7 @@ export default function Home() {
         braces: 0,
         roots: 0,
         knots: 0,
-        supportBraces: 0,
+        kickstands: 0,
       };
     }
 
@@ -918,10 +918,10 @@ export default function Home() {
       }
       return false;
     }).length;
-    const supportBraces = Object.values(supportBraceStateSnapshot.supportBraces).filter((item) => item.modelId === modelId).length;
+    const kickstands = Object.values(kickstandStateSnapshot.kickstands).filter((item) => item.modelId === modelId).length;
 
-    return { trunks, branches, leaves, twigs, sticks, braces, roots, knots, supportBraces };
-  }, [scene.activeModelId, supportBraceStateSnapshot.supportBraces, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs]);
+    return { trunks, branches, leaves, twigs, sticks, braces, roots, knots, kickstands };
+  }, [kickstandStateSnapshot.kickstands, scene.activeModelId, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs]);
 
   const transformDebugStats = React.useMemo(() => {
     const activeModel = scene.models.find((m) => m.id === scene.activeModelId) ?? null;
@@ -975,7 +975,7 @@ export default function Home() {
         storeUpdateStartedAt: timeline.storeUpdateStartedAt,
         storeUpdatedAt: timeline.storeUpdatedAt,
         supportStoreUpdatedAt: timeline.supportStoreUpdatedAt,
-        supportBraceStoreUpdatedAt: timeline.supportBraceStoreUpdatedAt,
+        kickstandStoreUpdatedAt: timeline.kickstandStoreUpdatedAt,
         activeModelStoreObservedAt: timeline.activeModelStoreObservedAt,
         nowPerfMs: performance.now(),
       },
@@ -1023,10 +1023,10 @@ export default function Home() {
         braces: Object.keys(supportStateSnapshot.braces).length,
         roots: Object.keys(supportStateSnapshot.roots).length,
         knots: Object.keys(supportStateSnapshot.knots).length,
-        supportBraces: Object.keys(supportBraceStateSnapshot.supportBraces).length,
+        kickstands: Object.keys(kickstandStateSnapshot.kickstands).length,
       },
     };
-  }, [scene.activeModelId, scene.models, supportBraceStateSnapshot.supportBraces, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
+  }, [kickstandStateSnapshot.kickstands, scene.activeModelId, scene.models, supportDragGroupRef, supportStateSnapshot.braces, supportStateSnapshot.branches, supportStateSnapshot.knots, supportStateSnapshot.leaves, supportStateSnapshot.roots, supportStateSnapshot.sticks, supportStateSnapshot.trunks, supportStateSnapshot.twigs, transformDebugTick, transformMgr.transform]);
 
   const supportDebugStats = React.useMemo(() => {
     const snapTarget = bracePlacementSnapshot.snapTarget;
@@ -1109,8 +1109,8 @@ export default function Home() {
     if (!modelId) return 0;
 
     const supportIds = getSupportsForModel(supportStateSnapshot, modelId);
-    const supportBraceCount = Object.values(supportBraceStateSnapshot.supportBraces)
-      .filter((supportBrace) => supportBrace.modelId === modelId)
+    const kickstandCount = Object.values(kickstandStateSnapshot.kickstands)
+      .filter((kickstand) => kickstand.modelId === modelId)
       .length;
 
     return supportIds.roots.length
@@ -1120,8 +1120,8 @@ export default function Home() {
       + supportIds.leaves.length
       + supportIds.twigs.length
       + supportIds.sticks.length
-      + supportBraceCount;
-  }, [supportBraceStateSnapshot.supportBraces, supportStateSnapshot]);
+      + kickstandCount;
+  }, [kickstandStateSnapshot.kickstands, supportStateSnapshot]);
 
   const requestDestructiveTransformSupportDeletion = React.useCallback((operationLabel: string) => {
     if (scene.mode !== 'prepare') return true;
@@ -2018,12 +2018,12 @@ export default function Home() {
         topDiameterByRootId.set(trunk.rootId, firstDiameter);
       }
     }
-    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
-      const firstDiameter = supportBrace.profile.terminalStartDiameterMm
-        || supportBrace.segments[0]?.diameter
-        || supportBrace.profile.bodyDiameterMm;
+    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
+      const firstDiameter = kickstand.profile.terminalStartDiameterMm
+        || kickstand.segments[0]?.diameter
+        || kickstand.profile.bodyDiameterMm;
       if (firstDiameter && firstDiameter > 0) {
-        topDiameterByRootId.set(supportBrace.rootId, firstDiameter);
+        topDiameterByRootId.set(kickstand.rootId, firstDiameter);
       }
     }
 
@@ -2050,7 +2050,7 @@ export default function Home() {
     for (const root of Object.values(supportStateSnapshot.roots)) {
       addRootVolume(root);
     }
-    for (const root of Object.values(supportBraceStateSnapshot.roots)) {
+    for (const root of Object.values(kickstandStateSnapshot.roots)) {
       addRootVolume(root);
     }
 
@@ -2133,13 +2133,13 @@ export default function Home() {
       supportMl += mm3ToMl(cylinderVolumeMm3(Math.max(0.001, brace.profile.diameter / 2), length));
     }
 
-    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
-      if (!visibleModelIds.has(supportBrace.modelId)) continue;
+    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
+      if (!visibleModelIds.has(kickstand.modelId)) continue;
 
-      for (let i = 0; i < supportBrace.segments.length; i += 1) {
-        const seg = supportBrace.segments[i];
-        const root = supportBraceStateSnapshot.roots[supportBrace.rootId];
-        const hostKnot = supportBraceStateSnapshot.knots[supportBrace.hostKnotId];
+      for (let i = 0; i < kickstand.segments.length; i += 1) {
+        const seg = kickstand.segments[i];
+        const root = kickstandStateSnapshot.roots[kickstand.rootId];
+        const hostKnot = kickstandStateSnapshot.knots[kickstand.hostKnotId];
         const rootTopPos = root
           ? {
               x: root.transform.pos.x,
@@ -2149,7 +2149,7 @@ export default function Home() {
           : null;
         const start = i === 0
           ? (seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 })
-          : (supportBrace.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 });
+          : (kickstand.segments[i - 1].topJoint?.pos ?? seg.bottomJoint?.pos ?? rootTopPos ?? { x: 0, y: 0, z: 0 });
         const end = seg.topJoint?.pos ?? hostKnot?.pos ?? start;
         supportMl += segmentVolumeMl(seg, start, end);
       }
@@ -2205,9 +2205,9 @@ export default function Home() {
     computeRaftOuterBoundary,
     raftSettingsSnapshot,
     scene.models,
-    supportBraceStateSnapshot.knots,
-    supportBraceStateSnapshot.roots,
-    supportBraceStateSnapshot.supportBraces,
+    kickstandStateSnapshot.knots,
+    kickstandStateSnapshot.roots,
+    kickstandStateSnapshot.kickstands,
     supportStateSnapshot.braces,
     supportStateSnapshot.branches,
     supportStateSnapshot.knots,
@@ -4263,7 +4263,7 @@ export default function Home() {
     scene.models,
     fallbackZRange,
     supportStateSnapshot,
-    supportBraceStateSnapshot,
+    kickstandStateSnapshot,
     raftSettingsSnapshot,
   ]);
 
@@ -4654,8 +4654,8 @@ export default function Home() {
       knotModelById.set(brace.startKnotId, brace.modelId);
       knotModelById.set(brace.endKnotId, brace.modelId);
     }
-    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
-      if (supportBrace.modelId) knotModelById.set(supportBrace.hostKnotId, supportBrace.modelId);
+    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
+      if (kickstand.modelId) knotModelById.set(kickstand.hostKnotId, kickstand.modelId);
     }
 
     for (const root of Object.values(supportStateSnapshot.roots)) {
@@ -4761,10 +4761,10 @@ export default function Home() {
       expand(modelId, stick.contactConeB.pos, Math.max(0.001, stick.contactConeB.profile.contactDiameterMm / 2));
     }
 
-    for (const supportBrace of Object.values(supportBraceStateSnapshot.supportBraces)) {
-      const modelId = supportBrace.modelId;
+    for (const kickstand of Object.values(kickstandStateSnapshot.kickstands)) {
+      const modelId = kickstand.modelId;
       if (!modelId) continue;
-      for (const seg of supportBrace.segments) {
+      for (const seg of kickstand.segments) {
         expand(modelId, seg.topJoint?.pos, Math.max(0.001, (seg.topJoint?.diameter ?? seg.diameter) / 2));
         expand(modelId, seg.bottomJoint?.pos, Math.max(0.001, (seg.bottomJoint?.diameter ?? seg.diameter) / 2));
       }
@@ -4790,7 +4790,7 @@ export default function Home() {
       expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
     }
 
-    for (const knot of Object.values(supportBraceStateSnapshot.knots)) {
+    for (const knot of Object.values(kickstandStateSnapshot.knots)) {
       const modelId = knotModelById.get(knot.id) ?? null;
       expand(modelId, knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2));
     }
@@ -4806,8 +4806,8 @@ export default function Home() {
     supportStateSnapshot.sticks,
     supportStateSnapshot.trunks,
     supportStateSnapshot.twigs,
-    supportBraceStateSnapshot.knots,
-    supportBraceStateSnapshot.supportBraces,
+    kickstandStateSnapshot.knots,
+    kickstandStateSnapshot.kickstands,
     raftSettingsSnapshot,
   ]);
 
@@ -7533,7 +7533,7 @@ export default function Home() {
               <div>Braces: {transformDebugStats.supportCounts.braces} / {activeSupportEntityCounts.braces}</div>
               <div>Roots: {transformDebugStats.supportCounts.roots} / {activeSupportEntityCounts.roots}</div>
               <div>Knots: {transformDebugStats.supportCounts.knots} / {activeSupportEntityCounts.knots}</div>
-              <div>SupportBraces: {transformDebugStats.supportCounts.supportBraces} / {activeSupportEntityCounts.supportBraces}</div>
+              <div>Kickstands: {transformDebugStats.supportCounts.kickstands} / {activeSupportEntityCounts.kickstands}</div>
             </div>
 
             {scene.mode !== 'support' && scene.mode !== 'printing' && (
@@ -7547,14 +7547,14 @@ export default function Home() {
                 <div>Store update start: {formatDebugTime(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.nowPerfMs)}</div>
                 <div>Store updated: {formatDebugTime(transformDebugStats.timeline.storeUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
                 <div>Support store updated: {formatDebugTime(transformDebugStats.timeline.supportStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
-                <div>SupportBrace store updated: {formatDebugTime(transformDebugStats.timeline.supportBraceStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
+                <div>Kickstand store updated: {formatDebugTime(transformDebugStats.timeline.kickstandStoreUpdatedAt, transformDebugStats.timeline.nowPerfMs)}</div>
                 <div>Active model store observed: {formatDebugTime(transformDebugStats.timeline.activeModelStoreObservedAt, transformDebugStats.timeline.nowPerfMs)}</div>
                 <div>Release → Live: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.liveCalculatedAt)}</div>
                 <div>Live → Store start: {formatDebugLatencyMs(transformDebugStats.timeline.liveCalculatedAt, transformDebugStats.timeline.storeUpdateStartedAt)}</div>
                 <div>Store start → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.storeUpdateStartedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
                 <div>Release → Store updated: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.storeUpdatedAt)}</div>
                 <div>Release → Support store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportStoreUpdatedAt)}</div>
-                <div>Release → SupportBrace store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.supportBraceStoreUpdatedAt)}</div>
+                <div>Release → Kickstand store: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.kickstandStoreUpdatedAt)}</div>
                 <div>Release → Active model observed: {formatDebugLatencyMs(transformDebugStats.timeline.dragReleasedAt, transformDebugStats.timeline.activeModelStoreObservedAt)}</div>
               </div>
             )}
@@ -7705,12 +7705,12 @@ export default function Home() {
             branchPlacementPreview={supports.branchPlacement.previewData}
             leafPlacementPreview={supports.leafPlacement.previewData}
             bracePlacementPreview={supports.bracePreview}
-            supportBracePlacementPreview={supports.supportBracePreview}
+            kickstandPlacementPreview={supports.kickstandPreview}
             blockSupportPlacement={supports.isPlacementDisabled}
             isBranchPlacementActive={supports.branchPlacement.isActive}
             isLeafPlacementActive={supports.leafPlacement.isActive}
             isBracePlacementActive={supports.bracePlacement.isActive}
-            isSupportBracePlacementActive={supports.supportBracePlacement.isActive}
+            isKickstandPlacementActive={supports.kickstandPlacement.isActive}
             branchTipPosition={supports.branchPlacement.tipPosition}
             branchHoverPosition={supports.branchPlacement.hoverPosition}
             leafTipPosition={supports.leafPlacement.tipPosition}

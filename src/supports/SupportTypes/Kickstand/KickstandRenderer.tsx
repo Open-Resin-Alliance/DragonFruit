@@ -11,10 +11,10 @@ import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import type { SupportBrace } from './types';
+import type { Kickstand } from './types';
 
-interface SupportBraceRendererProps {
-    supportBrace: SupportBrace;
+interface KickstandRendererProps {
+    kickstand: Kickstand;
     root: Roots;
     hostKnot: Knot;
     isSelected?: boolean;
@@ -32,8 +32,8 @@ interface SupportBraceRendererProps {
     selectedColor?: string;
 }
 
-export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
-    supportBrace,
+export const KickstandRenderer = React.memo(function KickstandRenderer({
+    kickstand,
     root,
     hostKnot,
     isSelected,
@@ -49,13 +49,13 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     baseColor = '#ff8800',
     hoverColor,
     selectedColor = '#80fffd',
-}: SupportBraceRendererProps) {
+}: KickstandRendererProps) {
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
 
     const { pickRef, visuals } = useHighlight({
-        id: supportBrace.id,
+        id: kickstand.id,
         category: 'support',
         enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
         isSelected,
@@ -67,12 +67,12 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     });
 
     const handleClick = (e: ThreeEvent<MouseEvent>) => {
-        handleSupportClick(e, supportBrace.id, !!isInteractable);
+        handleSupportClick(e, kickstand.id, !!isInteractable);
     };
 
     const handlePointerMove = React.useCallback(() => {
-        emitSupportModelPointerHover(supportBrace.modelId ?? null);
-    }, [supportBrace.modelId]);
+        emitSupportModelPointerHover(kickstand.modelId ?? null);
+    }, [kickstand.modelId]);
 
     const handlePointerOut = React.useCallback(() => {
         emitSupportModelPointerHover(null);
@@ -87,8 +87,8 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     const batchedStraightShafts: InstancedShaft[] = [];
     const joints: React.ReactNode[] = [];
 
-    supportBrace.segments.forEach((segment, index) => {
-        const isLast = index === supportBrace.segments.length - 1;
+    kickstand.segments.forEach((segment, index) => {
+        const isLast = index === kickstand.segments.length - 1;
 
         const endPoint = segment.topJoint
             ? new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z)
@@ -99,8 +99,8 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
 
         const segmentSelected = selectedId === segment.id;
 
-        const diameterStart = isLast ? supportBrace.profile.terminalStartDiameterMm : undefined;
-        const diameterEnd = isLast ? supportBrace.profile.terminalEndDiameterMm : undefined;
+        const diameterStart = isLast ? kickstand.profile.terminalStartDiameterMm : undefined;
+        const diameterEnd = isLast ? kickstand.profile.terminalEndDiameterMm : undefined;
         const isUniformDiameter = (diameterStart == null && diameterEnd == null)
             || (diameterStart != null && diameterEnd != null && Math.abs(diameterStart - diameterEnd) < 1e-6);
         const canBatchShaft = !isSelected && !deferStraightShaftsToSceneBatch && segment.type !== 'bezier' && isUniformDiameter;
@@ -174,7 +174,7 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
         currentStart = endPoint;
     });
 
-    const shaftDiameter = supportBrace.segments[0]?.diameter ?? supportBrace.profile.bodyDiameterMm;
+    const shaftDiameter = kickstand.segments[0]?.diameter ?? kickstand.profile.bodyDiameterMm;
 
     return (
         <group
@@ -221,4 +221,4 @@ export const SupportBraceRenderer = React.memo(function SupportBraceRenderer({
     );
 });
 
-SupportBraceRenderer.displayName = 'SupportBraceRenderer';
+KickstandRenderer.displayName = 'KickstandRenderer';

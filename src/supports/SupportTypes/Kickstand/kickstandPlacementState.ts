@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from 'react';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Vec3 } from '../../types';
-import type { SupportBraceBuildResult, SupportBraceHostKind } from './types';
+import type { KickstandBuildResult, KickstandHostKind } from './types';
 
-export interface SupportBracePlacementTarget {
+export interface KickstandPlacementTarget {
     segmentId: string;
-    supportKind: SupportBraceHostKind;
+    supportKind: KickstandHostKind;
     modelId: string;
     t: number;
     pos: Vec3;
@@ -14,21 +14,21 @@ export interface SupportBracePlacementTarget {
     rootPos: Vec3;
 }
 
-interface SupportBracePlacementState {
+interface KickstandPlacementState {
     hotkeyActive: boolean;
-    snapTarget: SupportBracePlacementTarget | null;
+    snapTarget: KickstandPlacementTarget | null;
     previewData: SupportData | null;
-    previewBuild: SupportBraceBuildResult | null;
+    previewBuild: KickstandBuildResult | null;
 }
 
-const initialState: SupportBracePlacementState = {
+const initialState: KickstandPlacementState = {
     hotkeyActive: false,
     snapTarget: null,
     previewData: null,
     previewBuild: null,
 };
 
-let state: SupportBracePlacementState = { ...initialState };
+let state: KickstandPlacementState = { ...initialState };
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -39,7 +39,7 @@ function vecEq(a: Vec3, b: Vec3): boolean {
     return a.x === b.x && a.y === b.y && a.z === b.z;
 }
 
-function targetEq(a: SupportBracePlacementTarget | null, b: SupportBracePlacementTarget | null): boolean {
+function targetEq(a: KickstandPlacementTarget | null, b: KickstandPlacementTarget | null): boolean {
     if (a === b) return true;
     if (!a || !b) return false;
 
@@ -55,13 +55,13 @@ function targetEq(a: SupportBracePlacementTarget | null, b: SupportBracePlacemen
     );
 }
 
-export const supportBracePlacementStore = {
+export const kickstandPlacementStore = {
     subscribe(listener: () => void) {
         listeners.add(listener);
         return () => listeners.delete(listener);
     },
 
-    getSnapshot(): SupportBracePlacementState {
+    getSnapshot(): KickstandPlacementState {
         return state;
     },
 
@@ -89,7 +89,7 @@ export const supportBracePlacementStore = {
         notify();
     },
 
-    setPreview(target: SupportBracePlacementTarget, build: SupportBraceBuildResult, previewData: SupportData) {
+    setPreview(target: KickstandPlacementTarget, build: KickstandBuildResult, previewData: SupportData) {
         if (targetEq(state.snapTarget, target)) return;
 
         state = {
@@ -121,11 +121,11 @@ export const supportBracePlacementStore = {
     },
 };
 
-export function useSupportBracePlacementState() {
+export function useKickstandPlacementState() {
     const snapshot = useSyncExternalStore(
-        supportBracePlacementStore.subscribe,
-        supportBracePlacementStore.getSnapshot,
-        supportBracePlacementStore.getSnapshot,
+        kickstandPlacementStore.subscribe,
+        kickstandPlacementStore.getSnapshot,
+        kickstandPlacementStore.getSnapshot,
     );
 
     return {
