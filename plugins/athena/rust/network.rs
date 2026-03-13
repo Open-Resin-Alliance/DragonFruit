@@ -410,6 +410,58 @@ fn resolve_address(status: &Value, fallback: &str) -> String {
     fallback.trim().to_string()
 }
 
+fn absolutize_nanodlp_url(candidate: &str, host: &str, port: u16) -> String {
+    let trimmed = candidate.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return trimmed.to_string();
+    }
+    if trimmed.starts_with("//") {
+        return format!("http:{trimmed}");
+    }
+    if trimmed.starts_with('/') {
+        return format!("{}{}", build_base_url(host, port), trimmed);
+    }
+    format!(
+        "{}/{}",
+        build_base_url(host, port),
+        trimmed.trim_start_matches('/')
+    )
+}
+
+fn resolve_nanodlp_webcam_candidates(status: &Value, host: &str, port: u16) -> Vec<String> {
+    let keys = [
+        "WebcamURL",
+        "webcamUrl",
+        "Webcam",
+        "webcam",
+        "CameraURL",
+        "cameraUrl",
+        "StreamURL",
+        "streamUrl",
+        "MjpegURL",
+        "mjpegUrl",
+        "SnapshotURL",
+        "snapshotUrl",
+    ];
+
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for key in keys {
+        let Some(raw) = status.get(key).and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let absolute = absolutize_nanodlp_url(trimmed, host, port);
+        if seen.insert(absolute.clone()) {
+            out.push(absolute);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Network interface enumeration
 // ---------------------------------------------------------------------------
@@ -1822,11 +1874,129 @@ async fn nanodlp_printer_start(payload: &Value) -> (u16, Value) {
 }
 
 // ---------------------------------------------------------------------------
+// NanoDLP: printer/status
+// ---------------------------------------------------------------------------
+
+async fn nanodlp_printer_status(payload: &Value) -> (u16, Value) {
+    let raw_host = resolve_raw_host(payload);
+    let parsed = match parse_host_and_port(&raw_host) {
+        Some(p) => p,
+        None => {
+            return (
+                400,
+                json!({ "ok": false, "error": "Invalid host or IP address" }),
+            )
+        }
+    };
+
+    let port = resolve_port(payload.get("port"), parsed.1);
+
+    match fetch_nanodlp_status(&parsed.0, port, 8000).await {
+        Some(status) => (
+            200,
+            json!({
+                "ok": true,
+                "ipAddress": parsed.0,
+                "port": port,
+                "status": status,
+            }),
+        ),
+        None => (
+            200,
+            json!({
+                "ok": false,
+                "ipAddress": parsed.0,
+                "port": port,
+                "error": "NanoDLP status endpoint unavailable.",
+                "status": Value::Null,
+            }),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NanoDLP: printer/webcam/info
+// ---------------------------------------------------------------------------
+
+async fn nanodlp_printer_webcam_info(payload: &Value) -> (u16, Value) {
+    let raw_host = resolve_raw_host(payload);
+    let parsed = match parse_host_and_port(&raw_host) {
+        Some(p) => p,
+        None => {
+            return (
+                400,
+                json!({ "ok": false, "error": "Invalid host or IP address" }),
+            )
+        }
+    };
+
+    let port = resolve_port(payload.get("port"), parsed.1);
+
+    match fetch_nanodlp_status(&parsed.0, port, 5000).await {
+        Some(status) => {
+            let candidates = resolve_nanodlp_webcam_candidates(&status, &parsed.0, port);
+            let snapshot_url = candidates
+                .iter()
+                .find(|value| {
+                    let v = value.to_lowercase();
+                    v.contains("snapshot")
+                        || v.contains(".jpg")
+                        || v.contains(".jpeg")
+                        || v.contains(".png")
+                })
+                .cloned()
+                .or_else(|| candidates.first().cloned());
+            let stream_url = candidates
+                .iter()
+                .find(|value| {
+                    let v = value.to_lowercase();
+                    v.contains("stream") || v.contains("mjpeg") || v.contains("video")
+                })
+                .cloned()
+                .or_else(|| candidates.first().cloned());
+
+            (
+                200,
+                json!({
+                    "ok": true,
+                    "available": !candidates.is_empty(),
+                    "ipAddress": parsed.0,
+                    "port": port,
+                    "streamUrl": stream_url,
+                    "snapshotUrl": snapshot_url,
+                    "candidates": candidates,
+                    "message": if !candidates.is_empty() { "Webcam endpoint detected." } else { "No webcam endpoint reported by this printer." },
+                    "status": status,
+                }),
+            )
+        }
+        None => (
+            200,
+            json!({
+                "ok": false,
+                "available": false,
+                "ipAddress": parsed.0,
+                "port": port,
+                "streamUrl": Value::Null,
+                "snapshotUrl": Value::Null,
+                "candidates": [],
+                "message": "NanoDLP status endpoint unavailable.",
+                "status": Value::Null,
+            }),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
 async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value) {
-    let op = operation.strip_prefix("nanodlp/").unwrap_or("");
+    let normalized_operation = operation.trim().trim_start_matches('/').trim_end_matches('/');
+    let op = normalized_operation
+        .strip_prefix("nanodlp/")
+        .unwrap_or(normalized_operation);
+
     match op {
         "connect" => nanodlp_connect(payload).await,
         "discover" => nanodlp_discover(payload).await,
@@ -1835,9 +2005,11 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
         "job/import" => nanodlp_job_import(payload).await,
         "plates/list/json" => nanodlp_plates_list_json(payload).await,
         "printer/start" => nanodlp_printer_start(payload).await,
+        "printer/status" => nanodlp_printer_status(payload).await,
+        "printer/webcam/info" => nanodlp_printer_webcam_info(payload).await,
         _ => (
             404,
-            json!({ "error": format!("Unknown Athena NanoDLP operation: {operation}") }),
+            json!({ "error": format!("Unknown Athena NanoDLP operation: {normalized_operation}") }),
         ),
     }
 }

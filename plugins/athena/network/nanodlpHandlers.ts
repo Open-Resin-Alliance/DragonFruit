@@ -342,6 +342,35 @@ function hasPositiveNumber(value: unknown): boolean {
   return Number.isFinite(parsed) && parsed > 0;
 }
 
+function toAbsoluteNanoDlpUrl(candidate: string, host: string, port: number): string {
+  const trimmed = candidate.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('//')) return `http:${trimmed}`;
+  if (trimmed.startsWith('/')) return `${buildNanoDlpBaseUrl(host, port)}${trimmed}`;
+  return `${buildNanoDlpBaseUrl(host, port)}/${trimmed.replace(/^\/+/, '')}`;
+}
+
+function resolveNanoDlpWebcamCandidates(status: Record<string, unknown>, host: string, port: number): string[] {
+  const candidates = [
+    status.WebcamURL,
+    status.webcamUrl,
+    status.Webcam,
+    status.webcam,
+    status.CameraURL,
+    status.cameraUrl,
+    status.StreamURL,
+    status.streamUrl,
+    status.MjpegURL,
+    status.mjpegUrl,
+    status.SnapshotURL,
+    status.snapshotUrl,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => toAbsoluteNanoDlpUrl(value, host, port));
+
+  return Array.from(new Set(candidates));
+}
+
 function normalizeJobName(value: string): string {
   return value
     .trim()
@@ -1065,6 +1094,8 @@ export async function handleAthenaNetworkOperation(operationPath: string[], payl
   if (op === 'job/import') return handleNanoDlpJobImport(payload);
   if (op === 'plates/list/json') return handleNanoDlpPlatesListJson(payload);
   if (op === 'printer/start') return handleNanoDlpPrinterStart(payload);
+  if (op === 'printer/status') return handleNanoDlpPrinterStatus(payload);
+  if (op === 'printer/webcam/info') return handleNanoDlpPrinterWebcamInfo(payload);
 
   return { status: 404, body: { error: 'Unknown Athena NanoDLP operation' } };
 }
@@ -1210,6 +1241,121 @@ async function handleNanoDlpPrinterStart(payload: unknown): Promise<HandlerResul
         port,
         plateId,
         error: message,
+      },
+    };
+  }
+}
+
+async function handleNanoDlpPrinterStatus(payload: unknown): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+
+  try {
+    const status = await fetchNanoDlpStatus(parsedHost.host, port, 8000);
+    if (!status) {
+      return {
+        status: 200,
+        body: {
+          ok: false,
+          ipAddress: parsedHost.host,
+          port,
+          error: 'NanoDLP status endpoint unavailable.',
+          status: null,
+        },
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        ipAddress: parsedHost.host,
+        port,
+        status,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch NanoDLP status.';
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        ipAddress: parsedHost.host,
+        port,
+        error: message,
+        status: null,
+      },
+    };
+  }
+}
+
+async function handleNanoDlpPrinterWebcamInfo(payload: unknown): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+
+  try {
+    const status = await fetchNanoDlpStatus(parsedHost.host, port, 5000);
+    if (!status) {
+      return {
+        status: 200,
+        body: {
+          ok: false,
+          available: false,
+          ipAddress: parsedHost.host,
+          port,
+          streamUrl: null,
+          snapshotUrl: null,
+          candidates: [],
+          message: 'NanoDLP status endpoint unavailable.',
+          status: null,
+        },
+      };
+    }
+
+    const candidates = resolveNanoDlpWebcamCandidates(status, parsedHost.host, port);
+    const snapshotUrl = candidates.find((value) => /snapshot|jpg|jpeg|png/i.test(value)) ?? candidates[0] ?? null;
+    const streamUrl = candidates.find((value) => /stream|mjpeg|video/i.test(value)) ?? candidates[0] ?? null;
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        available: Boolean(streamUrl || snapshotUrl),
+        ipAddress: parsedHost.host,
+        port,
+        streamUrl,
+        snapshotUrl,
+        candidates,
+        message: candidates.length > 0
+          ? 'Webcam endpoint detected.'
+          : 'No webcam endpoint reported by this printer.',
+        status,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to resolve NanoDLP webcam information.';
+    return {
+      status: 500,
+      body: {
+        ok: false,
+        available: false,
+        ipAddress: parsedHost.host,
+        port,
+        streamUrl: null,
+        snapshotUrl: null,
+        candidates: [],
+        message,
+        status: null,
       },
     };
   }

@@ -14,6 +14,10 @@ import {
   type NanoDlpBasicSection,
   type NanoDlpPrimaryEditField,
 } from '../../../plugins/athena/nanodlpProfilePlugin';
+import {
+  resolveNanodlpMonitoringSnapshot,
+  resolveNanodlpWebcamFeedInfo,
+} from '../../../plugins/athena/network';
 
 export type PluginSource = 'builtin' | 'github';
 
@@ -57,6 +61,38 @@ export type ProfileNetworkUiAdapter = {
   isDynamicWaitEnabled: (draft: Record<string, string>) => boolean;
 };
 
+export type PrinterMonitoringSnapshot = {
+  connected: boolean;
+  stateText: string;
+  isPrinting: boolean;
+  isPaused: boolean;
+  progressPct: number | null;
+  currentLayer: number | null;
+  totalLayers: number | null;
+  jobName: string | null;
+  etaSec: number | null;
+};
+
+export type PrinterMonitoringWebcamInfo = {
+  available: boolean;
+  streamUrl: string | null;
+  snapshotUrl: string | null;
+  message: string;
+};
+
+export type ProfileMonitoringUiAdapter = {
+  mode: string;
+  pluginId: string | null;
+  displayName: string;
+  available: boolean;
+  operations: {
+    status: string;
+    webcamInfo: string;
+  } | null;
+  parseStatusPayload: (payload: unknown) => PrinterMonitoringSnapshot;
+  parseWebcamInfoPayload: (payload: unknown, host: string, port: number) => PrinterMonitoringWebcamInfo;
+};
+
 const ATHENA_NANODLP_NETWORK_ADAPTER: ProfileNetworkUiAdapter = {
   mode: 'nanodlp',
   pluginId: 'athena',
@@ -84,6 +120,48 @@ const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>([
   [ATHENA_NANODLP_NETWORK_ADAPTER.mode, ATHENA_NANODLP_NETWORK_ADAPTER],
 ]);
 
+const ATHENA_NANODLP_MONITORING_ADAPTER: ProfileMonitoringUiAdapter = {
+  mode: 'nanodlp',
+  pluginId: 'athena',
+  displayName: 'Athena Monitoring',
+  available: true,
+  operations: {
+    status: 'nanodlp/printer/status',
+    webcamInfo: 'nanodlp/printer/webcam/info',
+  },
+  parseStatusPayload: (payload) => resolveNanodlpMonitoringSnapshot(payload),
+  parseWebcamInfoPayload: (payload, host, port) => resolveNanodlpWebcamFeedInfo(payload, host, port),
+};
+
+const GENERIC_MONITORING_STUB_ADAPTER: ProfileMonitoringUiAdapter = {
+  mode: 'generic',
+  pluginId: null,
+  displayName: 'Generic Monitoring Stub',
+  available: false,
+  operations: null,
+  parseStatusPayload: () => ({
+    connected: false,
+    stateText: 'Monitoring unavailable for this backend.',
+    isPrinting: false,
+    isPaused: false,
+    progressPct: null,
+    currentLayer: null,
+    totalLayers: null,
+    jobName: null,
+    etaSec: null,
+  }),
+  parseWebcamInfoPayload: () => ({
+    available: false,
+    streamUrl: null,
+    snapshotUrl: null,
+    message: 'Webcam feed unavailable for this backend.',
+  }),
+};
+
+const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>([
+  [ATHENA_NANODLP_MONITORING_ADAPTER.mode, ATHENA_NANODLP_MONITORING_ADAPTER],
+]);
+
 export function getProfileNetworkUiAdapter(mode: string | null | undefined): ProfileNetworkUiAdapter | null {
   if (!mode || typeof mode !== 'string') return null;
   return NETWORK_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? null;
@@ -91,6 +169,11 @@ export function getProfileNetworkUiAdapter(mode: string | null | undefined): Pro
 
 export function getDefaultProfileNetworkUiAdapter(): ProfileNetworkUiAdapter {
   return ATHENA_NANODLP_NETWORK_ADAPTER;
+}
+
+export function getProfileMonitoringUiAdapter(mode: string | null | undefined): ProfileMonitoringUiAdapter {
+  if (!mode || typeof mode !== 'string') return GENERIC_MONITORING_STUB_ADAPTER;
+  return MONITORING_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? GENERIC_MONITORING_STUB_ADAPTER;
 }
 
 export type InstalledProfilePlugin = {

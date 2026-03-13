@@ -8,7 +8,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { AlertTriangle, ChevronDown, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, X } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronDown, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -77,6 +77,9 @@ interface TopBarProps {
   onSaveScene?: () => void;
   onOpenScene?: () => void;
   onCloseProgram?: () => void;
+  showMonitorButton?: boolean;
+  monitorButtonActive?: boolean;
+  onOpenMonitor?: () => void;
 }
 
 export function TopBar({
@@ -128,6 +131,9 @@ export function TopBar({
   onSaveScene,
   onOpenScene,
   onCloseProgram,
+  showMonitorButton = false,
+  monitorButtonActive = false,
+  onOpenMonitor,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -457,12 +463,11 @@ export function TopBar({
               openAppMenu();
             }
           }}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md border transition-colors"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors"
           style={{
-            borderColor: 'var(--border-subtle)',
             background: isAppMenuOpen
-              ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
-              : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+              ? 'color-mix(in srgb, var(--accent), transparent 80%)'
+              : 'transparent',
           }}
           title="DragonFruit menu"
           aria-label="Open DragonFruit menu"
@@ -471,7 +476,7 @@ export function TopBar({
           <img
             src="/dragonfruit_assets/branding/simple_icon.svg"
             alt="DragonFruit"
-            className="h-6 w-6 object-contain"
+            className="h-7 w-7 object-contain"
             draggable={false}
           />
         </button>
@@ -520,6 +525,27 @@ export function TopBar({
           </span>
           <ChevronDown className="h-3.5 w-3.5 ml-auto shrink-0" style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
         </button>
+
+        {showMonitorButton && (
+          <button
+            type="button"
+            disabled={topbarActionsDisabled || !onOpenMonitor}
+            onClick={() => onOpenMonitor?.()}
+            className="group inline-flex h-10 items-center gap-1.5 rounded-md px-2 transition-colors"
+            style={{
+              background: monitorButtonActive
+                ? 'color-mix(in srgb, var(--accent), transparent 82%)'
+                : 'transparent',
+              color: monitorButtonActive ? 'var(--accent)' : 'var(--text-strong)',
+            }}
+            title="Open printer monitor"
+            aria-label="Open printer monitor"
+            data-no-window-drag="true"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            <span className="text-[11px] font-semibold">Monitor</span>
+          </button>
+        )}
       </div>
 
       {isAppMenuOpen && appMenuPosition && (
