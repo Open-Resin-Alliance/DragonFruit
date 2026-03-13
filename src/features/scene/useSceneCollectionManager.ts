@@ -149,10 +149,8 @@ function captureSceneSnapshot(
     selectedModelIds: [...selectedModelIds],
     ...(includeSupportState
       ? {
-          // Store immutable store snapshots by reference for speed.
-          // They are deep-cloned on restore in applySceneSnapshot.
-          supportState: getSnapshot(),
-          kickstandState: getKickstandSnapshot(),
+          supportState: clonePlainObject(getSnapshot()),
+          kickstandState: clonePlainObject(getKickstandSnapshot()),
         }
       : {}),
   };
