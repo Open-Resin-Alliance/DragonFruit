@@ -6,7 +6,7 @@ import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactC
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
-import type { Kickstand, KickstandBuildResult } from './SupportTypes/Kickstand/types';
+import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
 
@@ -2241,6 +2241,146 @@ export function removeBrace(braceId: string): { brace: Brace; startKnot: Knot | 
     return snapshots;
 }
 
+export function removeKickstandCascade(kickstandId: string): KickstandRemoveResult | null {
+    const kickstandState = getKickstandSnapshot();
+    const kickstand = kickstandState.kickstands[kickstandId];
+    if (!kickstand) return null;
+
+    const kickstandSegmentIds = new Set(kickstand.segments.map((segment) => segment.id));
+    const directKnotIds = new Set<string>();
+    for (const knot of Object.values(state.knots)) {
+        if (kickstandSegmentIds.has(knot.parentShaftId)) {
+            directKnotIds.add(knot.id);
+        }
+    }
+
+    const branchIdsToRemove: string[] = [];
+    for (const branch of Object.values(state.branches)) {
+        if (branch.parentKnotId && directKnotIds.has(branch.parentKnotId)) {
+            branchIdsToRemove.push(branch.id);
+        }
+    }
+
+    const leafIdsToRemove: string[] = [];
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.parentKnotId && directKnotIds.has(leaf.parentKnotId)) {
+            leafIdsToRemove.push(leaf.id);
+        }
+    }
+
+    const braceIdsToRemove: string[] = [];
+    for (const brace of Object.values(state.braces)) {
+        if ((brace.startKnotId && directKnotIds.has(brace.startKnotId)) || (brace.endKnotId && directKnotIds.has(brace.endKnotId))) {
+            braceIdsToRemove.push(brace.id);
+        }
+    }
+
+    const build = removeKickstand(kickstandId);
+    if (!build) return null;
+
+    const snapshots: KickstandRemoveResult = {
+        build,
+        branches: [],
+        braces: [],
+        kickstands: [],
+        leaves: [],
+        knots: [],
+    };
+
+    const seenBranchIds = new Set<string>();
+    const seenBraceIds = new Set<string>();
+    const seenKickstandIds = new Set<string>();
+    const seenLeafIds = new Set<string>();
+    const seenKnotIds = new Set<string>();
+
+    for (const branchId of branchIdsToRemove) {
+        const removed = removeBranch(branchId);
+        if (!removed) continue;
+
+        for (const branch of removed.branches ?? []) {
+            if (!branch || seenBranchIds.has(branch.id)) continue;
+            seenBranchIds.add(branch.id);
+            snapshots.branches.push(branch);
+        }
+
+        for (const brace of removed.braces ?? []) {
+            if (!brace || seenBraceIds.has(brace.id)) continue;
+            seenBraceIds.add(brace.id);
+            snapshots.braces.push(brace);
+        }
+
+        for (const nestedKickstand of removed.kickstands ?? []) {
+            if (!nestedKickstand || seenKickstandIds.has(nestedKickstand.kickstand.id)) continue;
+            seenKickstandIds.add(nestedKickstand.kickstand.id);
+            snapshots.kickstands.push(nestedKickstand);
+        }
+
+        for (const leaf of removed.leaves ?? []) {
+            if (!leaf || seenLeafIds.has(leaf.id)) continue;
+            seenLeafIds.add(leaf.id);
+            snapshots.leaves.push(leaf);
+        }
+
+        for (const knot of removed.knots ?? []) {
+            if (!knot || seenKnotIds.has(knot.id)) continue;
+            seenKnotIds.add(knot.id);
+            snapshots.knots.push(knot);
+        }
+    }
+
+    for (const leafId of leafIdsToRemove) {
+        const removed = removeLeaf(leafId);
+        if (!removed) continue;
+
+        if (removed.leaf && !seenLeafIds.has(removed.leaf.id)) {
+            seenLeafIds.add(removed.leaf.id);
+            snapshots.leaves.push(removed.leaf);
+        }
+
+        if (removed.knot && !seenKnotIds.has(removed.knot.id)) {
+            seenKnotIds.add(removed.knot.id);
+            snapshots.knots.push(removed.knot);
+        }
+    }
+
+    for (const braceId of braceIdsToRemove) {
+        const removed = removeBrace(braceId);
+        if (!removed) continue;
+
+        if (removed.brace && !seenBraceIds.has(removed.brace.id)) {
+            seenBraceIds.add(removed.brace.id);
+            snapshots.braces.push(removed.brace);
+        }
+
+        if (removed.startKnot && !seenKnotIds.has(removed.startKnot.id)) {
+            seenKnotIds.add(removed.startKnot.id);
+            snapshots.knots.push(removed.startKnot);
+        }
+
+        if (removed.endKnot && !seenKnotIds.has(removed.endKnot.id)) {
+            seenKnotIds.add(removed.endKnot.id);
+            snapshots.knots.push(removed.endKnot);
+        }
+    }
+
+    for (const knotId of directKnotIds) {
+        const removedKnot = removeKnotById(knotId);
+        if (!removedKnot || seenKnotIds.has(removedKnot.id)) continue;
+        seenKnotIds.add(removedKnot.id);
+        snapshots.knots.push(removedKnot);
+    }
+
+    if (state.knots[build.hostKnot.id]) {
+        removeKnotById(build.hostKnot.id);
+    }
+
+    if (state.roots[build.root.id]) {
+        removeRootById(build.root.id);
+    }
+
+    return snapshots;
+}
+
 export function removeBranch(branchId: string): { branches: Branch[]; braces: Brace[]; kickstands: KickstandBuildResult[]; leaves: Leaf[]; knots: Knot[] } | null {
     const rootBranch = state.branches[branchId];
     if (!rootBranch) return null;
@@ -2324,27 +2464,21 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
 
     const kickstandRootIdsToRemove = new Set<string>();
     for (const kickstandId of kickstandIdsToRemove) {
-        const currentKickstandState = getKickstandSnapshot();
-        const kickstand = currentKickstandState.kickstands[kickstandId];
-        if (!kickstand) continue;
+        const removed = removeKickstandCascade(kickstandId);
+        if (!removed) continue;
 
-        kickstandRootIdsToRemove.add(kickstand.rootId);
-        knotIdsToRemove.add(kickstand.hostKnotId);
+        snapshots.kickstands.push(removed.build);
+        kickstandRootIdsToRemove.add(removed.build.root.id);
 
-        const root = currentKickstandState.roots[kickstand.rootId];
-        const hostKnot = currentKickstandState.knots[kickstand.hostKnotId] ?? state.knots[kickstand.hostKnotId];
-
-        if (root && hostKnot) {
-            snapshots.kickstands.push({
-                kickstand: deepClone(kickstand),
-                root: deepClone(root),
-                hostKnot: deepClone(hostKnot),
-            });
-            kickstandRootIdsToRemove.add(root.id);
-            knotIdsToRemove.add(hostKnot.id);
+        for (const nestedKickstand of removed.kickstands ?? []) {
+            snapshots.kickstands.push(nestedKickstand);
+            kickstandRootIdsToRemove.add(nestedKickstand.root.id);
         }
 
-        removeKickstand(kickstandId);
+        snapshots.branches.push(...removed.branches);
+        snapshots.braces.push(...removed.braces);
+        snapshots.leaves.push(...removed.leaves);
+        snapshots.knots.push(...removed.knots);
     }
 
     const nextBranches = { ...state.branches };
@@ -2667,34 +2801,45 @@ export function removeTrunk(
     }
 
     for (const kickstandId of kickstandIdsToRemove) {
-        const currentKickstandState = getKickstandSnapshot();
-        const kickstand = currentKickstandState.kickstands[kickstandId];
-        if (!kickstand) continue;
+        const removed = removeKickstandCascade(kickstandId);
+        if (!removed) continue;
 
-        kickstandRootIdsToRemove.add(kickstand.rootId);
-        if (!seenKnotIds.has(kickstand.hostKnotId) && state.knots[kickstand.hostKnotId]) {
-            seenKnotIds.add(kickstand.hostKnotId);
-            snapshots.knots.push(deepClone(state.knots[kickstand.hostKnotId]));
+        if (!seenKickstandIds.has(removed.build.kickstand.id)) {
+            seenKickstandIds.add(removed.build.kickstand.id);
+            snapshots.kickstands.push(removed.build);
+            kickstandRootIdsToRemove.add(removed.build.root.id);
         }
 
-        const root = currentKickstandState.roots[kickstand.rootId];
-        const hostKnot = currentKickstandState.knots[kickstand.hostKnotId] ?? state.knots[kickstand.hostKnotId];
-
-        if (root && hostKnot && !seenKickstandIds.has(kickstand.id)) {
-            seenKickstandIds.add(kickstand.id);
-            snapshots.kickstands.push({
-                kickstand: deepClone(kickstand),
-                root: deepClone(root),
-                hostKnot: deepClone(hostKnot),
-            });
-            kickstandRootIdsToRemove.add(root.id);
-            if (!seenKnotIds.has(hostKnot.id)) {
-                seenKnotIds.add(hostKnot.id);
-                snapshots.knots.push(deepClone(hostKnot));
-            }
+        for (const nestedKickstand of removed.kickstands ?? []) {
+            if (!nestedKickstand || seenKickstandIds.has(nestedKickstand.kickstand.id)) continue;
+            seenKickstandIds.add(nestedKickstand.kickstand.id);
+            snapshots.kickstands.push(nestedKickstand);
+            kickstandRootIdsToRemove.add(nestedKickstand.root.id);
         }
 
-        removeKickstand(kickstandId);
+        for (const branch of removed.branches ?? []) {
+            if (!branch || seenBranchIds.has(branch.id)) continue;
+            seenBranchIds.add(branch.id);
+            snapshots.branches.push(branch);
+        }
+
+        for (const brace of removed.braces ?? []) {
+            if (!brace || seenBraceIds.has(brace.id)) continue;
+            seenBraceIds.add(brace.id);
+            snapshots.braces.push(brace);
+        }
+
+        for (const leaf of removed.leaves ?? []) {
+            if (!leaf || seenLeafIds.has(leaf.id)) continue;
+            seenLeafIds.add(leaf.id);
+            snapshots.leaves.push(leaf);
+        }
+
+        for (const knot of removed.knots ?? []) {
+            if (!knot || seenKnotIds.has(knot.id)) continue;
+            seenKnotIds.add(knot.id);
+            snapshots.knots.push(knot);
+        }
     }
 
     const remainingKnotsToRemove: string[] = [];

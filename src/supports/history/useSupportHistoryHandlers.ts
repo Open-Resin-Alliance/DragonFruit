@@ -31,9 +31,10 @@ import {
   SupportReplaceTrunkPayload,
   SupportReplaceStatePayload,
   SupportKickstandPayload,
+  SupportKickstandRemovePayload,
 } from './actionTypes';
-import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKnotById, removeRootById, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
-import { addKickstand, removeKickstand, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
+import { addKnot, addLeaf, addRoot, addTrunk, addBranch, addTwig, addStick, addBrace, removeLeaf, removeTrunk, removeBranch, removeTwig, removeStick, removeBrace, removeKickstandCascade, updateTrunk, updateBranch, updateKnot, setSnapshot } from '../state';
+import { addKickstand, setKickstandSnapshot } from '../SupportTypes/Kickstand/kickstandStore';
 
 export function useSupportHistoryHandlers(enabled = true) {
   useEffect(() => {
@@ -215,9 +216,7 @@ export function useSupportHistoryHandlers(enabled = true) {
         const payload = action.payload as SupportKickstandPayload | undefined;
         if (!payload?.build) return false;
         if (direction === 'undo') {
-          removeKickstand(payload.build.kickstand.id);
-          removeRootById(payload.build.root.id);
-          removeKnotById(payload.build.hostKnot.id);
+          removeKickstandCascade(payload.build.kickstand.id);
         } else {
           addKickstand(payload.build);
           addRoot(payload.build.root);
@@ -226,16 +225,23 @@ export function useSupportHistoryHandlers(enabled = true) {
         return true;
       }),
       registerHistoryHandler(SUPPORT_REMOVE_KICKSTAND, (action, direction) => {
-        const payload = action.payload as SupportKickstandPayload | undefined;
+        const payload = action.payload as SupportKickstandRemovePayload | undefined;
         if (!payload?.build) return false;
         if (direction === 'undo') {
-          addKickstand(payload.build);
           addRoot(payload.build.root);
+          addKickstand(payload.build);
           addKnot(payload.build.hostKnot);
+          for (const knot of payload.knots ?? []) addKnot(knot);
+          for (const leaf of payload.leaves ?? []) addLeaf(leaf);
+          for (const brace of payload.braces ?? []) addBrace(brace);
+          for (const kickstand of payload.kickstands ?? []) {
+            addKickstand(kickstand);
+            addRoot(kickstand.root);
+            addKnot(kickstand.hostKnot);
+          }
+          for (const branch of payload.branches ?? []) addBranch(branch);
         } else {
-          removeKickstand(payload.build.kickstand.id);
-          removeRootById(payload.build.root.id);
-          removeKnotById(payload.build.hostKnot.id);
+          removeKickstandCascade(payload.build.kickstand.id);
         }
         return true;
       }),
