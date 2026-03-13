@@ -11,7 +11,8 @@
     "display": { "resolutionX": 7680, "resolutionY": 4320, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
-    "networkSupport": "nanodlp"
+    "networkSupport": "nanodlp",
+    "networkFilter": "Athena 8K"
   },
   {
     "presetId": "concepts3d-athena1-12k-nanodlp",
@@ -25,7 +26,8 @@
     "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
-    "networkSupport": "nanodlp"
+    "networkSupport": "nanodlp",
+    "networkFilter": "Athena 12K"
   },
   {
     "presetId": "concepts3d-athena2-12k-nanodlp",
@@ -39,7 +41,8 @@
     "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
-    "networkSupport": "nanodlp"
+    "networkSupport": "nanodlp",
+    "networkFilter": "Athena2 12K"
   },
   {
     "presetId": "concepts3d-athena2-16k3b-nanodlp",
@@ -53,7 +56,8 @@
     "display": { "resolutionX": 15136, "resolutionY": 6230, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
     "antiAliasing": false,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
-    "networkSupport": "nanodlp"
+    "networkSupport": "nanodlp",
+    "networkFilter": "Athena2 16K"
   },
   {
     "presetId": "concepts3d-athena2-16k8b-nanodlp",
@@ -67,7 +71,8 @@
     "display": { "resolutionX": 15120, "resolutionY": 6230, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
-    "networkSupport": "nanodlp"
+    "networkSupport": "nanodlp",
+    "networkFilter": "Athena2 16K"
   },
   {
     "presetId": "concepts3d-athena2-16k8b-odyssey",
