@@ -760,6 +760,7 @@ export default function Home() {
     supportCount: number;
     operationLabel: string;
   } | null>(null);
+  const pendingDestructiveTransformContinueRef = React.useRef<(() => void) | null>(null);
   const dragDepthRef = React.useRef(0);
   const launchSceneFilesHandledRef = React.useRef(false);
   const lastPrepareDropRef = React.useRef<{ signature: string; atMs: number }>({
@@ -1152,6 +1153,20 @@ export default function Home() {
     return false;
   }, [getSupportPrimitiveCountForModel, pendingDestructiveTransform, scene]);
 
+  const requestDestructiveTransformSupportDeletionWithContinuation = React.useCallback((
+    operationLabel: string,
+    onContinue: () => void,
+  ) => {
+    const proceedImmediately = requestDestructiveTransformSupportDeletion(operationLabel);
+    if (proceedImmediately) {
+      pendingDestructiveTransformContinueRef.current = null;
+      return true;
+    }
+
+    pendingDestructiveTransformContinueRef.current = onContinue;
+    return false;
+  }, [requestDestructiveTransformSupportDeletion]);
+
   const handleConfirmDestructiveTransform = React.useCallback(() => {
     const pending = pendingDestructiveTransform;
     if (!pending) return;
@@ -1164,9 +1179,13 @@ export default function Home() {
     setSupportRenderRefreshNonce((value) => value + 1);
     setGizmoResetNonce((value) => value + 1);
     setPendingDestructiveTransform(null);
+    const continueAfterDeletion = pendingDestructiveTransformContinueRef.current;
+    pendingDestructiveTransformContinueRef.current = null;
+    continueAfterDeletion?.();
   }, [pendingDestructiveTransform, scene]);
 
   const handleCancelDestructiveTransform = React.useCallback(() => {
+    pendingDestructiveTransformContinueRef.current = null;
     setPendingDestructiveTransform(null);
   }, []);
 
@@ -6940,6 +6959,10 @@ export default function Home() {
     transformMgr.setTransformMode('transform');
   }, [handleTransformEnd, scene.activeModelId, transformMgr]);
 
+  const handlePlaceOnFaceBeforeApply = React.useCallback((_normal: THREE.Vector3, continueApply: () => void) => {
+    return requestDestructiveTransformSupportDeletionWithContinuation('Place On Face', continueApply);
+  }, [requestDestructiveTransformSupportDeletionWithContinuation]);
+
   return (
     <div className="ui-shell relative h-screen w-screen overflow-hidden" data-no-window-drag="true">
       <TopBar
@@ -7809,6 +7832,7 @@ export default function Home() {
                 onAnimatedTransformChange={handleTransformChange}
                 resolveAnimatedTransform={transformMgr.resolveLiveTransform}
                 onFaceSelect={handlePlaceOnFace}
+                onBeforeFaceApply={handlePlaceOnFaceBeforeApply}
               />
             )}
           </SceneCanvas>
