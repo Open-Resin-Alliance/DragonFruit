@@ -248,6 +248,17 @@ export function StlMesh({
   const isGizmoHoverCategory = hit.category === 'gizmo';
   const isSupportLikeHoverCategory = hit.category === 'support' || hit.category === 'segment' || hit.category === 'joint' || hit.category === 'knot' || hit.category === 'raft';
   const shouldSuppressModelInteraction = !!suppressModelInteraction;
+  const isSupportShiftGesture = (
+    event: {
+      shiftKey?: boolean;
+      nativeEvent?: { shiftKey?: boolean } | null;
+      sourceEvent?: { shiftKey?: boolean } | null;
+    } | null | undefined,
+  ) => mode === 'support' && !!(
+    event?.shiftKey
+    || event?.nativeEvent?.shiftKey
+    || event?.sourceEvent?.shiftKey
+  );
   const hasExternalHoverSource = externalHoveredModelId !== undefined;
   const isExternallyHoveredModel = !shouldSuppressModelInteraction
     && !!externalHoveredModelId
@@ -405,6 +416,11 @@ export function StlMesh({
         position={meshLocalOffset}
         renderOrder={isSupportDimmed ? 2 : 0}
         onClick={(e) => {
+          if (isSupportShiftGesture(e)) {
+            e.stopPropagation();
+            return;
+          }
+
           if (shouldSuppressModelInteraction) {
             e.stopPropagation();
             return;
@@ -446,6 +462,19 @@ export function StlMesh({
           }
         }}
         onPointerMove={(e) => {
+          if (isSupportShiftGesture(e)) {
+            schedulePointerHover(false);
+            onModelHoverPointChange?.(null);
+            onModelHoverModelChange?.(null);
+            window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
+              detail: { modelId: null },
+            }));
+            if (mode === 'support' && onSupportHover) {
+              onSupportHover(null);
+            }
+            return;
+          }
+
           if (shouldSuppressModelInteraction || isGizmoHoverCategory) {
             schedulePointerHover(false);
             onModelHoverPointChange?.(null);
@@ -532,6 +561,10 @@ export function StlMesh({
           }
         }}
         onPointerDown={(e) => {
+          if (isSupportShiftGesture(e)) {
+            return;
+          }
+
           if (!shouldSuppressModelInteraction && mode === 'prepare' && e.button === 0) {
             // While transforming the selected model, don't consume pointer-down at
             // the model layer; this keeps gizmo handle clicks responsive.

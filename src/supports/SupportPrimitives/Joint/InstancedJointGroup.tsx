@@ -101,6 +101,7 @@ export function InstancedJointGroup({
         <instancedMesh
             ref={meshRef}
             args={[undefined, undefined, validJoints.length]}
+            frustumCulled={false}
             onClick={onJointClick ? handleClick : undefined}
             onPointerMove={onJointPointerMove ? handlePointerMove : undefined}
             onPointerOut={onJointPointerOut ? handlePointerOut : undefined}

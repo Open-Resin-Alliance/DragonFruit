@@ -2576,16 +2576,15 @@ export function SceneCanvas({
   React.useEffect(() => {
     if (mode !== 'support' || !isMarqueeSelecting) {
       window.dispatchEvent(new CustomEvent('support-marquee-hover', {
-        detail: { supportId: null, modelId: null },
+        detail: { supportId: null, supportIds: [], modelId: null },
       }));
       return;
     }
 
-    const firstSupportId = supportMarqueeCandidateIdSet.values().next().value ?? null;
-    const modelId = firstSupportId ? getModelIdForSupportEntityId(firstSupportId) : null;
-
+    const supportIds = Array.from(supportMarqueeCandidateIdSet);
+    const firstSupportId = supportIds[0] ?? null;
     window.dispatchEvent(new CustomEvent('support-marquee-hover', {
-      detail: { supportId: firstSupportId, modelId },
+      detail: { supportId: firstSupportId, supportIds, modelId: null },
     }));
   }, [isMarqueeSelecting, mode, supportMarqueeCandidateIdSet]);
 
@@ -3361,7 +3360,7 @@ export function SceneCanvas({
     if (e.button !== 0) return;
     if (!e.shiftKey) return;
     if (isGizmoDragging || isPostGizmoInteractionGuardActive) return;
-    if (hoveredModelId || supportStateForBounds.hoveredCategory !== 'none') return;
+    if (mode === 'prepare' && (hoveredModelId || supportStateForBounds.hoveredCategory !== 'none')) return;
 
     if (mode === 'prepare' && onActiveModelChange) {
       const hasSelection = !!activeModelId || !!selectedModelIds?.length;
