@@ -163,6 +163,7 @@ function RootBucketMesh({
             <instancedMesh
                 ref={diskRef}
                 args={[undefined, undefined, bucket.roots.length]}
+                frustumCulled={false}
                 onClick={onRootClick ? handleClick : undefined}
                 onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                 onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
@@ -182,6 +183,7 @@ function RootBucketMesh({
                 <instancedMesh
                     ref={coneRef}
                     args={[undefined, undefined, bucket.roots.length]}
+                    frustumCulled={false}
                     onClick={onRootClick ? handleClick : undefined}
                     onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                     onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
@@ -202,6 +204,7 @@ function RootBucketMesh({
                 <instancedMesh
                     ref={sphereRef}
                     args={[undefined, undefined, bucket.roots.length]}
+                    frustumCulled={false}
                     onClick={onRootClick ? handleClick : undefined}
                     onPointerMove={onRootPointerMove ? handlePointerMove : undefined}
                     onPointerOut={onRootPointerOut ? handlePointerOut : undefined}
