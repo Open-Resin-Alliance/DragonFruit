@@ -26,6 +26,7 @@ import {
   removeTwig,
   removeStick,
   removeTrunk,
+  removeKickstandCascade,
   removeJointById,
   updateKnot,
   updateTrunk,
@@ -38,7 +39,7 @@ import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_KICKSTAND } from '@/supports/history/actionTypes';
 import { clearSelection, getMultiSelectedSupportIds, selectAllSupports } from '@/supports/interaction/SupportSelection';
-import { getKickstandSnapshot, removeKickstand } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
@@ -414,12 +415,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         const kickstands = Object.values(getKickstandSnapshot().kickstands);
         const kickstand = kickstands.find((ks) => ks.hostKnotId === id);
         if (kickstand) {
-          const kickstandSnapshots = removeKickstand(kickstand.id);
+          const kickstandSnapshots = removeKickstandCascade(kickstand.id);
           if (!kickstandSnapshots) return false;
           if (recordHistory) {
             pushHistory({
               type: SUPPORT_REMOVE_KICKSTAND,
-              payload: { build: kickstandSnapshots },
+              payload: kickstandSnapshots,
             });
           }
           setSelectedId(null);
@@ -498,12 +499,12 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       }
 
       if (category === 'brace') {
-        const kickstandSnapshots = removeKickstand(id);
+        const kickstandSnapshots = removeKickstandCascade(id);
         if (kickstandSnapshots) {
           if (recordHistory) {
             pushHistory({
               type: SUPPORT_REMOVE_KICKSTAND,
-              payload: { build: kickstandSnapshots },
+              payload: kickstandSnapshots,
             });
           }
           setSelectedId(null);

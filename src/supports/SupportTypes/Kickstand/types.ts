@@ -1,4 +1,4 @@
-import type { Knot, Roots, Segment, SupportEntity, Vec3 } from '../../types';
+import type { Branch, Brace, Knot, Leaf, Roots, Segment, SupportEntity, Vec3 } from '../../types';
 
 export type KickstandHostKind = 'trunk' | 'branch';
 
@@ -43,6 +43,15 @@ export interface KickstandBuildResult {
     root: Roots;
     hostKnot: Knot;
     kickstand: Kickstand;
+}
+
+export interface KickstandRemoveResult {
+    build: KickstandBuildResult;
+    branches: Branch[];
+    braces: Brace[];
+    kickstands: KickstandBuildResult[];
+    leaves: Leaf[];
+    knots: Knot[];
 }
 
 export interface KickstandState {

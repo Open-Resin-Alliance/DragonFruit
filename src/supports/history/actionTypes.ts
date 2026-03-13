@@ -1,6 +1,5 @@
 import type { Roots, Trunk, Leaf, Knot, Branch, Brace, Twig, Stick, SupportState } from '../types';
-import type { KickstandBuildResult } from '../SupportTypes/Kickstand/types';
-import type { KickstandState } from '../SupportTypes/Kickstand/types';
+import type { KickstandBuildResult, KickstandRemoveResult, KickstandState } from '../SupportTypes/Kickstand/types';
 
 export const SUPPORT_ADD_TRUNK = 'support:add-trunk' as const;
 export const SUPPORT_REMOVE_TRUNK = 'support:remove-trunk' as const;
@@ -119,6 +118,8 @@ export interface BraceLinkPayload {
 export interface SupportKickstandPayload {
   build: KickstandBuildResult;
 }
+
+export type SupportKickstandRemovePayload = KickstandRemoveResult;
 
 export interface SupportReplaceTrunkPayload {
   before: SupportState;
