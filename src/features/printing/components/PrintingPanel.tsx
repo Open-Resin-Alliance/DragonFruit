@@ -1,7 +1,6 @@
 import React from 'react';
 import { Download, Printer } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
-import { hostname } from 'os';
 
 type PrintingPanelProps = {
   outputName: string | null;
@@ -15,6 +14,7 @@ type PrintingPanelProps = {
   canSendToPrinter: boolean;
   sendBusy: boolean;
   sendStatusText: string | null;
+  sendButtonLabel?: string;
   onDownload: () => void;
   onSendToPrinter: () => void;
 };
@@ -31,6 +31,7 @@ export function PrintingPanel({
   canSendToPrinter,
   sendBusy,
   sendStatusText,
+  sendButtonLabel = 'Send to Printer',
   onDownload,
   onSendToPrinter,
 }: PrintingPanelProps) {
@@ -112,7 +113,7 @@ export function PrintingPanel({
               : 'Requires connected printer with supported upload capability and a generated print file'}
           >
             <Printer className="h-4 w-4" />
-            {sendBusy ? 'Sending…' : `Send to Printer`}
+            {sendBusy ? 'Sending…' : sendButtonLabel}
           </Button>
         </div>
 

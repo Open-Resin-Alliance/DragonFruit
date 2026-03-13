@@ -105,6 +105,7 @@ import {
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   subscribeToProfileStore,
+  type PrinterNetworkDevice,
 } from '@/features/profiles/profileStore';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import {
@@ -611,6 +612,8 @@ export default function Home() {
   const [printingReadyPlateId, setPrintingReadyPlateId] = React.useState<number | null>(null);
   const [printingPrintNowBusy, setPrintingPrintNowBusy] = React.useState(false);
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
+  const [printingTargetPickerOpen, setPrintingTargetPickerOpen] = React.useState(false);
+  const [printingTargetDeviceId, setPrintingTargetDeviceId] = React.useState<string | null>(null);
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
   const printingUploadProcessingHandoffTimeoutRef = React.useRef<number | null>(null);
@@ -2362,17 +2365,30 @@ export default function Home() {
   }, [activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
+  const connectedPrinterFleet = React.useMemo(() => {
+    if (!activePrinterProfile || activePrinterProfile.networkSupport !== 'nanodlp') return [] as PrinterNetworkDevice[];
+    return (activePrinterProfile.networkFleet ?? []).filter((device) => device.connected);
+  }, [activePrinterProfile]);
+  const printableConnectedPrinterFleet = React.useMemo(() => {
+    return connectedPrinterFleet.filter((device) => (device.selectedMaterialId?.trim() ?? '').length > 0);
+  }, [connectedPrinterFleet]);
+  const printingTargetDevice = React.useMemo(() => {
+    if (printableConnectedPrinterFleet.length === 0) return null;
+    return printableConnectedPrinterFleet.find((device) => device.id === printingTargetDeviceId)
+      ?? printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
+      ?? printableConnectedPrinterFleet[0]
+      ?? null;
+  }, [activePrinterProfile?.activeNetworkDeviceId, printableConnectedPrinterFleet, printingTargetDeviceId]);
+  const sendToPrinterButtonLabel = printableConnectedPrinterFleet.length > 1 ? 'Choose Printer…' : 'Send to Printer';
   const canSendToPrinter = Boolean(
     printingArtifact
     && printingArtifact.outputName.toLowerCase().endsWith('.nanodlp')
     && activePrinterProfile?.networkSupport === 'nanodlp'
-    && activePrinterProfile.networkConnection?.connected === true
-    && (activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '').length > 0,
+    && printableConnectedPrinterFleet.length > 0,
   );
   const canPrintNow = Boolean(
     printingReadyPlateId
-    && activePrinterProfile?.networkSupport === 'nanodlp'
-    && activePrinterProfile.networkConnection?.connected === true,
+    && printingTargetDevice?.connected === true,
   );
 
   const printingDialogStageLabel = React.useMemo(() => {
@@ -2446,6 +2462,27 @@ export default function Home() {
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!activePrinterProfile || activePrinterProfile.networkSupport !== 'nanodlp') {
+      setPrintingTargetDeviceId(null);
+      return;
+    }
+
+    if (printableConnectedPrinterFleet.length === 0) {
+      setPrintingTargetDeviceId(null);
+      return;
+    }
+
+    if (printingTargetDeviceId && printableConnectedPrinterFleet.some((device) => device.id === printingTargetDeviceId)) {
+      return;
+    }
+
+    const fallbackTarget = printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile.activeNetworkDeviceId)
+      ?? printableConnectedPrinterFleet[0]
+      ?? null;
+    setPrintingTargetDeviceId(fallbackTarget?.id ?? null);
+  }, [activePrinterProfile, printableConnectedPrinterFleet, printingTargetDeviceId]);
 
   React.useEffect(() => {
     if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
@@ -2772,14 +2809,13 @@ export default function Home() {
     void handleOpenSceneDialog();
   }, [handleOpenSceneDialog]);
 
-  const handleSendToPrinter = React.useCallback(async () => {
+  const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice) => {
     if (!printingArtifact || !activePrinterProfile) return;
     if (activePrinterProfile.networkSupport !== 'nanodlp') return;
-    if (activePrinterProfile.networkConnection?.connected !== true) return;
 
-    const host = (activePrinterProfile.networkConnection.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
-    const port = activePrinterProfile.networkConnection.port || 80;
-    const selectedMaterialId = (activePrinterProfile.networkConnection.selectedMaterialId ?? '').trim();
+    const host = (targetDevice.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
+    const port = targetDevice.port || 80;
+    const selectedMaterialId = (targetDevice.selectedMaterialId ?? '').trim();
     if (!host) {
       setPrintingSendStatusText('No printer IP address available for send operation.');
       return;
@@ -2788,6 +2824,8 @@ export default function Home() {
       setPrintingSendStatusText('No NanoDLP material profile selected. Choose one in Printer Settings first.');
       return;
     }
+
+    setPrintingTargetDeviceId(targetDevice.id);
 
     setPrintingReadyPlateId(null);
     setPrintingSendBusy(true);
@@ -2984,14 +3022,30 @@ export default function Home() {
     }
   }, [activePrinterProfile, printingArtifact]);
 
-  const handlePrintNow = React.useCallback(async () => {
-    if (!activePrinterProfile) return;
+  const handleSendToPrinter = React.useCallback(async () => {
+    if (!printingArtifact || !activePrinterProfile) return;
     if (activePrinterProfile.networkSupport !== 'nanodlp') return;
-    if (activePrinterProfile.networkConnection?.connected !== true) return;
+    if (printableConnectedPrinterFleet.length === 0) {
+      setPrintingSendStatusText('No connected printer with a selected NanoDLP material is available for upload.');
+      return;
+    }
+
+    if (printableConnectedPrinterFleet.length > 1) {
+      setPrintingTargetPickerOpen(true);
+      return;
+    }
+
+    await performSendToPrinter(printableConnectedPrinterFleet[0]);
+  }, [activePrinterProfile, performSendToPrinter, printableConnectedPrinterFleet, printingArtifact]);
+
+  const handlePrintNow = React.useCallback(async () => {
+    if (!activePrinterProfile || !printingTargetDevice) return;
+    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (printingTargetDevice.connected !== true) return;
     if (!printingReadyPlateId) return;
 
-    const host = (activePrinterProfile.networkConnection.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
-    const port = activePrinterProfile.networkConnection.port || 80;
+    const host = (printingTargetDevice.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
+    const port = printingTargetDevice.port || 80;
     if (!host) {
       setPrintingSendStatusText('No printer IP address available for Print Now.');
       return;
@@ -3030,7 +3084,7 @@ export default function Home() {
     } finally {
       setPrintingPrintNowBusy(false);
     }
-  }, [activePrinterProfile, printingReadyPlateId]);
+  }, [activePrinterProfile, printingReadyPlateId, printingTargetDevice]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
     if (!Number.isFinite(nextLayer)) return;
@@ -7387,6 +7441,7 @@ export default function Home() {
               canSendToPrinter={canSendToPrinter}
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
+              sendButtonLabel={sendToPrinterButtonLabel}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
             />
@@ -8111,6 +8166,109 @@ export default function Home() {
         }}
       />
 
+      {printingTargetPickerOpen && (
+        <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose printer"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  Fleet Upload
+                </div>
+                <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Choose target printer
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                onClick={() => setPrintingTargetPickerOpen(false)}
+                disabled={printingSendBusy}
+              >
+                Cancel
+              </button>
+            </div>
+
+            <div className="p-4 space-y-2.5">
+              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Multiple compatible printers are online. Pick the machine that should receive this upload.
+              </div>
+
+              <div className="space-y-2 max-h-[320px] overflow-y-auto custom-scrollbar pr-1">
+                {printableConnectedPrinterFleet.map((device) => {
+                  const isSelected = device.id === (printingTargetDeviceId ?? printingTargetDevice?.id);
+                  return (
+                    <button
+                      key={device.id}
+                      type="button"
+                      onClick={() => setPrintingTargetDeviceId(device.id)}
+                      className="w-full rounded-lg border px-3 py-2.5 text-left"
+                      style={isSelected
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 89%)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                          }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
+                            {device.displayName || device.hostName || device.ipAddress}
+                          </div>
+                          <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
+                            {device.ipAddress} • {(device.selectedMaterialName ?? device.selectedMaterialId ?? 'No material').toString()}
+                          </div>
+                        </div>
+                        {isSelected && (
+                          <div className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>
+                            Selected
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => setPrintingTargetPickerOpen(false)}
+                  disabled={printingSendBusy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button-accent !h-9 px-3 text-xs"
+                  disabled={printingSendBusy || !printingTargetDevice}
+                  onClick={() => {
+                    if (!printingTargetDevice) return;
+                    setPrintingTargetPickerOpen(false);
+                    void performSendToPrinter(printingTargetDevice);
+                  }}
+                >
+                  Upload to Selected Printer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {printingUploadDialogOpen && (
         <div className="absolute inset-0 z-[121] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
           <div
@@ -8145,6 +8303,12 @@ export default function Home() {
                   <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Stage</div>
                   <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
                     {printingDialogStageLabel}
+                  </div>
+                </div>
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Target Printer</div>
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || 'Pending'}>
+                    {printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || 'Pending'}
                   </div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
