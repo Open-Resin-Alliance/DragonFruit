@@ -507,6 +507,21 @@ function decodeVoxlEmbeddedMeshBytes(meshRef: VoxlMeshRef): Uint8Array {
   throw new Error(`Unsupported VOXL embedded mesh encoding: ${String(dataEncoding)}`);
 }
 
+function sanitizeImportedModelDisplayName(rawName: string): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) return 'model';
+
+  let base = trimmed;
+  while (true) {
+    const dotIndex = base.lastIndexOf('.');
+    if (dotIndex <= 0) break;
+    base = base.slice(0, dotIndex).trim();
+    if (!base) return 'model';
+  }
+
+  return base;
+}
+
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   if (!globalThis.crypto?.subtle) {
     throw new Error('SHA-256 hashing is unavailable in this environment.');
@@ -2464,7 +2479,7 @@ export function useSceneCollectionManager() {
 
         const model: LoadedModel = {
           id: importedModelId || generateId(),
-          name: file.name,
+          name: sanitizeImportedModelDisplayName(file.name),
           fileUrl: '', // No URL
           fileSizeBytes: file.size,
           geometry: processed,
@@ -2613,7 +2628,7 @@ export function useSceneCollectionManager() {
 
           importedModels.push({
             id: resolvedId,
-            name: model.name,
+            name: sanitizeImportedModelDisplayName(model.name),
             fileUrl: '',
             fileSizeBytes: model.fileSizeBytes,
             geometry,
