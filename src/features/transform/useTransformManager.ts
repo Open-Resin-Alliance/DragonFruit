@@ -47,6 +47,16 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     }
   }, [liftDistance]);
 
+  const setAutoLiftEnabled = useCallback((enabled: boolean) => {
+    setAutoLift(enabled);
+    transformHook.setAutoSnapEnabled(true);
+  }, [transformHook]);
+
+  const disableAutoLiftForManualZMove = useCallback(() => {
+    setAutoLift(false);
+    transformHook.setAutoSnapEnabled(false);
+  }, [transformHook]);
+
   const buildTransformMatrix = useCallback((candidate: {
     position: THREE.Vector3;
     rotation: THREE.Euler;
@@ -240,8 +250,10 @@ export function useTransformManager({ geom }: TransformManagerProps) {
     setTransformMode: transformHook.setMode,
     isTransforming,
     setIsTransforming,
+    autoSnapEnabled: transformHook.autoSnapEnabled,
     autoLift,
-    setAutoLift,
+    setAutoLift: setAutoLiftEnabled,
+    disableAutoLiftForManualZMove,
     liftDistance,
     setLiftDistance,
     zRange,

@@ -860,6 +860,7 @@ export function SceneCanvas({
   transform,
   autoLift = false,
   liftDistance = 5,
+  autoSnapEnabled = true,
   onTransformChange,
   onTransformStart,
   onGizmoTransformCommit,
@@ -961,6 +962,7 @@ export function SceneCanvas({
   transform?: ModelTransform;
   autoLift?: boolean;
   liftDistance?: number;
+  autoSnapEnabled?: boolean;
   onTransformChange?: (position: THREE.Vector3, rotation: THREE.Euler, scale: THREE.Vector3) => void;
   onTransformStart?: (
     operation: 'move' | 'rotate' | 'scale',
@@ -1146,6 +1148,7 @@ export function SceneCanvas({
 
   const alignLiveTransformToLift = React.useCallback((model: LoadedModel | null | undefined, candidate: ModelTransform | null) => {
     if (!model || !candidate) return candidate;
+    if (!autoSnapEnabled) return candidate;
 
     const geometry = model.geometry?.geometry;
     if (!geometry) return candidate;
@@ -1176,7 +1179,7 @@ export function SceneCanvas({
       rotation: candidate.rotation.clone(),
       scale: candidate.scale.clone(),
     };
-  }, [autoLift, liftDistance]);
+  }, [autoLift, autoSnapEnabled, liftDistance]);
 
   const supportColorsByModelId = React.useMemo(() => {
     const fallbackColor = meshColor ?? '#a3a3a3';
@@ -5470,10 +5473,10 @@ export function SceneCanvas({
                       }
                     }
                   }}
-                    onMoveStart={() => {
+                    onMoveStart={(axis) => {
                     stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
-                      const shouldProceed = onTransformStart?.('move');
+                      const shouldProceed = onTransformStart?.('move', axis ? { axis } : undefined);
                       if (shouldProceed === false) return false;
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;

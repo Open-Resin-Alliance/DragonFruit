@@ -588,6 +588,7 @@ export interface LoadedModel {
   color: string;
   polygonCount: number;
   ignoreAutoLift?: boolean;
+  manualZMoveOverride?: boolean;
 }
 
 type DebugPrimitiveType =
@@ -1571,6 +1572,18 @@ export function useSceneCollectionManager() {
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, visible } : m
     ));
+  }, []);
+
+  const setModelManualZMoveOverride = useCallback((id: string, manualZMoveOverride: boolean) => {
+    setModels(prev => prev.map((model) => (
+      model.id === id
+        ? (
+            model.manualZMoveOverride === manualZMoveOverride
+              ? model
+              : { ...model, manualZMoveOverride }
+          )
+        : model
+    )));
   }, []);
 
   const renameModel = useCallback((id: string, name: string) => {
@@ -3021,6 +3034,7 @@ export function useSceneCollectionManager() {
     updateModelTransform,
     commitModelTransformHistory,
     updateModelTransforms,
+    setModelManualZMoveOverride,
     setModelVisibility,
     renameModel,
     groupModels,

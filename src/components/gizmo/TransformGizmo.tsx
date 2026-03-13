@@ -129,24 +129,27 @@ export function TransformGizmo({
   };
 
   const handleDragStart = (part: string, isUniform?: boolean): boolean => {
-    const axisFromPart = (part.endsWith('-x') ? 'x' : part.endsWith('-y') ? 'y' : 'z') as GizmoAxis;
+    const axisFromPart = part.endsWith('-x')
+      ? 'x'
+      : part.endsWith('-y')
+        ? 'y'
+        : part.endsWith('-z')
+          ? 'z'
+          : undefined;
 
-    if (part === 'center' && onMoveStart) {
-      const allowed = onMoveStart();
-      if (allowed === false) return false;
-    }
-
-    if (part.startsWith('axis-') && onMoveStart) {
-      const allowed = onMoveStart();
+    if ((part === 'center' || part.startsWith('axis-')) && onMoveStart) {
+      const allowed = onMoveStart(axisFromPart);
       if (allowed === false) return false;
     }
 
     if (part.startsWith('ring-') && onRotateStart) {
+      if (!axisFromPart) return false;
       const allowed = onRotateStart(axisFromPart);
       if (allowed === false) return false;
     }
 
     if (part.startsWith('scale-') && onScaleStart) {
+      if (!axisFromPart) return false;
       const allowed = onScaleStart(axisFromPart, Boolean(isUniform));
       if (allowed === false) return false;
     }

@@ -4075,11 +4075,13 @@ export default function Home() {
 
       const shouldSuppressAutoLiftDuringSync =
         scene.activeModel.ignoreAutoLift && displayActiveModelId !== scene.activeModelId;
+      const shouldDisableAutoSnap =
+        shouldSuppressAutoLiftDuringSync || scene.activeModel.manualZMoveOverride === true;
 
       // Some imported models need to keep their stored transform when first synced into
       // the live transform manager. Only suppress auto-lift for that initial sync pass;
       // once synchronized, the Modify tab settings should work normally again.
-      if (shouldSuppressAutoLiftDuringSync) {
+      if (shouldDisableAutoSnap) {
         transformMgr.transformHook.setAutoSnapEnabled(false);
       } else {
         transformMgr.transformHook.setAutoSnapEnabled(true);
@@ -6276,6 +6278,19 @@ export default function Home() {
     skipNextTransformEndCommitRef.current = null;
   }, [isFiniteTransform, scene, transformMgr.transformHook]);
 
+  const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
+    if (scene.activeModelId) {
+      scene.setModelManualZMoveOverride(scene.activeModelId, false);
+    }
+    transformMgr.setAutoLift(enabled);
+  }, [scene, transformMgr]);
+
+  const disableAutoLiftForManualZMove = React.useCallback(() => {
+    if (!scene.activeModelId) return;
+    scene.setModelManualZMoveOverride(scene.activeModelId, true);
+    transformMgr.disableAutoLiftForManualZMove();
+  }, [scene, transformMgr]);
+
   const handleTransformStart = React.useCallback((
     operation: 'move' | 'rotate' | 'scale',
     details?: { axis?: 'x' | 'y' | 'z' | 'uniform'; isUniform?: boolean },
@@ -6304,6 +6319,10 @@ export default function Home() {
     if (!scene.activeModelId || !scene.activeModel) return;
     const targetModelName = (scene.activeModel.name ?? scene.activeModelId).trim();
 
+    if (operation === 'move' && details?.axis === 'z') {
+      disableAutoLiftForManualZMove();
+    }
+
     if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
       pendingTransformHistoryRef.current = {
         modelId: scene.activeModelId,
@@ -6322,7 +6341,7 @@ export default function Home() {
 
     transformMgr.setIsTransforming(true);
     return true;
-  }, [requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, transformMgr]);
+  }, [disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, transformMgr]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
@@ -7059,7 +7078,7 @@ export default function Home() {
                 onResetScale={transformMgr.transformHook.resetScale}
                 modelBBox={scene.geom.bbox}
                 autoLift={transformMgr.autoLift}
-                onAutoLiftChange={transformMgr.setAutoLift}
+                onAutoLiftChange={handleAutoLiftChange}
                 liftDistance={transformMgr.liftDistance}
                 onLiftDistanceChange={transformMgr.setLiftDistance}
                 onLift={() => {
@@ -7720,6 +7739,7 @@ export default function Home() {
             transform={transformMgr.transform}
             autoLift={transformMgr.autoLift}
             liftDistance={transformMgr.liftDistance}
+            autoSnapEnabled={transformMgr.autoSnapEnabled}
             onTransformStart={handleTransformStart}
             onGizmoTransformCommit={handleGizmoTransformCommit}
             onGizmoTransformGroupCommit={handleGizmoTransformGroupCommit}
