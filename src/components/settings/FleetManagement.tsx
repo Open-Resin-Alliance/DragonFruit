@@ -35,8 +35,6 @@ type FleetManagementProps = {
   onNetworkIpAddressChange: (value: string) => void;
   onConnectManual: () => void;
   activePrinterSummary: string;
-  networkConnectionMessage: string;
-  networkMessageConnected: boolean;
   onClose: () => void;
   onSave: () => void;
 };
@@ -67,8 +65,6 @@ export function FleetManagement({
   onNetworkIpAddressChange,
   onConnectManual,
   activePrinterSummary,
-  networkConnectionMessage,
-  networkMessageConnected,
   onClose,
   onSave,
 }: FleetManagementProps) {
@@ -96,6 +92,7 @@ export function FleetManagement({
       </div>
 
       <div className="p-5 space-y-4">
+        {managedPrinters.length > 0 && (
         <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -148,22 +145,18 @@ export function FleetManagement({
                               Active
                             </span>
                           )}
-                          <span
-                            className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                            style={device.connected
-                              ? {
-                                  borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 24%)',
-                                  background: 'color-mix(in srgb, #22c55e, transparent 88%)',
-                                  color: 'color-mix(in srgb, #86efac, white 10%)',
-                                }
-                              : {
-                                  borderColor: 'var(--border-subtle)',
-                                  background: 'color-mix(in srgb, var(--surface-2), transparent 25%)',
-                                  color: 'var(--text-muted)',
-                                }}
-                          >
-                            {device.connected ? 'Connected' : 'Offline'}
-                          </span>
+                          {!device.connected && (
+                            <span
+                              className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                              style={{
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-2), transparent 25%)',
+                                color: 'var(--text-muted)',
+                              }}
+                            >
+                              Offline
+                            </span>
+                          )}
                         </div>
                         <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
                           {device.ipAddress}
@@ -251,10 +244,11 @@ export function FleetManagement({
             )}
           </div>
         </div>
+        )}
 
         {showAddPrinterFlow && (
           <>
-            <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+            <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Discovery</div>
@@ -298,7 +292,7 @@ export function FleetManagement({
                 </button>
               </div>
 
-              <div className="mt-2.5 space-y-1.5">
+              <div className="mt-2 space-y-1">
                 <div className="h-1.5 rounded-full border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), black 14%)' }}>
                   <div
                     className="h-full rounded-full transition-[width] duration-200 ease-out"
@@ -319,7 +313,7 @@ export function FleetManagement({
             </div>
 
             {networkDiscoveryEnabled && (
-              <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+              <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Discovered Printers</div>
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -332,7 +326,7 @@ export function FleetManagement({
                     No discovered printers yet. Run Scan to search your local subnet.
                   </div>
                 ) : (
-                  <div className="mt-2.5 space-y-2 max-h-[248px] overflow-y-auto custom-scrollbar pr-1">
+                  <div className="mt-2 space-y-1.5 max-h-[180px] overflow-y-auto custom-scrollbar pr-1">
                     {discoveredPrinters.map((entry) => {
                       const savedEntry = managedPrinters.find((device) => device.ipAddress === entry.ipAddress) ?? null;
                       const isEntryConnected = savedEntry?.connected === true;
@@ -374,7 +368,7 @@ export function FleetManagement({
                   </div>
                 )}
 
-                <div className="mt-3 border-t pt-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
                   <button
                     type="button"
                     onClick={onToggleManualEntry}
@@ -388,7 +382,7 @@ export function FleetManagement({
             )}
 
             {showManualNetworkEntry && (
-              <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+              <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                 <label className="space-y-1 block">
                   <span className="ui-label font-medium">Printer IP Address (manual)</span>
                   <input
@@ -400,7 +394,7 @@ export function FleetManagement({
                   />
                 </label>
 
-                <div className="mt-2.5 flex items-center justify-between gap-2">
+                <div className="mt-2 flex items-center justify-between gap-2">
                   <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                     Save and select a printer by connecting manually.
                   </div>
@@ -420,11 +414,6 @@ export function FleetManagement({
           </>
         )}
 
-        {networkConnectionMessage && (
-          <div className="text-[11px]" style={{ color: networkMessageConnected ? '#86efac' : 'var(--text-muted)' }}>
-            {networkConnectionMessage}
-          </div>
-        )}
       </div>
 
       <div className="px-4 pb-4 flex items-center justify-end gap-2">

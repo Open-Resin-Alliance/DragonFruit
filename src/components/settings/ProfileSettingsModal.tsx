@@ -445,6 +445,11 @@ export function ProfileSettingsModal({
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
   const selectedNanodlpHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
   const managedNetworkPrinters = React.useMemo(() => selectedPrinter?.networkFleet ?? [], [selectedPrinter?.networkFleet]);
+  const connectedManagedNetworkPrinterCount = React.useMemo(
+    () => managedNetworkPrinters.filter((device) => device.connected).length,
+    [managedNetworkPrinters],
+  );
+  const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 1 ? 'Manage Fleet' : 'Network Settings';
   const activeManagedNetworkPrinter = React.useMemo(
     () => managedNetworkPrinters.find((device) => device.id === selectedPrinter?.activeNetworkDeviceId) ?? null,
     [managedNetworkPrinters, selectedPrinter?.activeNetworkDeviceId],
@@ -1179,6 +1184,15 @@ export function ProfileSettingsModal({
     setNetworkConnectionMessage(`Removed ${device.displayName || device.hostName || device.ipAddress} from this profile fleet.`);
   }, [networkIpAddress, selectedPrinter]);
 
+  const handleOpenNetworkSettings = React.useCallback(() => {
+    if (!selectedPrinter) return;
+    setNetworkDiscoveryEnabled(selectedPrinter.network?.discoveryEnabled ?? true);
+    setNetworkIpAddress(selectedPrinter.network?.ipAddress ?? '');
+    setIsAddingNetworkPrinter((selectedPrinter.networkFleet?.length ?? 0) === 0);
+    setShowManualNetworkEntry((selectedPrinter.networkFleet?.length ?? 0) === 0);
+    setIsNetworkSettingsOpen(true);
+  }, [selectedPrinter]);
+
   React.useEffect(() => {
     if (!isNetworkSettingsOpen) return;
     if (!selectedPrinterSupportsNetworkSettings) return;
@@ -1873,20 +1887,13 @@ export function ProfileSettingsModal({
                   {selectedPrinterSupportsNetworkSettings && (
                     <button
                       type="button"
-                      onClick={() => {
-                        if (!selectedPrinter) return;
-                        setNetworkDiscoveryEnabled(selectedPrinter.network?.discoveryEnabled ?? true);
-                        setNetworkIpAddress(selectedPrinter.network?.ipAddress ?? '');
-                        setIsAddingNetworkPrinter((selectedPrinter.networkFleet?.length ?? 0) === 0);
-                        setShowManualNetworkEntry((selectedPrinter.networkFleet?.length ?? 0) === 0);
-                        setIsNetworkSettingsOpen(true);
-                      }}
+                      onClick={handleOpenNetworkSettings}
                       disabled={!hasPrinters || !selectedPrinter}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                       style={{ color: 'var(--text-strong)' }}
                     >
                       <Search className="w-3.5 h-3.5" />
-                      Network Settings
+                      {networkSettingsActionLabel}
                     </button>
                   )}
                   <button
@@ -2103,6 +2110,21 @@ export function ProfileSettingsModal({
                     <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
                       Connect to a machine to view on-device material profiles.
                     </p>
+                    {selectedPrinterSupportsNetworkSettings && (
+                      <button
+                        type="button"
+                        onClick={handleOpenNetworkSettings}
+                        className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                        style={{
+                          color: 'var(--accent-secondary)',
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                        }}
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        Connect Now
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -2517,8 +2539,6 @@ export function ProfileSettingsModal({
                 : activeManagedNetworkPrinter
                   ? `Selected: ${activeManagedNetworkPrinter.displayName || activeManagedNetworkPrinter.ipAddress}`
                   : 'No active printer selected'}
-              networkConnectionMessage={networkConnectionMessage}
-              networkMessageConnected={selectedPrinter.networkConnection?.connected === true}
               onClose={() => setIsNetworkSettingsOpen(false)}
               onSave={() => {
                 updatePrinterNetworkSettings(selectedPrinter.id, {

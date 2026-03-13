@@ -99,6 +99,7 @@ import {
   subscribeToWorkspaceCameraSettings,
 } from '@/components/settings/workspaceCameraPreferences';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
+import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import {
   getActiveMaterialProfile,
   getActivePrinterProfile,
@@ -146,6 +147,12 @@ interface ShaftHoverDebugDetail {
   segmentId: string | null;
   point: { x: number; y: number; z: number } | null;
 }
+
+type FleetUploadMaterialOption = {
+  id: string;
+  name: string;
+  layerHeightMm: number | null;
+};
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
 
@@ -614,6 +621,11 @@ export default function Home() {
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
   const [printingTargetPickerOpen, setPrintingTargetPickerOpen] = React.useState(false);
   const [printingTargetDeviceId, setPrintingTargetDeviceId] = React.useState<string | null>(null);
+  const [printingTargetMaterialId, setPrintingTargetMaterialId] = React.useState<string>('');
+  const [printingTargetMaterialOptions, setPrintingTargetMaterialOptions] = React.useState<FleetUploadMaterialOption[]>([]);
+  const [isPrintingTargetMaterialsLoading, setIsPrintingTargetMaterialsLoading] = React.useState(false);
+  const [printingTargetMaterialError, setPrintingTargetMaterialError] = React.useState<string | null>(null);
+  const printingTargetMaterialsCacheRef = React.useRef<Map<string, FleetUploadMaterialOption[]>>(new Map());
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
   const printingUploadProcessingHandoffTimeoutRef = React.useRef<number | null>(null);
@@ -2365,12 +2377,20 @@ export default function Home() {
   }, [activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
+  const nanodlpNetworkUiAdapter = React.useMemo(() => getProfileNetworkUiAdapter('nanodlp'), []);
+  const slicedLayerHeightMm = React.useMemo(() => {
+    return Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
+  }, [activeMaterialProfile?.layerHeightMm]);
+  const isLayerHeightMatch = React.useCallback((candidateLayerHeightMm: number | null | undefined) => {
+    if (candidateLayerHeightMm == null) return false;
+    return Math.abs(candidateLayerHeightMm - slicedLayerHeightMm) <= 0.0005;
+  }, [slicedLayerHeightMm]);
   const connectedPrinterFleet = React.useMemo(() => {
     if (!activePrinterProfile || activePrinterProfile.networkSupport !== 'nanodlp') return [] as PrinterNetworkDevice[];
     return (activePrinterProfile.networkFleet ?? []).filter((device) => device.connected);
   }, [activePrinterProfile]);
   const printableConnectedPrinterFleet = React.useMemo(() => {
-    return connectedPrinterFleet.filter((device) => (device.selectedMaterialId?.trim() ?? '').length > 0);
+    return connectedPrinterFleet;
   }, [connectedPrinterFleet]);
   const printingTargetDevice = React.useMemo(() => {
     if (printableConnectedPrinterFleet.length === 0) return null;
@@ -2379,7 +2399,25 @@ export default function Home() {
       ?? printableConnectedPrinterFleet[0]
       ?? null;
   }, [activePrinterProfile?.activeNetworkDeviceId, printableConnectedPrinterFleet, printingTargetDeviceId]);
-  const sendToPrinterButtonLabel = printableConnectedPrinterFleet.length > 1 ? 'Choose Printer…' : 'Send to Printer';
+  const printingTargetMaterialGroups = React.useMemo(() => {
+    const groups = new Map<string, FleetUploadMaterialOption[]>();
+    for (const material of printingTargetMaterialOptions) {
+      const label = material.layerHeightMm == null
+        ? 'Layer height unknown'
+        : '';
+      const bucket = groups.get(label);
+      if (bucket) {
+        bucket.push(material);
+      } else {
+        groups.set(label, [material]);
+      }
+    }
+    return Array.from(groups.entries()).map(([label, materials]) => ({ label, materials }));
+  }, [printingTargetMaterialOptions]);
+  const sendToPrinterTargetName = printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || null;
+  const sendToPrinterButtonLabel = sendToPrinterTargetName
+    ? `Upload to ${sendToPrinterTargetName.length > 26 ? `${sendToPrinterTargetName.slice(0, 24)}…` : sendToPrinterTargetName}`
+    : 'Send to Printer';
   const canSendToPrinter = Boolean(
     printingArtifact
     && printingArtifact.outputName.toLowerCase().endsWith('.nanodlp')
@@ -2483,6 +2521,120 @@ export default function Home() {
       ?? null;
     setPrintingTargetDeviceId(fallbackTarget?.id ?? null);
   }, [activePrinterProfile, printableConnectedPrinterFleet, printingTargetDeviceId]);
+
+  React.useEffect(() => {
+    if (!printingTargetPickerOpen) {
+      setIsPrintingTargetMaterialsLoading(false);
+      return;
+    }
+    if (!printingTargetDevice || !nanodlpNetworkUiAdapter) {
+      setPrintingTargetMaterialOptions([]);
+      setPrintingTargetMaterialId('');
+      setPrintingTargetMaterialError('Select a printer to load matching material settings.');
+      setIsPrintingTargetMaterialsLoading(false);
+      return;
+    }
+
+    const host = (printingTargetDevice.ipAddress || '').trim();
+    if (!host) {
+      setPrintingTargetMaterialOptions([]);
+      setPrintingTargetMaterialId('');
+      setPrintingTargetMaterialError('Selected printer has no network address.');
+      setIsPrintingTargetMaterialsLoading(false);
+      return;
+    }
+
+    const cacheKey = `${nanodlpNetworkUiAdapter.pluginId}:${host.toLowerCase()}`;
+    const applyResolvedMaterials = (parsed: FleetUploadMaterialOption[]) => {
+      let matching = parsed.filter((material) => isLayerHeightMatch(material.layerHeightMm));
+
+      if (matching.length === 0 && (printingTargetDevice.selectedMaterialId?.trim() ?? '').length > 0 && isLayerHeightMatch(printingTargetDevice.selectedMaterialLayerHeightMm ?? null)) {
+        matching = [{
+          id: printingTargetDevice.selectedMaterialId!.trim(),
+          name: printingTargetDevice.selectedMaterialName?.trim() || printingTargetDevice.selectedMaterialId!.trim(),
+          layerHeightMm: printingTargetDevice.selectedMaterialLayerHeightMm ?? null,
+        }];
+      }
+
+      setPrintingTargetMaterialOptions(matching);
+
+      setPrintingTargetMaterialId((previousId) => {
+        const preferredId = previousId.trim();
+        const fallbackId = matching.find((material) => material.id === (printingTargetDevice.selectedMaterialId ?? '').trim())?.id
+          ?? matching[0]?.id
+          ?? '';
+        return matching.some((material) => material.id === preferredId) ? preferredId : fallbackId;
+      });
+
+      if (matching.length === 0) {
+        setPrintingTargetMaterialError(`No material on this printer matches sliced layer height ${slicedLayerHeightMm.toFixed(3)} mm.`);
+      } else {
+        setPrintingTargetMaterialError(null);
+      }
+    };
+
+    const cached = printingTargetMaterialsCacheRef.current.get(cacheKey);
+    if (cached) {
+      setIsPrintingTargetMaterialsLoading(false);
+      applyResolvedMaterials(cached);
+      return;
+    }
+
+    let cancelled = false;
+    setIsPrintingTargetMaterialsLoading(true);
+    setPrintingTargetMaterialError(null);
+
+    void (async () => {
+      try {
+        const response = await pluginNetworkFetch({
+          pluginId: nanodlpNetworkUiAdapter.pluginId,
+          operation: nanodlpNetworkUiAdapter.operations.materials,
+          host,
+        });
+
+        const payload = await response.json().catch(() => null) as any;
+        const rawMaterials = Array.isArray(payload?.materials) ? payload.materials : [];
+
+        const parsed: FleetUploadMaterialOption[] = rawMaterials
+          .map((item: any) => {
+            if (typeof item?.id !== 'string' || typeof item?.name !== 'string') return null;
+            const processValues = nanodlpNetworkUiAdapter.resolveMaterialProcessValues((item?.meta ?? {}) as Record<string, unknown>);
+            return {
+              id: item.id,
+              name: item.name,
+              layerHeightMm: Number.isFinite(Number(processValues.layerHeightMm))
+                ? Number(processValues.layerHeightMm)
+                : null,
+            } satisfies FleetUploadMaterialOption;
+          })
+          .filter((item: FleetUploadMaterialOption | null): item is FleetUploadMaterialOption => item !== null);
+
+        if (cancelled) return;
+        printingTargetMaterialsCacheRef.current.set(cacheKey, parsed);
+        applyResolvedMaterials(parsed);
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : 'Failed to load materials from printer.';
+        setPrintingTargetMaterialOptions([]);
+        setPrintingTargetMaterialId('');
+        setPrintingTargetMaterialError(message);
+      } finally {
+        if (!cancelled) {
+          setIsPrintingTargetMaterialsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isLayerHeightMatch,
+    nanodlpNetworkUiAdapter,
+    printingTargetDevice,
+    printingTargetPickerOpen,
+    slicedLayerHeightMm,
+  ]);
 
   React.useEffect(() => {
     if (!printingUploadDialogOpen || printingUploadDialogStage !== 'processing' || printingDeviceProcessingStartedAtMs == null) {
@@ -2809,19 +2961,23 @@ export default function Home() {
     void handleOpenSceneDialog();
   }, [handleOpenSceneDialog]);
 
-  const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice) => {
+  const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice, selectedMaterialIdOverride?: string) => {
     if (!printingArtifact || !activePrinterProfile) return;
     if (activePrinterProfile.networkSupport !== 'nanodlp') return;
 
     const host = (targetDevice.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
     const port = targetDevice.port || 80;
-    const selectedMaterialId = (targetDevice.selectedMaterialId ?? '').trim();
+    const selectedMaterialId = (selectedMaterialIdOverride ?? targetDevice.selectedMaterialId ?? '').trim();
     if (!host) {
       setPrintingSendStatusText('No printer IP address available for send operation.');
       return;
     }
     if (!selectedMaterialId) {
-      setPrintingSendStatusText('No NanoDLP material profile selected. Choose one in Printer Settings first.');
+      setPrintingSendStatusText('Select a matching NanoDLP material profile before upload.');
+      return;
+    }
+    if (!selectedMaterialIdOverride && !isLayerHeightMatch(targetDevice.selectedMaterialLayerHeightMm ?? null)) {
+      setPrintingSendStatusText(`Selected material on this printer does not match sliced layer height ${slicedLayerHeightMm.toFixed(3)} mm.`);
       return;
     }
 
@@ -3020,7 +3176,7 @@ export default function Home() {
     } finally {
       setPrintingSendBusy(false);
     }
-  }, [activePrinterProfile, printingArtifact]);
+  }, [activePrinterProfile, isLayerHeightMatch, printingArtifact, slicedLayerHeightMm]);
 
   const handleSendToPrinter = React.useCallback(async () => {
     if (!printingArtifact || !activePrinterProfile) return;
@@ -3030,13 +3186,19 @@ export default function Home() {
       return;
     }
 
-    if (printableConnectedPrinterFleet.length > 1) {
+    const selectedTarget = printingTargetDevice ?? printableConnectedPrinterFleet[0] ?? null;
+    if (!selectedTarget) {
+      setPrintingSendStatusText('No connected printer with a selected NanoDLP material is available for upload.');
+      return;
+    }
+
+    if (!isLayerHeightMatch(selectedTarget.selectedMaterialLayerHeightMm ?? null)) {
       setPrintingTargetPickerOpen(true);
       return;
     }
 
-    await performSendToPrinter(printableConnectedPrinterFleet[0]);
-  }, [activePrinterProfile, performSendToPrinter, printableConnectedPrinterFleet, printingArtifact]);
+    await performSendToPrinter(selectedTarget);
+  }, [activePrinterProfile, isLayerHeightMatch, performSendToPrinter, printableConnectedPrinterFleet, printingArtifact, printingTargetDevice]);
 
   const handlePrintNow = React.useCallback(async () => {
     if (!activePrinterProfile || !printingTargetDevice) return;
@@ -7442,6 +7604,8 @@ export default function Home() {
               sendBusy={printingSendBusy}
               sendStatusText={printingSendStatusText}
               sendButtonLabel={sendToPrinterButtonLabel}
+              showSendTargetPicker={printableConnectedPrinterFleet.length > 1}
+              onOpenSendTargetPicker={() => setPrintingTargetPickerOpen(true)}
               onDownload={handleDownloadPrintArtifact}
               onSendToPrinter={handleSendToPrinter}
             />
@@ -8169,7 +8333,7 @@ export default function Home() {
       {printingTargetPickerOpen && (
         <div className="absolute inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-sm px-4">
           <div
-            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            className="w-full max-w-3xl overflow-hidden rounded-xl border shadow-2xl"
             style={{
               background: 'var(--surface-0)',
               borderColor: 'var(--border-subtle)',
@@ -8179,7 +8343,7 @@ export default function Home() {
             aria-modal="true"
             aria-label="Choose printer"
           >
-            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+            <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
               <div>
                 <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                   Fleet Upload
@@ -8188,59 +8352,131 @@ export default function Home() {
                   Choose target printer
                 </div>
               </div>
-              <button
-                type="button"
-                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
-                onClick={() => setPrintingTargetPickerOpen(false)}
-                disabled={printingSendBusy}
-              >
-                Cancel
-              </button>
             </div>
 
-            <div className="p-4 space-y-2.5">
+            <div className="p-4 space-y-3.5">
               <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Multiple compatible printers are online. Pick the machine that should receive this upload.
+                Pick the target machine and material profile for this upload.
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Target layer height: <span style={{ color: 'var(--text-strong)' }}>{slicedLayerHeightMm.toFixed(3)} mm</span>
               </div>
 
-              <div className="space-y-2 max-h-[320px] overflow-y-auto custom-scrollbar pr-1">
-                {printableConnectedPrinterFleet.map((device) => {
-                  const isSelected = device.id === (printingTargetDeviceId ?? printingTargetDevice?.id);
-                  return (
-                    <button
-                      key={device.id}
-                      type="button"
-                      onClick={() => setPrintingTargetDeviceId(device.id)}
-                      className="w-full rounded-lg border px-3 py-2.5 text-left"
-                      style={isSelected
-                        ? {
-                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 89%)',
-                          }
-                        : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-1)',
-                          }}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
-                            {device.displayName || device.hostName || device.ipAddress}
+              <div className="grid gap-3 md:grid-cols-2 md:items-start">
+                <div className="rounded-md border px-3 py-2.5 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                    Target printer
+                  </div>
+                  <div className="max-h-[318px] overflow-y-auto custom-scrollbar pr-1 space-y-2">
+                    {printableConnectedPrinterFleet.map((device) => {
+                      const isSelected = device.id === (printingTargetDeviceId ?? printingTargetDevice?.id);
+                      const deviceLayerMatch = isLayerHeightMatch(device.selectedMaterialLayerHeightMm ?? null);
+                      return (
+                        <button
+                          key={device.id}
+                          type="button"
+                          onClick={() => setPrintingTargetDeviceId(device.id)}
+                          className="w-full rounded-lg border px-3 py-2.5 text-left"
+                          style={isSelected
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 89%)',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'color-mix(in srgb, var(--surface-1), black 3%)',
+                              }}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="text-[15px] font-semibold leading-tight" style={{ color: 'var(--text-strong)' }}>
+                                {device.displayName || device.hostName || device.ipAddress}
+                              </div>
+                              <div className="text-[12px] leading-tight mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                {device.ipAddress} • {deviceLayerMatch ? 'Layer match' : 'Layer mismatch'}
+                              </div>
+                            </div>
+                            {isSelected && (
+                              <div className="self-center text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>
+                                Selected
+                              </div>
+                            )}
                           </div>
-                          <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                            {device.ipAddress} • {(device.selectedMaterialName ?? device.selectedMaterialId ?? 'No material').toString()}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-md border px-3 py-2.5 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[11px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                    Target material (matching sliced layer height)
+                  </div>
+                  {isPrintingTargetMaterialsLoading ? (
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading materials from selected printer…</div>
+                  ) : printingTargetMaterialOptions.length > 0 ? (
+                    <div className="max-h-[318px] overflow-y-auto custom-scrollbar pr-1 space-y-2">
+                      {printingTargetMaterialGroups.map((group) => (
+                        <div key={group.label} className="space-y-1.5">
+                          {group.label && (
+                            <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                              {group.label}
+                            </div>
+                          )}
+                          <div className="space-y-1">
+                            {group.materials.map((material) => {
+                              const isSelectedMaterial = material.id === printingTargetMaterialId;
+                              return (
+                                <button
+                                  key={material.id}
+                                  type="button"
+                                  onClick={() => setPrintingTargetMaterialId(material.id)}
+                                  className="w-full rounded-md border px-2.5 py-2 text-left"
+                                  style={isSelectedMaterial
+                                    ? {
+                                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
+                                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
+                                      }
+                                    : {
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'color-mix(in srgb, var(--surface-1), black 3%)',
+                                      }}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0 text-[13px] font-medium truncate" style={{ color: 'var(--text-strong)' }} title={material.name}>
+                                      {material.name}
+                                    </div>
+                                    {isSelectedMaterial && (
+                                      <div className="self-start text-[11px] font-semibold leading-none pt-[1px]" style={{ color: 'var(--accent-secondary)' }}>
+                                        Selected
+                                      </div>
+                                    )}
+                                  </div>
+                                  {material.layerHeightMm != null && (
+                                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                      {material.layerHeightMm.toFixed(3)} mm
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
-                        {isSelected && (
-                          <div className="text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>
-                            Selected
-                          </div>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {printingTargetMaterialError ?? 'No matching material profile found on this printer.'}
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {printingTargetMaterialError && printingTargetMaterialOptions.length > 0 && (
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  {printingTargetMaterialError}
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button
@@ -8254,11 +8490,11 @@ export default function Home() {
                 <button
                   type="button"
                   className="ui-button ui-button-accent !h-9 px-3 text-xs"
-                  disabled={printingSendBusy || !printingTargetDevice}
+                  disabled={printingSendBusy || isPrintingTargetMaterialsLoading || !printingTargetDevice || !printingTargetMaterialId}
                   onClick={() => {
-                    if (!printingTargetDevice) return;
+                    if (!printingTargetDevice || !printingTargetMaterialId) return;
                     setPrintingTargetPickerOpen(false);
-                    void performSendToPrinter(printingTargetDevice);
+                    void performSendToPrinter(printingTargetDevice, printingTargetMaterialId);
                   }}
                 >
                   Upload to Selected Printer
