@@ -85,7 +85,7 @@ export interface GizmoConfig {
   axisLock?: GizmoAxis | null;
   
   // Callbacks
-  onMoveStart?: () => boolean | void;
+  onMoveStart?: (axis?: GizmoAxis) => boolean | void;
   onMove?: (delta: THREE.Vector3, axis?: GizmoAxis) => void;
   onMoveEnd?: () => void;
   
