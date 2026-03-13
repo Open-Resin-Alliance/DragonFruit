@@ -184,6 +184,7 @@ function ConeBucketMesh({
                 <instancedMesh
                     ref={diskRef}
                     args={[undefined, undefined, bucket.cones.length]}
+                    frustumCulled={false}
                     {...sharedHandlers}
                 >
                     <cylinderGeometry args={[bucket.contactRadius, bucket.contactRadius, bucket.diskThickness + bucket.penetration, 10]} />
@@ -204,6 +205,7 @@ function ConeBucketMesh({
             <instancedMesh
                 ref={bodyRef}
                 args={[undefined, undefined, bucket.cones.length]}
+                frustumCulled={false}
                 {...sharedHandlers}
             >
                 <cylinderGeometry args={[bucket.contactRadius, bucket.bodyRadius, bucket.length, 10]} />
@@ -220,6 +222,7 @@ function ConeBucketMesh({
             <instancedMesh
                 ref={tipSphereRef}
                 args={[undefined, undefined, bucket.cones.length]}
+                frustumCulled={false}
                 {...sharedHandlers}
             >
                 <sphereGeometry args={[bucket.contactRadius, 10, 8]} />

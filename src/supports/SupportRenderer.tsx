@@ -78,6 +78,27 @@ const BATCHED_JOINT_HEIGHT_SEGMENTS = 10;
 const MULTI_SELECTION_DETAIL_THRESHOLD = 24;
 const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
+const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
+
+function normalizeSupportIdList(ids: readonly (string | null | undefined)[]) {
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const id of ids) {
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        normalized.push(id);
+    }
+    return normalized.length > 0 ? normalized : EMPTY_SUPPORT_ID_LIST;
+}
+
+function supportIdListsEqual(a: readonly string[], b: readonly string[]) {
+    if (a === b) return true;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
 
 export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0 }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -98,7 +119,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const selectedId = selectionEnabled ? state.selectedId : null;
     const selectedCategory = selectionEnabled ? state.selectedCategory : null;
     const hasSupportMultiSelection = effectiveSelectedSupportIds.length > 0;
-    const useMultiSelectionDetail = hasSupportMultiSelection && selectedId !== null && selectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
+    const useMultiSelectionDetail = hasSupportMultiSelection && effectiveSelectedSupportIds.length <= MULTI_SELECTION_DETAIL_THRESHOLD;
     const dimNonSelected = selectedId !== null || hasSupportMultiSelection;
     const hideUnselectedKnots = selectedId !== null || hasSupportMultiSelection;
     const enableTwigSceneBatching = false;
@@ -126,8 +147,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const [immediatePrepareActiveModelId, setImmediatePrepareActiveModelId] = React.useState<string | null>(null);
     const [sceneHoveredSupportId, setSceneHoveredSupportId] = React.useState<string | null>(null);
     const [marqueeHoveredSupportId, setMarqueeHoveredSupportId] = React.useState<string | null>(null);
+    const [marqueeHoveredSupportIds, setMarqueeHoveredSupportIds] = React.useState<readonly string[]>(EMPTY_SUPPORT_ID_LIST);
     const pendingSceneHoverClearFrameRef = React.useRef<number | null>(null);
     const orbitInteractionActiveRef = React.useRef(false);
+    const marqueeHoveredSupportIdSet = useMemo(() => new Set(marqueeHoveredSupportIds), [marqueeHoveredSupportIds]);
     const entitySegmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();
 
@@ -246,6 +269,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
             setMarqueeHoveredSupportId((prev) => (prev === null ? prev : null));
+            setMarqueeHoveredSupportIds((prev) => (prev.length === 0 ? prev : EMPTY_SUPPORT_ID_LIST));
             emitSupportModelPointerHover(null);
         };
 
@@ -256,15 +280,22 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const handleSupportMarqueeHover = (event: Event) => {
             if (supportSelectionAndHoverSuppressed) {
                 setMarqueeHoveredSupportId((prev) => (prev === null ? prev : null));
+                setMarqueeHoveredSupportIds((prev) => (prev.length === 0 ? prev : EMPTY_SUPPORT_ID_LIST));
                 emitSupportModelPointerHover(null);
                 return;
             }
 
-            const customEvent = event as CustomEvent<{ supportId?: string | null; modelId?: string | null }>;
-            const supportId = customEvent.detail?.supportId ?? null;
+            const customEvent = event as CustomEvent<{ supportId?: string | null; supportIds?: string[]; modelId?: string | null }>;
+            const supportIds = normalizeSupportIdList(
+                Array.isArray(customEvent.detail?.supportIds) && customEvent.detail.supportIds.length > 0
+                    ? customEvent.detail.supportIds
+                    : [customEvent.detail?.supportId ?? null],
+            );
+            const supportId = supportIds[0] ?? null;
             const modelId = customEvent.detail?.modelId ?? null;
 
-            setMarqueeHoveredSupportId(supportId);
+            setMarqueeHoveredSupportIds((prev) => (supportIdListsEqual(prev, supportIds) ? prev : supportIds));
+            setMarqueeHoveredSupportId((prev) => (prev === supportId ? prev : supportId));
             emitSupportModelPointerHover(modelId);
         };
 
@@ -393,6 +424,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
         setMarqueeHoveredSupportId((prev) => (prev === null ? prev : null));
+        setMarqueeHoveredSupportIds((prev) => (prev.length === 0 ? prev : EMPTY_SUPPORT_ID_LIST));
         setImmediateModelHoverId((prev) => (prev === null ? prev : null));
         emitSupportModelPointerHover(null);
     }, [supportSelectionAndHoverSuppressed]);
@@ -1570,10 +1602,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const sceneBatchedTwigShaftGroups = useMemo(() => {
         if (!enableTwigSceneBatching) {
-            return [] as Array<{ modelId?: string; shafts: InstancedShaft[] }>;
+            return [] as Array<{ modelId?: string; color: string; shafts: InstancedShaft[] }>;
         }
 
-        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const twig of Object.values(state.twigs)) {
             if (!isModelVisible(twig.modelId, twig.id)) continue;
@@ -1581,21 +1613,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedTwigIds.has(twig.id)) continue;
 
+            const color = resolveSceneSupportColor(shaftSet.modelId, twig.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
+            const groupKey = `${modelKey}:${color}`;
+            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
-            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
+            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToVec3Like, enableTwigSceneBatching]);
+    }, [state.twigs, twigShaftsBySupport, selectedTwigIds, isModelVisible, applyDropToVec3Like, enableTwigSceneBatching, resolveSceneSupportColor]);
 
     const sceneBatchedStickShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const stick of Object.values(state.sticks)) {
             if (!isModelVisible(stick.modelId, stick.id)) continue;
@@ -1603,21 +1637,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedStickIds.has(stick.id)) continue;
 
+            const color = resolveSceneSupportColor(shaftSet.modelId, stick.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
+            const groupKey = `${modelKey}:${color}`;
+            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
-            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
+            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [state.sticks, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToVec3Like]);
+    }, [state.sticks, stickShaftsBySupport, selectedStickIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedKickstandShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const kickstand of Object.values(kickstandState.kickstands)) {
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
@@ -1625,21 +1661,23 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!shaftSet) continue;
             if (selectedKickstandIds.has(kickstand.id)) continue;
 
+            const color = resolveSceneSupportColor(shaftSet.modelId, kickstand.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
+            const groupKey = `${modelKey}:${color}`;
+            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
-            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
+            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [kickstandState.kickstands, kickstandShaftsBySupport, selectedKickstandIds, isModelVisible, applyDropToVec3Like]);
+    }, [kickstandState.kickstands, kickstandShaftsBySupport, selectedKickstandIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedBraceShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; debugSection?: 'initial' | 'repeating' | null; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         const sectionColorsEnabled = !!settings.autoBracing.debugSectionColorsEnabled;
         const splitByDebugSection = sectionColorsEnabled && !dimNonSelected;
@@ -1655,7 +1693,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const debugSection = splitByDebugSection
                 ? (brace.debugSection ?? null)
                 : null;
-            const groupKey = debugSection ? `${modelKey}:${debugSection}` : modelKey;
+            const color = debugSection
+                ? AUTO_BRACING_DEBUG_SECTION_COLORS[debugSection]
+                : resolveSceneSupportColor(shaftSet.modelId, brace.id);
+            const groupKey = `${modelKey}:${color}`;
 
             const existing = grouped.get(groupKey);
             if (existing) {
@@ -1667,7 +1708,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             } else {
                 grouped.set(groupKey, {
                     modelId: shaftSet.modelId,
-                    debugSection,
+                    color,
                     shafts: shaftSet.shafts.map((shaft) => ({
                         ...shaft,
                         start: applyDropToVec3Like(shaft.start, shaft.modelId),
@@ -1678,10 +1719,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return Array.from(grouped.values());
-    }, [state.braces, braceShaftsBySupport, selectedBraceIds, isModelVisible, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected]);
+    }, [state.braces, braceShaftsBySupport, selectedBraceIds, isModelVisible, applyDropToVec3Like, settings.autoBracing.debugSectionColorsEnabled, dimNonSelected, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const trunk of Object.values(state.trunks)) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
@@ -1690,22 +1731,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedTrunkIds.has(trunk.id)) continue;
 
+            const color = resolveSceneSupportColor(shaftSet.modelId, trunk.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
+            const groupKey = `${modelKey}:${color}`;
+            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
                 end: applyDropToVec3Like(shaft.end, shaft.modelId),
             })));
 
-            if (existing.shafts.length > 0) grouped.set(modelKey, existing);
+            if (existing.shafts.length > 0) grouped.set(groupKey, existing);
         }
 
         return Array.from(grouped.values());
-    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToVec3Like]);
+    }, [state.trunks, trunkShaftsBySupport, selectedTrunkIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedBranchShaftGroups = useMemo(() => {
-        const grouped = new Map<string, { modelId?: string; shafts: InstancedShaft[] }>();
+        const grouped = new Map<string, { modelId?: string; color: string; shafts: InstancedShaft[] }>();
 
         for (const branch of Object.values(state.branches)) {
             if (!isModelVisible(branch.modelId)) continue;
@@ -1714,8 +1757,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             if (selectedBranchIds.has(branch.id)) continue;
 
+            const color = resolveSceneSupportColor(shaftSet.modelId, branch.id);
             const modelKey = shaftSet.modelId ?? '__unassigned__';
-            const existing = grouped.get(modelKey) ?? { modelId: shaftSet.modelId, shafts: [] };
+            const groupKey = `${modelKey}:${color}`;
+            const existing = grouped.get(groupKey) ?? { modelId: shaftSet.modelId, color, shafts: [] };
             existing.shafts.push(...shaftSet.shafts.map((shaft) => ({
                 ...shaft,
                 start: applyDropToVec3Like(shaft.start, shaft.modelId),
@@ -1723,12 +1768,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })));
 
             if (existing.shafts.length > 0) {
-                grouped.set(modelKey, existing);
+                grouped.set(groupKey, existing);
             }
         }
 
         return Array.from(grouped.values());
-    }, [state.branches, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToVec3Like]);
+    }, [state.branches, branchShaftsBySupport, selectedBranchIds, isModelVisible, applyDropToVec3Like, resolveSceneSupportColor]);
 
     const sceneBatchedTrunkRootGroups = useMemo(() => {
         if (hidePlateContactPrimitivesEffective) return [] as Array<{ color: string; roots: InstancedRoot[] }>;
@@ -2054,6 +2099,179 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }));
     }, [hoveredSupportJointSet, applyDropToVec3Like]);
 
+    const buildHighlightedRootOverlay = React.useCallback((supportId: string): InstancedRoot | null => {
+        const hasSolidBottom = raftSettings.bottomMode === 'solid';
+        const raftThickness = raftSettings.thickness ?? 0;
+
+        const trunk = state.trunks[supportId];
+        if (trunk) {
+            const root = state.roots[trunk.rootId];
+            if (!root) return null;
+
+            const shaftDiameter = Math.max(0.001, trunk.segments[0]?.diameter ?? 1.5);
+            const topRadius = shaftDiameter / 2;
+            const bottomRadius = Math.max(0.001, root.diameter / 2);
+            const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
+            const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+
+            return {
+                id: root.id,
+                supportId: trunk.id,
+                modelId: trunk.modelId,
+                basePos: applyDropToVec3Like({
+                    x: root.transform.pos.x,
+                    y: root.transform.pos.y,
+                    z: root.transform.pos.z + verticalOffset,
+                }, trunk.modelId),
+                bottomRadius,
+                topRadius,
+                effectiveDiskHeight,
+                coneHeight: Math.max(0, root.coneHeight),
+            };
+        }
+
+        const kickstand = kickstandState.kickstands[supportId];
+        if (kickstand) {
+            const root = kickstandState.roots[kickstand.rootId];
+            if (!root) return null;
+
+            const shaftDiameter = Math.max(
+                0.001,
+                kickstand.segments[0]?.diameter ?? kickstand.profile.bodyDiameterMm,
+            );
+            const topRadius = shaftDiameter / 2;
+            const bottomRadius = Math.max(0.001, root.diameter / 2);
+            const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
+            const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+
+            return {
+                id: root.id,
+                supportId: kickstand.id,
+                modelId: kickstand.modelId,
+                basePos: applyDropToVec3Like({
+                    x: root.transform.pos.x,
+                    y: root.transform.pos.y,
+                    z: root.transform.pos.z + verticalOffset,
+                }, kickstand.modelId),
+                bottomRadius,
+                topRadius,
+                effectiveDiskHeight,
+                coneHeight: Math.max(0, root.coneHeight),
+            };
+        }
+
+        return null;
+    }, [
+        raftSettings.bottomMode,
+        raftSettings.thickness,
+        state.trunks,
+        state.roots,
+        kickstandState.kickstands,
+        kickstandState.roots,
+        applyDropToVec3Like,
+    ]);
+
+    const hoveredSupportOverlayRoots = useMemo(() => {
+        if (hidePlateContactPrimitivesEffective) return [] as InstancedRoot[];
+        if (!isInteractable) return [] as InstancedRoot[];
+
+        const hoveredSupportId = marqueeHoveredSupportId ?? sceneHoveredSupportId ?? (hoveredCategoryForVisual === 'support' ? hoveredIdForVisual : null);
+        if (!hoveredSupportId) return [] as InstancedRoot[];
+
+        const overlay = buildHighlightedRootOverlay(hoveredSupportId);
+        return overlay ? [overlay] : [];
+    }, [
+        hidePlateContactPrimitivesEffective,
+        isInteractable,
+        marqueeHoveredSupportId,
+        sceneHoveredSupportId,
+        hoveredCategoryForVisual,
+        hoveredIdForVisual,
+        buildHighlightedRootOverlay,
+    ]);
+
+    const additionalMarqueeHoveredSupportIds = useMemo(() => {
+        if (!isInteractable || marqueeHoveredSupportIds.length <= 1) return EMPTY_SUPPORT_ID_LIST;
+        return marqueeHoveredSupportIds.slice(1);
+    }, [isInteractable, marqueeHoveredSupportIds]);
+
+    const marqueeHoveredOverlayShafts = useMemo(() => {
+        if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedShaft[];
+
+        const overlays: InstancedShaft[] = [];
+        for (const supportId of additionalMarqueeHoveredSupportIds) {
+            const shaftSet = trunkShaftsBySupport.get(supportId)
+                ?? branchShaftsBySupport.get(supportId)
+                ?? braceShaftsBySupport.get(supportId)
+                ?? twigShaftsBySupport.get(supportId)
+                ?? stickShaftsBySupport.get(supportId)
+                ?? kickstandShaftsBySupport.get(supportId)
+                ?? null;
+            if (!shaftSet) continue;
+            overlays.push(...shaftSet.shafts.map((shaft) => ({
+                ...shaft,
+                start: applyDropToVec3Like(shaft.start, shaft.modelId),
+                end: applyDropToVec3Like(shaft.end, shaft.modelId),
+                diameter: shaft.diameter * 1.02,
+            })));
+        }
+        return overlays;
+    }, [additionalMarqueeHoveredSupportIds, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, kickstandShaftsBySupport, applyDropToVec3Like]);
+
+    const marqueeHoveredOverlayCones = useMemo(() => {
+        if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedContactCone[];
+
+        const overlays: InstancedContactCone[] = [];
+        for (const supportId of additionalMarqueeHoveredSupportIds) {
+            const coneSet = contactConesBySupport.get(supportId);
+            if (!coneSet) continue;
+            overlays.push(...coneSet.cones.map((cone) => ({
+                ...cone,
+                pos: applyDropToVec3Like(cone.pos, cone.modelId),
+            })));
+        }
+        return overlays;
+    }, [additionalMarqueeHoveredSupportIds, contactConesBySupport, applyDropToVec3Like]);
+
+    const marqueeHoveredOverlayJoints = useMemo(() => {
+        if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedJoint[];
+
+        const overlays: InstancedJoint[] = [];
+        for (const supportId of additionalMarqueeHoveredSupportIds) {
+            const jointSet = trunkJointsBySupport.get(supportId)
+                ?? branchJointsBySupport.get(supportId)
+                ?? twigJointsBySupport.get(supportId)
+                ?? stickJointsBySupport.get(supportId)
+                ?? kickstandJointsBySupport.get(supportId)
+                ?? null;
+            if (!jointSet) continue;
+            overlays.push(...jointSet.joints.map((joint) => ({
+                ...joint,
+                pos: applyDropToVec3Like(joint.pos, joint.modelId),
+                diameter: joint.diameter * 1.06,
+            })));
+        }
+        return overlays;
+    }, [additionalMarqueeHoveredSupportIds, trunkJointsBySupport, branchJointsBySupport, twigJointsBySupport, stickJointsBySupport, kickstandJointsBySupport, applyDropToVec3Like]);
+
+    const marqueeHoveredOverlayRoots = useMemo(() => {
+        if (hidePlateContactPrimitivesEffective) return [] as InstancedRoot[];
+        if (additionalMarqueeHoveredSupportIds.length === 0) return [] as InstancedRoot[];
+
+        const overlays: InstancedRoot[] = [];
+
+        for (const supportId of additionalMarqueeHoveredSupportIds) {
+            const overlay = buildHighlightedRootOverlay(supportId);
+            if (overlay) overlays.push(overlay);
+        }
+
+        return overlays;
+    }, [
+        hidePlateContactPrimitivesEffective,
+        additionalMarqueeHoveredSupportIds,
+        buildHighlightedRootOverlay,
+    ]);
+
     const handleSceneBatchedShaftClick = React.useCallback((shaft: InstancedShaft, event: { nativeEvent?: Event }) => {
         if (!isPointerInteractable) return;
         if (isPreparePointerInteractable) {
@@ -2319,10 +2537,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Trunks */}
             {sceneBatchedTrunkShaftGroups.map((group) => (
-                <group key={`scene-trunk-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-trunk-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
+                        color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2435,6 +2653,84 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 />
             )}
 
+            {hoveredSupportOverlayRoots.length > 0 && (
+                <InstancedRootsGroup
+                    key={`scene-root-hover-overlay:${hoveredSupportOverlayRoots.map((root) => root.supportId ?? root.id).join(':')}:${hoveredSupportOverlayRoots.length}`}
+                    roots={hoveredSupportOverlayRoots}
+                    color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportOverlayRoots[0]?.modelId)}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
+
+            {marqueeHoveredOverlayShafts.length > 0 && (
+                <InstancedShaftGroup
+                    key={`scene-marquee-overlay-shafts:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayShafts.length}`}
+                    shafts={marqueeHoveredOverlayShafts}
+                    color={BULK_MULTI_SELECTED_COLOR}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                    onShaftClick={isPointerInteractable ? handleSceneBatchedShaftClick : undefined}
+                    onShaftPointerMove={isPointerInteractable ? handleSceneBatchedShaftPointerMove : undefined}
+                    onShaftPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
+
+            {marqueeHoveredOverlayCones.length > 0 && (
+                <InstancedContactConeGroup
+                    key={`scene-marquee-overlay-cones:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayCones.length}`}
+                    cones={marqueeHoveredOverlayCones}
+                    color={BULK_MULTI_SELECTED_COLOR}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
+                    onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
+                    onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
+
+            {marqueeHoveredOverlayJoints.length > 0 && (
+                <InstancedJointGroup
+                    key={`scene-marquee-overlay-joints:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayJoints.length}`}
+                    joints={marqueeHoveredOverlayJoints}
+                    color={BULK_MULTI_SELECTED_COLOR}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
+                    heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
+                    onJointClick={isPointerInteractable ? handleSceneBatchedJointClick : undefined}
+                    onJointPointerMove={isPointerInteractable ? handleSceneBatchedJointPointerMove : undefined}
+                    onJointPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
+
+            {marqueeHoveredOverlayRoots.length > 0 && (
+                <InstancedRootsGroup
+                    key={`scene-marquee-overlay-roots:${marqueeHoveredSupportIds.join(':')}:${marqueeHoveredOverlayRoots.length}`}
+                    roots={marqueeHoveredOverlayRoots}
+                    color={BULK_MULTI_SELECTED_COLOR}
+                    emissive="#ffffff"
+                    emissiveIntensity={0.3}
+                    transparent={ghostTransparent}
+                    opacity={ghostOpacityClamped}
+                    onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
+                    onRootPointerMove={isPointerInteractable ? handleSceneBatchedRootPointerMove : undefined}
+                    onRootPointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
+                />
+            )}
+
             {Object.values(state.trunks).map(trunk => {
                 if (!isModelVisible(trunk.modelId, trunk.id)) return null;
                 const root = state.roots[trunk.rootId];
@@ -2447,7 +2743,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
                 const isTrunkHovered = (hoveredCategoryForVisual === 'support' && hoveredIdForVisual === trunk.id)
                     || sceneHoveredSupportId === trunk.id
-                    || marqueeHoveredSupportId === trunk.id;
+                    || marqueeHoveredSupportIdSet.has(trunk.id);
                 const deferTrunkInteractionToSceneBatch = !effectiveSelected && !hasBezierSegment;
 
                 return (
@@ -2475,10 +2771,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Branches */}
             {sceneBatchedBranchShaftGroups.map((group) => (
-                <group key={`scene-branch-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-branch-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
+                        color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2501,7 +2797,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
                 const isBranchHovered = (hoveredCategoryForVisual === 'support' && hoveredIdForVisual === branch.id)
                     || sceneHoveredSupportId === branch.id
-                    || marqueeHoveredSupportId === branch.id;
+                    || marqueeHoveredSupportIdSet.has(branch.id);
                 const deferBranchInteractionToSceneBatch = !effectiveSelected && !hasBezierSegment;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
@@ -2565,7 +2861,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
                 const isTwigHovered = (hoveredCategoryForVisual === 'support' && hoveredIdForVisual === twig.id)
                     || sceneHoveredSupportId === twig.id
-                    || marqueeHoveredSupportId === twig.id;
+                    || marqueeHoveredSupportIdSet.has(twig.id);
                 const deferTwigInteractionToSceneBatch = !effectiveSelected && isTwigBatchable;
 
                 return (
@@ -2588,10 +2884,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {sceneBatchedTwigShaftGroups.map((group) => (
-                <group key={`scene-twig-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-twig-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
+                        color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2612,7 +2908,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
                 const isStickHovered = (hoveredCategoryForVisual === 'support' && hoveredIdForVisual === stick.id)
                     || sceneHoveredSupportId === stick.id
-                    || marqueeHoveredSupportId === stick.id;
+                    || marqueeHoveredSupportIdSet.has(stick.id);
                 const deferStickInteractionToSceneBatch = !effectiveSelected && isStickBatchable;
 
                 return (
@@ -2636,10 +2932,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {sceneBatchedStickShaftGroups.map((group) => (
-                <group key={`scene-stick-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-stick-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
+                        color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2652,16 +2948,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {/* Render Braces */}
             {sceneBatchedBraceShaftGroups.map((group) => (
-                <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.debugSection ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-brace-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={
-                            dimNonSelected
-                                ? '#666666'
-                                : (settings.autoBracing.debugSectionColorsEnabled && group.debugSection
-                                    ? AUTO_BRACING_DEBUG_SECTION_COLORS[group.debugSection]
-                                    : resolveBaseColor(group.modelId))
-                        }
+                        color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}
@@ -2685,7 +2975,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
                 const isBraceHovered = (hoveredCategoryForVisual === 'support' && hoveredIdForVisual === brace.id)
                     || sceneHoveredSupportId === brace.id
-                    || marqueeHoveredSupportId === brace.id;
+                    || marqueeHoveredSupportIdSet.has(brace.id);
                 const deferBraceInteractionToSceneBatch = !effectiveSelected && isBraceBatchable;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
 
@@ -2725,7 +3015,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
                 const isKickstandHovered = (hoveredCategoryForVisual === 'support' && hoveredIdForVisual === kickstand.id)
                     || sceneHoveredSupportId === kickstand.id
-                    || marqueeHoveredSupportId === kickstand.id;
+                    || marqueeHoveredSupportIdSet.has(kickstand.id);
                 const deferKickstandInteractionToSceneBatch = !effectiveSelected && isKickstandBatchable;
                 const showKnot = !hideUnselectedKnots || effectiveSelected;
 
@@ -2753,10 +3043,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             })}
 
             {sceneBatchedKickstandShaftGroups.map((group) => (
-                <group key={`scene-kickstand-batch:${group.modelId ?? 'none'}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
+                <group key={`scene-kickstand-batch:${group.modelId ?? 'none'}:${group.color}:${group.shafts.length}`} userData={{ modelId: group.modelId ?? null }}>
                     <InstancedShaftGroup
                         shafts={group.shafts}
-                        color={dimNonSelected ? '#666666' : resolveBaseColor(group.modelId)}
+                        color={group.color}
                         transparent={ghostTransparent}
                         opacity={ghostOpacityClamped}
                         radialSegments={sceneBatchedShaftRadialSegments}

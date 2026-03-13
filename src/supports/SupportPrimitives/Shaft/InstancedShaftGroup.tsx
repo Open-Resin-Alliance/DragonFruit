@@ -120,6 +120,7 @@ export function InstancedShaftGroup({
         <instancedMesh
             ref={meshRef}
             args={[undefined, undefined, validShafts.length]}
+            frustumCulled={false}
             onClick={onShaftClick ? handleClick : undefined}
             onPointerMove={onShaftPointerMove ? handlePointerMove : undefined}
             onPointerOut={onShaftPointerOut ? handlePointerOut : undefined}
