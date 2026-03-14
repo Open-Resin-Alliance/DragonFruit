@@ -37,8 +37,8 @@ jobs:
         id: version_check
         shell: bash
         run: |
-          PACKAGE_VERSION="$(node -p \"require('./package.json').version\")"
-          TAURI_VERSION="$(node -p \"JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version\")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          TAURI_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version")"
 
           if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
             echo "Unable to determine one or both app versions."
@@ -102,8 +102,8 @@ jobs:
         id: version_check
         shell: bash
         run: |
-          PACKAGE_VERSION="$(node -p \"require('./package.json').version\")"
-          TAURI_VERSION="$(node -p \"JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version\")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          TAURI_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version")"
 
           if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
             echo "Unable to determine one or both app versions."
