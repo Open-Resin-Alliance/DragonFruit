@@ -66,6 +66,9 @@ export type PrinterMonitoringSnapshot = {
   stateText: string;
   isPrinting: boolean;
   isPaused: boolean;
+  cancelLatched: boolean;
+  pauseLatched: boolean;
+  finished: boolean;
   progressPct: number | null;
   currentLayer: number | null;
   totalLayers: number | null;
@@ -89,8 +92,12 @@ export type ProfileMonitoringUiAdapter = {
   operations: {
     status: string;
     webcamInfo: string;
+    pause: string;
+    resume: string;
+    cancel: string;
+    emergencyStop: string;
   } | null;
-  parseStatusPayload: (payload: unknown) => PrinterMonitoringSnapshot;
+  parseStatusPayload: (payload: unknown, contextKey?: string) => PrinterMonitoringSnapshot;
   parseWebcamInfoPayload: (payload: unknown, host: string, port: number) => PrinterMonitoringWebcamInfo;
 };
 
@@ -129,8 +136,12 @@ const ATHENA_NANODLP_MONITORING_ADAPTER: ProfileMonitoringUiAdapter = {
   operations: {
     status: 'nanodlp/printer/status',
     webcamInfo: 'nanodlp/printer/webcam/info',
+    pause: 'nanodlp/printer/pause',
+    resume: 'nanodlp/printer/unpause',
+    cancel: 'nanodlp/printer/stop',
+    emergencyStop: 'nanodlp/printer/force-stop',
   },
-  parseStatusPayload: (payload) => resolveNanodlpMonitoringSnapshot(payload),
+  parseStatusPayload: (payload, contextKey) => resolveNanodlpMonitoringSnapshot(payload, contextKey),
   parseWebcamInfoPayload: (payload, host, port) => resolveNanodlpWebcamFeedInfo(payload, host, port),
 };
 
@@ -145,6 +156,9 @@ const GENERIC_MONITORING_STUB_ADAPTER: ProfileMonitoringUiAdapter = {
     stateText: 'Monitoring unavailable for this backend.',
     isPrinting: false,
     isPaused: false,
+    cancelLatched: false,
+    pauseLatched: false,
+    finished: false,
     progressPct: null,
     currentLayer: null,
     totalLayers: null,

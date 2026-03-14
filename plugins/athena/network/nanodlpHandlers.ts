@@ -1195,6 +1195,10 @@ export async function handleAthenaNetworkOperation(operationPath: string[], payl
   if (op === 'job/import') return handleNanoDlpJobImport(payload);
   if (op === 'plates/list/json') return handleNanoDlpPlatesListJson(payload);
   if (op === 'printer/start') return handleNanoDlpPrinterStart(payload);
+  if (op === 'printer/pause') return handleNanoDlpPrinterPause(payload);
+  if (op === 'printer/unpause' || op === 'printer/resume') return handleNanoDlpPrinterResume(payload);
+  if (op === 'printer/stop' || op === 'printer/cancel') return handleNanoDlpPrinterCancel(payload);
+  if (op === 'printer/force-stop' || op === 'printer/emergency-stop') return handleNanoDlpPrinterEmergencyStop(payload);
   if (op === 'printer/status') return handleNanoDlpPrinterStatus(payload);
   if (op === 'printer/webcam/info') return handleNanoDlpPrinterWebcamInfo(payload);
 
@@ -1345,6 +1349,132 @@ async function handleNanoDlpPrinterStart(payload: unknown): Promise<HandlerResul
       },
     };
   }
+}
+
+async function handleNanoDlpPrinterControl(
+  payload: unknown,
+  options: {
+    action: 'pause' | 'resume' | 'cancel' | 'emergency-stop';
+    endpointPaths: string[];
+    successMessage: string;
+    failureLabel: string;
+    treatAnyResponseAsSuccess?: boolean;
+  },
+): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+  const baseNoSlash = buildNanoDlpBaseUrl(parsedHost.host, port).replace(/\/+$/, '');
+  const attempted: Array<{ path: string; status: number }> = [];
+  let lastError: unknown = null;
+
+  for (const path of options.endpointPaths) {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) continue;
+
+    try {
+      const response = await fetch(`${baseNoSlash}${normalizedPath}`, {
+        method: 'GET',
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      attempted.push({ path: normalizedPath, status: response.status });
+
+      if (response.status === 200 || response.status === 302) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            action: options.action,
+            ipAddress: parsedHost.host,
+            port,
+            status: response.status,
+            endpoint: normalizedPath,
+            message: options.successMessage,
+          },
+        };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const lastAttempt = attempted[attempted.length - 1] ?? null;
+  const lastStatus = lastAttempt?.status ?? null;
+  const networkMessage = lastError instanceof Error ? lastError.message : null;
+
+  if (options.treatAnyResponseAsSuccess === true && attempted.length > 0) {
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        action: options.action,
+        ipAddress: parsedHost.host,
+        port,
+        status: lastStatus,
+        endpoint: lastAttempt?.path ?? null,
+        message: options.successMessage,
+        warning: `Command returned non-200 status (${lastStatus ?? 'unknown'}) but was treated as success for fail-safe behavior.`,
+        attempted,
+      },
+    };
+  }
+
+  return {
+    status: lastStatus != null ? 502 : 500,
+    body: {
+      ok: false,
+      action: options.action,
+      ipAddress: parsedHost.host,
+      port,
+      status: lastStatus,
+      error: networkMessage ?? `${options.failureLabel} not supported or failed on this NanoDLP host.`,
+      attempted,
+    },
+  };
+}
+
+async function handleNanoDlpPrinterPause(payload: unknown): Promise<HandlerResult> {
+  return handleNanoDlpPrinterControl(payload, {
+    action: 'pause',
+    endpointPaths: ['/printer/pause'],
+    successMessage: 'Pause command sent to printer.',
+    failureLabel: 'Pause command',
+  });
+}
+
+async function handleNanoDlpPrinterResume(payload: unknown): Promise<HandlerResult> {
+  return handleNanoDlpPrinterControl(payload, {
+    action: 'resume',
+    endpointPaths: ['/printer/unpause', '/printer/resume'],
+    successMessage: 'Resume command sent to printer.',
+    failureLabel: 'Resume command',
+  });
+}
+
+async function handleNanoDlpPrinterCancel(payload: unknown): Promise<HandlerResult> {
+  return handleNanoDlpPrinterControl(payload, {
+    action: 'cancel',
+    endpointPaths: ['/printer/stop', '/printer/cancel'],
+    successMessage: 'Cancel command sent to printer.',
+    failureLabel: 'Cancel command',
+  });
+}
+
+async function handleNanoDlpPrinterEmergencyStop(payload: unknown): Promise<HandlerResult> {
+  return handleNanoDlpPrinterControl(payload, {
+    action: 'emergency-stop',
+    endpointPaths: ['/printer/force-stop', '/printer/emergency-stop', '/printer/emergency', '/printer/abort', '/printer/stop'],
+    successMessage: 'Emergency stop command sent to printer.',
+    failureLabel: 'Emergency stop command',
+    treatAnyResponseAsSuccess: true,
+  });
 }
 
 async function handleNanoDlpPrinterStatus(payload: unknown): Promise<HandlerResult> {

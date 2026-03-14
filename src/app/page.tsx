@@ -637,6 +637,8 @@ export default function Home() {
   const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
   const [isPrintingMonitorPolling, setIsPrintingMonitorPolling] = React.useState(false);
   const [printingMonitorError, setPrintingMonitorError] = React.useState<string | null>(null);
+  const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
+  const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
   const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
@@ -2559,21 +2561,49 @@ export default function Home() {
       ? (1 / printingMonitorWebcamAspectRatio)
       : printingMonitorWebcamAspectRatio;
   }, [printingMonitorWebcamAspectRatio, shouldRotateMonitorWebcam]);
+  const printingMonitorHasActivePrint = React.useMemo(() => {
+    return Boolean(
+      printingMonitorSnapshot?.isPrinting
+      || printingMonitorSnapshot?.isPaused
+      || printingMonitorSnapshot?.cancelLatched
+      || printingMonitorSnapshot?.pauseLatched
+    );
+  }, [
+    printingMonitorSnapshot?.cancelLatched,
+    printingMonitorSnapshot?.isPaused,
+    printingMonitorSnapshot?.isPrinting,
+    printingMonitorSnapshot?.pauseLatched,
+  ]);
+  const printingMonitorDisplayProgressPct = React.useMemo(() => {
+    if (!printingMonitorHasActivePrint) return 0;
+    const raw = printingMonitorSnapshot?.progressPct;
+    if (raw == null || !Number.isFinite(raw)) return 0;
+    return Math.max(0, Math.min(100, raw));
+  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.progressPct]);
+  const printingMonitorDisplayCurrentLayer = React.useMemo(() => {
+    if (!printingMonitorHasActivePrint) return 0;
+    const raw = printingMonitorSnapshot?.currentLayer;
+    if (raw == null || !Number.isFinite(raw) || raw < 0) return 0;
+    return Math.max(0, Math.round(raw));
+  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.currentLayer]);
+  const printingMonitorDisplayTotalLayers = React.useMemo(() => {
+    if (!printingMonitorHasActivePrint) return 0;
+    const raw = printingMonitorSnapshot?.totalLayers;
+    if (raw == null || !Number.isFinite(raw) || raw < 0) return 0;
+    return Math.max(0, Math.round(raw));
+  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.totalLayers]);
   const selectedPrinterHasActivePrint = React.useMemo(() => {
-    const stateText = (selectedPrinterMonitorSnapshot?.stateText ?? '').toLowerCase();
     return Boolean(
       selectedPrinterMonitorSnapshot?.isPrinting
       || selectedPrinterMonitorSnapshot?.isPaused
-      || (selectedPrinterMonitorSnapshot?.progressPct ?? 0) > 0
-      || (selectedPrinterMonitorSnapshot?.currentLayer ?? 0) > 0
-      || /print|pause|cancel|layer/.test(stateText),
+      || selectedPrinterMonitorSnapshot?.cancelLatched
+      || selectedPrinterMonitorSnapshot?.pauseLatched
     );
   }, [
-    selectedPrinterMonitorSnapshot?.currentLayer,
+    selectedPrinterMonitorSnapshot?.cancelLatched,
     selectedPrinterMonitorSnapshot?.isPaused,
     selectedPrinterMonitorSnapshot?.isPrinting,
-    selectedPrinterMonitorSnapshot?.progressPct,
-    selectedPrinterMonitorSnapshot?.stateText,
+    selectedPrinterMonitorSnapshot?.pauseLatched,
   ]);
   const showTopbarMonitorButton = React.useMemo(() => {
     const hasMonitoring = Boolean(
@@ -2818,7 +2848,7 @@ export default function Home() {
 
           const payload = await response.json().catch(() => ({} as any));
           if (cancelled) return;
-          const snapshot = printingMonitoringAdapter.parseStatusPayload(payload);
+          const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
           setSelectedPrinterMonitorSnapshot(snapshot);
         } catch {
           if (cancelled) return;
@@ -2877,7 +2907,7 @@ export default function Home() {
           const payload = await response.json().catch(() => ({} as any));
           if (cancelled) return;
 
-          const snapshot = printingMonitoringAdapter.parseStatusPayload(payload);
+          const snapshot = printingMonitoringAdapter.parseStatusPayload(payload, `${host}:${port}`);
           setPrintingMonitorSnapshot(snapshot);
           setPrintingMonitorError(typeof payload?.error === 'string' ? payload.error : null);
         } catch (error) {
@@ -2960,6 +2990,8 @@ export default function Home() {
   React.useEffect(() => {
     if (!printingMonitorModalOpen) {
       setPrintingMonitorLeftColumnHeight(null);
+      setPrintingMonitorActionBusy(null);
+      setPrintingMonitorActionStatus(null);
       return;
     }
 
@@ -3582,6 +3614,91 @@ export default function Home() {
       setPrintingPrintNowBusy(false);
     }
   }, [activePrinterProfile, printingReadyPlateId, printingTargetDevice]);
+
+  const handlePrintingMonitorControlAction = React.useCallback(async (
+    action: 'pause' | 'resume' | 'cancel' | 'emergency-stop',
+  ) => {
+    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations) return;
+
+    if (action === 'cancel') {
+      const confirmed = window.confirm('Cancel the current print job? This cannot be undone.');
+      if (!confirmed) return;
+    }
+
+    if (action === 'emergency-stop') {
+      const confirmed = window.confirm('Emergency Stop immediately halts the printer. Continue?');
+      if (!confirmed) return;
+    }
+
+    const host = (monitoringDevice?.ipAddress || '').trim();
+    const port = monitoringDevice?.port || 80;
+    if (!host) {
+      setPrintingMonitorError('No printer IP available for control command.');
+      return;
+    }
+
+    const operation = action === 'pause'
+      ? printingMonitoringAdapter.operations.pause
+      : action === 'resume'
+        ? printingMonitoringAdapter.operations.resume
+        : action === 'cancel'
+          ? printingMonitoringAdapter.operations.cancel
+          : printingMonitoringAdapter.operations.emergencyStop;
+
+    setPrintingMonitorActionBusy(action);
+    setPrintingMonitorActionStatus(null);
+
+    try {
+      const response = await pluginNetworkFetch({
+        pluginId: printingMonitoringAdapter.pluginId,
+        operation,
+        ipAddress: host,
+        port,
+        plateId: printingMonitorPlateId,
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (!response.ok || payload?.ok === false) {
+        const reason = typeof payload?.error === 'string'
+          ? payload.error
+          : `HTTP ${response.status}`;
+        throw new Error(reason);
+      }
+
+      const successMessage = typeof payload?.message === 'string' && payload.message.trim().length > 0
+        ? payload.message.trim()
+        : action === 'pause'
+          ? 'Pause command sent.'
+          : action === 'resume'
+            ? 'Resume command sent.'
+            : action === 'cancel'
+              ? 'Cancel command sent.'
+              : 'Emergency stop command sent.';
+
+      setPrintingMonitorActionStatus(successMessage);
+      setPrintingMonitorError(null);
+
+      const statusResponse = await pluginNetworkFetch({
+        pluginId: printingMonitoringAdapter.pluginId,
+        operation: printingMonitoringAdapter.operations.status,
+        ipAddress: host,
+        port,
+        plateId: printingMonitorPlateId,
+      });
+      const statusPayload = await statusResponse.json().catch(() => ({} as any));
+      if (statusResponse.ok) {
+        setPrintingMonitorSnapshot(printingMonitoringAdapter.parseStatusPayload(statusPayload, `${host}:${port}`));
+      }
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : 'Failed to send control command to printer.';
+      setPrintingMonitorError(message);
+      setPrintingMonitorActionStatus(null);
+    } finally {
+      setPrintingMonitorActionBusy(null);
+    }
+  }, [monitoringDevice?.ipAddress, monitoringDevice?.port, printingMonitorPlateId, printingMonitoringAdapter]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
     if (!Number.isFinite(nextLayer)) return;
@@ -9074,9 +9191,9 @@ export default function Home() {
                   <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
                     Print Preview
                   </div>
-                  {printingMonitorThumbnailUrl ? (
-                    <div className="mt-1.5 rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
-                      <div className="aspect-[4/3] w-full">
+                  <div className="mt-1.5 rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
+                    <div className="aspect-[4/3] w-full">
+                      {printingMonitorHasActivePrint && printingMonitorThumbnailUrl ? (
                         <img
                           src={printingMonitorThumbnailUrl}
                           alt="Active print thumbnail"
@@ -9085,13 +9202,13 @@ export default function Home() {
                           decoding="async"
                           fetchPriority="high"
                         />
-                      </div>
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          {printingMonitorHasActivePrint ? 'No print thumbnail available yet.' : 'No active print.'}
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="mt-1 text-[11px] px-1 pb-1" style={{ color: 'var(--text-muted)' }}>
-                      No print thumbnail available yet.
-                    </div>
-                  )}
+                  </div>
                 </div>
 
                 <div className="rounded-md border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
@@ -9100,7 +9217,7 @@ export default function Home() {
                     <span>{isPrintingMonitorPolling ? 'Live' : 'Idle'}</span>
                   </div>
 
-                  {printingMonitorSnapshot?.progressPct != null && (
+                  {printingMonitorHasActivePrint ? (
                     <>
                       <div
                         className="h-2 w-full rounded-full border overflow-hidden"
@@ -9112,24 +9229,26 @@ export default function Home() {
                         <div
                           className="h-full rounded-full transition-[width] duration-200 ease-out"
                           style={{
-                            width: `${Math.max(0, Math.min(100, printingMonitorSnapshot.progressPct)).toFixed(2)}%`,
+                            width: `${printingMonitorDisplayProgressPct.toFixed(2)}%`,
                             background: 'linear-gradient(90deg, #60a5fa, #22d3ee)',
                           }}
                         />
                       </div>
                       <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        Progress {printingMonitorSnapshot.progressPct.toFixed(1)}%
+                        Progress {printingMonitorDisplayProgressPct.toFixed(1)}%
                       </div>
                     </>
+                  ) : (
+                    <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      No active print.
+                    </div>
                   )}
 
                   <div className="grid grid-cols-2 gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
                     <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                       Layer:{' '}
                       <span style={{ color: 'var(--text-strong)' }}>
-                        {printingMonitorSnapshot?.currentLayer != null && printingMonitorSnapshot?.totalLayers != null
-                          ? `${printingMonitorSnapshot.currentLayer}/${printingMonitorSnapshot.totalLayers}`
-                          : '—'}
+                        {`${printingMonitorDisplayCurrentLayer}/${printingMonitorDisplayTotalLayers}`}
                       </span>
                     </div>
                     <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -9141,6 +9260,54 @@ export default function Home() {
                       <span style={{ color: 'var(--text-strong)' }}>{printingMonitorSnapshot?.jobName ?? '—'}</span>
                     </div>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      className="ui-button ui-button-secondary !h-8 px-2.5 text-[11px]"
+                      onClick={() => {
+                        void handlePrintingMonitorControlAction(printingMonitorSnapshot?.isPaused ? 'resume' : 'pause');
+                      }}
+                      disabled={printingMonitorActionBusy !== null || !printingMonitoringAdapter.operations || !printingMonitorHasActivePrint}
+                    >
+                      {printingMonitorActionBusy === 'pause' || printingMonitorActionBusy === 'resume'
+                        ? (printingMonitorSnapshot?.isPaused ? 'Resuming…' : 'Pausing…')
+                        : (printingMonitorSnapshot?.isPaused ? 'Resume' : 'Pause')}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="ui-button ui-button-secondary !h-8 px-2.5 text-[11px]"
+                      onClick={() => {
+                        void handlePrintingMonitorControlAction('cancel');
+                      }}
+                      disabled={printingMonitorActionBusy !== null || !printingMonitoringAdapter.operations || !printingMonitorHasActivePrint}
+                    >
+                      {printingMonitorActionBusy === 'cancel' ? 'Canceling…' : 'Cancel'}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="ui-button !h-8 px-2.5 text-[11px] col-span-2"
+                      style={{
+                        borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
+                        background: 'color-mix(in srgb, #ef4444, var(--surface-1) 88%)',
+                        color: '#fecaca',
+                      }}
+                      onClick={() => {
+                        void handlePrintingMonitorControlAction('emergency-stop');
+                      }}
+                      disabled={printingMonitorActionBusy !== null || !printingMonitoringAdapter.operations}
+                    >
+                      {printingMonitorActionBusy === 'emergency-stop' ? 'Emergency Stop…' : 'Emergency Stop'}
+                    </button>
+                  </div>
+
+                  {printingMonitorActionStatus && !printingMonitorError && (
+                    <div className="text-[11px] rounded-md border px-2.5 py-2" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                      {printingMonitorActionStatus}
+                    </div>
+                  )}
 
                   {printingMonitorError && (
                     <div className="text-[11px] rounded-md border px-2.5 py-2" style={{ color: '#fca5a5', borderColor: 'color-mix(in srgb, #fca5a5, var(--border-subtle) 60%)' }}>

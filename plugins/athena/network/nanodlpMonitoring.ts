@@ -12,6 +12,9 @@ export type NanoDlpMonitoringSnapshot = {
   stateText: string;
   isPrinting: boolean;
   isPaused: boolean;
+  cancelLatched: boolean;
+  pauseLatched: boolean;
+  finished: boolean;
   progressPct: number | null;
   currentLayer: number | null;
   totalLayers: number | null;
@@ -54,6 +57,24 @@ function normalizePercent(value: number | null): number | null {
   return Math.max(0, Math.min(100, value));
 }
 
+type NanoDlpLatchState = {
+  cancelLatched: boolean;
+  prevStateCode: number;
+};
+
+const stateByContext = new Map<string, NanoDlpLatchState>();
+
+function getLatchState(contextKey: string): NanoDlpLatchState {
+  const existing = stateByContext.get(contextKey);
+  if (existing) return existing;
+  const created: NanoDlpLatchState = {
+    cancelLatched: false,
+    prevStateCode: -1,
+  };
+  stateByContext.set(contextKey, created);
+  return created;
+}
+
 function toAbsoluteNanoDlpUrl(candidate: string, host: string, port: number): string | null {
   const trimmed = candidate.trim();
   if (!trimmed) return null;
@@ -71,19 +92,26 @@ function toAbsoluteNanoDlpUrl(candidate: string, host: string, port: number): st
   return `http://${host}${port === 80 ? '' : `:${port}`}/${trimmed.replace(/^\/+/, '')}`;
 }
 
-export function resolveNanodlpMonitoringSnapshot(payload: unknown): NanoDlpMonitoringSnapshot {
+export function resolveNanodlpMonitoringSnapshot(
+  payload: unknown,
+  contextKey: string = 'default',
+): NanoDlpMonitoringSnapshot {
   const root = (payload ?? {}) as UnknownRecord;
   const status = ((root.status ?? root.Status ?? root) ?? {}) as UnknownRecord;
+  const latch = getLatchState(contextKey);
 
   const stateCode = toFiniteNumber(status.State ?? status.state ?? status.STATE);
   const rawPrinting = toBooleanFlag(status.Printing ?? status.printing ?? false);
   const rawPaused = toBooleanFlag(status.Paused ?? status.paused ?? false);
 
-  const inferredPaused = stateCode === 3;
-  const inferredPrinting = stateCode === 1 || stateCode === 2 || stateCode === 4 || stateCode === 5;
-
-  const paused = rawPaused || inferredPaused;
-  const printing = rawPrinting || inferredPrinting;
+  const normalizedStateCode = (() => {
+    if (stateCode != null) return Math.round(stateCode);
+    const stateText = String(status.State ?? status.state ?? '').trim().toLowerCase();
+    if (stateText === 'printing' || rawPrinting) return 5;
+    if (stateText === 'paused' || rawPaused) return 3;
+    if (stateText === 'idle') return 0;
+    return -1;
+  })();
 
   const currentLayer = toFiniteNumber(status.LayerID ?? status.layerId ?? status.CurrentLayer ?? status.currentLayer);
   const totalLayers = toFiniteNumber(status.LayersCount ?? status.layersCount ?? status.TotalLayers ?? status.totalLayers);
@@ -108,27 +136,122 @@ export function resolveNanodlpMonitoringSnapshot(payload: unknown): NanoDlpMonit
     ? jobPath.trim()
     : null;
 
-  const canonicalStateText = (() => {
-    if (stateCode === 4) return 'Canceling';
-    if (stateCode === 2) return 'Pausing';
-    if (paused) return 'Paused';
-    if (printing) return 'Printing';
-    return 'Idle';
+  if (normalizedStateCode === 4) {
+    latch.cancelLatched = true;
+  }
+  if (latch.prevStateCode === 0 && normalizedStateCode === 1) {
+    latch.cancelLatched = false;
+  }
+
+  const pauseLatched = normalizedStateCode === 2;
+
+  const canonical = (() => {
+    if (normalizedStateCode === 0 && latch.cancelLatched) {
+      return {
+        stateText: 'Idle',
+        isPaused: false,
+        isPrinting: false,
+        cancelLatched: true,
+        pauseLatched: false,
+        finished: false,
+      };
+    }
+
+    if (latch.cancelLatched) {
+      return {
+        stateText: 'Canceling',
+        isPaused: false,
+        isPrinting: false,
+        cancelLatched: true,
+        pauseLatched: false,
+        finished: false,
+      };
+    }
+
+    if (normalizedStateCode === 3) {
+      return {
+        stateText: 'Paused',
+        isPaused: true,
+        isPrinting: true,
+        cancelLatched: false,
+        pauseLatched: false,
+        finished: false,
+      };
+    }
+
+    if (normalizedStateCode === 1 || (normalizedStateCode === 5 && rawPrinting)) {
+      return {
+        stateText: 'Printing',
+        isPaused: false,
+        isPrinting: true,
+        cancelLatched: false,
+        pauseLatched: false,
+        finished: false,
+      };
+    }
+
+    if (normalizedStateCode === 2) {
+      return {
+        stateText: 'Pausing',
+        isPaused: false,
+        isPrinting: true,
+        cancelLatched: false,
+        pauseLatched: true,
+        finished: false,
+      };
+    }
+
+    if (rawPaused) {
+      return {
+        stateText: 'Paused',
+        isPaused: true,
+        isPrinting: true,
+        cancelLatched: false,
+        pauseLatched,
+        finished: false,
+      };
+    }
+
+    if (rawPrinting) {
+      return {
+        stateText: 'Printing',
+        isPaused: false,
+        isPrinting: true,
+        cancelLatched: false,
+        pauseLatched,
+        finished: false,
+      };
+    }
+
+    const inferFinished = currentLayer != null || totalLayers != null || jobName != null;
+    return {
+      stateText: 'Idle',
+      isPaused: false,
+      isPrinting: false,
+      cancelLatched: false,
+      pauseLatched,
+      finished: inferFinished,
+    };
   })();
 
-  const stateText = [
+  latch.prevStateCode = normalizedStateCode;
+
+  const resolvedStateText = [
+    canonical.stateText,
     status.Status,
     status.State,
-    canonicalStateText,
   ].find((value) => typeof value === 'string' && value.trim().length > 0) as string | undefined;
 
   const connected = root.ok === false ? false : true;
 
   return {
     connected,
-    stateText: stateText?.trim() || (printing ? 'Printing' : 'Idle'),
-    isPrinting: printing,
-    isPaused: paused,
+    stateText: resolvedStateText?.trim() || canonical.stateText,
+    isPrinting: canonical.isPrinting,
+    isPaused: canonical.isPaused,
+    cancelLatched: canonical.cancelLatched,
+    pauseLatched: canonical.pauseLatched,
+    finished: canonical.finished,
     progressPct: reportedProgress ?? derivedProgress,
     currentLayer,
     totalLayers,

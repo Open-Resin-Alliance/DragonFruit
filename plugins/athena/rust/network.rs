@@ -1997,6 +1997,169 @@ async fn nanodlp_printer_start(payload: &Value) -> (u16, Value) {
     }
 }
 
+async fn nanodlp_printer_control(
+    payload: &Value,
+    action: &str,
+    endpoint_paths: &[&str],
+    success_message: &str,
+    failure_label: &str,
+    treat_any_response_as_success: bool,
+) -> (u16, Value) {
+    let raw_host = resolve_raw_host(payload);
+    let parsed = match parse_host_and_port(&raw_host) {
+        Some(p) => p,
+        None => {
+            return (
+                400,
+                json!({ "ok": false, "error": "Invalid host or IP address" }),
+            )
+        }
+    };
+
+    let port = resolve_port(payload.get("port"), parsed.1);
+    let base_url = build_base_url(&parsed.0, port)
+        .trim_end_matches('/')
+        .to_string();
+
+    let mut attempted: Vec<Value> = Vec::new();
+    let mut last_network_error: Option<String> = None;
+
+    for path in endpoint_paths {
+        let normalized = path.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+
+        match http_client()
+            .get(format!("{base_url}{normalized}"))
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                attempted.push(json!({ "path": normalized, "status": status }));
+
+                if status == 200 || status == 302 {
+                    return (
+                        200,
+                        json!({
+                            "ok": true,
+                            "action": action,
+                            "ipAddress": parsed.0,
+                            "port": port,
+                            "status": status,
+                            "endpoint": normalized,
+                            "message": success_message,
+                        }),
+                    );
+                }
+            }
+            Err(error) => {
+                last_network_error = Some(error.to_string());
+            }
+        }
+    }
+
+    let last_status = attempted
+        .last()
+        .and_then(|entry| entry.get("status"))
+        .and_then(|value| value.as_u64())
+        .map(|value| value as u16);
+
+    if treat_any_response_as_success && !attempted.is_empty() {
+        return (
+            200,
+            json!({
+                "ok": true,
+                "action": action,
+                "ipAddress": parsed.0,
+                "port": port,
+                "status": last_status,
+                "endpoint": attempted
+                    .last()
+                    .and_then(|entry| entry.get("path"))
+                    .and_then(|value| value.as_str()),
+                "message": success_message,
+                "warning": format!(
+                    "Command returned non-200 status ({}) but was treated as success for fail-safe behavior.",
+                    last_status
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                ),
+                "attempted": attempted,
+            }),
+        );
+    }
+
+    (
+        if last_status.is_some() { 502 } else { 500 },
+        json!({
+            "ok": false,
+            "action": action,
+            "ipAddress": parsed.0,
+            "port": port,
+            "status": last_status,
+            "error": last_network_error.unwrap_or_else(|| format!("{failure_label} not supported or failed on this NanoDLP host.")),
+            "attempted": attempted,
+        }),
+    )
+}
+
+async fn nanodlp_printer_pause(payload: &Value) -> (u16, Value) {
+    nanodlp_printer_control(
+        payload,
+        "pause",
+        &["/printer/pause"],
+        "Pause command sent to printer.",
+        "Pause command",
+        false,
+    )
+    .await
+}
+
+async fn nanodlp_printer_resume(payload: &Value) -> (u16, Value) {
+    nanodlp_printer_control(
+        payload,
+        "resume",
+        &["/printer/unpause", "/printer/resume"],
+        "Resume command sent to printer.",
+        "Resume command",
+        false,
+    )
+    .await
+}
+
+async fn nanodlp_printer_cancel(payload: &Value) -> (u16, Value) {
+    nanodlp_printer_control(
+        payload,
+        "cancel",
+        &["/printer/stop", "/printer/cancel"],
+        "Cancel command sent to printer.",
+        "Cancel command",
+        false,
+    )
+    .await
+}
+
+async fn nanodlp_printer_emergency_stop(payload: &Value) -> (u16, Value) {
+    nanodlp_printer_control(
+        payload,
+        "emergency-stop",
+        &[
+            "/printer/force-stop",
+            "/printer/emergency-stop",
+            "/printer/emergency",
+            "/printer/abort",
+            "/printer/stop",
+        ],
+        "Emergency stop command sent to printer.",
+        "Emergency stop command",
+        true,
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // NanoDLP: printer/status
 // ---------------------------------------------------------------------------
@@ -2188,6 +2351,10 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
         "job/import" => nanodlp_job_import(payload).await,
         "plates/list/json" => nanodlp_plates_list_json(payload).await,
         "printer/start" => nanodlp_printer_start(payload).await,
+        "printer/pause" => nanodlp_printer_pause(payload).await,
+        "printer/unpause" | "printer/resume" => nanodlp_printer_resume(payload).await,
+        "printer/stop" | "printer/cancel" => nanodlp_printer_cancel(payload).await,
+        "printer/force-stop" | "printer/emergency-stop" => nanodlp_printer_emergency_stop(payload).await,
         "printer/status" => nanodlp_printer_status(payload).await,
         "printer/webcam/info" => nanodlp_printer_webcam_info(payload).await,
         _ => (
