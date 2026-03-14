@@ -1,11 +1,9 @@
-name: Build Tauri Bundles
+name: Build Tauri Artifacts
 
 on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
   pull_request:
     branches:
       - main
@@ -15,30 +13,159 @@ permissions:
   contents: write
 
 jobs:
-  publish-tauri:
+  resolve-version-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version_tag: ${{ steps.version_check.outputs.version_tag }}
+      should_release: ${{ steps.release_decision.outputs.should_release }}
+      tag_exists: ${{ steps.tag_lookup.outputs.tag_exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate package and Tauri versions
+        id: version_check
+        shell: bash
+        run: |
+          PACKAGE_VERSION="$(node -p \"require('./package.json').version\")"
+          TAURI_VERSION="$(node -p \"JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version\")"
+
+          if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
+            echo "Unable to determine one or both app versions."
+            exit 1
+          fi
+
+          if [[ "$PACKAGE_VERSION" != "$TAURI_VERSION" ]]; then
+            echo "Version mismatch detected: package.json=$PACKAGE_VERSION, src-tauri/tauri.conf.json=$TAURI_VERSION"
+            exit 1
+          fi
+
+          echo "version_tag=v${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch tags
+        run: git fetch --force --tags origin
+
+      - name: Check whether version tag already exists
+        id: tag_lookup
+        shell: bash
+        run: |
+          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide release mode
+        id: release_decision
+        shell: bash
+        run: |
+          SHOULD_RELEASE=false
+          if [[ '${{ github.event_name }}' != 'pull_request' && '${{ github.ref }}' == 'refs/heads/main' && '${{ steps.tag_lookup.outputs.tag_exists }}' != 'true' ]]; then
+            SHOULD_RELEASE=true
+          fi
+          echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push version tag
+        if: steps.release_decision.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION_TAG" -m "Release $VERSION_TAG"
+          git push origin "$VERSION_TAG"
+
+  build-preview:
+    needs: resolve-version-tag
+    if: ${{ github.event_name == 'pull_request' || needs.resolve-version-tag.outputs.should_release != 'true' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - target: aarch64-apple-darwin
+            artifactName: dragonfruit-macos-arm64-preview
+            artifactPath: src-tauri/target/aarch64-apple-darwin/release/dragonfruit-desktop
+          - target: x86_64-apple-darwin
+            artifactName: dragonfruit-macos-x64-preview
+            artifactPath: src-tauri/target/x86_64-apple-darwin/release/dragonfruit-desktop
+          - target: x86_64-unknown-linux-gnu
+            artifactName: dragonfruit-linux-x64-preview
+            artifactPath: src-tauri/target/x86_64-unknown-linux-gnu/release/dragonfruit-desktop
+          - target: x86_64-pc-windows-gnu
+            artifactName: dragonfruit-windows-x64-preview
+            artifactPath: src-tauri/target/x86_64-pc-windows-gnu/release/dragonfruit-desktop.exe
+
+    runs-on:
+      - self-hosted
+      - macOS
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build lightweight preview artifact
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tauriScript: npx tauri
+          args: --target ${{ matrix.target }} --bundles none
+
+      - name: Upload preview artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifactName }}
+          path: ${{ matrix.artifactPath }}
+          if-no-files-found: error
+
+  publish-release:
+    needs: resolve-version-tag
+    if: ${{ needs.resolve-version-tag.outputs.should_release == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin --bundles app,dmg
             artifactName: dragonfruit-macos-arm64
-          - platform: macos-latest
+          - runner: macos-latest
+            target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin --bundles app,dmg
             artifactName: dragonfruit-macos-x64
-          - platform: ubuntu-22.04
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
             args: --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage
             artifactName: dragonfruit-linux-x64
-          - platform: windows-latest
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc --bundles msi,nsis
             artifactName: dragonfruit-windows-x64
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux system dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.runner == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf
@@ -52,7 +179,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -62,33 +189,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build with tauri-action (workflow artifacts)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: tauri-apps/tauri-action@v0
-        with:
-          tauriScript: npx tauri
-          args: ${{ matrix.args }}
-
-      - name: Upload workflow artifacts
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifactName }}
-          path: |
-            src-tauri/target/release/bundle/**
-            src-tauri/target/*/release/bundle/**
-          if-no-files-found: error
-
       - name: Build with tauri-action (tag release)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "DragonFruit ${{ github.ref_name }}"
+          tagName: ${{ needs.resolve-version-tag.outputs.version_tag }}
+          releaseName: "DragonFruit ${{ needs.resolve-version-tag.outputs.version_tag }}"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
