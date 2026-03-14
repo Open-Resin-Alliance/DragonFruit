@@ -28,10 +28,35 @@ jobs:
         with:
           node-version: "20.18.0"
 
-      - name: Check required CLI tools on self-hosted macOS
+      - name: Ensure required CLI tools on self-hosted macOS
         shell: bash
         run: |
           set -euo pipefail
+
+          # Ensure Cargo bin path is available for this and later steps.
+          if [[ -d "$HOME/.cargo/bin" ]]; then
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+
+          # Install Rust toolchain if missing.
+          if ! command -v rustup >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+            echo "Rust toolchain missing; installing rustup/cargo..."
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+
+          # Install Docker CLI if missing (best effort).
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "Docker CLI missing; attempting install via Homebrew..."
+            if command -v brew >/dev/null 2>&1; then
+              brew install docker || true
+              if ! command -v docker >/dev/null 2>&1; then
+                brew install --cask docker || true
+              fi
+            fi
+          fi
 
           missing=()
           required_cmds=(git node npm rustup cargo docker)
@@ -49,7 +74,26 @@ jobs:
 
       - name: Verify Docker daemon availability
         shell: bash
-        run: docker info >/dev/null
+        run: |
+          set -euo pipefail
+
+          if docker info >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          echo "Docker daemon not reachable; attempting to launch Docker Desktop..."
+          open -a Docker || true
+
+          for _ in {1..18}; do
+            if docker info >/dev/null 2>&1; then
+              echo "Docker daemon is now available."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Docker daemon is still unavailable. Start Docker Desktop (or another Docker daemon) on the runner and retry."
+          exit 1
 
       - name: Verify required Rust targets are installed
         shell: bash
@@ -73,9 +117,8 @@ jobs:
           done
 
           if [[ ${#missing_targets[@]} -gt 0 ]]; then
-            echo "Missing required Rust targets on self-hosted runner: ${missing_targets[*]}"
-            echo "Install with: rustup target add ${missing_targets[*]}"
-            exit 1
+            echo "Missing required Rust targets; installing: ${missing_targets[*]}"
+            rustup target add "${missing_targets[@]}"
           fi
 
       - name: Validate package and Tauri versions
