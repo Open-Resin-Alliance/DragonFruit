@@ -8,12 +8,86 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      use_github_fallback:
+        description: "Use GitHub-hosted runner for version resolution (fallback)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
   resolve-version-tag:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.use_github_fallback != true }}
+    runs-on:
+      - self-hosted
+      - macOS
+    outputs:
+      version_tag: ${{ steps.version_check.outputs.version_tag }}
+      should_release: ${{ steps.release_decision.outputs.should_release }}
+      tag_exists: ${{ steps.tag_lookup.outputs.tag_exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate package and Tauri versions
+        id: version_check
+        shell: bash
+        run: |
+          PACKAGE_VERSION="$(node -p \"require('./package.json').version\")"
+          TAURI_VERSION="$(node -p \"JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version\")"
+
+          if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
+            echo "Unable to determine one or both app versions."
+            exit 1
+          fi
+
+          if [[ "$PACKAGE_VERSION" != "$TAURI_VERSION" ]]; then
+            echo "Version mismatch detected: package.json=$PACKAGE_VERSION, src-tauri/tauri.conf.json=$TAURI_VERSION"
+            exit 1
+          fi
+
+          echo "version_tag=v${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch tags
+        run: git fetch --force --tags origin
+
+      - name: Check whether version tag already exists
+        id: tag_lookup
+        shell: bash
+        run: |
+          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide release mode
+        id: release_decision
+        shell: bash
+        run: |
+          SHOULD_RELEASE=false
+          if [[ '${{ github.event_name }}' != 'pull_request' && '${{ github.ref }}' == 'refs/heads/main' && '${{ steps.tag_lookup.outputs.tag_exists }}' != 'true' ]]; then
+            SHOULD_RELEASE=true
+          fi
+          echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push version tag
+        if: steps.release_decision.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION_TAG" -m "Release $VERSION_TAG"
+          git push origin "$VERSION_TAG"
+
+  resolve-version-tag-fallback:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_fallback == true }}
     runs-on: ubuntu-latest
     outputs:
       version_tag: ${{ steps.version_check.outputs.version_tag }}
@@ -78,8 +152,10 @@ jobs:
           git push origin "$VERSION_TAG"
 
   build-preview:
-    needs: resolve-version-tag
-    if: ${{ github.event_name == 'pull_request' || needs.resolve-version-tag.outputs.should_release != 'true' }}
+    needs:
+      - resolve-version-tag
+      - resolve-version-tag-fallback
+    if: ${{ always() && (needs.resolve-version-tag.result == 'success' || needs.resolve-version-tag.result == 'skipped') && (needs.resolve-version-tag-fallback.result == 'success' || needs.resolve-version-tag-fallback.result == 'skipped') && (github.event_name == 'pull_request' || (needs.resolve-version-tag.outputs.should_release || needs.resolve-version-tag-fallback.outputs.should_release) != 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -137,8 +213,10 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    needs: resolve-version-tag
-    if: ${{ needs.resolve-version-tag.outputs.should_release == 'true' }}
+    needs:
+      - resolve-version-tag
+      - resolve-version-tag-fallback
+    if: ${{ always() && (needs.resolve-version-tag.result == 'success' || needs.resolve-version-tag.result == 'skipped') && (needs.resolve-version-tag-fallback.result == 'success' || needs.resolve-version-tag-fallback.result == 'skipped') && (needs.resolve-version-tag.outputs.should_release || needs.resolve-version-tag-fallback.outputs.should_release) == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -196,8 +274,8 @@ jobs:
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
-          tagName: ${{ needs.resolve-version-tag.outputs.version_tag }}
-          releaseName: "DragonFruit ${{ needs.resolve-version-tag.outputs.version_tag }}"
+          tagName: ${{ needs.resolve-version-tag.outputs.version_tag || needs.resolve-version-tag-fallback.outputs.version_tag }}
+          releaseName: "DragonFruit ${{ needs.resolve-version-tag.outputs.version_tag || needs.resolve-version-tag-fallback.outputs.version_tag }}"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
