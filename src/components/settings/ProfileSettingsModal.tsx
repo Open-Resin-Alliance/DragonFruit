@@ -2320,14 +2320,16 @@ export function ProfileSettingsModal({
                           <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
                             Synced with NanoDLP
                           </span>
-                          <button
-                            type="button"
-                            onClick={openNanodlpEditDialog}
-                            className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
-                            style={{ color: 'var(--accent-secondary)' }}
-                          >
-                            Edit all fields
-                          </button>
+                          {!selectedNanodlpMaterial.locked && (
+                            <button
+                              type="button"
+                              onClick={openNanodlpEditDialog}
+                              className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
+                              style={{ color: 'var(--accent-secondary)' }}
+                            >
+                              Edit all fields
+                            </button>
+                          )}
                         </div>
                       </div>
                     ) : (

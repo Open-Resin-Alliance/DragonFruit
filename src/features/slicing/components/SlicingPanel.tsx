@@ -239,14 +239,45 @@ export function SlicingPanel({
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  const effectiveMaterialProfile = useMemo(() => {
+    if (!activeMaterialProfile) return null;
+    if (activePrinterProfile?.networkSupport !== 'nanodlp') return activeMaterialProfile;
+    if (activePrinterProfile.networkConnection?.connected !== true) return activeMaterialProfile;
+
+    const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    if (!selectedMaterialId) return activeMaterialProfile;
+
+    const selectedLayerHeightMm = Number(activePrinterProfile.networkConnection?.selectedMaterialLayerHeightMm);
+    const selectedNormalExposureSec = Number(activePrinterProfile.networkConnection?.selectedMaterialNormalExposureSec);
+    const selectedBottomExposureSec = Number(activePrinterProfile.networkConnection?.selectedMaterialBottomExposureSec);
+    const selectedBottomLayerCount = Number(activePrinterProfile.networkConnection?.selectedMaterialBottomLayerCount);
+    const selectedMaterialName = activePrinterProfile.networkConnection?.selectedMaterialName?.trim() ?? '';
+
+    return {
+      ...activeMaterialProfile,
+      name: selectedMaterialName || activeMaterialProfile.name,
+      layerHeightMm: Number.isFinite(selectedLayerHeightMm) && selectedLayerHeightMm > 0
+        ? selectedLayerHeightMm
+        : activeMaterialProfile.layerHeightMm,
+      normalExposureSec: Number.isFinite(selectedNormalExposureSec) && selectedNormalExposureSec > 0
+        ? selectedNormalExposureSec
+        : activeMaterialProfile.normalExposureSec,
+      bottomExposureSec: Number.isFinite(selectedBottomExposureSec) && selectedBottomExposureSec > 0
+        ? selectedBottomExposureSec
+        : activeMaterialProfile.bottomExposureSec,
+      bottomLayerCount: Number.isFinite(selectedBottomLayerCount) && selectedBottomLayerCount >= 0
+        ? selectedBottomLayerCount
+        : activeMaterialProfile.bottomLayerCount,
+    };
+  }, [activeMaterialProfile, activePrinterProfile]);
 
   const selectedFormat = useMemo(() => {
-    if (!activePrinterProfile || !activeMaterialProfile) return null;
+    if (!activePrinterProfile || !effectiveMaterialProfile) return null;
     return resolveSlicingFormatDefinition({
       printerProfile: activePrinterProfile,
-      materialProfile: activeMaterialProfile,
+      materialProfile: effectiveMaterialProfile,
     });
-  }, [activeMaterialProfile, activePrinterProfile]);
+  }, [activePrinterProfile, effectiveMaterialProfile]);
 
   const selectedNanodlpMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
   // V3 supports grayscale anti-aliasing in the native raster pipeline,
@@ -327,9 +358,9 @@ export function SlicingPanel({
   }, [estimatedVolumeLabelOverride, visibleModels]);
 
   const estimatedLayerCount = useMemo(() => {
-    if (!activeMaterialProfile || visibleModels.length === 0) return 0;
+    if (!effectiveMaterialProfile || visibleModels.length === 0) return 0;
 
-    const layerHeightMm = Math.max(0.001, activeMaterialProfile.layerHeightMm || 0.05);
+    const layerHeightMm = Math.max(0.001, effectiveMaterialProfile.layerHeightMm || 0.05);
     let maxModelHeightMm = 0;
 
     for (const model of visibleModels) {
@@ -340,30 +371,30 @@ export function SlicingPanel({
     }
 
     return Math.max(0, Math.ceil(maxModelHeightMm / layerHeightMm));
-  }, [activeMaterialProfile, visibleModels]);
+  }, [effectiveMaterialProfile, visibleModels]);
 
   const estimatedPrintTimeLabel = useMemo(() => {
-    if (!activeMaterialProfile || estimatedLayerCount <= 0) return '—';
+    if (!effectiveMaterialProfile || estimatedLayerCount <= 0) return '—';
 
     const totalLayers = estimatedLayerCount;
-    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(activeMaterialProfile.bottomLayerCount)));
+    const bottomLayers = Math.max(0, Math.min(totalLayers, Math.round(effectiveMaterialProfile.bottomLayerCount)));
     const normalLayers = Math.max(0, totalLayers - bottomLayers);
 
-    const liftSec = activeMaterialProfile.liftSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.liftSpeedMmMin) * 60
+    const liftSec = effectiveMaterialProfile.liftSpeedMmMin > 0
+      ? (effectiveMaterialProfile.liftDistanceMm / effectiveMaterialProfile.liftSpeedMmMin) * 60
       : 0;
-    const retractSec = activeMaterialProfile.retractSpeedMmMin > 0
-      ? (activeMaterialProfile.liftDistanceMm / activeMaterialProfile.retractSpeedMmMin) * 60
+    const retractSec = effectiveMaterialProfile.retractSpeedMmMin > 0
+      ? (effectiveMaterialProfile.liftDistanceMm / effectiveMaterialProfile.retractSpeedMmMin) * 60
       : 0;
     const travelSecPerLayer = Math.max(0, liftSec + retractSec);
 
     const totalSec = (
-      bottomLayers * (activeMaterialProfile.bottomExposureSec + travelSecPerLayer)
-      + normalLayers * (activeMaterialProfile.normalExposureSec + travelSecPerLayer)
+      bottomLayers * (effectiveMaterialProfile.bottomExposureSec + travelSecPerLayer)
+      + normalLayers * (effectiveMaterialProfile.normalExposureSec + travelSecPerLayer)
     );
 
     return formatClockFromSeconds(totalSec);
-  }, [activeMaterialProfile, estimatedLayerCount]);
+  }, [effectiveMaterialProfile, estimatedLayerCount]);
 
   const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
   const effectiveAaOnSupports = antiAliasingAvailable ? aaOnSupports : false;
@@ -391,10 +422,10 @@ export function SlicingPanel({
       return `${selectedNanodlpMaterialId} (NanoDLP ID)`;
     }
 
-    return activeMaterialProfile?.name ?? 'No material selected';
+    return effectiveMaterialProfile?.name ?? 'No material selected';
   }, [
-    activeMaterialProfile?.name,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
+    effectiveMaterialProfile?.name,
     isLoadingNanodlpMaterial,
     isNanodlpConnected,
     nanodlpSelectedMaterialName,
@@ -522,7 +553,7 @@ export function SlicingPanel({
       return;
     }
 
-    if (!activeMaterialProfile) {
+    if (!effectiveMaterialProfile) {
       alert('Select a material profile first.');
       return;
     }
@@ -580,7 +611,7 @@ export function SlicingPanel({
       const result = await runSliceExportOrchestrator({
         models: visibleModels,
         printerProfile: activePrinterProfile,
-        materialProfile: activeMaterialProfile,
+        materialProfile: effectiveMaterialProfile,
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
         antiAliasingLevel: effectiveAntiAliasingLevel,
         aaOnSupports: effectiveAaOnSupports,
@@ -936,7 +967,7 @@ export function SlicingPanel({
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layer Height</div>
                 <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {activeMaterialProfile ? `${activeMaterialProfile.layerHeightMm.toFixed(3)} mm` : '—'}
+                  {effectiveMaterialProfile ? `${effectiveMaterialProfile.layerHeightMm.toFixed(3)} mm` : '—'}
                 </div>
               </div>
               <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -1210,7 +1241,7 @@ export function SlicingPanel({
 
           <Button
             onClick={handleSliceZipExport}
-            disabled={isSlicingZip || !activePrinterProfile || !activeMaterialProfile || models.length === 0}
+            disabled={isSlicingZip || !activePrinterProfile || !effectiveMaterialProfile || models.length === 0}
             variant="primary"
             className={`w-full !h-9 text-sm inline-flex items-center justify-center gap-1.5 ${isSlicingZip ? 'cursor-wait opacity-70' : ''}`}
           >

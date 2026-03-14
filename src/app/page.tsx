@@ -531,6 +531,17 @@ export default function Home() {
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
+  const nanodlpSelectedMaterialLayerHeightMm = React.useMemo(() => {
+    if (activePrinterProfile?.networkSupport !== 'nanodlp') return null;
+    if (activePrinterProfile.networkConnection?.connected !== true) return null;
+    const candidate = Number(activePrinterProfile.networkConnection?.selectedMaterialLayerHeightMm);
+    if (!Number.isFinite(candidate) || candidate <= 0) return null;
+    return candidate;
+  }, [
+    activePrinterProfile?.networkConnection?.connected,
+    activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm,
+    activePrinterProfile?.networkSupport,
+  ]);
   const hasActivePrinterProfile = Boolean(activePrinterProfile);
 
   // 2. Transform Management (needs geom for bounds)
@@ -2517,8 +2528,11 @@ export default function Home() {
     [activePrinterProfile?.networkSupport],
   );
   const slicedLayerHeightMm = React.useMemo(() => {
+    if (nanodlpSelectedMaterialLayerHeightMm != null) {
+      return Math.max(0.001, Number(nanodlpSelectedMaterialLayerHeightMm));
+    }
     return Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
-  }, [activeMaterialProfile?.layerHeightMm]);
+  }, [activeMaterialProfile?.layerHeightMm, nanodlpSelectedMaterialLayerHeightMm]);
   const isLayerHeightMatch = React.useCallback((candidateLayerHeightMm: number | null | undefined) => {
     if (candidateLayerHeightMm == null) return false;
     return Math.abs(candidateLayerHeightMm - slicedLayerHeightMm) <= 0.0005;
@@ -2585,6 +2599,28 @@ export default function Home() {
     return Array.from(groups.entries()).map(([label, materials]) => ({ label, materials }));
   }, [printingTargetMaterialOptions]);
   const sendToPrinterTargetName = printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || null;
+  const printingResinName = React.useMemo(() => {
+    const targetName = printingTargetDevice?.selectedMaterialName?.trim();
+    if (targetName && targetName.length > 0) return targetName;
+
+    const selectedName = activePrinterProfile?.networkConnection?.selectedMaterialName?.trim();
+    if (
+      activePrinterProfile?.networkSupport === 'nanodlp'
+      && activePrinterProfile?.networkConnection?.connected === true
+      && selectedName
+      && selectedName.length > 0
+    ) {
+      return selectedName;
+    }
+
+    return activeMaterialProfile?.name ?? 'No resin selected';
+  }, [
+    activeMaterialProfile?.name,
+    activePrinterProfile?.networkConnection?.connected,
+    activePrinterProfile?.networkConnection?.selectedMaterialName,
+    activePrinterProfile?.networkSupport,
+    printingTargetDevice?.selectedMaterialName,
+  ]);
   const sendToPrinterButtonLabel = sendToPrinterTargetName
     ? `Upload to ${sendToPrinterTargetName.length > 26 ? `${sendToPrinterTargetName.slice(0, 24)}…` : sendToPrinterTargetName}`
     : 'Send to Printer';
@@ -5614,13 +5650,16 @@ export default function Home() {
   }, [runExportThumbnailCapture]);
 
   React.useEffect(() => {
-    const profileLayerHeightMm = Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
+    const profileLayerHeightMm = nanodlpSelectedMaterialLayerHeightMm != null
+      ? Math.max(0.001, Number(nanodlpSelectedMaterialLayerHeightMm))
+      : Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
     const targetMicron = Math.max(1, Math.round(profileLayerHeightMm * 1000));
     if (slicing.layerHeightMicron !== targetMicron) {
       slicing.setLayerHeightMicron(targetMicron);
     }
   }, [
     activeMaterialProfile?.layerHeightMm,
+    nanodlpSelectedMaterialLayerHeightMm,
     slicing.layerHeightMicron,
     slicing.setLayerHeightMicron,
   ]);
@@ -8636,7 +8675,7 @@ export default function Home() {
               outputFormat={printingArtifact?.outputName?.split('.').pop() ? `.${printingArtifact.outputName.split('.').pop()}` : null}
               outputSizeLabel={printingOutputSizeLabel}
               printerName={activePrinterProfile?.name ?? 'No printer selected'}
-              resinName={activeMaterialProfile?.name ?? 'No resin selected'}
+              resinName={printingResinName}
               estimatedPrintTimeLabel={estimatedPrintTimeLabel}
               estimatedVolumeLabel={estimatedVolumeMlLabel}
               canDownload={canDownloadPrintArtifact}
