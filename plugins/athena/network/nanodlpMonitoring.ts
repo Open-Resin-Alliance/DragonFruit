@@ -15,6 +15,7 @@ export type NanoDlpMonitoringSnapshot = {
   progressPct: number | null;
   currentLayer: number | null;
   totalLayers: number | null;
+  plateId: number | null;
   jobName: string | null;
   etaSec: number | null;
 };
@@ -86,6 +87,7 @@ export function resolveNanodlpMonitoringSnapshot(payload: unknown): NanoDlpMonit
 
   const currentLayer = toFiniteNumber(status.LayerID ?? status.layerId ?? status.CurrentLayer ?? status.currentLayer);
   const totalLayers = toFiniteNumber(status.LayersCount ?? status.layersCount ?? status.TotalLayers ?? status.totalLayers);
+  const plateId = toFiniteNumber(status.PlateID ?? status.plateId ?? status.plate_id ?? status.PlateId ?? status.id);
 
   const reportedProgress = normalizePercent(toFiniteNumber(status.Progress ?? status.progress ?? status.Percent ?? status.percent));
   const derivedProgress = (currentLayer != null && totalLayers != null && totalLayers > 0)
@@ -130,6 +132,7 @@ export function resolveNanodlpMonitoringSnapshot(payload: unknown): NanoDlpMonit
     progressPct: reportedProgress ?? derivedProgress,
     currentLayer,
     totalLayers,
+    plateId: plateId != null && plateId > 0 ? Math.round(plateId) : null,
     jobName,
     etaSec: etaSec != null && etaSec >= 0 ? etaSec : null,
   };
@@ -153,7 +156,16 @@ export function resolveNanodlpWebcamFeedInfo(
 
   const status = ((root.status ?? root.Status ?? root) ?? {}) as UnknownRecord;
 
-  const candidates = [
+  const explicitRootCandidates = [
+    root.streamUrl,
+    root.snapshotUrl,
+    ...(Array.isArray(root.candidates) ? root.candidates : []),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => toAbsoluteNanoDlpUrl(value, host, port))
+    .filter((value): value is string => Boolean(value));
+
+  const statusCandidates = [
     status.WebcamURL,
     status.webcamUrl,
     status.Webcam,
@@ -171,7 +183,7 @@ export function resolveNanodlpWebcamFeedInfo(
     .map((value) => toAbsoluteNanoDlpUrl(value, host, port))
     .filter((value): value is string => Boolean(value));
 
-  const deduped = Array.from(new Set(candidates));
+  const deduped = Array.from(new Set([...explicitRootCandidates, ...statusCandidates]));
   const snapshotUrl = deduped.find((value) => /snapshot|jpg|jpeg|png/i.test(value)) ?? deduped[0] ?? null;
   const streamUrl = deduped.find((value) => /stream|mjpeg|video/i.test(value)) ?? deduped[0] ?? null;
 
@@ -180,7 +192,9 @@ export function resolveNanodlpWebcamFeedInfo(
       available: false,
       streamUrl: null,
       snapshotUrl: null,
-      message: 'No webcam endpoint reported by this printer.',
+      message: typeof root.message === 'string' && root.message.trim().length > 0
+        ? root.message.trim()
+        : 'No webcam endpoint reported by this printer.',
     };
   }
 
@@ -188,6 +202,8 @@ export function resolveNanodlpWebcamFeedInfo(
     available: true,
     streamUrl,
     snapshotUrl,
-    message: 'Webcam feed detected.',
+    message: typeof root.message === 'string' && root.message.trim().length > 0
+      ? root.message.trim()
+      : 'Webcam feed detected.',
   };
 }

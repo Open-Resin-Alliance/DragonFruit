@@ -462,6 +462,130 @@ fn resolve_nanodlp_webcam_candidates(status: &Value, host: &str, port: u16) -> V
     out
 }
 
+fn resolve_athena_camera_online(state_payload: &Value) -> bool {
+    match state_payload {
+        Value::Bool(v) => *v,
+        Value::Number(n) => n.as_f64().map(|v| v.is_finite() && v > 0.0).unwrap_or(false),
+        Value::String(s) => {
+            let normalized = s.trim().to_lowercase();
+            (normalized.contains("online")
+                || normalized.contains("active")
+                || normalized.contains("enabled")
+                || normalized.contains("ready")
+                || normalized.contains("stream"))
+                && !(normalized.contains("offline")
+                    || normalized.contains("disabled")
+                    || normalized.contains("error")
+                    || normalized.contains("fail"))
+        }
+        Value::Object(obj) => {
+            let boolish_keys = ["online", "enabled", "active", "streaming", "available"];
+            for key in boolish_keys {
+                if let Some(value) = obj.get(key) {
+                    match value {
+                        Value::Bool(true) => return true,
+                        Value::Number(n) => {
+                            if n.as_f64().map(|v| v.is_finite() && v > 0.0).unwrap_or(false) {
+                                return true;
+                            }
+                        }
+                        Value::String(s) => {
+                            let normalized = s.trim().to_lowercase();
+                            if normalized == "true"
+                                || normalized == "online"
+                                || normalized == "active"
+                                || normalized == "enabled"
+                            {
+                                return true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let state_text = obj
+                .get("state")
+                .or_else(|| obj.get("status"))
+                .or_else(|| obj.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+
+            !state_text.is_empty()
+                && (state_text.contains("online")
+                    || state_text.contains("active")
+                    || state_text.contains("enabled")
+                    || state_text.contains("ready")
+                    || state_text.contains("stream"))
+                && !(state_text.contains("offline")
+                    || state_text.contains("disabled")
+                    || state_text.contains("error")
+                    || state_text.contains("fail"))
+        }
+        _ => false,
+    }
+}
+
+async fn fetch_athena_camera_info(host: &str, port: u16) -> (bool, Option<String>, Option<String>, Value) {
+    let base_url = build_base_url(host, port);
+    let state_url = format!("{base_url}/athena-camera/state");
+    let stream_url = format!("{base_url}/athena-camera/stream");
+
+    let probe_stream_reachable = async {
+        match http_client()
+            .get(&stream_url)
+            .header("Accept", "multipart/x-mixed-replace, image/*, */*;q=0.8")
+            .timeout(Duration::from_millis(2500))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let code = resp.status().as_u16();
+                code == 200 || code == 206 || code == 302 || code == 401 || code == 403
+            }
+            Err(_) => false,
+        }
+    };
+
+    let mut parsed = Value::Null;
+
+    let response = match http_client()
+        .get(&state_url)
+        .header("Accept", "application/json, text/plain;q=0.9, */*;q=0.8")
+        .timeout(Duration::from_millis(4500))
+        .send()
+        .await
+    {
+        Ok(resp) => Some(resp),
+        Err(_) => None,
+    };
+
+    if let Some(response) = response {
+        if response.status().as_u16() != 200 {
+            parsed = json!({ "status": response.status().as_u16() });
+        } else {
+            let text = response.text().await.unwrap_or_default();
+            parsed = if text.trim().is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text))
+            };
+        }
+    }
+
+    let stream_reachable = probe_stream_reachable.await;
+    let online = resolve_athena_camera_online(&parsed) || stream_reachable;
+    let stream_url = if online { Some(stream_url) } else { None };
+    let snapshot_url = parsed
+        .get("snapshotUrl")
+        .and_then(|v| v.as_str())
+        .map(|v| absolutize_nanodlp_url(v, host, port));
+
+    (online, stream_url, snapshot_url, parsed)
+}
+
 // ---------------------------------------------------------------------------
 // Network interface enumeration
 // ---------------------------------------------------------------------------
@@ -1932,10 +2056,33 @@ async fn nanodlp_printer_webcam_info(payload: &Value) -> (u16, Value) {
 
     let port = resolve_port(payload.get("port"), parsed.1);
 
-    match fetch_nanodlp_status(&parsed.0, port, 5000).await {
-        Some(status) => {
-            let candidates = resolve_nanodlp_webcam_candidates(&status, &parsed.0, port);
-            let snapshot_url = candidates
+    let status = fetch_nanodlp_status(&parsed.0, port, 5000).await;
+    let camera_info = fetch_athena_camera_info(&parsed.0, port).await;
+
+    let (camera_online, camera_stream_url, camera_snapshot_url, camera_state_payload) = camera_info;
+
+    match status {
+        Some(status_payload) => {
+            let status_candidates = resolve_nanodlp_webcam_candidates(&status_payload, &parsed.0, port);
+            let had_status_candidates = !status_candidates.is_empty();
+            let mut candidates = Vec::new();
+            if let Some(stream) = camera_stream_url.clone() {
+                candidates.push(stream);
+            }
+            if let Some(snapshot) = camera_snapshot_url.clone() {
+                candidates.push(snapshot);
+            }
+            candidates.extend(status_candidates);
+
+            let mut deduped = Vec::new();
+            let mut seen = HashSet::new();
+            for candidate in candidates {
+                if seen.insert(candidate.clone()) {
+                    deduped.push(candidate);
+                }
+            }
+
+            let snapshot_url = deduped
                 .iter()
                 .find(|value| {
                     let v = value.to_lowercase();
@@ -1945,45 +2092,81 @@ async fn nanodlp_printer_webcam_info(payload: &Value) -> (u16, Value) {
                         || v.contains(".png")
                 })
                 .cloned()
-                .or_else(|| candidates.first().cloned());
-            let stream_url = candidates
+                .or_else(|| deduped.first().cloned());
+            let stream_url = deduped
                 .iter()
                 .find(|value| {
                     let v = value.to_lowercase();
                     v.contains("stream") || v.contains("mjpeg") || v.contains("video")
                 })
                 .cloned()
-                .or_else(|| candidates.first().cloned());
+                .or_else(|| deduped.first().cloned());
 
             (
                 200,
                 json!({
                     "ok": true,
-                    "available": !candidates.is_empty(),
+                    "available": !deduped.is_empty(),
                     "ipAddress": parsed.0,
                     "port": port,
                     "streamUrl": stream_url,
                     "snapshotUrl": snapshot_url,
-                    "candidates": candidates,
-                    "message": if !candidates.is_empty() { "Webcam endpoint detected." } else { "No webcam endpoint reported by this printer." },
-                    "status": status,
+                    "candidates": deduped,
+                    "message": if camera_online {
+                        "Athena camera stream available."
+                    } else if had_status_candidates {
+                        "Webcam endpoint detected."
+                    } else {
+                        "No webcam endpoint reported by this printer."
+                    },
+                    "status": status_payload,
+                    "cameraState": camera_state_payload,
                 }),
             )
         }
-        None => (
-            200,
-            json!({
-                "ok": false,
-                "available": false,
-                "ipAddress": parsed.0,
-                "port": port,
-                "streamUrl": Value::Null,
-                "snapshotUrl": Value::Null,
-                "candidates": [],
-                "message": "NanoDLP status endpoint unavailable.",
-                "status": Value::Null,
-            }),
-        ),
+        None => {
+            if camera_online {
+                let mut candidates = Vec::new();
+                if let Some(stream) = camera_stream_url.clone() {
+                    candidates.push(stream);
+                }
+                if let Some(snapshot) = camera_snapshot_url.clone() {
+                    candidates.push(snapshot);
+                }
+
+                (
+                    200,
+                    json!({
+                        "ok": true,
+                        "available": !candidates.is_empty(),
+                        "ipAddress": parsed.0,
+                        "port": port,
+                        "streamUrl": camera_stream_url,
+                        "snapshotUrl": camera_snapshot_url,
+                        "candidates": candidates,
+                        "message": "Athena camera stream available.",
+                        "status": Value::Null,
+                        "cameraState": camera_state_payload,
+                    }),
+                )
+            } else {
+                (
+                    200,
+                    json!({
+                        "ok": false,
+                        "available": false,
+                        "ipAddress": parsed.0,
+                        "port": port,
+                        "streamUrl": Value::Null,
+                        "snapshotUrl": Value::Null,
+                        "candidates": [],
+                        "message": "No camera endpoint available from this printer.",
+                        "status": Value::Null,
+                        "cameraState": camera_state_payload,
+                    }),
+                )
+            }
+        }
     }
 }
 

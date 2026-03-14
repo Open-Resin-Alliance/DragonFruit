@@ -69,6 +69,7 @@ export type PrinterMonitoringSnapshot = {
   progressPct: number | null;
   currentLayer: number | null;
   totalLayers: number | null;
+  plateId: number | null;
   jobName: string | null;
   etaSec: number | null;
 };
@@ -147,6 +148,7 @@ const GENERIC_MONITORING_STUB_ADAPTER: ProfileMonitoringUiAdapter = {
     progressPct: null,
     currentLayer: null,
     totalLayers: null,
+    plateId: null,
     jobName: null,
     etaSec: null,
   }),

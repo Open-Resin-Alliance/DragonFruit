@@ -371,6 +371,107 @@ function resolveNanoDlpWebcamCandidates(status: Record<string, unknown>, host: s
   return Array.from(new Set(candidates));
 }
 
+function resolveAthenaCameraOnline(statePayload: unknown): boolean {
+  if (statePayload == null) return false;
+  if (typeof statePayload === 'boolean') return statePayload;
+  if (typeof statePayload === 'number') return Number.isFinite(statePayload) && statePayload > 0;
+  if (typeof statePayload === 'string') {
+    const normalized = statePayload.trim().toLowerCase();
+    return /online|active|enabled|ready|stream/.test(normalized) && !/offline|disabled|error|fail/.test(normalized);
+  }
+
+  if (typeof statePayload === 'object') {
+    const obj = statePayload as Record<string, unknown>;
+    const boolish = [obj.online, obj.enabled, obj.active, obj.streaming, obj.available];
+    for (const value of boolish) {
+      if (value === true) return true;
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) return true;
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true' || normalized === 'online' || normalized === 'active' || normalized === 'enabled') return true;
+      }
+    }
+
+    const stateText = String(obj.state ?? obj.status ?? obj.message ?? '').trim().toLowerCase();
+    if (stateText && /online|active|enabled|ready|stream/.test(stateText) && !/offline|disabled|error|fail/.test(stateText)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function resolveAthenaCameraFeedInfo(host: string, port: number): Promise<{
+  online: boolean;
+  streamUrl: string | null;
+  snapshotUrl: string | null;
+  statePayload: unknown;
+}> {
+  const baseUrl = buildNanoDlpBaseUrl(host, port);
+  const stateUrl = `${baseUrl}/athena-camera/state`;
+  const streamUrl = `${baseUrl}/athena-camera/stream`;
+
+  const probeStreamReachable = async (): Promise<boolean> => {
+    try {
+      const response = await fetch(streamUrl, {
+        method: 'GET',
+        headers: { Accept: 'multipart/x-mixed-replace, image/*, */*;q=0.8' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(2500),
+      });
+
+      // Some setups may challenge auth; that still proves endpoint exists.
+      const reachable = response.status === 200 || response.status === 206 || response.status === 302 || response.status === 401 || response.status === 403;
+      try {
+        await response.body?.cancel?.();
+      } catch {
+        // Ignore cancellation errors for stream bodies.
+      }
+      return reachable;
+    } catch {
+      return false;
+    }
+  };
+
+  let parsedState: unknown = null;
+
+  try {
+    const response = await fetch(stateUrl, {
+      method: 'GET',
+      headers: { Accept: 'application/json, text/plain;q=0.9, */*;q=0.8' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(4500),
+    });
+
+    if (response.status !== 200) {
+      parsedState = { status: response.status };
+    } else {
+      const text = await response.text().catch(() => '');
+      parsedState = (() => {
+        if (!text.trim()) return null;
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
+      })();
+    }
+  } catch {
+    parsedState = null;
+  }
+
+  const streamReachable = await probeStreamReachable();
+  const online = resolveAthenaCameraOnline(parsedState) || streamReachable;
+  const snapshotCandidate = typeof (parsedState as any)?.snapshotUrl === 'string' ? (parsedState as any).snapshotUrl : null;
+
+  return {
+    online,
+    streamUrl: online ? streamUrl : null,
+    snapshotUrl: snapshotCandidate ? toAbsoluteNanoDlpUrl(snapshotCandidate, host, port) : null,
+    statePayload: parsedState,
+  };
+}
+
 function normalizeJobName(value: string): string {
   return value
     .trim()
@@ -1304,8 +1405,12 @@ async function handleNanoDlpPrinterWebcamInfo(payload: unknown): Promise<Handler
   const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
 
   try {
-    const status = await fetchNanoDlpStatus(parsedHost.host, port, 5000);
-    if (!status) {
+    const [status, athenaCamera] = await Promise.all([
+      fetchNanoDlpStatus(parsedHost.host, port, 5000),
+      resolveAthenaCameraFeedInfo(parsedHost.host, port),
+    ]);
+
+    if (!status && !athenaCamera.online) {
       return {
         status: 200,
         body: {
@@ -1316,13 +1421,23 @@ async function handleNanoDlpPrinterWebcamInfo(payload: unknown): Promise<Handler
           streamUrl: null,
           snapshotUrl: null,
           candidates: [],
-          message: 'NanoDLP status endpoint unavailable.',
+          message: 'No camera endpoint available from this printer.',
           status: null,
+          cameraState: athenaCamera.statePayload,
         },
       };
     }
 
-    const candidates = resolveNanoDlpWebcamCandidates(status, parsedHost.host, port);
+    const statusCandidates = status
+      ? resolveNanoDlpWebcamCandidates(status, parsedHost.host, port)
+      : [];
+
+    const candidates = Array.from(new Set([
+      ...(athenaCamera.streamUrl ? [athenaCamera.streamUrl] : []),
+      ...(athenaCamera.snapshotUrl ? [athenaCamera.snapshotUrl] : []),
+      ...statusCandidates,
+    ]));
+
     const snapshotUrl = candidates.find((value) => /snapshot|jpg|jpeg|png/i.test(value)) ?? candidates[0] ?? null;
     const streamUrl = candidates.find((value) => /stream|mjpeg|video/i.test(value)) ?? candidates[0] ?? null;
 
@@ -1336,10 +1451,13 @@ async function handleNanoDlpPrinterWebcamInfo(payload: unknown): Promise<Handler
         streamUrl,
         snapshotUrl,
         candidates,
-        message: candidates.length > 0
-          ? 'Webcam endpoint detected.'
-          : 'No webcam endpoint reported by this printer.',
-        status,
+        message: athenaCamera.online
+          ? 'Athena camera stream available.'
+          : candidates.length > 0
+            ? 'Webcam endpoint detected.'
+            : 'No webcam endpoint reported by this printer.',
+        status: status ?? null,
+        cameraState: athenaCamera.statePayload,
       },
     };
   } catch (error) {

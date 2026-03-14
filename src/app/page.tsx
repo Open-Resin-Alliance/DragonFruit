@@ -2509,6 +2509,45 @@ export default function Home() {
     const seconds = Math.floor(totalSeconds % 60);
     return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
   }, [printingMonitorSnapshot?.etaSec]);
+  const printingMonitorPlateId = React.useMemo(() => {
+    const candidate = printingMonitorSnapshot?.plateId ?? printingReadyPlateId;
+    if (candidate == null || !Number.isFinite(candidate) || candidate <= 0) return null;
+    return Math.round(candidate);
+  }, [printingMonitorSnapshot?.plateId, printingReadyPlateId]);
+  const printingMonitorThumbnailUrl = React.useMemo(() => {
+    if (!monitoringDevice || printingMonitorPlateId == null) return null;
+    const host = (monitoringDevice.ipAddress || '').trim();
+    if (!host) return null;
+    const port = monitoringDevice.port || 80;
+    const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
+    return `${base}/static/plates/${printingMonitorPlateId}/3d.png`;
+  }, [monitoringDevice, printingMonitorPlateId]);
+  const printingMonitorWebcamUrl = React.useMemo(() => {
+    return printingMonitorWebcamInfo?.streamUrl ?? printingMonitorWebcamInfo?.snapshotUrl ?? null;
+  }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl]);
+  const shouldRotateMonitorWebcam = React.useMemo(() => {
+    const fingerprint = [
+      activePrinterProfile?.manufacturer,
+      activePrinterProfile?.name,
+      monitoringDevice?.displayName,
+      monitoringDevice?.hostName,
+      monitoringDevice?.ipAddress,
+    ]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    const isNanodlp = activePrinterProfile?.networkSupport === 'nanodlp';
+    if (!isNanodlp) return false;
+    return /\bathena\b/.test(fingerprint);
+  }, [
+    activePrinterProfile?.manufacturer,
+    activePrinterProfile?.name,
+    activePrinterProfile?.networkSupport,
+    monitoringDevice?.displayName,
+    monitoringDevice?.hostName,
+    monitoringDevice?.ipAddress,
+  ]);
   const selectedPrinterHasActivePrint = React.useMemo(() => {
     const stateText = (selectedPrinterMonitorSnapshot?.stateText ?? '').toLowerCase();
     return Boolean(
@@ -8957,7 +8996,7 @@ export default function Home() {
           />
 
           <div
-            className="relative z-[1] w-[min(680px,92vw)] max-h-[86vh] overflow-auto rounded-xl border shadow-2xl"
+            className="relative z-[1] w-[min(1120px,94vw)] max-h-[88vh] overflow-auto rounded-xl border shadow-2xl"
             style={{
               borderColor: 'var(--border-subtle)',
               background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
@@ -8984,78 +9023,106 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                <span>{printingMonitorSnapshot?.stateText ?? 'Polling printer status…'}</span>
-                <span>{isPrintingMonitorPolling ? 'Live' : 'Idle'}</span>
-              </div>
-
-              {printingMonitorSnapshot?.progressPct != null && (
-                <>
-                  <div
-                    className="h-2 w-full rounded-full border overflow-hidden"
-                    style={{
-                      borderColor: 'var(--border-subtle)',
-                      background: 'color-mix(in srgb, var(--surface-2), black 20%)',
-                    }}
-                  >
-                    <div
-                      className="h-full rounded-full transition-[width] duration-200 ease-out"
-                      style={{
-                        width: `${Math.max(0, Math.min(100, printingMonitorSnapshot.progressPct)).toFixed(2)}%`,
-                        background: 'linear-gradient(90deg, #60a5fa, #22d3ee)',
-                      }}
-                    />
+            <div className="p-4 grid gap-3 lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)] lg:auto-rows-fr">
+              <section className="grid gap-3 grid-rows-[auto_1fr]">
+                <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
+                  <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
+                    Print Preview
                   </div>
-                  <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    Progress {printingMonitorSnapshot.progressPct.toFixed(1)}%
+                  {printingMonitorThumbnailUrl ? (
+                    <div className="mt-1.5 rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
+                      <div className="aspect-[4/3] w-full">
+                        <img
+                          src={printingMonitorThumbnailUrl}
+                          alt="Active print thumbnail"
+                          className="block h-full w-full object-contain"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] px-1 pb-1" style={{ color: 'var(--text-muted)' }}>
+                      No print thumbnail available yet.
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-md border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
+                  <div className="flex items-center justify-between gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <span>{printingMonitorSnapshot?.stateText ?? 'Polling printer status…'}</span>
+                    <span>{isPrintingMonitorPolling ? 'Live' : 'Idle'}</span>
                   </div>
-                </>
-              )}
 
-              <div className="grid grid-cols-3 gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                <div>
-                  Layer:{' '}
-                  <span style={{ color: 'var(--text-strong)' }}>
-                    {printingMonitorSnapshot?.currentLayer != null && printingMonitorSnapshot?.totalLayers != null
-                      ? `${printingMonitorSnapshot.currentLayer}/${printingMonitorSnapshot.totalLayers}`
-                      : '—'}
-                  </span>
-                </div>
-                <div>
-                  ETA:{' '}
-                  <span style={{ color: 'var(--text-strong)' }}>{printingMonitorEtaLabel}</span>
-                </div>
-                <div className="truncate" title={printingMonitorSnapshot?.jobName ?? undefined}>
-                  Job:{' '}
-                  <span style={{ color: 'var(--text-strong)' }}>{printingMonitorSnapshot?.jobName ?? '—'}</span>
-                </div>
-              </div>
+                  {printingMonitorSnapshot?.progressPct != null && (
+                    <>
+                      <div
+                        className="h-2 w-full rounded-full border overflow-hidden"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-2), black 20%)',
+                        }}
+                      >
+                        <div
+                          className="h-full rounded-full transition-[width] duration-200 ease-out"
+                          style={{
+                            width: `${Math.max(0, Math.min(100, printingMonitorSnapshot.progressPct)).toFixed(2)}%`,
+                            background: 'linear-gradient(90deg, #60a5fa, #22d3ee)',
+                          }}
+                        />
+                      </div>
+                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                        Progress {printingMonitorSnapshot.progressPct.toFixed(1)}%
+                      </div>
+                    </>
+                  )}
 
-              {printingMonitorError && (
-                <div className="text-[11px]" style={{ color: '#fca5a5' }}>
-                  {printingMonitorError}
-                </div>
-              )}
+                  <div className="grid grid-cols-2 gap-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                      Layer:{' '}
+                      <span style={{ color: 'var(--text-strong)' }}>
+                        {printingMonitorSnapshot?.currentLayer != null && printingMonitorSnapshot?.totalLayers != null
+                          ? `${printingMonitorSnapshot.currentLayer}/${printingMonitorSnapshot.totalLayers}`
+                          : '—'}
+                      </span>
+                    </div>
+                    <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                      ETA:{' '}
+                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorEtaLabel}</span>
+                    </div>
+                    <div className="col-span-2 rounded-md border px-2.5 py-2 truncate" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }} title={printingMonitorSnapshot?.jobName ?? undefined}>
+                      Job:{' '}
+                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorSnapshot?.jobName ?? '—'}</span>
+                    </div>
+                  </div>
 
-              <div className="pt-1 border-t" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  {printingMonitorError && (
+                    <div className="text-[11px] rounded-md border px-2.5 py-2" style={{ color: '#fca5a5', borderColor: 'color-mix(in srgb, #fca5a5, var(--border-subtle) 60%)' }}>
+                      {printingMonitorError}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="rounded-md border p-2 flex flex-col min-h-[420px] h-full" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
+                <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
                   Webcam
                 </div>
-                {printingMonitorWebcamInfo?.available && (printingMonitorWebcamInfo.snapshotUrl || printingMonitorWebcamInfo.streamUrl) ? (
-                  <div className="mt-1.5 rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <img
-                      src={printingMonitorWebcamInfo.snapshotUrl ?? printingMonitorWebcamInfo.streamUrl ?? ''}
-                      alt="Printer webcam preview"
-                      className="block w-full h-[220px] object-cover"
-                    />
+                {printingMonitorWebcamInfo?.available && printingMonitorWebcamUrl ? (
+                  <div className="mt-1.5 rounded-md border overflow-hidden flex-1 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
+                    <div className="h-full w-full flex items-center justify-center p-2">
+                      <img
+                        src={printingMonitorWebcamUrl}
+                        alt="Printer webcam preview"
+                        className="block max-h-full max-w-full object-contain"
+                        style={{ transform: shouldRotateMonitorWebcam ? 'rotate(90deg)' : undefined }}
+                      />
+                    </div>
                   </div>
                 ) : (
-                  <div className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  <div className="mt-1 text-[11px] px-1 pb-1" style={{ color: 'var(--text-muted)' }}>
                     {printingMonitorWebcamInfo?.message ?? 'No webcam feed reported yet.'}
                   </div>
                 )}
-              </div>
+              </section>
             </div>
           </div>
         </div>
