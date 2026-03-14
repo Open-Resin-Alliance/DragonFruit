@@ -633,9 +633,12 @@ export default function Home() {
   const printingTargetMaterialsCacheRef = React.useRef<Map<string, FleetUploadMaterialOption[]>>(new Map());
   const [printingMonitorSnapshot, setPrintingMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const [printingMonitorWebcamInfo, setPrintingMonitorWebcamInfo] = React.useState<PrinterMonitoringWebcamInfo | null>(null);
+  const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
+  const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
   const [isPrintingMonitorPolling, setIsPrintingMonitorPolling] = React.useState(false);
   const [printingMonitorError, setPrintingMonitorError] = React.useState<string | null>(null);
   const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
+  const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
@@ -2548,6 +2551,14 @@ export default function Home() {
     monitoringDevice?.hostName,
     monitoringDevice?.ipAddress,
   ]);
+  const monitorWebcamDisplayAspectRatio = React.useMemo(() => {
+    if (printingMonitorWebcamAspectRatio == null || !Number.isFinite(printingMonitorWebcamAspectRatio) || printingMonitorWebcamAspectRatio <= 0) {
+      return null;
+    }
+    return shouldRotateMonitorWebcam
+      ? (1 / printingMonitorWebcamAspectRatio)
+      : printingMonitorWebcamAspectRatio;
+  }, [printingMonitorWebcamAspectRatio, shouldRotateMonitorWebcam]);
   const selectedPrinterHasActivePrint = React.useMemo(() => {
     const stateText = (selectedPrinterMonitorSnapshot?.stateText ?? '').toLowerCase();
     return Boolean(
@@ -2941,6 +2952,40 @@ export default function Home() {
       cancelled = true;
     };
   }, [monitoringDevice, printingMonitoringAdapter, printingMonitorModalOpen]);
+
+  React.useEffect(() => {
+    setPrintingMonitorWebcamAspectRatio(null);
+  }, [printingMonitorWebcamUrl]);
+
+  React.useEffect(() => {
+    if (!printingMonitorModalOpen) {
+      setPrintingMonitorLeftColumnHeight(null);
+      return;
+    }
+
+    const column = printingMonitorLeftColumnRef.current;
+    if (!column) return;
+
+    const updateHeight = () => {
+      const measured = Math.max(0, Math.round(column.getBoundingClientRect().height));
+      setPrintingMonitorLeftColumnHeight((previous) => {
+        if (previous != null && Math.abs(previous - measured) <= 1) return previous;
+        return measured > 0 ? measured : previous;
+      });
+    };
+
+    updateHeight();
+    const resizeObserver = new ResizeObserver(() => {
+      updateHeight();
+    });
+    resizeObserver.observe(column);
+    window.addEventListener('resize', updateHeight);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateHeight);
+    };
+  }, [printingMonitorModalOpen]);
 
   const handleDownloadPrintArtifact = React.useCallback(async () => {
     if (!printingArtifact) return;
@@ -9023,8 +9068,8 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="p-4 grid gap-3 lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)] lg:auto-rows-fr">
-              <section className="grid gap-3 grid-rows-[auto_1fr]">
+            <div className="p-4 grid items-start gap-3 lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]">
+              <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
                 <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
                     Print Preview
@@ -9036,6 +9081,9 @@ export default function Home() {
                           src={printingMonitorThumbnailUrl}
                           alt="Active print thumbnail"
                           className="block h-full w-full object-contain"
+                          loading="eager"
+                          decoding="async"
+                          fetchPriority="high"
                         />
                       </div>
                     </div>
@@ -9102,19 +9150,63 @@ export default function Home() {
                 </div>
               </section>
 
-              <section className="rounded-md border p-2 flex flex-col min-h-[420px] h-full" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
+              <section
+                className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
+                  height: printingMonitorLeftColumnHeight != null ? `${printingMonitorLeftColumnHeight}px` : undefined,
+                }}
+              >
                 <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
                   Webcam
                 </div>
                 {printingMonitorWebcamInfo?.available && printingMonitorWebcamUrl ? (
-                  <div className="mt-1.5 rounded-md border overflow-hidden flex-1 min-h-[360px]" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
-                    <div className="h-full w-full flex items-center justify-center p-2">
-                      <img
-                        src={printingMonitorWebcamUrl}
-                        alt="Printer webcam preview"
-                        className="block max-h-full max-w-full object-contain"
-                        style={{ transform: shouldRotateMonitorWebcam ? 'rotate(90deg)' : undefined }}
-                      />
+                  <div className="mt-1.5 flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
+                    <div
+                      className="rounded-md border overflow-hidden h-full max-h-full max-w-full"
+                      style={{
+                        borderColor: 'var(--border-subtle)',
+                        background: 'color-mix(in srgb, var(--surface-1), #000 6%)',
+                      }}
+                    >
+                      <div
+                        className="h-full"
+                        style={monitorWebcamDisplayAspectRatio != null
+                          ? {
+                              width: 'auto',
+                              aspectRatio: String(monitorWebcamDisplayAspectRatio),
+                            }
+                          : {
+                              width: 'fit-content',
+                            }}
+                      >
+                        <img
+                          src={printingMonitorWebcamUrl}
+                          alt="Printer webcam preview"
+                          className="block h-full w-auto max-w-full object-contain"
+                          style={{
+                            transform: shouldRotateMonitorWebcam
+                              ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
+                              : undefined,
+                            transformOrigin: 'center center',
+                          }}
+                          onLoad={(event) => {
+                            const target = event.currentTarget;
+                            const naturalW = target.naturalWidth;
+                            const naturalH = target.naturalHeight;
+                            if (!Number.isFinite(naturalW) || !Number.isFinite(naturalH) || naturalW <= 0 || naturalH <= 0) return;
+                            const ratio = naturalW / naturalH;
+                            setPrintingMonitorWebcamAspectRatio((previous) => {
+                              if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
+                              return ratio;
+                            });
+                          }}
+                          loading="eager"
+                          decoding="async"
+                          fetchPriority="high"
+                        />
+                      </div>
                     </div>
                   </div>
                 ) : (
