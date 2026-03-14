@@ -32,6 +32,7 @@ import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
+import { shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
@@ -459,6 +460,11 @@ export function BranchPlacementController() {
         if (!isActive || stage !== 'awaitingBase') return;
 
         const handleClick = (e: MouseEvent) => {
+            if (shouldSuppressContactDiskHudPlacementCommit()) {
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
             const snapTarget = branchPlacementStore.getSnapTarget();
             if (!tipPosition || !tipNormal) return;
 

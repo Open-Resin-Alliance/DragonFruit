@@ -1,17 +1,19 @@
 import React from 'react';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useSyncExternalStore } from 'react';
-import { Trunk, Roots, Vec3 } from '../../types';
+import { Trunk, Roots } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import { validateBezierConstraints } from '../../Curves/BezierUtils';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
-import { setSelectedId } from '../../state';
+import { getSnapshot, setSelectedId, subscribe, updateTrunk } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
 
 interface TrunkRendererProps {
@@ -31,12 +33,16 @@ interface TrunkRendererProps {
     baseColor?: string;
     hoverColor?: string;
     selectedColor?: string;
+    onContactDiskHudHoverChange?: (hovered: boolean) => void;
 }
 
-export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, deferRootsToSceneBatch = false, deferContactConesToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd' }: TrunkRendererProps) {
+export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, isSelected, selectedId, dimNonSelected, isHovered: propHovered, suppressHover, isInteractable = true, deferStraightShaftsToSceneBatch = false, deferInteractionToSceneBatch = false, deferRootsToSceneBatch = false, deferContactConesToSceneBatch = false, hidePlateContactPrimitives = false, baseColor = '#ff8800', hoverColor, selectedColor = '#80fffd', onContactDiskHudHoverChange }: TrunkRendererProps) {
+    const { camera, scene, gl } = useThree();
+    const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
+    const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
 
     // Use universal highlight hook
     const { pickRef, visuals } = useHighlight({
@@ -68,6 +74,38 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
 
     const handlePointerOut = React.useCallback(() => {
         emitSupportModelPointerHover(null);
+    }, []);
+
+    const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
+        console.log('[TrunkDrag] HUD pointerDown fired | isSelected:', isSelected, '| hasCone:', !!trunk.contactCone);
+        if (!isSelected || !trunk.contactCone) return;
+        if (!isPrimaryPointerPress(e)) return;
+        console.log('[TrunkDrag] Starting drag session...');
+
+        dragSessionRef.current?.stop();
+        dragSessionRef.current = startContactDiskDragSession({
+            camera,
+            domElement: gl.domElement,
+            scene,
+            initialEvent: e,
+            modelId: trunk.modelId,
+            onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+                const latestTrunk = supportState.trunks[trunk.id];
+                if (!latestTrunk?.contactCone) return;
+                updateTrunk({
+                    ...latestTrunk,
+                    contactCone: recomputeContactConeForMovedDisk(latestTrunk.contactCone, point, surfaceNormal),
+                });
+            },
+            onEnd: () => {
+                dragSessionRef.current = null;
+            },
+        });
+    }, [camera, gl.domElement, isInteractable, isSelected, scene, supportState, trunk.id, trunk.contactCone]);
+
+    const handleContactDiskHudPointerUp = React.useCallback(() => {
+        dragSessionRef.current?.stop();
+        dragSessionRef.current = null;
     }, []);
 
     // --- Roots parameters for segment start calculation ---
@@ -203,6 +241,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     if (trunk.contactCone && !deferContactConesToSceneBatch) {
         coneRender = (
             <ContactConeRenderer
+                contactDiskId={trunk.contactCone.id}
                 pos={trunk.contactCone.pos}
                 normal={trunk.contactCone.normal}
                 surfaceNormal={trunk.contactCone.surfaceNormal}
@@ -216,6 +255,9 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                 socketJointId={trunk.contactCone.socketJointId}
                 isInteractable={isInteractable}
                 isParentSelected={isSelected}
+                onDiskHudHoverChange={onContactDiskHudHoverChange}
+                onDiskHudPointerDown={handleContactDiskHudPointerDown}
+                onDiskHudPointerUp={handleContactDiskHudPointerUp}
             />
         );
     }

@@ -14,6 +14,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
+import { shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 export function LeafPlacementController() {
     const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
@@ -324,6 +325,11 @@ export function LeafPlacementController() {
         if (!isActive || stage !== 'awaitingBase') return;
 
         const handleClick = (e: MouseEvent) => {
+            if (shouldSuppressContactDiskHudPlacementCommit()) {
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
             const snapTarget = leafPlacementStore.getSnapTarget();
             if (!snapTarget || !tipPosition || !surfaceNormal) return;
 

@@ -1,15 +1,18 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
 import { getConeCenterPosition, getConeQuaternion, getSocketPosition } from './contactConeUtils';
 import { getJointRadius } from '../../constants';
+import { subscribe, getSnapshot } from '../../state';
+import { handleContactDiskClick } from '../../interaction/clickHandlers';
 
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
 import { JointRenderer } from '../Joint/JointRenderer';
 
 interface ContactConeRendererProps {
+    contactDiskId?: string;
     pos: Vec3;                          // Contact point on model
     normal: Vec3;                       // Cone axis (points into model)
     surfaceNormal?: Vec3;               // Actual surface normal (for disk alignment)
@@ -31,6 +34,9 @@ interface ContactConeRendererProps {
     socketJointId?: string;
     isInteractable?: boolean;
     isParentSelected?: boolean;
+    onDiskHudHoverChange?: (hovered: boolean) => void;
+    onDiskHudPointerDown?: (e: any) => void;
+    onDiskHudPointerUp?: (e: any) => void;
 }
 
 /**
@@ -42,6 +48,7 @@ interface ContactConeRendererProps {
  * - Socket joint: Spherical joint at socket side (connects to shaft).
  */
 export function ContactConeRenderer({
+    contactDiskId,
     pos,
     normal,
     surfaceNormal,
@@ -60,8 +67,12 @@ export function ContactConeRenderer({
     isInteractable = true,
     isParentSelected = false,
     diskColor,
-    bodyColor
+    bodyColor,
+    onDiskHudHoverChange,
+    onDiskHudPointerDown,
+    onDiskHudPointerUp
 }: ContactConeRendererProps) {
+    const state = useSyncExternalStore(subscribe, getSnapshot);
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
     const length = profile.lengthMm;
@@ -69,7 +80,8 @@ export function ContactConeRenderer({
 
     // Resolve accurate colors logic
     const finalDiskColor = diskColor || color;
-    const finalBodyColor = bodyColor || color;
+    const isSelected = !!contactDiskId && state.selectedId === contactDiskId;
+    const finalBodyColor = bodyColor || (isSelected ? '#c11f61' : color);
 
     // Fallback: If no surfaceNormal provided, assume it aligns with cone axis
     const effectiveSurfaceNormal = surfaceNormal || normal;
@@ -108,6 +120,10 @@ export function ContactConeRenderer({
     // Calculate cone center (based on shifted start position)
     const center = getConeCenterPosition(coneStartPos, normal, profile);
     const quaternion = getConeQuaternion(normal);
+    const handleConeClick = (e: any) => {
+        if (!contactDiskId) return;
+        handleContactDiskClick(e, contactDiskId, isInteractable, isParentSelected, isSelected);
+    };
 
     // Socket joint position (at the large end of the cone)
     // const socketPos = getSocketPosition(coneStartPos, normal, profile);
@@ -120,6 +136,7 @@ export function ContactConeRenderer({
             {/* --- Contact Primitive (Disk) --- */}
             {profile.type === 'disk' && (
                 <ContactDiskRenderer
+                    id={contactDiskId}
                     pos={pos}
                     normal={effectiveSurfaceNormal} // Must use Surface Normal!
                     coneAxis={normal}               // The direction of the cone
@@ -133,6 +150,11 @@ export function ContactConeRenderer({
                     radialSegments={radialSegments}
                     sphereSegments={sphereSegments}
                     raycast={raycast}
+                    isInteractable={isInteractable}
+                    isParentSelected={isParentSelected}
+                    onHudHoverChange={onDiskHudHoverChange}
+                    onHudPointerDown={onDiskHudPointerDown}
+                    onHudPointerUp={onDiskHudPointerUp}
                 />
             )}
 
@@ -141,7 +163,7 @@ export function ContactConeRenderer({
                 position={[center.x, center.y, center.z]}
                 quaternion={quaternion}
             >
-                <mesh raycast={raycast}>
+                <mesh raycast={raycast} onClick={handleConeClick}>
                     {/* CylinderGeometry: radiusTop, radiusBottom, height, radialSegments */}
                     {/* Top = contact (small), Bottom = socket (large) in Y-up space */}
                     {/* After rotation, "top" faces the model */}
@@ -160,7 +182,7 @@ export function ContactConeRenderer({
             {/* --- Cone Tip Sphere (The Ball Joint at the Disk) --- */}
             {/* Renders at coneStartPos, size = contactRadius */}
             <group position={[coneStartPos.x, coneStartPos.y, coneStartPos.z]}>
-                <mesh raycast={raycast}>
+                <mesh raycast={raycast} onClick={handleConeClick}>
                     <sphereGeometry args={[contactRadius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
