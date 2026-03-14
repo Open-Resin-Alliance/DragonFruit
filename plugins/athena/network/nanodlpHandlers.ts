@@ -184,6 +184,25 @@ function normalizeMachineName(value: string): string {
     .trim();
 }
 
+function isNanoDlpFilterDebugEnabled(payload: unknown, requestedNetworkFilter: string | null): boolean {
+  if (typeof (payload as any)?.suppressNetworkFilterDebug === 'boolean') {
+    return !(payload as any).suppressNetworkFilterDebug;
+  }
+  if (typeof (payload as any)?.debugNetworkFilter === 'boolean') return (payload as any).debugNetworkFilter;
+  if (typeof (payload as any)?.debugDiscovery === 'boolean') return (payload as any).debugDiscovery;
+  if (requestedNetworkFilter && requestedNetworkFilter.trim().length > 0) return true;
+  return true;
+}
+
+function logNanoDlpFilterDebug(enabled: boolean, scope: string, details: Record<string, unknown>): void {
+  if (!enabled) return;
+  try {
+    console.info(`[Athena][NanoDLP][FilterDebug][${scope}]`, details);
+  } catch {
+    // no-op
+  }
+}
+
 function resolveKnownNetworkFilter(machineName: string): string | null {
   const normalizedMachineName = normalizeMachineName(machineName);
   if (!normalizedMachineName) return null;
@@ -232,16 +251,7 @@ async function resolveRequestedNetworkFilter(payload: unknown): Promise<string |
     ? (payload as any).networkFilter.trim()
     : '';
   if (explicitFilter.length > 0) return explicitFilter;
-
-  const rawHost = resolveNanoDlpRawHost(payload);
-  const parsedHost = rawHost.trim().length > 0 ? parseNanoDlpHostAndPort(rawHost) : null;
-  if (!parsedHost) return null;
-
-  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
-  const machineName = await fetchNanoDlpMachineName(parsedHost.host, port, 2500);
-  if (!machineName) return null;
-
-  return resolveKnownNetworkFilter(machineName);
+  return null;
 }
 
 async function resolveDeviceNetworkFilter(hostOrIp: string, port: number, timeoutMs: number): Promise<string | null> {
@@ -250,25 +260,86 @@ async function resolveDeviceNetworkFilter(hostOrIp: string, port: number, timeou
   return resolveKnownNetworkFilter(machineName);
 }
 
+async function resolveDeviceMachineName(hostOrIp: string, port: number, timeoutMs: number): Promise<string | null> {
+  const machineName = await fetchNanoDlpMachineName(hostOrIp, port, timeoutMs);
+  if (!machineName) return null;
+  return machineName.trim() || null;
+}
+
 async function probeNanoDlp(
   hostOrIp: string,
   port: number,
   timeoutMs: number = 5000,
   requestedModelHint: SupportedAthenaModel | null = null,
   requestedNetworkFilter: string | null = null,
+  debugFilter: boolean = false,
 ): Promise<NanoDlpDiscoveredDevice | null> {
   try {
     const status = await fetchNanoDlpStatus(hostOrIp, port, timeoutMs);
-    if (!status) return null;
+    if (!status) {
+      logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
+        hostOrIp,
+        port,
+        reason: 'status-unavailable',
+      });
+      return null;
+    }
 
     const supportedModel = resolveSupportedAthenaModel(status);
-    if (!supportedModel) return null;
-    if (!isSupportedAthenaModelMatch(supportedModel, requestedModelHint)) return null;
+    if (!supportedModel) {
+      logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
+        hostOrIp,
+        port,
+        reason: 'unsupported-model',
+        printerModel: resolveNanoDlpPrinterModel(status),
+      });
+      return null;
+    }
+    if (!isSupportedAthenaModelMatch(supportedModel, requestedModelHint)) {
+      logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
+        hostOrIp,
+        port,
+        reason: 'model-hint-mismatch',
+        supportedModel,
+        requestedModelHint,
+        printerModel: resolveNanoDlpPrinterModel(status),
+      });
+      return null;
+    }
 
     if (requestedNetworkFilter) {
-      const deviceFilter = await resolveDeviceNetworkFilter(hostOrIp, port, Math.max(1200, Math.min(timeoutMs, 4000)));
-      if (!deviceFilter) return null;
-      if (normalizeMachineName(deviceFilter) !== normalizeMachineName(requestedNetworkFilter)) return null;
+      const machineName = await resolveDeviceMachineName(hostOrIp, port, Math.max(1200, Math.min(timeoutMs, 4000)));
+      if (!machineName) {
+        logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
+          hostOrIp,
+          port,
+          reason: 'machine-name-unavailable',
+          requestedNetworkFilter,
+        });
+        return null;
+      }
+      const normalizedMachineName = normalizeMachineName(machineName);
+      const normalizedRequestedFilter = normalizeMachineName(requestedNetworkFilter);
+      if (normalizedMachineName !== normalizedRequestedFilter) {
+        logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
+          hostOrIp,
+          port,
+          reason: 'network-filter-mismatch',
+          machineName,
+          normalizedMachineName,
+          requestedNetworkFilter,
+          normalizedRequestedFilter,
+          printerModel: resolveNanoDlpPrinterModel(status),
+        });
+        return null;
+      }
+
+      logNanoDlpFilterDebug(debugFilter, 'probe/match', {
+        hostOrIp,
+        port,
+        machineName,
+        requestedNetworkFilter,
+      });
     }
 
     const hostName = resolveNanoDlpStatusHostName(status);
@@ -287,6 +358,11 @@ async function probeNanoDlp(
       firmwareVersion: status.Version != null ? String(status.Version) : '',
     };
   } catch {
+    logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
+      hostOrIp,
+      port,
+      reason: 'probe-exception',
+    });
     return null;
   }
 }
@@ -672,6 +748,14 @@ async function handleNanoDlpConnect(payload: unknown): Promise<HandlerResult> {
   const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
   const requestedModelHint = normalizeSupportedAthenaModelHint((payload as any)?.modelHint);
   const requestedNetworkFilter = await resolveRequestedNetworkFilter(payload);
+  const debugFilter = isNanoDlpFilterDebugEnabled(payload, requestedNetworkFilter);
+
+  logNanoDlpFilterDebug(debugFilter, 'connect/request', {
+    host: parsedHost.host,
+    port,
+    requestedModelHint,
+    requestedNetworkFilter,
+  });
 
   try {
     const status = await fetchNanoDlpStatus(parsedHost.host, port, 5000);
@@ -695,14 +779,44 @@ async function handleNanoDlpConnect(payload: unknown): Promise<HandlerResult> {
     const supportedModel = resolveSupportedAthenaModel(status);
     const printerModel = resolveNanoDlpPrinterModel(status);
     const deviceNetworkFilter = await resolveDeviceNetworkFilter(parsedHost.host, port, 3500);
+    const deviceMachineName = await resolveDeviceMachineName(parsedHost.host, port, 3500);
+    logNanoDlpFilterDebug(debugFilter, 'connect/candidate', {
+      host: parsedHost.host,
+      port,
+      supportedModel,
+      requestedModelHint,
+      printerModel,
+      requestedNetworkFilter,
+      deviceMachineName,
+      normalizedDeviceMachineName: deviceMachineName ? normalizeMachineName(deviceMachineName) : null,
+      normalizedRequestedNetworkFilter: requestedNetworkFilter ? normalizeMachineName(requestedNetworkFilter) : null,
+      deviceNetworkFilter,
+    });
 
     if (
       !supportedModel
       || !isSupportedAthenaModelMatch(supportedModel, requestedModelHint)
       || (requestedNetworkFilter
-        ? (!deviceNetworkFilter || normalizeMachineName(deviceNetworkFilter) !== normalizeMachineName(requestedNetworkFilter))
+        ? (!deviceMachineName || normalizeMachineName(deviceMachineName) !== normalizeMachineName(requestedNetworkFilter))
         : Boolean(ATHENA_NETWORK_FILTERS.length > 0 && !deviceNetworkFilter))
     ) {
+      logNanoDlpFilterDebug(debugFilter, 'connect/reject', {
+        host: parsedHost.host,
+        port,
+        reason: !supportedModel
+          ? 'unsupported-model'
+          : !isSupportedAthenaModelMatch(supportedModel, requestedModelHint)
+            ? 'model-hint-mismatch'
+            : requestedNetworkFilter
+              ? 'network-filter-mismatch'
+              : 'known-filter-missing',
+        requestedModelHint,
+        requestedNetworkFilter,
+        supportedModel,
+        printerModel,
+        deviceMachineName,
+        deviceNetworkFilter,
+      });
       const requestedLabel = requestedModelHint === 'athena-2' ? 'Athena 2' : requestedModelHint === 'athena' ? 'Athena' : null;
       return {
         status: 200,
@@ -734,6 +848,15 @@ async function handleNanoDlpConnect(payload: unknown): Promise<HandlerResult> {
     const hostName = resolveNanoDlpStatusHostName(status);
     const printerName = resolveNanoDlpPrinterName(status);
     const resolvedAddress = resolveNanoDlpResolvedAddress(status, parsedHost.host);
+
+    logNanoDlpFilterDebug(debugFilter, 'connect/accept', {
+      host: parsedHost.host,
+      port,
+      resolvedAddress,
+      printerModel,
+      requestedNetworkFilter,
+      deviceMachineName,
+    });
 
     return {
       status: 200,
@@ -784,6 +907,7 @@ async function handleNanoDlpDiscover(payload: unknown): Promise<HandlerResult> {
   const rawHost = resolveNanoDlpRawHost(payload);
   const requestedModelHint = normalizeSupportedAthenaModelHint((payload as any)?.modelHint);
   const requestedNetworkFilter = await resolveRequestedNetworkFilter(payload);
+  const debugFilter = isNanoDlpFilterDebugEnabled(payload, requestedNetworkFilter);
   const forcedHostParsed = rawHost.trim().length > 0 ? parseNanoDlpHostAndPort(rawHost) : null;
   const forcedHost = forcedHostParsed?.host ?? null;
   const forcedHostIsIpv4 = forcedHost ? isPlainIpv4(forcedHost) : false;
@@ -855,6 +979,17 @@ async function handleNanoDlpDiscover(payload: unknown): Promise<HandlerResult> {
   const requestedBatchStart = clampNumber((payload as any)?.batchStart, 0, 0, Number.MAX_SAFE_INTEGER);
   const requestedBatchSize = clampNumber((payload as any)?.batchSize, 96, 8, 256);
 
+  logNanoDlpFilterDebug(debugFilter, 'discover/request', {
+    scanScope,
+    requestedModelHint,
+    requestedNetworkFilter,
+    forcedHost,
+    targetPorts,
+    localTargetCount: localTargets.length,
+    subnetTargetCount: subnetTargets.length,
+    progressive,
+  });
+
   const foundByAddress = new Map<string, NanoDlpDiscoveredDevice>();
 
   if (localTargets.length > 0) {
@@ -865,6 +1000,7 @@ async function handleNanoDlpDiscover(payload: unknown): Promise<HandlerResult> {
         Math.max(probeTimeoutMs, 1500),
         requestedModelHint,
         requestedNetworkFilter,
+        debugFilter,
       );
       if (!result) return null;
       if (foundByAddress.has(result.ipAddress)) return null;
@@ -880,10 +1016,23 @@ async function handleNanoDlpDiscover(payload: unknown): Promise<HandlerResult> {
     const batchTargets = subnetTargets.slice(batchStart, batchEnd);
 
     await runWithConcurrency(batchTargets, subnetConcurrency, async (target) => {
-      const result = await probeNanoDlp(target.ipAddress, target.port, probeTimeoutMs, requestedModelHint, requestedNetworkFilter);
+      const result = await probeNanoDlp(target.ipAddress, target.port, probeTimeoutMs, requestedModelHint, requestedNetworkFilter, debugFilter);
       if (!result) return null;
-      if (foundByAddress.has(result.ipAddress)) return null;
+      if (foundByAddress.has(result.ipAddress)) {
+        logNanoDlpFilterDebug(debugFilter, 'discover/duplicate', {
+          phase: 'subnet-progressive',
+          ipAddress: result.ipAddress,
+          port: result.port,
+        });
+        return null;
+      }
       foundByAddress.set(result.ipAddress, result);
+      logNanoDlpFilterDebug(debugFilter, 'discover/accept', {
+        phase: 'subnet-progressive',
+        ipAddress: result.ipAddress,
+        port: result.port,
+        printerModel: result.printerModel,
+      });
       return result;
     });
 
@@ -910,17 +1059,35 @@ async function handleNanoDlpDiscover(payload: unknown): Promise<HandlerResult> {
   if (subnetTargets.length > 0) {
     await runWithConcurrency(subnetTargets, subnetConcurrency, async (target) => {
       if (foundByAddress.has(target.ipAddress)) return null;
-      const result = await probeNanoDlp(target.ipAddress, target.port, probeTimeoutMs, requestedModelHint, requestedNetworkFilter);
+      const result = await probeNanoDlp(target.ipAddress, target.port, probeTimeoutMs, requestedModelHint, requestedNetworkFilter, debugFilter);
       if (!result) return null;
 
       if (!foundByAddress.has(result.ipAddress)) {
         foundByAddress.set(result.ipAddress, result);
+        logNanoDlpFilterDebug(debugFilter, 'discover/accept', {
+          phase: 'subnet-full',
+          ipAddress: result.ipAddress,
+          port: result.port,
+          printerModel: result.printerModel,
+        });
         return result;
       }
 
+      logNanoDlpFilterDebug(debugFilter, 'discover/duplicate', {
+        phase: 'subnet-full',
+        ipAddress: result.ipAddress,
+        port: result.port,
+      });
       return null;
     });
   }
+
+  logNanoDlpFilterDebug(debugFilter, 'discover/summary', {
+    discoveredCount: foundByAddress.size,
+    scanScope,
+    scannedHosts: localHostCandidates.length + effectiveSubnetHostCandidates.length,
+    scannedEndpoints: localTargets.length + subnetTargets.length,
+  });
 
   return {
     status: 200,

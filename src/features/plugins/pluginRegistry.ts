@@ -326,6 +326,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
     antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
     networkSupport: value.networkSupport === 'nanodlp' ? 'nanodlp' : undefined,
+    networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),
     pixelSize,
     bitDepth: sanitizeBitDepth((value as any).bitDepth),

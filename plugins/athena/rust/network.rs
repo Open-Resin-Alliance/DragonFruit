@@ -292,6 +292,42 @@ fn normalize_machine_name(name: &str) -> String {
     normalize_model_name(name)
 }
 
+fn is_nanodlp_filter_debug_enabled(payload: &Value, requested_network_filter: Option<&str>) -> bool {
+    if let Some(v) = payload
+        .get("suppressNetworkFilterDebug")
+        .and_then(|v| v.as_bool())
+    {
+        return !v;
+    }
+
+    if let Some(v) = payload
+        .get("debugNetworkFilter")
+        .and_then(|v| v.as_bool())
+    {
+        return v;
+    }
+
+    if let Some(v) = payload
+        .get("debugDiscovery")
+        .and_then(|v| v.as_bool())
+    {
+        return v;
+    }
+
+    if requested_network_filter.map(|v| !v.trim().is_empty()).unwrap_or(false) {
+        return true;
+    }
+
+    true
+}
+
+fn log_nanodlp_filter_debug(scope: &str, enabled: bool, details: Value) {
+    if !enabled {
+        return;
+    }
+    eprintln!("[Athena][NanoDLP][FilterDebug][{}] {}", scope, details);
+}
+
 fn resolve_supported_athena_model(status: &Value) -> Option<&'static str> {
     let model = resolve_printer_model(status);
     if model.is_empty() {
@@ -386,16 +422,21 @@ async fn resolve_requested_network_filter(payload: &Value) -> Option<String> {
         return explicit;
     }
 
-    let raw_host = resolve_raw_host(payload);
-    let parsed = parse_host_and_port(&raw_host)?;
-    let port = resolve_port(payload.get("port"), parsed.1);
-    let machine_name = fetch_nanodlp_machine_name(&parsed.0, port, 2500).await?;
-    resolve_known_network_filter(&machine_name)
+    None
 }
 
 async fn resolve_device_network_filter(host: &str, port: u16, timeout_ms: u64) -> Option<String> {
     let machine_name = fetch_nanodlp_machine_name(host, port, timeout_ms).await?;
     resolve_known_network_filter(&machine_name)
+}
+
+async fn resolve_device_machine_name(host: &str, port: u16, timeout_ms: u64) -> Option<String> {
+    let machine_name = fetch_nanodlp_machine_name(host, port, timeout_ms).await?;
+    let trimmed = machine_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 fn resolve_address(status: &Value, fallback: &str) -> String {
@@ -1036,6 +1077,18 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
     let port = resolve_port(payload.get("port"), parsed.1);
     let requested_model_hint = normalize_model_hint(payload.get("modelHint"));
     let requested_network_filter = resolve_requested_network_filter(payload).await;
+    let debug_filter = is_nanodlp_filter_debug_enabled(payload, requested_network_filter.as_deref());
+
+    log_nanodlp_filter_debug(
+        "connect/request",
+        debug_filter,
+        json!({
+            "host": parsed.0,
+            "port": port,
+            "requestedModelHint": requested_model_hint,
+            "requestedNetworkFilter": requested_network_filter,
+        }),
+    );
 
     match fetch_nanodlp_status(&parsed.0, port, 5000).await {
         Some(status) => {
@@ -1057,17 +1110,61 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
                 })
                 .unwrap_or_default();
             let device_network_filter = resolve_device_network_filter(&parsed.0, port, 3500).await;
+            let device_machine_name = resolve_device_machine_name(&parsed.0, port, 3500).await;
+
+            log_nanodlp_filter_debug(
+                "connect/candidate",
+                debug_filter,
+                json!({
+                    "host": parsed.0,
+                    "port": port,
+                    "supportedModel": supported_model,
+                    "requestedModelHint": requested_model_hint,
+                    "printerModel": printer_model,
+                    "requestedNetworkFilter": requested_network_filter,
+                    "deviceMachineName": device_machine_name,
+                    "normalizedDeviceMachineName": device_machine_name.as_deref().map(normalize_machine_name),
+                    "normalizedRequestedNetworkFilter": requested_network_filter.as_deref().map(normalize_machine_name),
+                    "deviceNetworkFilter": device_network_filter,
+                }),
+            );
 
             if supported_model.is_none()
                 || !matches_model_hint(supported_model.unwrap_or(""), requested_model_hint)
                 || (requested_network_filter.is_some()
-                    && (device_network_filter.is_none()
-                        || normalize_machine_name(device_network_filter.as_deref().unwrap_or(""))
+                    && (device_machine_name.is_none()
+                        || normalize_machine_name(device_machine_name.as_deref().unwrap_or(""))
                             != normalize_machine_name(requested_network_filter.as_deref().unwrap_or(""))))
                 || (requested_network_filter.is_none()
                     && !athena_network_filters().is_empty()
                     && device_network_filter.is_none())
             {
+                let reason = if supported_model.is_none() {
+                    "unsupported-model"
+                } else if !matches_model_hint(supported_model.unwrap_or(""), requested_model_hint) {
+                    "model-hint-mismatch"
+                } else if requested_network_filter.is_some() {
+                    "network-filter-mismatch"
+                } else {
+                    "known-filter-missing"
+                };
+
+                log_nanodlp_filter_debug(
+                    "connect/reject",
+                    debug_filter,
+                    json!({
+                        "host": parsed.0,
+                        "port": port,
+                        "reason": reason,
+                        "requestedModelHint": requested_model_hint,
+                        "requestedNetworkFilter": requested_network_filter,
+                        "supportedModel": supported_model,
+                        "printerModel": printer_model,
+                        "deviceMachineName": device_machine_name,
+                        "deviceNetworkFilter": device_network_filter,
+                    }),
+                );
+
                 let requested_label = match requested_model_hint {
                     Some("athena-2") => Some("Athena 2"),
                     Some("athena") => Some("Athena"),
@@ -1173,6 +1270,7 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
     };
     let requested_model_hint = normalize_model_hint(payload.get("modelHint"));
     let requested_network_filter = resolve_requested_network_filter(payload).await;
+    let debug_filter = is_nanodlp_filter_debug_enabled(payload, requested_network_filter.as_deref());
 
     let raw_host = resolve_raw_host(payload);
     let forced_host_parsed = if raw_host.trim().is_empty() {
@@ -1317,6 +1415,21 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
     let batch_start = clamp_u64(payload.get("batchStart"), 0, 0, u64::MAX) as usize;
     let batch_size = clamp_u64(payload.get("batchSize"), 96, 8, 256) as usize;
 
+    log_nanodlp_filter_debug(
+        "discover/request",
+        debug_filter,
+        json!({
+            "scanScope": scan_scope,
+            "requestedModelHint": requested_model_hint,
+            "requestedNetworkFilter": requested_network_filter,
+            "forcedHost": forced_host,
+            "targetPorts": target_ports,
+            "localTargetCount": local_targets.len(),
+            "subnetTargetCount": subnet_targets.len(),
+            "progressive": progressive,
+        }),
+    );
+
     // Scan local hostnames with a longer minimum timeout
     let local_timeout = probe_timeout_ms.max(1500);
     let mut found = probe_batch(local_targets.clone(), local_concurrency, local_timeout).await;
@@ -1325,9 +1438,27 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
         for device in found {
             let host = device.get("ipAddress").and_then(|v| v.as_str()).unwrap_or("");
             let port = device.get("port").and_then(|v| v.as_u64()).and_then(|p| u16::try_from(p).ok()).unwrap_or(80);
-            let matched = resolve_device_network_filter(host, port, 2500).await
-                .map(|f| normalize_machine_name(&f) == normalize_machine_name(expected_filter))
+            let machine_name = resolve_device_machine_name(host, port, 2500).await;
+            let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
+            let normalized_expected = normalize_machine_name(expected_filter);
+            let matched = normalized_machine_name
+                .as_deref()
+                .map(|name| name == normalized_expected)
                 .unwrap_or(false);
+            log_nanodlp_filter_debug(
+                if matched { "discover/match" } else { "discover/reject" },
+                debug_filter,
+                json!({
+                    "phase": "local-hostnames",
+                    "host": host,
+                    "port": port,
+                    "machineName": machine_name,
+                    "normalizedMachineName": normalized_machine_name,
+                    "expectedFilter": expected_filter,
+                    "normalizedExpectedFilter": normalized_expected,
+                    "reason": if matched { "network-filter-match" } else { "network-filter-mismatch" },
+                }),
+            );
             if matched {
                 filtered.push(device);
             }
@@ -1363,9 +1494,27 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
             for device in subnet_found {
                 let host = device.get("ipAddress").and_then(|v| v.as_str()).unwrap_or("");
                 let port = device.get("port").and_then(|v| v.as_u64()).and_then(|p| u16::try_from(p).ok()).unwrap_or(80);
-                let matched = resolve_device_network_filter(host, port, 2500).await
-                    .map(|f| normalize_machine_name(&f) == normalize_machine_name(expected_filter))
+                let machine_name = resolve_device_machine_name(host, port, 2500).await;
+                let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
+                let normalized_expected = normalize_machine_name(expected_filter);
+                let matched = normalized_machine_name
+                    .as_deref()
+                    .map(|name| name == normalized_expected)
                     .unwrap_or(false);
+                log_nanodlp_filter_debug(
+                    if matched { "discover/match" } else { "discover/reject" },
+                    debug_filter,
+                    json!({
+                        "phase": "subnet-progressive",
+                        "host": host,
+                        "port": port,
+                        "machineName": machine_name,
+                        "normalizedMachineName": normalized_machine_name,
+                        "expectedFilter": expected_filter,
+                        "normalizedExpectedFilter": normalized_expected,
+                        "reason": if matched { "network-filter-match" } else { "network-filter-mismatch" },
+                    }),
+                );
                 if matched {
                     filtered.push(device);
                 }
@@ -1438,9 +1587,27 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
             for device in subnet_found {
                 let host = device.get("ipAddress").and_then(|v| v.as_str()).unwrap_or("");
                 let port = device.get("port").and_then(|v| v.as_u64()).and_then(|p| u16::try_from(p).ok()).unwrap_or(80);
-                let matched = resolve_device_network_filter(host, port, 2500).await
-                    .map(|f| normalize_machine_name(&f) == normalize_machine_name(expected_filter))
+                let machine_name = resolve_device_machine_name(host, port, 2500).await;
+                let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
+                let normalized_expected = normalize_machine_name(expected_filter);
+                let matched = normalized_machine_name
+                    .as_deref()
+                    .map(|name| name == normalized_expected)
                     .unwrap_or(false);
+                log_nanodlp_filter_debug(
+                    if matched { "discover/match" } else { "discover/reject" },
+                    debug_filter,
+                    json!({
+                        "phase": "subnet-full",
+                        "host": host,
+                        "port": port,
+                        "machineName": machine_name,
+                        "normalizedMachineName": normalized_machine_name,
+                        "expectedFilter": expected_filter,
+                        "normalizedExpectedFilter": normalized_expected,
+                        "reason": if matched { "network-filter-match" } else { "network-filter-mismatch" },
+                    }),
+                );
                 if matched {
                     filtered.push(device);
                 }

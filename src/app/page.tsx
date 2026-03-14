@@ -2557,13 +2557,8 @@ export default function Home() {
     if (printableConnectedPrinterFleet.length > 0) {
       return printableConnectedPrinterFleet;
     }
-
-    if (selectedKnownPrinterDevice) {
-      return [selectedKnownPrinterDevice];
-    }
-
     return [] as PrinterNetworkDevice[];
-  }, [printableConnectedPrinterFleet, selectedKnownPrinterDevice]);
+  }, [printableConnectedPrinterFleet]);
   const monitoringDevice = React.useMemo(() => {
     if (monitorSelectableDevices.length > 0) {
       return monitorSelectableDevices.find((device) => device.id === printingMonitorDeviceId)
@@ -2572,19 +2567,8 @@ export default function Home() {
         ?? monitorSelectableDevices[0]
         ?? null;
     }
-
-    const fallbackHost = (activePrinterProfile?.network?.ipAddress || '').trim();
-    if (!fallbackHost) return null;
-
-    return {
-      id: 'profile-network-fallback',
-      displayName: activePrinterProfile?.name ?? 'Selected printer',
-      hostName: '',
-      ipAddress: fallbackHost,
-      port: 80,
-      connected: false,
-    };
-  }, [activePrinterProfile?.activeNetworkDeviceId, activePrinterProfile?.name, activePrinterProfile?.network?.ipAddress, monitorSelectableDevices, printingMonitorDeviceId, printingTargetDevice?.id]);
+    return null;
+  }, [activePrinterProfile?.activeNetworkDeviceId, monitorSelectableDevices, printingMonitorDeviceId, printingTargetDevice?.id]);
   const printingTargetMaterialGroups = React.useMemo(() => {
     const groups = new Map<string, FleetUploadMaterialOption[]>();
     for (const material of printingTargetMaterialOptions) {
@@ -2764,6 +2748,7 @@ export default function Home() {
     selectedPrinterMonitorSnapshot?.isPrinting,
     selectedPrinterMonitorSnapshot?.pauseLatched,
   ]);
+  const hasConnectedMonitorTarget = printableConnectedPrinterFleet.length > 0;
   const showTopbarMonitorButton = React.useMemo(() => {
     const hasMonitoring = Boolean(
       printingMonitoringAdapter.available
@@ -2772,8 +2757,9 @@ export default function Home() {
       && activePrinterProfile?.networkSupport === 'nanodlp',
     );
     if (!hasMonitoring) return false;
+    if (!hasConnectedMonitorTarget) return false;
     return true;
-  }, [activePrinterProfile?.networkSupport, printingMonitoringAdapter]);
+  }, [activePrinterProfile?.networkSupport, hasConnectedMonitorTarget, printingMonitoringAdapter]);
 
   // Best-effort background cleanup of stale DragonFruit temp artifacts from prior runs.
   React.useEffect(() => {
@@ -2820,6 +2806,12 @@ export default function Home() {
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!showTopbarMonitorButton && printingMonitorModalOpen) {
+      setPrintingMonitorModalOpen(false);
+    }
+  }, [printingMonitorModalOpen, showTopbarMonitorButton]);
 
   React.useEffect(() => {
     if (!activePrinterProfile || activePrinterProfile.networkSupport !== 'nanodlp') {

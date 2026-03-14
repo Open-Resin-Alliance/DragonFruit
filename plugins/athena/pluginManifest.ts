@@ -179,6 +179,9 @@ export const ATHENA_PLUGIN_MANIFEST = {
         outputFormat,
       },
       networkSupport: (preset as any).networkSupport === 'nanodlp' ? 'nanodlp' as const : undefined,
+      networkFilter: typeof (preset as any).networkFilter === 'string' && (preset as any).networkFilter.trim().length > 0
+        ? (preset as any).networkFilter.trim()
+        : undefined,
     };
   }) as PrinterPreset[],
   materialTemplates: [],

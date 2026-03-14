@@ -63,6 +63,7 @@ export type PrinterPreset = {
   imageAssetPath?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
@@ -87,6 +88,7 @@ export type PrinterProfile = {
   imageDataUrl?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
@@ -206,6 +208,12 @@ const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
 function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
   return undefined;
+}
+
+function sanitizeNetworkFilter(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddress = ''): PrinterNetworkConnectionState {
@@ -428,6 +436,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   imageDataUrl: preset.imageAssetPath,
   antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
   networkSupport: normalizeNetworkSupport(preset.networkSupport),
+  networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
   platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
   pixelSize: sanitizePixelSize((preset as any).pixelSize),
   bitDepth: sanitizeBitDepth((preset as any).bitDepth),
@@ -563,6 +572,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
             ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
           networkSupport,
+          networkFilter: sanitizeNetworkFilter((profile as any).networkFilter) ?? sanitizeNetworkFilter((matchedPreset as any)?.networkFilter),
           platformBadge: sanitizePlatformBadge((profile as any).platformBadge) ?? sanitizePlatformBadge((matchedPreset as any)?.platformBadge),
           pixelSize: sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize),
           bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
@@ -856,6 +866,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     imageDataUrl: partial?.imageDataUrl,
     antiAliasing: normalizeAntiAliasingSupport(partial?.antiAliasing),
     networkSupport,
+    networkFilter: sanitizeNetworkFilter(partial?.networkFilter),
     platformBadge: sanitizePlatformBadge(partial?.platformBadge),
     pixelSize: sanitizePixelSize(partial?.pixelSize),
     bitDepth: sanitizeBitDepth(partial?.bitDepth),
@@ -916,6 +927,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     imageDataUrl: preset.imageAssetPath,
     antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
     networkSupport: normalizeNetworkSupport(preset.networkSupport),
+    networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
     platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
@@ -994,6 +1006,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       networkSupport: updates.networkSupport !== undefined
         ? normalizeNetworkSupport(updates.networkSupport)
         : profile.networkSupport,
+      networkFilter: updates.networkFilter !== undefined
+        ? sanitizeNetworkFilter(updates.networkFilter)
+        : profile.networkFilter,
       platformBadge: updates.platformBadge !== undefined
         ? sanitizePlatformBadge(updates.platformBadge)
         : profile.platformBadge,

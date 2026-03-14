@@ -149,6 +149,14 @@ export function ProfileSettingsModal({
   initialTab = 'printer',
   openPrinterLibraryToken = 0,
 }: ProfileSettingsModalProps) {
+  const logNetworkScanDebug = React.useCallback((scope: string, details: Record<string, unknown>) => {
+    try {
+      console.info(`[NetworkSettings][AutoScan][${scope}]`, details);
+    } catch {
+      // no-op
+    }
+  }, []);
+
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const [selectedPrinterId, setSelectedPrinterId] = React.useState<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = React.useState<string | null>(null);
@@ -444,6 +452,130 @@ export function ProfileSettingsModal({
   const selectedPrinterResolvedId = selectedPrinter?.id ?? '';
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
   const selectedNanodlpHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
+  const selectedPrinterPreset = React.useMemo(() => {
+    if (!selectedPrinter) return null;
+    const presetId = resolveOfficialPresetIdFromProfile(selectedPrinter);
+    if (presetId) {
+      return availablePrinterPresets.find((preset) => preset.presetId === presetId) ?? null;
+    }
+
+    const normalizedPrinterName = (selectedPrinter.name ?? '').trim().toLowerCase();
+    const normalizedPrinterManufacturer = (selectedPrinter.manufacturer ?? '').trim().toLowerCase();
+
+    if (!normalizedPrinterName) return null;
+
+    const exactMatch = availablePrinterPresets.find((preset) => (
+      (preset.name ?? '').trim().toLowerCase() === normalizedPrinterName
+      && (preset.manufacturer ?? '').trim().toLowerCase() === normalizedPrinterManufacturer
+    ));
+    if (exactMatch) return exactMatch;
+
+    const fuzzyMatch = availablePrinterPresets.find((preset) => {
+      const presetName = (preset.name ?? '').trim().toLowerCase();
+      const presetFamily = (preset.family ?? '').trim().toLowerCase();
+      const manufacturerMatches = !normalizedPrinterManufacturer
+        || (preset.manufacturer ?? '').trim().toLowerCase() === normalizedPrinterManufacturer;
+      if (!manufacturerMatches) return false;
+      return (
+        presetName === normalizedPrinterName
+        || presetName.includes(normalizedPrinterName)
+        || normalizedPrinterName.includes(presetName)
+        || (presetFamily.length > 0 && normalizedPrinterName.includes(presetFamily))
+      );
+    });
+
+    return fuzzyMatch ?? null;
+  }, [availablePrinterPresets, selectedPrinter]);
+  const selectedPrinterNetworkFilterHint = React.useMemo(() => {
+    const explicit = selectedPrinter?.networkFilter?.trim() || '';
+    if (explicit.length > 0) return explicit;
+
+    const presetFilter = selectedPrinterPreset?.networkFilter?.trim() || '';
+    if (presetFilter.length > 0) return presetFilter;
+
+    if (!selectedPrinter) return '';
+
+    const normalizedName = (selectedPrinter.name ?? '').trim().toLowerCase();
+    const normalizedManufacturer = (selectedPrinter.manufacturer ?? '').trim().toLowerCase();
+    const resolutionX = Number(selectedPrinter.display?.resolutionX ?? 0);
+    const resolutionY = Number(selectedPrinter.display?.resolutionY ?? 0);
+    const pixelX = Number(selectedPrinter.pixelSize?.x ?? 0);
+    const pixelY = Number(selectedPrinter.pixelSize?.y ?? 0);
+
+    const candidates = availablePrinterPresets
+      .filter((preset) => preset.networkSupport === 'nanodlp')
+      .filter((preset) => typeof preset.networkFilter === 'string' && preset.networkFilter.trim().length > 0);
+
+    const byDisplayAndPixel = candidates.find((preset) => {
+      const presetResolutionX = Number(preset.display?.resolutionX ?? 0);
+      const presetResolutionY = Number(preset.display?.resolutionY ?? 0);
+      const presetPixelX = Number((preset as any)?.pixelSize?.x ?? 0);
+      const presetPixelY = Number((preset as any)?.pixelSize?.y ?? 0);
+
+      const resolutionMatch = resolutionX > 0 && resolutionY > 0
+        && presetResolutionX === resolutionX
+        && presetResolutionY === resolutionY;
+
+      const pixelMatch = pixelX > 0 && pixelY > 0
+        && Math.abs(presetPixelX - pixelX) < 0.001
+        && Math.abs(presetPixelY - pixelY) < 0.001;
+
+      return resolutionMatch && pixelMatch;
+    });
+    if (byDisplayAndPixel?.networkFilter) return byDisplayAndPixel.networkFilter;
+
+    const byDisplayOnly = candidates.find((preset) => {
+      const presetResolutionX = Number(preset.display?.resolutionX ?? 0);
+      const presetResolutionY = Number(preset.display?.resolutionY ?? 0);
+      return resolutionX > 0 && resolutionY > 0
+        && presetResolutionX === resolutionX
+        && presetResolutionY === resolutionY;
+    });
+    if (byDisplayOnly?.networkFilter) return byDisplayOnly.networkFilter;
+
+    const exactByNameAndManufacturer = candidates.find((preset) => (
+      (preset.name ?? '').trim().toLowerCase() === normalizedName
+      && (preset.manufacturer ?? '').trim().toLowerCase() === normalizedManufacturer
+    ));
+    if (exactByNameAndManufacturer?.networkFilter) return exactByNameAndManufacturer.networkFilter;
+
+    const exactByName = candidates.find((preset) => (
+      (preset.name ?? '').trim().toLowerCase() === normalizedName
+    ));
+    if (exactByName?.networkFilter) return exactByName.networkFilter;
+
+    const containsByName = candidates.find((preset) => {
+      const presetName = (preset.name ?? '').trim().toLowerCase();
+      if (!presetName || !normalizedName) return false;
+      return normalizedName.includes(presetName) || presetName.includes(normalizedName);
+    });
+    if (containsByName?.networkFilter) return containsByName.networkFilter;
+
+    const containsByFamily = candidates.find((preset) => {
+      const presetFamily = (preset.family ?? '').trim().toLowerCase();
+      if (!presetFamily || !normalizedName) return false;
+      return normalizedName.includes(presetFamily);
+    });
+    if (containsByFamily?.networkFilter) return containsByFamily.networkFilter;
+
+    return '';
+  }, [availablePrinterPresets, selectedPrinter, selectedPrinter?.networkFilter, selectedPrinterPreset?.networkFilter]);
+  const selectedPrinterModelHint = React.useMemo(() => {
+    const source = [
+      selectedPrinterNetworkFilterHint,
+      selectedPrinter?.name ?? '',
+      selectedPrinterPreset?.name ?? '',
+      selectedPrinterPreset?.family ?? '',
+    ]
+      .filter((value) => typeof value === 'string' && value.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    if (!source) return undefined;
+    if (/\bathena\s*(ii|2)\b/.test(source) || source.includes('athena2')) return 'athena-2' as const;
+    if (source.includes('athena')) return 'athena' as const;
+    return undefined;
+  }, [selectedPrinter?.name, selectedPrinterNetworkFilterHint, selectedPrinterPreset?.family, selectedPrinterPreset?.name]);
   const managedNetworkPrinters = React.useMemo(() => selectedPrinter?.networkFleet ?? [], [selectedPrinter?.networkFleet]);
   const connectedManagedNetworkPrinterCount = React.useMemo(
     () => managedNetworkPrinters.filter((device) => device.connected).length,
@@ -831,14 +963,45 @@ export function ProfileSettingsModal({
       const configuredHost = networkIpAddress.trim();
       const seedDevices: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
 
+      logNetworkScanDebug('discover/request', {
+        printerId: selectedPrinter.id,
+        printerName: selectedPrinter.name,
+        printerManufacturer: selectedPrinter.manufacturer ?? null,
+        printerOfficialPresetId: resolveOfficialPresetIdFromProfile(selectedPrinter),
+        printerResolutionX: selectedPrinter.display?.resolutionX ?? null,
+        printerResolutionY: selectedPrinter.display?.resolutionY ?? null,
+        printerPixelX: selectedPrinter.pixelSize?.x ?? null,
+        printerPixelY: selectedPrinter.pixelSize?.y ?? null,
+        scanScope: 'local-hostnames+subnet(progressive)',
+        configuredHost,
+        networkFilter: selectedPrinterNetworkFilterHint || null,
+        modelHint: selectedPrinterModelHint ?? null,
+        localHostnamesPresetCount: effectiveNetworkUiAdapter.defaultLocalHostnames.length,
+      });
+
       if (configuredHost.length > 0) {
         const connectResponse = await pluginNetworkFetch({
           pluginId: networkUiAdapter.pluginId,
           operation: networkUiAdapter.operations.connect,
           host: configuredHost,
+          networkFilter: selectedPrinterNetworkFilterHint || undefined,
+          modelHint: selectedPrinterModelHint,
         });
 
         const connectPayload = await connectResponse.json().catch(() => null) as any;
+        logNetworkScanDebug('connect/configured-host-response', {
+          ok: connectResponse.ok,
+          status: connectResponse.status,
+          requestHost: configuredHost,
+          requestedNetworkFilter: selectedPrinterNetworkFilterHint || null,
+          requestedModelHint: selectedPrinterModelHint ?? null,
+          connected: connectPayload?.connected === true,
+          ipAddress: connectPayload?.ipAddress,
+          hostName: connectPayload?.hostName,
+          printerName: connectPayload?.printerName,
+          printerModel: connectPayload?.printerModel,
+          statusText: connectPayload?.statusText,
+        });
         if (connectPayload?.connected === true && typeof connectPayload?.ipAddress === 'string') {
           const resolvedName = [connectPayload.hostName, connectPayload.printerName, connectPayload.ipAddress]
             .find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() ?? configuredHost;
@@ -864,11 +1027,31 @@ export function ProfileSettingsModal({
         mode: selectedPrinter.networkSupport,
         scanScope: 'local-hostnames',
         host: networkIpAddress.trim() || undefined,
+        networkFilter: selectedPrinterNetworkFilterHint || undefined,
+        modelHint: selectedPrinterModelHint,
+        debugNetworkFilter: true,
         localHostnames: localHostnameCandidates,
         ports: [80, 8080],
       });
 
       const localPayload = await localResponse.json().catch(() => null) as any;
+      logNetworkScanDebug('discover/local-response', {
+        ok: localResponse.ok,
+        status: localResponse.status,
+        requestedNetworkFilter: selectedPrinterNetworkFilterHint || null,
+        requestedModelHint: selectedPrinterModelHint ?? null,
+        localHostnames: localHostnameCandidates,
+        foundCount: Array.isArray(localPayload?.devices) ? localPayload.devices.length : 0,
+        devices: Array.isArray(localPayload?.devices)
+          ? localPayload.devices.map((device: any) => ({
+            ipAddress: device?.ipAddress,
+            hostName: device?.hostName,
+            printerName: device?.printerName,
+            printerModel: device?.printerModel,
+            statusText: device?.statusText,
+          }))
+          : [],
+      });
       const localDevices: any[] = Array.isArray(localPayload?.devices) ? localPayload.devices : [];
       const localDiscovered = localDevices.map((device, index) => {
         const hostName = typeof device?.hostName === 'string' ? device.hostName.trim() : '';
@@ -912,6 +1095,9 @@ export function ProfileSettingsModal({
           probeTimeoutMs: 1200,
           subnetConcurrency: 84,
           host: networkIpAddress.trim() || undefined,
+          networkFilter: selectedPrinterNetworkFilterHint || undefined,
+          modelHint: selectedPrinterModelHint,
+          debugNetworkFilter: true,
           excludeHosts: localDiscovered.map((item) => item.ipAddress),
           seedIps: localDiscovered.map((item) => item.ipAddress),
           ports: [80, 8080],
@@ -919,6 +1105,27 @@ export function ProfileSettingsModal({
 
         const payload = await response.json().catch(() => null) as any;
         subnetPayloadLast = payload;
+        logNetworkScanDebug('discover/subnet-batch-response', {
+          ok: response.ok,
+          status: response.status,
+          batchStart: subnetBatchStart,
+          nextBatchStart: payload?.nextBatchStart,
+          done: payload?.done === true,
+          scannedEndpoints: payload?.scannedEndpoints,
+          totalEndpoints: payload?.totalEndpoints,
+          requestedNetworkFilter: selectedPrinterNetworkFilterHint || null,
+          requestedModelHint: selectedPrinterModelHint ?? null,
+          foundCount: Array.isArray(payload?.devices) ? payload.devices.length : 0,
+          devices: Array.isArray(payload?.devices)
+            ? payload.devices.map((device: any) => ({
+              ipAddress: device?.ipAddress,
+              hostName: device?.hostName,
+              printerName: device?.printerName,
+              printerModel: device?.printerModel,
+              statusText: device?.statusText,
+            }))
+            : [],
+        });
 
         const devices: any[] = Array.isArray(payload?.devices) ? payload.devices : [];
         const discoveredBatch = devices.map((device, index) => {
@@ -974,6 +1181,14 @@ export function ProfileSettingsModal({
       setNetworkScanProgressPct(100);
       setNetworkScanPhaseLabel('Scan complete');
 
+      logNetworkScanDebug('discover/summary', {
+        mergedCount: merged.length,
+        scannedHosts,
+        scannedEndpoints,
+        scannedLocalHostnames,
+        scannedSubnetHosts,
+      });
+
       if (merged.length > 0) {
         setNetworkConnectionMessage(
           `Found ${merged.length} NanoDLP device${merged.length === 1 ? '' : 's'} (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`,
@@ -987,6 +1202,11 @@ export function ProfileSettingsModal({
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Discovery failed';
+      logNetworkScanDebug('discover/error', {
+        message,
+        requestedNetworkFilter: selectedPrinterNetworkFilterHint || null,
+        requestedModelHint: selectedPrinterModelHint ?? null,
+      });
       setDiscoveredPrinters([]);
       setNetworkConnectionMessage(message);
       setNetworkScanPhaseLabel('Scan failed');
@@ -998,7 +1218,16 @@ export function ProfileSettingsModal({
         setNetworkScanPhaseLabel('');
       }, 500);
     }
-  }, [effectiveNetworkUiAdapter, networkDiscoveryEnabled, networkIpAddress, networkUiAdapter, selectedPrinter]);
+  }, [
+    effectiveNetworkUiAdapter,
+    logNetworkScanDebug,
+    networkDiscoveryEnabled,
+    networkIpAddress,
+    networkUiAdapter,
+    selectedPrinter,
+    selectedPrinterModelHint,
+    selectedPrinterNetworkFilterHint,
+  ]);
 
   const handleConnectNetworkPrinter = React.useCallback(async (options?: { host?: string; closeOnSuccess?: boolean }) => {
     if (!selectedPrinter || !networkUiAdapter) return;
@@ -1078,6 +1307,8 @@ export function ProfileSettingsModal({
         pluginId: effectiveNetworkUiAdapter.pluginId,
         operation: effectiveNetworkUiAdapter.operations.connect,
         host,
+        networkFilter: selectedPrinterNetworkFilterHint || undefined,
+        modelHint: selectedPrinterModelHint,
       });
 
       const payload = await response.json().catch(() => null) as any;
@@ -1160,7 +1391,15 @@ export function ProfileSettingsModal({
     } finally {
       setIsNetworkConnecting(false);
     }
-  }, [effectiveNetworkUiAdapter, networkDiscoveryEnabled, networkIpAddress, networkUiAdapter, selectedPrinter]);
+  }, [
+    effectiveNetworkUiAdapter,
+    networkDiscoveryEnabled,
+    networkIpAddress,
+    networkUiAdapter,
+    selectedPrinter,
+    selectedPrinterModelHint,
+    selectedPrinterNetworkFilterHint,
+  ]);
 
   const handleSelectManagedPrinter = React.useCallback((device: PrinterNetworkDevice) => {
     if (!selectedPrinter) return;
@@ -1189,7 +1428,7 @@ export function ProfileSettingsModal({
     setNetworkDiscoveryEnabled(selectedPrinter.network?.discoveryEnabled ?? true);
     setNetworkIpAddress(selectedPrinter.network?.ipAddress ?? '');
     setIsAddingNetworkPrinter((selectedPrinter.networkFleet?.length ?? 0) === 0);
-    setShowManualNetworkEntry((selectedPrinter.networkFleet?.length ?? 0) === 0);
+    setShowManualNetworkEntry(false);
     setIsNetworkSettingsOpen(true);
   }, [selectedPrinter]);
 
@@ -2510,7 +2749,7 @@ export function ProfileSettingsModal({
               showAddPrinterFlow={isAddingNetworkPrinter || managedNetworkPrinters.length === 0}
               onEnterAddPrinterFlow={() => {
                 setIsAddingNetworkPrinter(true);
-                setShowManualNetworkEntry(true);
+                setShowManualNetworkEntry(false);
               }}
               onExitAddPrinterFlow={() => {
                 setIsAddingNetworkPrinter(false);
