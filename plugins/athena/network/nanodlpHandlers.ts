@@ -295,17 +295,8 @@ async function probeNanoDlp(
       });
       return null;
     }
-    if (!isSupportedAthenaModelMatch(supportedModel, requestedModelHint)) {
-      logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
-        hostOrIp,
-        port,
-        reason: 'model-hint-mismatch',
-        supportedModel,
-        requestedModelHint,
-        printerModel: resolveNanoDlpPrinterModel(status),
-      });
-      return null;
-    }
+
+    let networkFilterMatched = false;
 
     if (requestedNetworkFilter) {
       const machineName = await resolveDeviceMachineName(hostOrIp, port, Math.max(1200, Math.min(timeoutMs, 4000)));
@@ -334,12 +325,29 @@ async function probeNanoDlp(
         return null;
       }
 
+      networkFilterMatched = true;
+
       logNanoDlpFilterDebug(debugFilter, 'probe/match', {
         hostOrIp,
         port,
         machineName,
         requestedNetworkFilter,
       });
+    }
+
+    const modelHintMatched = isSupportedAthenaModelMatch(supportedModel, requestedModelHint);
+    if (!modelHintMatched && !networkFilterMatched) {
+      logNanoDlpFilterDebug(debugFilter, 'probe/reject', {
+        hostOrIp,
+        port,
+        reason: 'model-hint-mismatch',
+        supportedModel,
+        requestedModelHint,
+        modelHintMatched,
+        networkFilterMatched,
+        printerModel: resolveNanoDlpPrinterModel(status),
+      });
+      return null;
     }
 
     const hostName = resolveNanoDlpStatusHostName(status);
@@ -793,11 +801,23 @@ async function handleNanoDlpConnect(payload: unknown): Promise<HandlerResult> {
       deviceNetworkFilter,
     });
 
+    const normalizedRequestedNetworkFilter = requestedNetworkFilter ? normalizeMachineName(requestedNetworkFilter) : null;
+    const normalizedDeviceMachineName = deviceMachineName ? normalizeMachineName(deviceMachineName) : null;
+    const networkFilterMatched = Boolean(
+      normalizedRequestedNetworkFilter
+      && normalizedDeviceMachineName
+      && normalizedDeviceMachineName === normalizedRequestedNetworkFilter,
+    );
+    const modelHintMatched = Boolean(
+      supportedModel
+      && isSupportedAthenaModelMatch(supportedModel, requestedModelHint),
+    );
+
     if (
       !supportedModel
-      || !isSupportedAthenaModelMatch(supportedModel, requestedModelHint)
+      || (!modelHintMatched && !networkFilterMatched)
       || (requestedNetworkFilter
-        ? (!deviceMachineName || normalizeMachineName(deviceMachineName) !== normalizeMachineName(requestedNetworkFilter))
+        ? !networkFilterMatched
         : Boolean(ATHENA_NETWORK_FILTERS.length > 0 && !deviceNetworkFilter))
     ) {
       logNanoDlpFilterDebug(debugFilter, 'connect/reject', {
@@ -805,13 +825,15 @@ async function handleNanoDlpConnect(payload: unknown): Promise<HandlerResult> {
         port,
         reason: !supportedModel
           ? 'unsupported-model'
-          : !isSupportedAthenaModelMatch(supportedModel, requestedModelHint)
+          : (!modelHintMatched && !networkFilterMatched)
             ? 'model-hint-mismatch'
             : requestedNetworkFilter
               ? 'network-filter-mismatch'
               : 'known-filter-missing',
         requestedModelHint,
         requestedNetworkFilter,
+        modelHintMatched,
+        networkFilterMatched,
         supportedModel,
         printerModel,
         deviceMachineName,

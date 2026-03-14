@@ -444,6 +444,8 @@ export function ProfileSettingsModal({
   const selectedNanodlpMaterialIdRef = React.useRef('');
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
+  const discoveryInFlightRef = React.useRef(false);
+  const discoveryRunIdRef = React.useRef(0);
 
   React.useEffect(() => {
     selectedNanodlpMaterialIdRef.current = selectedNanodlpMaterialId;
@@ -954,6 +956,18 @@ export function ProfileSettingsModal({
     if (!networkDiscoveryEnabled) return;
     if (!networkUiAdapter) return;
 
+    if (discoveryInFlightRef.current) {
+      logNetworkScanDebug('discover/skip-concurrent', {
+        printerId: selectedPrinter.id,
+        reason: 'scan-already-running',
+      });
+      return;
+    }
+
+    discoveryInFlightRef.current = true;
+    const runId = ++discoveryRunIdRef.current;
+    const isCurrentRun = () => discoveryRunIdRef.current === runId;
+
     setIsNetworkScanning(true);
     setNetworkScanPhaseLabel('Resolving friendly .local hostnames…');
     setNetworkConnectionMessage('Resolving friendly .local hostnames…');
@@ -1070,7 +1084,7 @@ export function ProfileSettingsModal({
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
-      setDiscoveredPrinters(baseDiscovered);
+      if (isCurrentRun()) setDiscoveredPrinters(baseDiscovered);
 
       setNetworkScanProgressPct(44);
       setNetworkScanPhaseLabel('Scanning local subnet…');
@@ -1146,7 +1160,7 @@ export function ProfileSettingsModal({
         const liveMerged = [...baseDiscovered, ...subnetDiscovered].filter((item, index, array) => (
           array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
         ));
-        setDiscoveredPrinters(liveMerged);
+        if (isCurrentRun()) setDiscoveredPrinters(liveMerged);
 
         subnetTotalEndpoints = Number.isFinite(Number(payload?.totalEndpoints)) ? Number(payload.totalEndpoints) : subnetTotalEndpoints;
         subnetScannedEndpoints = Number.isFinite(Number(payload?.scannedEndpoints)) ? Number(payload.scannedEndpoints) : subnetScannedEndpoints;
@@ -1177,9 +1191,11 @@ export function ProfileSettingsModal({
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
-      setDiscoveredPrinters(merged);
-      setNetworkScanProgressPct(100);
-      setNetworkScanPhaseLabel('Scan complete');
+      if (isCurrentRun()) {
+        setDiscoveredPrinters(merged);
+        setNetworkScanProgressPct(100);
+        setNetworkScanPhaseLabel('Scan complete');
+      }
 
       logNetworkScanDebug('discover/summary', {
         mergedCount: merged.length,
@@ -1190,15 +1206,19 @@ export function ProfileSettingsModal({
       });
 
       if (merged.length > 0) {
-        setNetworkConnectionMessage(
-          `Found ${merged.length} NanoDLP device${merged.length === 1 ? '' : 's'} (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`,
-        );
+        if (isCurrentRun()) {
+          setNetworkConnectionMessage(
+            `Found ${merged.length} NanoDLP device${merged.length === 1 ? '' : 's'} (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`,
+          );
+        }
       } else {
-        setNetworkConnectionMessage(
-          scannedSubnetHosts > 0 || scannedLocalHostnames > 0
-            ? `No NanoDLP devices found (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`
-            : 'No local IPv4 subnet detected by the scanner. Try entering printer IP and scanning again.',
-        );
+        if (isCurrentRun()) {
+          setNetworkConnectionMessage(
+            scannedSubnetHosts > 0 || scannedLocalHostnames > 0
+              ? `No NanoDLP devices found (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`
+              : 'No local IPv4 subnet detected by the scanner. Try entering printer IP and scanning again.',
+          );
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Discovery failed';
@@ -1207,18 +1227,26 @@ export function ProfileSettingsModal({
         requestedNetworkFilter: selectedPrinterNetworkFilterHint || null,
         requestedModelHint: selectedPrinterModelHint ?? null,
       });
-      setDiscoveredPrinters([]);
-      setNetworkConnectionMessage(message);
-      setNetworkScanPhaseLabel('Scan failed');
-      setNetworkScanProgressPct(100);
+      if (isCurrentRun()) {
+        setDiscoveredPrinters([]);
+        setNetworkConnectionMessage(message);
+        setNetworkScanPhaseLabel('Scan failed');
+        setNetworkScanProgressPct(100);
+      }
     } finally {
-      setIsNetworkScanning(false);
-      window.setTimeout(() => {
-        setNetworkScanProgressPct(0);
-        setNetworkScanPhaseLabel('');
-      }, 500);
+      if (isCurrentRun()) {
+        setIsNetworkScanning(false);
+        window.setTimeout(() => {
+          if (!isCurrentRun()) return;
+          setNetworkScanProgressPct(0);
+          setNetworkScanPhaseLabel('');
+        }, 500);
+      }
+      discoveryInFlightRef.current = false;
     }
   }, [
+    discoveryInFlightRef,
+    discoveryRunIdRef,
     effectiveNetworkUiAdapter,
     logNetworkScanDebug,
     networkDiscoveryEnabled,

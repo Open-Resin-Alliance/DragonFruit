@@ -1129,19 +1129,32 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
                 }),
             );
 
+            let normalized_requested_network_filter = requested_network_filter
+                .as_deref()
+                .map(normalize_machine_name);
+            let normalized_device_machine_name = device_machine_name
+                .as_deref()
+                .map(normalize_machine_name);
+            let network_filter_matched = normalized_requested_network_filter
+                .as_ref()
+                .zip(normalized_device_machine_name.as_ref())
+                .map(|(expected, actual)| expected == actual)
+                .unwrap_or(false);
+            let model_hint_matched = supported_model
+                .map(|model| matches_model_hint(model, requested_model_hint))
+                .unwrap_or(false);
+
             if supported_model.is_none()
-                || !matches_model_hint(supported_model.unwrap_or(""), requested_model_hint)
+                || (!model_hint_matched && !network_filter_matched)
                 || (requested_network_filter.is_some()
-                    && (device_machine_name.is_none()
-                        || normalize_machine_name(device_machine_name.as_deref().unwrap_or(""))
-                            != normalize_machine_name(requested_network_filter.as_deref().unwrap_or(""))))
+                    && !network_filter_matched)
                 || (requested_network_filter.is_none()
                     && !athena_network_filters().is_empty()
                     && device_network_filter.is_none())
             {
                 let reason = if supported_model.is_none() {
                     "unsupported-model"
-                } else if !matches_model_hint(supported_model.unwrap_or(""), requested_model_hint) {
+                } else if !model_hint_matched && !network_filter_matched {
                     "model-hint-mismatch"
                 } else if requested_network_filter.is_some() {
                     "network-filter-mismatch"
@@ -1158,6 +1171,8 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
                         "reason": reason,
                         "requestedModelHint": requested_model_hint,
                         "requestedNetworkFilter": requested_network_filter,
+                        "modelHintMatched": model_hint_matched,
+                        "networkFilterMatched": network_filter_matched,
                         "supportedModel": supported_model,
                         "printerModel": printer_model,
                         "deviceMachineName": device_machine_name,
@@ -1465,18 +1480,20 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
         }
         found = filtered;
     }
-    if let Some(expected) = requested_model_hint {
-        found.retain(|device| {
-            let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
-            let normalized = normalize_model_name(model);
-            if expected == "athena-2" {
-                normalized.contains("athena 2") || normalized.contains("athena2")
-            } else {
-                normalized.contains("athena")
-                    && !normalized.contains("athena 2")
-                    && !normalized.contains("athena2")
-            }
-        });
+    if requested_network_filter.is_none() {
+        if let Some(expected) = requested_model_hint {
+            found.retain(|device| {
+                let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
+                let normalized = normalize_model_name(model);
+                if expected == "athena-2" {
+                    normalized.contains("athena 2") || normalized.contains("athena2")
+                } else {
+                    normalized.contains("athena")
+                        && !normalized.contains("athena 2")
+                        && !normalized.contains("athena2")
+                }
+            });
+        }
     }
 
     // Progressive subnet scanning
@@ -1522,18 +1539,20 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
             subnet_found = filtered;
         }
 
-        if let Some(expected) = requested_model_hint {
-            subnet_found.retain(|device| {
-                let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
-                let normalized = normalize_model_name(model);
-                if expected == "athena-2" {
-                    normalized.contains("athena 2") || normalized.contains("athena2")
-                } else {
-                    normalized.contains("athena")
-                        && !normalized.contains("athena 2")
-                        && !normalized.contains("athena2")
-                }
-            });
+        if requested_network_filter.is_none() {
+            if let Some(expected) = requested_model_hint {
+                subnet_found.retain(|device| {
+                    let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
+                    let normalized = normalize_model_name(model);
+                    if expected == "athena-2" {
+                        normalized.contains("athena 2") || normalized.contains("athena2")
+                    } else {
+                        normalized.contains("athena")
+                            && !normalized.contains("athena 2")
+                            && !normalized.contains("athena2")
+                    }
+                });
+            }
         }
 
         let local_ips: HashSet<String> = found
@@ -1614,18 +1633,20 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
             }
             subnet_found = filtered;
         }
-        if let Some(expected) = requested_model_hint {
-            subnet_found.retain(|device| {
-                let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
-                let normalized = normalize_model_name(model);
-                if expected == "athena-2" {
-                    normalized.contains("athena 2") || normalized.contains("athena2")
-                } else {
-                    normalized.contains("athena")
-                        && !normalized.contains("athena 2")
-                        && !normalized.contains("athena2")
-                }
-            });
+        if requested_network_filter.is_none() {
+            if let Some(expected) = requested_model_hint {
+                subnet_found.retain(|device| {
+                    let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
+                    let normalized = normalize_model_name(model);
+                    if expected == "athena-2" {
+                        normalized.contains("athena 2") || normalized.contains("athena2")
+                    } else {
+                        normalized.contains("athena")
+                            && !normalized.contains("athena 2")
+                            && !normalized.contains("athena2")
+                    }
+                });
+            }
         }
         subnet_found.retain(|d| {
             let ip = d.get("ipAddress").and_then(|v| v.as_str()).unwrap_or("");

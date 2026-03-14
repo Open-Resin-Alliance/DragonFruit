@@ -339,6 +339,12 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       resolutionX,
       resolutionY,
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
+      mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
+        ? (value as any).display.mirrorX
+        : undefined,
+      mirrorY: typeof (value as any).display?.mirrorY === 'boolean'
+        ? (value as any).display.mirrorY
+        : undefined,
     },
   };
 }
