@@ -79,6 +79,7 @@ interface TopBarProps {
   onCloseProgram?: () => void;
   showMonitorButton?: boolean;
   monitorButtonActive?: boolean;
+  monitorButtonPaused?: boolean;
   onOpenMonitor?: () => void;
 }
 
@@ -133,6 +134,7 @@ export function TopBar({
   onCloseProgram,
   showMonitorButton = false,
   monitorButtonActive = false,
+  monitorButtonPaused = false,
   onOpenMonitor,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -397,6 +399,52 @@ export function TopBar({
   }, [activePrinterProfile?.id, activePrinterProfile?.imageDataUrl]);
 
   const activePrinterThumbnailSrc = printerThumbnailFailed ? undefined : activePrinterProfile?.imageDataUrl;
+  const topbarFleetPrinterName = React.useMemo(() => {
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    if (fleet.length === 0) return null;
+
+    const preferred = fleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
+      ?? fleet.find((device) => device.connected)
+      ?? fleet[0]
+      ?? null;
+    if (!preferred) return null;
+
+    return preferred.displayName || preferred.hostName || preferred.ipAddress || null;
+  }, [activePrinterProfile?.activeNetworkDeviceId, activePrinterProfile?.networkFleet]);
+  const topbarUsesFleetLabelOrder = React.useMemo(() => {
+    return (activePrinterProfile?.networkFleet?.length ?? 0) > 1;
+  }, [activePrinterProfile?.networkFleet]);
+  const topbarPrinterLabelTop = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      return activePrinterProfile?.name ?? 'Select Profile';
+    }
+    return 'Printer';
+  }, [activePrinterProfile?.name, topbarUsesFleetLabelOrder]);
+  const topbarPrinterLabelBottom = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      return topbarFleetPrinterName ?? 'No active printer';
+    }
+    return activePrinterProfile?.name ?? 'Select Printer';
+  }, [activePrinterProfile?.name, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
+  const topbarPrinterButtonTitle = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      const profileName = activePrinterProfile?.name ?? 'Select Profile';
+      const printerName = topbarFleetPrinterName ?? 'No active printer';
+      return `Printer profile: ${profileName} • Active printer: ${printerName}`;
+    }
+    return activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile';
+  }, [activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
+  const topbarPrinterButtonAriaLabel = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      const profileName = activePrinterProfile?.name ?? 'Select profile';
+      const printerName = topbarFleetPrinterName ?? 'No active printer';
+      return `Printer profile ${profileName}, active printer ${printerName}`;
+    }
+    return activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile';
+  }, [activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
+  const monitorButtonAnimationClass = monitorButtonPaused
+    ? 'ui-topbar-monitor-paused'
+    : (monitorButtonActive ? 'ui-topbar-monitor-active' : '');
 
   const steps: Array<{
     mode: SupportMode;
@@ -498,8 +546,8 @@ export function TopBar({
           style={{
             background: 'transparent',
           }}
-          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile'}
-          aria-label={activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile'}
+          title={topbarPrinterButtonTitle}
+          aria-label={topbarPrinterButtonAriaLabel}
           data-no-window-drag="true"
         >
           <div className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-sm shrink-0">
@@ -516,11 +564,17 @@ export function TopBar({
             )}
           </div>
           <span className="min-w-0 flex flex-col items-start leading-none gap-[2px]">
-            <span className="text-[9px] uppercase tracking-[0.11em]" style={{ color: 'var(--text-muted)' }}>
-              Printer
+            <span
+              className={topbarUsesFleetLabelOrder
+                ? 'truncate text-[10px] tracking-[0.01em]'
+                : 'text-[9px] uppercase tracking-[0.11em]'}
+              style={{ color: 'var(--text-muted)' }}
+              title={topbarPrinterLabelTop}
+            >
+              {topbarPrinterLabelTop}
             </span>
             <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {activePrinterProfile?.name ?? 'Select Printer'}
+              {topbarPrinterLabelBottom}
             </span>
           </span>
           <ChevronDown className="h-3.5 w-3.5 ml-auto shrink-0" style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
@@ -541,12 +595,10 @@ export function TopBar({
             data-no-window-drag="true"
           >
             <Activity
-              className={`h-3.5 w-3.5 ${monitorButtonActive ? 'motion-safe:animate-pulse' : ''}`}
-              style={{ color: monitorButtonActive ? '#22c55e' : 'currentColor' }}
+              className={`h-3.5 w-3.5 ${monitorButtonAnimationClass}`}
             />
             <span
-              className={`text-[11px] font-semibold ${monitorButtonActive ? 'motion-safe:animate-pulse' : ''}`}
-              style={{ color: monitorButtonActive ? '#22c55e' : 'currentColor' }}
+              className={`text-[11px] font-semibold ${monitorButtonAnimationClass}`}
             >
               Monitor
             </span>

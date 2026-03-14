@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, ChevronDown, Play, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -762,10 +762,12 @@ export default function Home() {
   const [isPrintingMonitorPolling, setIsPrintingMonitorPolling] = React.useState(false);
   const [printingMonitorError, setPrintingMonitorError] = React.useState<string | null>(null);
   const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
+  const [printingMonitorControlPendingAction, setPrintingMonitorControlPendingAction] = React.useState<null | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
   const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
   const [printingMonitorPendingConfirmation, setPrintingMonitorPendingConfirmation] = React.useState<PrintingMonitorPendingConfirmation | null>(null);
   const [printingMonitorDeviceId, setPrintingMonitorDeviceId] = React.useState<string | null>(null);
   const [isPrintingMonitorPrinterMenuOpen, setIsPrintingMonitorPrinterMenuOpen] = React.useState(false);
+  const [isPrintingMonitorPrinterThumbnailFailed, setIsPrintingMonitorPrinterThumbnailFailed] = React.useState(false);
   const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
@@ -2722,19 +2724,102 @@ export default function Home() {
       ? (1 / printingMonitorWebcamAspectRatio)
       : printingMonitorWebcamAspectRatio;
   }, [printingMonitorWebcamAspectRatio, shouldRotateMonitorWebcam]);
+  const printingMonitorStateTextNormalized = React.useMemo(() => {
+    return String(printingMonitorSnapshot?.stateText ?? '').trim().toLowerCase();
+  }, [printingMonitorSnapshot?.stateText]);
+  const printingMonitorIsPauseTransition = React.useMemo(() => {
+    return Boolean(
+      printingMonitorSnapshot?.pauseLatched
+      || printingMonitorStateTextNormalized === 'pausing',
+    );
+  }, [printingMonitorSnapshot?.pauseLatched, printingMonitorStateTextNormalized]);
+  const printingMonitorIsCancelTransition = React.useMemo(() => {
+    return Boolean(
+      printingMonitorStateTextNormalized === 'canceling'
+      || (printingMonitorSnapshot?.cancelLatched && printingMonitorStateTextNormalized !== 'idle'),
+    );
+  }, [printingMonitorSnapshot?.cancelLatched, printingMonitorStateTextNormalized]);
   const printingMonitorHasActivePrint = React.useMemo(() => {
     return Boolean(
       printingMonitorSnapshot?.isPrinting
       || printingMonitorSnapshot?.isPaused
-      || printingMonitorSnapshot?.cancelLatched
-      || printingMonitorSnapshot?.pauseLatched
+      || printingMonitorIsCancelTransition
+      || printingMonitorIsPauseTransition
     );
   }, [
-    printingMonitorSnapshot?.cancelLatched,
     printingMonitorSnapshot?.isPaused,
     printingMonitorSnapshot?.isPrinting,
-    printingMonitorSnapshot?.pauseLatched,
+    printingMonitorIsCancelTransition,
+    printingMonitorIsPauseTransition,
   ]);
+  const printingMonitorAnyActionBusy = React.useMemo(() => {
+    return printingMonitorActionBusy !== null || printingMonitorControlPendingAction !== null;
+  }, [printingMonitorActionBusy, printingMonitorControlPendingAction]);
+  const printingMonitorCancelButtonAnimating = React.useMemo(() => {
+    return Boolean(
+      printingMonitorControlPendingAction === 'cancel'
+      || printingMonitorIsCancelTransition
+      || printingMonitorActionBusy === 'cancel',
+    );
+  }, [printingMonitorActionBusy, printingMonitorControlPendingAction, printingMonitorIsCancelTransition]);
+  const printingMonitorPauseButtonAnimating = React.useMemo(() => {
+    return Boolean(
+      printingMonitorControlPendingAction === 'pause'
+      || printingMonitorControlPendingAction === 'resume'
+      || printingMonitorIsPauseTransition
+      || printingMonitorActionBusy === 'pause'
+      || printingMonitorActionBusy === 'resume',
+    );
+  }, [
+    printingMonitorActionBusy,
+    printingMonitorControlPendingAction,
+    printingMonitorIsPauseTransition,
+  ]);
+  const printingMonitorPauseButtonDisabled = React.useMemo(() => {
+    if (!printingMonitoringAdapter.operations || !printingMonitorHasActivePrint) return true;
+    if (printingMonitorIsCancelTransition || printingMonitorControlPendingAction === 'cancel') return true;
+    if (printingMonitorIsPauseTransition || printingMonitorControlPendingAction === 'pause') return true;
+    return (
+      printingMonitorActionBusy === 'start'
+      || printingMonitorActionBusy === 'delete'
+      || printingMonitorActionBusy === 'pause'
+      || printingMonitorActionBusy === 'resume'
+      || printingMonitorActionBusy === 'emergency-stop'
+      || printingMonitorControlPendingAction === 'resume'
+      || printingMonitorControlPendingAction === 'emergency-stop'
+    );
+  }, [
+    printingMonitorActionBusy,
+    printingMonitorControlPendingAction,
+    printingMonitorHasActivePrint,
+    printingMonitorIsCancelTransition,
+    printingMonitorIsPauseTransition,
+    printingMonitoringAdapter.operations,
+  ]);
+  const printingMonitorCancelButtonDisabled = React.useMemo(() => {
+    if (!printingMonitoringAdapter.operations || !printingMonitorHasActivePrint) return true;
+    if (printingMonitorIsPauseTransition || printingMonitorIsCancelTransition) return true;
+    return printingMonitorAnyActionBusy;
+  }, [
+    printingMonitorAnyActionBusy,
+    printingMonitorHasActivePrint,
+    printingMonitorIsCancelTransition,
+    printingMonitorIsPauseTransition,
+    printingMonitoringAdapter.operations,
+  ]);
+  const printingMonitorEmergencyStopDisabled = React.useMemo(() => {
+    if (!printingMonitoringAdapter.operations) return true;
+    return (
+      printingMonitorActionBusy === 'start'
+      || printingMonitorActionBusy === 'delete'
+      || printingMonitorActionBusy === 'pause'
+      || printingMonitorActionBusy === 'resume'
+      || printingMonitorActionBusy === 'emergency-stop'
+      || printingMonitorControlPendingAction === 'pause'
+      || printingMonitorControlPendingAction === 'resume'
+      || printingMonitorControlPendingAction === 'emergency-stop'
+    );
+  }, [printingMonitorActionBusy, printingMonitorControlPendingAction, printingMonitoringAdapter.operations]);
   const printingMonitorDisplayProgressPct = React.useMemo(() => {
     if (!printingMonitorHasActivePrint) return 0;
     const totalRaw = printingMonitorSnapshot?.totalLayers;
@@ -2778,20 +2863,67 @@ export default function Home() {
 
     return '—';
   }, [printingMonitorHasActivePrint, printingMonitorPlateId, printingMonitorRecentPlates, printingMonitorSelectedPlateId]);
+  const selectedPrinterStateTextNormalized = React.useMemo(() => {
+    return String(selectedPrinterMonitorSnapshot?.stateText ?? '').trim().toLowerCase();
+  }, [selectedPrinterMonitorSnapshot?.stateText]);
+  const selectedPrinterIsPauseTransition = React.useMemo(() => {
+    return Boolean(
+      selectedPrinterMonitorSnapshot?.pauseLatched
+      || selectedPrinterStateTextNormalized === 'pausing',
+    );
+  }, [selectedPrinterMonitorSnapshot?.pauseLatched, selectedPrinterStateTextNormalized]);
+  const selectedPrinterIsCancelTransition = React.useMemo(() => {
+    return Boolean(
+      selectedPrinterStateTextNormalized === 'canceling'
+      || (selectedPrinterMonitorSnapshot?.cancelLatched && selectedPrinterStateTextNormalized !== 'idle'),
+    );
+  }, [selectedPrinterMonitorSnapshot?.cancelLatched, selectedPrinterStateTextNormalized]);
   const selectedPrinterHasActivePrint = React.useMemo(() => {
     return Boolean(
       selectedPrinterMonitorSnapshot?.isPrinting
       || selectedPrinterMonitorSnapshot?.isPaused
-      || selectedPrinterMonitorSnapshot?.cancelLatched
-      || selectedPrinterMonitorSnapshot?.pauseLatched
+      || selectedPrinterIsCancelTransition
+      || selectedPrinterIsPauseTransition
     );
   }, [
-    selectedPrinterMonitorSnapshot?.cancelLatched,
     selectedPrinterMonitorSnapshot?.isPaused,
     selectedPrinterMonitorSnapshot?.isPrinting,
-    selectedPrinterMonitorSnapshot?.pauseLatched,
+    selectedPrinterIsCancelTransition,
+    selectedPrinterIsPauseTransition,
   ]);
+  const selectedPrinterHasPausedAlert = React.useMemo(() => {
+    return Boolean(
+      selectedPrinterMonitorSnapshot?.isPaused
+      || selectedPrinterIsPauseTransition,
+    );
+  }, [selectedPrinterIsPauseTransition, selectedPrinterMonitorSnapshot?.isPaused]);
   const hasConnectedMonitorTarget = printableConnectedPrinterFleet.length > 0;
+  const printingMonitorPrinterThumbnailSrc = React.useMemo(() => {
+    const source = activePrinterProfile?.imageDataUrl;
+    if (typeof source !== 'string') return null;
+    const trimmed = source.trim();
+    if (!trimmed || isPrintingMonitorPrinterThumbnailFailed) return null;
+    return trimmed;
+  }, [activePrinterProfile?.imageDataUrl, isPrintingMonitorPrinterThumbnailFailed]);
+  const printingMonitorHeaderUsesFleetLabelOrder = React.useMemo(() => {
+    return (activePrinterProfile?.networkFleet?.length ?? 0) > 1;
+  }, [activePrinterProfile?.networkFleet]);
+  const printingMonitorHeaderTopLabel = React.useMemo(() => {
+    if (printingMonitorHeaderUsesFleetLabelOrder) {
+      return activePrinterProfile?.name ?? 'Select Profile';
+    }
+    return 'Printer';
+  }, [activePrinterProfile?.name, printingMonitorHeaderUsesFleetLabelOrder]);
+  const printingMonitorHeaderBottomLabel = React.useMemo(() => {
+    const selectedPrinterName = monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer';
+    return selectedPrinterName;
+  }, [monitoringDevice?.displayName, monitoringDevice?.hostName, monitoringDevice?.ipAddress]);
+  const printingMonitorHeaderTitle = React.useMemo(() => {
+    if (printingMonitorHeaderUsesFleetLabelOrder) {
+      return `Printer profile: ${printingMonitorHeaderTopLabel} • Active printer: ${printingMonitorHeaderBottomLabel}`;
+    }
+    return `Monitored printer: ${printingMonitorHeaderBottomLabel}`;
+  }, [printingMonitorHeaderBottomLabel, printingMonitorHeaderTopLabel, printingMonitorHeaderUsesFleetLabelOrder]);
   const showTopbarMonitorButton = React.useMemo(() => {
     const hasMonitoring = Boolean(
       printingMonitoringAdapter.available
@@ -3471,9 +3603,14 @@ export default function Home() {
   }, [isPrintingMonitorPrinterMenuOpen]);
 
   React.useEffect(() => {
+    setIsPrintingMonitorPrinterThumbnailFailed(false);
+  }, [activePrinterProfile?.id, activePrinterProfile?.imageDataUrl]);
+
+  React.useEffect(() => {
     if (!printingMonitorModalOpen) {
       setPrintingMonitorLeftColumnHeight(null);
       setPrintingMonitorActionBusy(null);
+      setPrintingMonitorControlPendingAction(null);
       setPrintingMonitorActionStatus(null);
       setPrintingMonitorPendingConfirmation(null);
       return;
@@ -3502,6 +3639,49 @@ export default function Home() {
       window.removeEventListener('resize', updateHeight);
     };
   }, [printingMonitorModalOpen]);
+
+  React.useEffect(() => {
+    if (!printingMonitorControlPendingAction) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setPrintingMonitorControlPendingAction(null);
+    }, 20_000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [printingMonitorControlPendingAction]);
+
+  React.useEffect(() => {
+    if (!printingMonitorControlPendingAction || !printingMonitorSnapshot) return;
+
+    const settled = (() => {
+      if (printingMonitorControlPendingAction === 'pause') {
+        return printingMonitorSnapshot.isPaused || !printingMonitorHasActivePrint;
+      }
+      if (printingMonitorControlPendingAction === 'resume') {
+        return !printingMonitorSnapshot.isPaused && !printingMonitorIsPauseTransition;
+      }
+      if (printingMonitorControlPendingAction === 'cancel') {
+        return !printingMonitorSnapshot.isPrinting
+          && !printingMonitorSnapshot.isPaused
+          && !printingMonitorIsCancelTransition;
+      }
+      return !printingMonitorSnapshot.isPrinting
+        && !printingMonitorSnapshot.isPaused
+        && !printingMonitorIsCancelTransition;
+    })();
+
+    if (settled) {
+      setPrintingMonitorControlPendingAction(null);
+    }
+  }, [
+    printingMonitorControlPendingAction,
+    printingMonitorHasActivePrint,
+    printingMonitorIsCancelTransition,
+    printingMonitorIsPauseTransition,
+    printingMonitorSnapshot,
+  ]);
 
   const handleDownloadPrintArtifact = React.useCallback(async () => {
     if (!printingArtifact) return;
@@ -4248,6 +4428,7 @@ export default function Home() {
           : printingMonitoringAdapter.operations.emergencyStop;
 
     setPrintingMonitorActionBusy(action);
+    setPrintingMonitorControlPendingAction(action);
     setPrintingMonitorActionStatus(null);
 
     try {
@@ -4297,6 +4478,7 @@ export default function Home() {
         : 'Failed to send control command to printer.';
       setPrintingMonitorError(message);
       setPrintingMonitorActionStatus(null);
+      setPrintingMonitorControlPendingAction(null);
     } finally {
       setPrintingMonitorActionBusy(null);
     }
@@ -8293,6 +8475,7 @@ export default function Home() {
         onOpenScene={handleTopBarOpenScene}
         showMonitorButton={showTopbarMonitorButton}
         monitorButtonActive={selectedPrinterHasActivePrint}
+        monitorButtonPaused={selectedPrinterHasPausedAlert}
         onOpenMonitor={() => setPrintingMonitorModalOpen(true)}
       />
 
@@ -9974,24 +10157,75 @@ export default function Home() {
                 {monitorSelectableDevices.length > 1 ? (
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-sm font-semibold transition-colors"
+                    className="group inline-flex items-center gap-2 rounded-md px-1.5 py-1 text-sm font-semibold transition-colors"
                     style={{
-                      borderColor: 'var(--border-subtle)',
-                      background: 'var(--surface-1)',
+                      background: 'transparent',
                       color: 'var(--text-strong)',
                     }}
                     onClick={() => setIsPrintingMonitorPrinterMenuOpen((previous) => !previous)}
-                    aria-label="Select monitored printer"
-                    title="Switch monitored printer"
+                    aria-label={printingMonitorHeaderUsesFleetLabelOrder
+                      ? `Select monitored printer for profile ${printingMonitorHeaderTopLabel}`
+                      : 'Select monitored printer'}
+                    title={printingMonitorHeaderTitle}
                   >
-                    <span className="max-w-[280px] truncate">
-                      {monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer'}
+                    <div className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                      {printingMonitorPrinterThumbnailSrc ? (
+                        <img
+                          src={printingMonitorPrinterThumbnailSrc}
+                          alt={activePrinterProfile?.name ?? 'Selected printer'}
+                          className="h-full w-full object-cover"
+                          draggable={false}
+                          onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
+                        />
+                      ) : (
+                        <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                      )}
+                    </div>
+                    <span className="min-w-0 flex max-w-[280px] flex-col items-start leading-none gap-[2px]">
+                      <span
+                        className={printingMonitorHeaderUsesFleetLabelOrder
+                          ? 'truncate text-[10px] tracking-[0.01em]'
+                          : 'text-[9px] uppercase tracking-[0.11em]'}
+                        style={{ color: 'var(--text-muted)' }}
+                        title={printingMonitorHeaderTopLabel}
+                      >
+                        {printingMonitorHeaderTopLabel}
+                      </span>
+                      <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }} title={printingMonitorHeaderBottomLabel}>
+                        {printingMonitorHeaderBottomLabel}
+                      </span>
                     </span>
                     <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isPrintingMonitorPrinterMenuOpen ? 'rotate-180' : ''}`} />
                   </button>
                 ) : (
-                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                    {monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer'}
+                  <div className="inline-flex items-center gap-2 px-1.5 py-1">
+                    <div className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                      {printingMonitorPrinterThumbnailSrc ? (
+                        <img
+                          src={printingMonitorPrinterThumbnailSrc}
+                          alt={activePrinterProfile?.name ?? 'Selected printer'}
+                          className="h-full w-full object-cover"
+                          draggable={false}
+                          onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
+                        />
+                      ) : (
+                        <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                      )}
+                    </div>
+                    <span className="min-w-0 flex max-w-[280px] flex-col items-start leading-none gap-[2px]">
+                      <span
+                        className={printingMonitorHeaderUsesFleetLabelOrder
+                          ? 'truncate text-[10px] tracking-[0.01em]'
+                          : 'text-[9px] uppercase tracking-[0.11em]'}
+                        style={{ color: 'var(--text-muted)' }}
+                        title={printingMonitorHeaderTopLabel}
+                      >
+                        {printingMonitorHeaderTopLabel}
+                      </span>
+                      <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }} title={printingMonitorHeaderBottomLabel}>
+                        {printingMonitorHeaderBottomLabel}
+                      </span>
+                    </span>
                   </div>
                 )}
 
@@ -10026,11 +10260,28 @@ export default function Home() {
                               setIsPrintingMonitorPrinterMenuOpen(false);
                             }}
                           >
-                            <div className="truncate text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }} title={display}>
-                              {display}
-                            </div>
-                            <div className="mt-0.5 truncate text-[10px]" style={{ color: 'var(--text-muted)' }} title={device.ipAddress || undefined}>
-                              {device.ipAddress || 'No IP'}
+                            <div className="flex items-center gap-2">
+                              <div className="inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                                {printingMonitorPrinterThumbnailSrc ? (
+                                  <img
+                                    src={printingMonitorPrinterThumbnailSrc}
+                                    alt={activePrinterProfile?.name ?? display}
+                                    className="h-full w-full object-cover"
+                                    draggable={false}
+                                    onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
+                                  />
+                                ) : (
+                                  <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }} title={display}>
+                                  {display}
+                                </div>
+                                <div className="mt-0.5 truncate text-[10px]" style={{ color: 'var(--text-muted)' }} title={device.ipAddress || undefined}>
+                                  {device.ipAddress || 'No IP'}
+                                </div>
+                              </div>
                             </div>
                           </button>
                         );
@@ -10061,7 +10312,7 @@ export default function Home() {
                       onClick={() => {
                         void refreshPrintingMonitorRecentPlates();
                       }}
-                      disabled={printingMonitorActionBusy !== null || isPrintingMonitorRecentPlatesLoading}
+                      disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
                       className="!p-1.5"
                       title="Refresh recent print files"
                       aria-label="Refresh recent print files"
@@ -10140,7 +10391,7 @@ export default function Home() {
                                               color: '#bbf7d0',
                                             }}
                                             title={`Start plate #${plate.plateId}`}
-                                            disabled={printingMonitorActionBusy !== null || printingMonitorHasActivePrint}
+                                            disabled={printingMonitorAnyActionBusy || printingMonitorHasActivePrint}
                                           >
                                             <Play className="w-3.5 h-3.5" />
                                           </IconButton>
@@ -10156,7 +10407,7 @@ export default function Home() {
                                               color: '#fecaca',
                                             }}
                                             title={`Delete plate #${plate.plateId}`}
-                                            disabled={printingMonitorActionBusy !== null}
+                                            disabled={printingMonitorAnyActionBusy}
                                           >
                                             <Trash2 className="w-3.5 h-3.5" />
                                           </IconButton>
@@ -10238,7 +10489,7 @@ export default function Home() {
                     <button
                       type="button"
                       className="ui-button !h-9 px-3 text-xs"
-                      style={printingMonitorHasActivePrint
+                      style={!printingMonitorPauseButtonDisabled
                         ? {
                             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
                             background: 'color-mix(in srgb, var(--accent), var(--surface-1) 87%)',
@@ -10253,17 +10504,28 @@ export default function Home() {
                       onClick={() => {
                         void handlePrintingMonitorControlAction(printingMonitorSnapshot?.isPaused ? 'resume' : 'pause');
                       }}
-                      disabled={printingMonitorActionBusy !== null || !printingMonitoringAdapter.operations || !printingMonitorHasActivePrint}
+                      disabled={printingMonitorPauseButtonDisabled}
                     >
-                      {printingMonitorActionBusy === 'pause' || printingMonitorActionBusy === 'resume'
-                        ? (printingMonitorSnapshot?.isPaused ? 'Resuming…' : 'Pausing…')
+                      {printingMonitorPauseButtonAnimating
+                        ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            <span>
+                              {printingMonitorControlPendingAction === 'resume'
+                                ? 'Resuming…'
+                                : printingMonitorSnapshot?.isPaused && !printingMonitorIsPauseTransition
+                                  ? 'Resuming…'
+                                  : 'Pausing…'}
+                            </span>
+                          </span>
+                        )
                         : (printingMonitorSnapshot?.isPaused ? 'Resume' : 'Pause')}
                     </button>
 
                     <button
                       type="button"
                       className="ui-button !h-9 px-3 text-xs"
-                      style={printingMonitorHasActivePrint
+                      style={!printingMonitorCancelButtonDisabled
                         ? {
                             borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 48%)',
                             background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
@@ -10278,9 +10540,16 @@ export default function Home() {
                       onClick={() => {
                         void handlePrintingMonitorControlAction('cancel');
                       }}
-                      disabled={printingMonitorActionBusy !== null || !printingMonitoringAdapter.operations || !printingMonitorHasActivePrint}
+                      disabled={printingMonitorCancelButtonDisabled}
                     >
-                      {printingMonitorActionBusy === 'cancel' ? 'Canceling…' : 'Cancel'}
+                      {printingMonitorCancelButtonAnimating
+                        ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            <span>Canceling…</span>
+                          </span>
+                        )
+                        : 'Cancel'}
                     </button>
 
                     <button
@@ -10294,9 +10563,11 @@ export default function Home() {
                       onClick={() => {
                         void handlePrintingMonitorControlAction('emergency-stop');
                       }}
-                      disabled={printingMonitorActionBusy !== null || !printingMonitoringAdapter.operations}
+                      disabled={printingMonitorEmergencyStopDisabled}
                     >
-                      {printingMonitorActionBusy === 'emergency-stop' ? 'Emergency Stop…' : 'Emergency Stop'}
+                      {(printingMonitorControlPendingAction === 'emergency-stop' || printingMonitorActionBusy === 'emergency-stop')
+                        ? 'Stopping…'
+                        : 'Emergency Stop'}
                     </button>
                   </div>
 
