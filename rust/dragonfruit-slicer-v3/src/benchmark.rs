@@ -137,6 +137,8 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         container_compression_level: 2,
         anti_aliasing_level: "Off".to_string(),
         aa_on_supports: false,
+        mirror_x: false,
+        mirror_y: false,
         triangles_xyz: triangles,
         metadata_json: "{}".to_string(),
     };

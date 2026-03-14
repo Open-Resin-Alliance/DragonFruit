@@ -63,6 +63,12 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
       resolutionX: Math.round(sanitizeNumber((value as any).display?.resolutionX, 2560, 1, 200000)),
       resolutionY: Math.round(sanitizeNumber((value as any).display?.resolutionY, 1620, 1, 200000)),
       outputFormat: parseOutputFormat((value as any).display?.outputFormat),
+      mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
+        ? (value as any).display.mirrorX
+        : undefined,
+      mirrorY: typeof (value as any).display?.mirrorY === 'boolean'
+        ? (value as any).display.mirrorY
+        : undefined,
     },
     networkSupport: (value as any).networkSupport === 'nanodlp' ? 'nanodlp' : undefined,
   };

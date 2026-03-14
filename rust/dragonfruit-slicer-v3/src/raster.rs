@@ -101,14 +101,32 @@ struct ScanlineSegmentIndex {
 }
 
 #[inline]
-fn mm_to_pixel_x(x_mm: f32, min_x_mm: f32, build_width_mm: f32, width_px: u32) -> f32 {
-    let t = (x_mm - min_x_mm) / build_width_mm;
+fn mm_to_pixel_x(
+    x_mm: f32,
+    min_x_mm: f32,
+    build_width_mm: f32,
+    width_px: u32,
+    mirror_x: bool,
+) -> f32 {
+    let mut t = (x_mm - min_x_mm) / build_width_mm;
+    if mirror_x {
+        t = 1.0 - t;
+    }
     t * ((width_px.saturating_sub(1)) as f32)
 }
 
 #[inline]
-fn mm_to_pixel_y(y_mm: f32, min_y_mm: f32, build_depth_mm: f32, height_px: u32) -> f32 {
-    let t = (y_mm - min_y_mm) / build_depth_mm;
+fn mm_to_pixel_y(
+    y_mm: f32,
+    min_y_mm: f32,
+    build_depth_mm: f32,
+    height_px: u32,
+    mirror_y: bool,
+) -> f32 {
+    let mut t = (y_mm - min_y_mm) / build_depth_mm;
+    if mirror_y {
+        t = 1.0 - t;
+    }
     (1.0 - t) * ((height_px.saturating_sub(1)) as f32)
 }
 
@@ -190,10 +208,34 @@ fn build_segments_for_layer(
             }
         }
 
-        let x1 = mm_to_pixel_x(p0.0, min_x_mm, job.build_width_mm, job.source_width_px);
-        let y1 = mm_to_pixel_y(p0.1, min_y_mm, job.build_depth_mm, job.source_height_px);
-        let x2 = mm_to_pixel_x(p1.0, min_x_mm, job.build_width_mm, job.source_width_px);
-        let y2 = mm_to_pixel_y(p1.1, min_y_mm, job.build_depth_mm, job.source_height_px);
+        let x1 = mm_to_pixel_x(
+            p0.0,
+            min_x_mm,
+            job.build_width_mm,
+            job.source_width_px,
+            job.mirror_x,
+        );
+        let y1 = mm_to_pixel_y(
+            p0.1,
+            min_y_mm,
+            job.build_depth_mm,
+            job.source_height_px,
+            job.mirror_y,
+        );
+        let x2 = mm_to_pixel_x(
+            p1.0,
+            min_x_mm,
+            job.build_width_mm,
+            job.source_width_px,
+            job.mirror_x,
+        );
+        let y2 = mm_to_pixel_y(
+            p1.1,
+            min_y_mm,
+            job.build_depth_mm,
+            job.source_height_px,
+            job.mirror_y,
+        );
 
         let dy = y2 - y1;
         if dy.abs() < 1e-8 {
@@ -684,6 +726,8 @@ mod tests {
             container_compression_level: 0,
             anti_aliasing_level: "Off".to_string(),
             aa_on_supports: false,
+            mirror_x: false,
+            mirror_y: false,
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
         }

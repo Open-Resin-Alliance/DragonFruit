@@ -16,6 +16,10 @@ fn default_anti_aliasing_level() -> String {
     "Off".to_string()
 }
 
+fn default_false() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
@@ -48,6 +52,12 @@ pub struct SliceJobV3 {
     /// Whether AA should apply to support geometry (reserved for future split masks).
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// Mirror output image across X axis.
+    #[serde(default = "default_false")]
+    pub mirror_x: bool,
+    /// Mirror output image across Y axis.
+    #[serde(default = "default_false")]
+    pub mirror_y: bool,
     /// Flat triangle buffer (`x,y,z` * 3 vertices per triangle).
     pub triangles_xyz: Vec<f32>,
     /// Opaque metadata JSON passed through from app layer.

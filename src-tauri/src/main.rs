@@ -163,6 +163,10 @@ struct SliceJobMetadata {
     png_compression_strategy: String,
     anti_aliasing_level: String,
     aa_on_supports: bool,
+    #[serde(default)]
+    mirror_x: bool,
+    #[serde(default)]
+    mirror_y: bool,
     container_compression_level: u8,
     build_width_mm: f32,
     build_depth_mm: f32,
@@ -322,6 +326,8 @@ async fn slice_solid_native_to_temp_path(
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
             aa_on_supports: meta.aa_on_supports,
+            mirror_x: meta.mirror_x,
+            mirror_y: meta.mirror_y,
             container_compression_level: meta.container_compression_level,
             build_width_mm: meta.build_width_mm,
             build_depth_mm: meta.build_depth_mm,

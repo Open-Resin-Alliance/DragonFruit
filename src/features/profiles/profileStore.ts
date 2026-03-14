@@ -35,6 +35,11 @@ export type PrinterNetworkConnectionState = {
   selectedMaterialBottomLayerCount?: number;
 };
 
+export type PrinterNetworkDevice = PrinterNetworkConnectionState & {
+  id: string;
+  displayName: string;
+};
+
 export type PrinterPlatformBadge = {
   text: string;
   color?: string;
@@ -58,6 +63,7 @@ export type PrinterPreset = {
   imageAssetPath?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
@@ -82,6 +88,7 @@ export type PrinterProfile = {
   imageDataUrl?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
@@ -101,6 +108,8 @@ export type PrinterProfile = {
     mirrorY?: boolean;
   };
   network?: PrinterNetworkSettings;
+  networkFleet?: PrinterNetworkDevice[];
+  activeNetworkDeviceId?: string;
   networkConnection?: PrinterNetworkConnectionState;
 };
 
@@ -201,6 +210,12 @@ function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function sanitizeNetworkFilter(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddress = ''): PrinterNetworkConnectionState {
   return {
     mode,
@@ -216,6 +231,15 @@ function createDefaultNetworkConnectionState(mode: PrinterNetworkSupport, ipAddr
     selectedMaterialNormalExposureSec: undefined,
     selectedMaterialBottomExposureSec: undefined,
     selectedMaterialBottomLayerCount: undefined,
+  };
+}
+
+function createDefaultPrinterNetworkDevice(mode: PrinterNetworkSupport, ipAddress = ''): PrinterNetworkDevice {
+  const base = createDefaultNetworkConnectionState(mode, ipAddress);
+  return {
+    id: createId('network-device'),
+    displayName: ipAddress.trim() || 'Printer',
+    ...base,
   };
 }
 
@@ -250,6 +274,123 @@ function sanitizePrinterNetworkConnectionState(
     selectedMaterialBottomLayerCount: Number.isFinite(Number(source.selectedMaterialBottomLayerCount))
       ? Number(source.selectedMaterialBottomLayerCount)
       : undefined,
+  };
+}
+
+function sanitizePrinterNetworkDevice(
+  input: unknown,
+  mode: PrinterNetworkSupport,
+  fallbackIpAddress = '',
+): PrinterNetworkDevice {
+  const source = (input ?? {}) as any;
+  const connection = sanitizePrinterNetworkConnectionState(source, mode, fallbackIpAddress);
+  const displayNameRaw = typeof source.displayName === 'string' ? source.displayName.trim() : '';
+
+  return {
+    id: typeof source.id === 'string' && source.id.trim().length > 0
+      ? source.id.trim()
+      : createId('network-device'),
+    displayName: displayNameRaw || connection.hostName || connection.ipAddress || 'Printer',
+    ...connection,
+  };
+}
+
+function hasMeaningfulPrinterNetworkConnection(value: PrinterNetworkConnectionState | null | undefined): boolean {
+  if (!value) return false;
+  return Boolean(
+    value.connected
+    || value.hostName.trim().length > 0
+    || value.ipAddress.trim().length > 0
+    || value.lastCheckedAt.trim().length > 0
+    || (value.statusText ?? '').trim().length > 0
+    || (value.selectedMaterialId ?? '').trim().length > 0,
+  );
+}
+
+function sanitizePrinterNetworkFleet(
+  input: unknown,
+  mode: PrinterNetworkSupport,
+  fallbackIpAddress = '',
+): PrinterNetworkDevice[] {
+  if (!Array.isArray(input)) return [];
+
+  const byId = new Set<string>();
+  const byAddress = new Set<string>();
+  const fleet: PrinterNetworkDevice[] = [];
+
+  for (const item of input) {
+    const device = sanitizePrinterNetworkDevice(item, mode, fallbackIpAddress);
+    if (!hasMeaningfulPrinterNetworkConnection(device)) continue;
+    const normalizedAddress = device.ipAddress.trim().toLowerCase();
+    if (byId.has(device.id)) continue;
+    if (normalizedAddress && byAddress.has(normalizedAddress)) continue;
+    byId.add(device.id);
+    if (normalizedAddress) byAddress.add(normalizedAddress);
+    fleet.push(device);
+  }
+
+  return fleet;
+}
+
+function resolveActivePrinterNetworkDevice(
+  fleet: PrinterNetworkDevice[],
+  requestedId?: string,
+  fallbackIpAddress = '',
+): PrinterNetworkDevice | null {
+  if (fleet.length === 0) return null;
+
+  const normalizedRequestedId = requestedId?.trim() || '';
+  if (normalizedRequestedId) {
+    const matched = fleet.find((device) => device.id === normalizedRequestedId);
+    if (matched) return matched;
+  }
+
+  const normalizedFallbackIp = fallbackIpAddress.trim().toLowerCase();
+  if (normalizedFallbackIp) {
+    const matched = fleet.find((device) => device.ipAddress.trim().toLowerCase() === normalizedFallbackIp);
+    if (matched) return matched;
+  }
+
+  return fleet.find((device) => device.connected) ?? fleet[0] ?? null;
+}
+
+function deriveNetworkProfileState(
+  profile: Partial<PrinterProfile>,
+  mode: PrinterNetworkSupport,
+): Pick<PrinterProfile, 'network' | 'networkFleet' | 'activeNetworkDeviceId' | 'networkConnection'> {
+  const network = sanitizePrinterNetworkSettings((profile as any).network);
+  let networkFleet = sanitizePrinterNetworkFleet((profile as any).networkFleet, mode, network.ipAddress);
+
+  if (networkFleet.length === 0) {
+    const legacyConnection = sanitizePrinterNetworkConnectionState(
+      (profile as any).networkConnection,
+      mode,
+      network.ipAddress,
+    );
+    if (hasMeaningfulPrinterNetworkConnection(legacyConnection)) {
+      networkFleet = [{
+        id: createId('network-device'),
+        displayName: legacyConnection.hostName || legacyConnection.ipAddress || 'Printer',
+        ...legacyConnection,
+      }];
+    }
+  }
+
+  const rawActiveDeviceId = typeof (profile as any).activeNetworkDeviceId === 'string'
+    ? (profile as any).activeNetworkDeviceId.trim()
+    : '';
+  const activeDevice = resolveActivePrinterNetworkDevice(networkFleet, rawActiveDeviceId, network.ipAddress);
+  const resolvedNetwork = activeDevice?.ipAddress
+    ? { ...network, ipAddress: activeDevice.ipAddress }
+    : network;
+
+  return {
+    network: resolvedNetwork,
+    networkFleet,
+    activeNetworkDeviceId: activeDevice?.id ?? undefined,
+    networkConnection: activeDevice
+      ? sanitizePrinterNetworkConnectionState(activeDevice, mode, resolvedNetwork.ipAddress)
+      : createDefaultNetworkConnectionState(mode, resolvedNetwork.ipAddress),
   };
 }
 
@@ -295,6 +436,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   imageDataUrl: preset.imageAssetPath,
   antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
   networkSupport: normalizeNetworkSupport(preset.networkSupport),
+  networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
   platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
   pixelSize: sanitizePixelSize((preset as any).pixelSize),
   bitDepth: sanitizeBitDepth((preset as any).bitDepth),
@@ -412,6 +554,15 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
 
         const fallbackBuildVolume = matchedPreset?.buildVolumeMm;
         const fallbackDisplay = matchedPreset?.display;
+        const networkSupport = resolveNetworkSupport(profile);
+        const networkProfileState = networkSupport
+          ? deriveNetworkProfileState(profile, networkSupport)
+          : {
+            network: sanitizePrinterNetworkSettings((profile as any).network),
+            networkFleet: undefined,
+            activeNetworkDeviceId: undefined,
+            networkConnection: undefined,
+          };
 
         return {
           id: profile.id,
@@ -420,7 +571,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           imageDataUrl: typeof profile.imageDataUrl === 'string' ? profile.imageDataUrl : undefined,
           antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
             ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
-          networkSupport: resolveNetworkSupport(profile),
+          networkSupport,
+          networkFilter: sanitizeNetworkFilter((profile as any).networkFilter) ?? sanitizeNetworkFilter((matchedPreset as any)?.networkFilter),
           platformBadge: sanitizePlatformBadge((profile as any).platformBadge) ?? sanitizePlatformBadge((matchedPreset as any)?.platformBadge),
           pixelSize: sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize),
           bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
@@ -439,14 +591,10 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
             mirrorY: normalizeMirrorFlag(rawDisplay?.mirrorY, normalizeMirrorFlag(fallbackDisplay?.mirrorY, false)),
           },
-          network: sanitizePrinterNetworkSettings((profile as any).network),
-          networkConnection: resolveNetworkSupport(profile)
-            ? sanitizePrinterNetworkConnectionState(
-              (profile as any).networkConnection,
-              resolveNetworkSupport(profile)!,
-              sanitizePrinterNetworkSettings((profile as any).network).ipAddress,
-            )
-            : undefined,
+          network: networkProfileState.network,
+          networkFleet: networkProfileState.networkFleet,
+          activeNetworkDeviceId: networkProfileState.activeNetworkDeviceId,
+          networkConnection: networkProfileState.networkConnection,
         };
       })
       .filter((profile): profile is PrinterProfile => profile !== null)
@@ -677,7 +825,7 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
   };
 }
 
-function createId(prefix: 'printer' | 'material'): string {
+function createId(prefix: 'printer' | 'material' | 'network-device'): string {
   const rand = Math.random().toString(36).slice(2, 9);
   return `${prefix}-${Date.now().toString(36)}-${rand}`;
 }
@@ -718,6 +866,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     imageDataUrl: partial?.imageDataUrl,
     antiAliasing: normalizeAntiAliasingSupport(partial?.antiAliasing),
     networkSupport,
+    networkFilter: sanitizeNetworkFilter(partial?.networkFilter),
     platformBadge: sanitizePlatformBadge(partial?.platformBadge),
     pixelSize: sanitizePixelSize(partial?.pixelSize),
     bitDepth: sanitizeBitDepth(partial?.bitDepth),
@@ -733,6 +882,8 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       mirrorY: normalizeMirrorFlag(partial?.display?.mirrorY, false),
     },
     network: networkSettings,
+    networkFleet: networkSupport ? sanitizePrinterNetworkFleet(partial?.networkFleet, networkSupport, networkSettings.ipAddress) : undefined,
+    activeNetworkDeviceId: typeof partial?.activeNetworkDeviceId === 'string' ? partial.activeNetworkDeviceId.trim() || undefined : undefined,
     networkConnection: networkSupport
       ? sanitizePrinterNetworkConnectionState(partial?.networkConnection, networkSupport, networkSettings.ipAddress)
       : undefined,
@@ -776,6 +927,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     imageDataUrl: preset.imageAssetPath,
     antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
     networkSupport: normalizeNetworkSupport(preset.networkSupport),
+    networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
     platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
@@ -854,6 +1006,9 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       networkSupport: updates.networkSupport !== undefined
         ? normalizeNetworkSupport(updates.networkSupport)
         : profile.networkSupport,
+      networkFilter: updates.networkFilter !== undefined
+        ? sanitizeNetworkFilter(updates.networkFilter)
+        : profile.networkFilter,
       platformBadge: updates.platformBadge !== undefined
         ? sanitizePlatformBadge(updates.platformBadge)
         : profile.platformBadge,
@@ -924,17 +1079,9 @@ export function updatePrinterNetworkSettings(id: string, updates: Partial<Printe
 
     changed = true;
 
-    const networkConnection = profile.networkSupport
-      ? {
-        ...createDefaultNetworkConnectionState(profile.networkSupport, next.ipAddress),
-        lastCheckedAt: profile.networkConnection?.lastCheckedAt ?? '',
-      }
-      : undefined;
-
     return {
       ...profile,
       network: next,
-      networkConnection,
     };
   });
 
@@ -991,8 +1138,27 @@ export function updatePrinterNetworkConnectionStatus(
     }
 
     changed = true;
+    const fleet = Array.isArray(profile.networkFleet) ? [...profile.networkFleet] : [];
+    const activeDeviceId = profile.activeNetworkDeviceId?.trim() || '';
+    const activeIndex = fleet.findIndex((device) => device.id === activeDeviceId);
+
+    if (activeIndex >= 0) {
+      fleet[activeIndex] = {
+        ...fleet[activeIndex],
+        ...next,
+        displayName: fleet[activeIndex].displayName || next.hostName || next.ipAddress || 'Printer',
+      };
+    } else if (hasMeaningfulPrinterNetworkConnection(next)) {
+      fleet.push({
+        id: createId('network-device'),
+        displayName: next.hostName || next.ipAddress || 'Printer',
+        ...next,
+      });
+    }
+
     return {
       ...profile,
+      networkFleet: fleet,
       networkConnection: next,
     };
   });
@@ -1122,6 +1288,182 @@ export function removeMaterialProfile(id: string): void {
     ...state,
     materialProfiles,
   }));
+}
+
+export function getPrinterNetworkFleet(printerProfileId: string, stateOverride?: ProfileStoreState): PrinterNetworkDevice[] {
+  const snapshot = stateOverride ?? state;
+  const profile = snapshot.printerProfiles.find((entry) => entry.id === printerProfileId);
+  return Array.isArray(profile?.networkFleet) ? profile.networkFleet : [];
+}
+
+export function getConnectedPrinterNetworkFleet(printerProfileId: string, stateOverride?: ProfileStoreState): PrinterNetworkDevice[] {
+  return getPrinterNetworkFleet(printerProfileId, stateOverride).filter((device) => device.connected);
+}
+
+export function upsertPrinterNetworkDevice(
+  printerProfileId: string,
+  deviceInput: Partial<PrinterNetworkDevice> & { ipAddress: string },
+  options?: { select?: boolean },
+): string {
+  ensureHydrated();
+  const profile = state.printerProfiles.find((entry) => entry.id === printerProfileId);
+  if (!profile?.networkSupport) {
+    throw new Error(`[ProfileStore] Cannot update network fleet for printer ${printerProfileId}`);
+  }
+
+  const normalizedIp = deviceInput.ipAddress.trim();
+  if (!normalizedIp) {
+    throw new Error('[ProfileStore] ipAddress is required for network fleet device upsert');
+  }
+
+  const currentFleet = Array.isArray(profile.networkFleet) ? [...profile.networkFleet] : [];
+  const targetIndex = currentFleet.findIndex((device) => (
+    (typeof deviceInput.id === 'string' && deviceInput.id.trim().length > 0 && device.id === deviceInput.id.trim())
+    || device.ipAddress.trim().toLowerCase() === normalizedIp.toLowerCase()
+  ));
+  const existing = targetIndex >= 0 ? currentFleet[targetIndex] : createDefaultPrinterNetworkDevice(profile.networkSupport, normalizedIp);
+  const nextConnection = sanitizePrinterNetworkConnectionState(
+    {
+      ...existing,
+      ...deviceInput,
+      ipAddress: normalizedIp,
+    },
+    profile.networkSupport,
+    normalizedIp,
+  );
+
+  const nextDevice: PrinterNetworkDevice = {
+    id: existing.id,
+    displayName: typeof deviceInput.displayName === 'string' && deviceInput.displayName.trim().length > 0
+      ? deviceInput.displayName.trim()
+      : existing.displayName || nextConnection.hostName || nextConnection.ipAddress || 'Printer',
+    ...nextConnection,
+  };
+
+  if (targetIndex >= 0) {
+    currentFleet[targetIndex] = nextDevice;
+  } else {
+    currentFleet.push(nextDevice);
+  }
+
+  const shouldSelect = options?.select === true || !profile.activeNetworkDeviceId;
+  const nextActiveDeviceId = shouldSelect ? nextDevice.id : profile.activeNetworkDeviceId;
+
+  setState(ensureActiveMaterialForActivePrinter({
+    ...state,
+    printerProfiles: state.printerProfiles.map((entry) => entry.id === printerProfileId
+      ? {
+        ...entry,
+        network: {
+          ...sanitizePrinterNetworkSettings(entry.network),
+          ipAddress: shouldSelect ? nextDevice.ipAddress : sanitizePrinterNetworkSettings(entry.network).ipAddress,
+        },
+        networkFleet: currentFleet,
+        activeNetworkDeviceId: nextActiveDeviceId,
+        networkConnection: shouldSelect
+          ? sanitizePrinterNetworkConnectionState(nextDevice, entry.networkSupport!, nextDevice.ipAddress)
+          : entry.networkConnection,
+      }
+      : entry),
+  }));
+
+  return nextDevice.id;
+}
+
+export function selectPrinterNetworkDevice(printerProfileId: string, deviceId: string): void {
+  ensureHydrated();
+  const normalizedDeviceId = deviceId.trim();
+  if (!normalizedDeviceId) return;
+
+  let changed = false;
+  const printerProfiles = state.printerProfiles.map((profile) => {
+    if (profile.id !== printerProfileId) return profile;
+    const fleet = Array.isArray(profile.networkFleet) ? profile.networkFleet : [];
+    const target = fleet.find((device) => device.id === normalizedDeviceId);
+    if (!target) return profile;
+    if (profile.activeNetworkDeviceId === normalizedDeviceId && sanitizePrinterNetworkSettings(profile.network).ipAddress === target.ipAddress) {
+      return profile;
+    }
+    changed = true;
+    return {
+      ...profile,
+      activeNetworkDeviceId: normalizedDeviceId,
+      network: {
+        ...sanitizePrinterNetworkSettings(profile.network),
+        ipAddress: target.ipAddress,
+      },
+      networkConnection: sanitizePrinterNetworkConnectionState(target, profile.networkSupport!, target.ipAddress),
+    };
+  });
+
+  if (!changed) return;
+  setState(ensureActiveMaterialForActivePrinter({ ...state, printerProfiles }));
+}
+
+export function disconnectPrinterNetworkDevice(printerProfileId: string, deviceId: string): void {
+  ensureHydrated();
+  let changed = false;
+  const now = new Date().toISOString();
+
+  const printerProfiles = state.printerProfiles.map((profile) => {
+    if (profile.id !== printerProfileId) return profile;
+    const fleet = Array.isArray(profile.networkFleet) ? profile.networkFleet : [];
+    const nextFleet = fleet.map((device) => {
+      if (device.id !== deviceId) return device;
+      changed = true;
+      return {
+        ...device,
+        connected: false,
+        lastCheckedAt: now,
+        statusText: 'Disconnected',
+      };
+    });
+    if (!changed) return profile;
+    const nextActive = nextFleet.find((device) => device.id === profile.activeNetworkDeviceId);
+    return {
+      ...profile,
+      networkFleet: nextFleet,
+      networkConnection: nextActive
+        ? sanitizePrinterNetworkConnectionState(nextActive, profile.networkSupport!, nextActive.ipAddress)
+        : profile.networkConnection,
+    };
+  });
+
+  if (!changed) return;
+  setState(ensureActiveMaterialForActivePrinter({ ...state, printerProfiles }));
+}
+
+export function removePrinterNetworkDevice(printerProfileId: string, deviceId: string): void {
+  ensureHydrated();
+  let changed = false;
+
+  const printerProfiles = state.printerProfiles.map((profile) => {
+    if (profile.id !== printerProfileId) return profile;
+    const fleet = Array.isArray(profile.networkFleet) ? profile.networkFleet : [];
+    const nextFleet = fleet.filter((device) => device.id !== deviceId);
+    if (nextFleet.length === fleet.length) return profile;
+    changed = true;
+    const nextActive = profile.activeNetworkDeviceId === deviceId ? nextFleet[0]?.id : profile.activeNetworkDeviceId;
+    return {
+      ...profile,
+      networkFleet: nextFleet,
+      activeNetworkDeviceId: nextActive,
+      network: {
+        ...sanitizePrinterNetworkSettings(profile.network),
+        ipAddress: profile.activeNetworkDeviceId === deviceId ? (nextFleet[0]?.ipAddress ?? '') : sanitizePrinterNetworkSettings(profile.network).ipAddress,
+      },
+      networkConnection: nextActive
+        ? sanitizePrinterNetworkConnectionState(
+          nextFleet.find((device) => device.id === nextActive),
+          profile.networkSupport!,
+          nextFleet.find((device) => device.id === nextActive)?.ipAddress ?? '',
+        )
+        : createDefaultNetworkConnectionState(profile.networkSupport!, ''),
+    };
+  });
+
+  if (!changed) return;
+  setState(ensureActiveMaterialForActivePrinter({ ...state, printerProfiles }));
 }
 
 export function getActivePrinterProfile(stateOverride?: ProfileStoreState): PrinterProfile | null {

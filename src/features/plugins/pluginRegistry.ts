@@ -14,6 +14,10 @@ import {
   type NanoDlpBasicSection,
   type NanoDlpPrimaryEditField,
 } from '../../../plugins/athena/nanodlpProfilePlugin';
+import {
+  resolveNanodlpMonitoringSnapshot,
+  resolveNanodlpWebcamFeedInfo,
+} from '../../../plugins/athena/network';
 
 export type PluginSource = 'builtin' | 'github';
 
@@ -57,6 +61,49 @@ export type ProfileNetworkUiAdapter = {
   isDynamicWaitEnabled: (draft: Record<string, string>) => boolean;
 };
 
+export type PrinterMonitoringSnapshot = {
+  connected: boolean;
+  stateText: string;
+  isPrinting: boolean;
+  isPaused: boolean;
+  cancelLatched: boolean;
+  pauseLatched: boolean;
+  finished: boolean;
+  progressPct: number | null;
+  currentLayer: number | null;
+  totalLayers: number | null;
+  plateId: number | null;
+  jobName: string | null;
+  etaSec: number | null;
+};
+
+export type PrinterMonitoringWebcamInfo = {
+  available: boolean;
+  streamUrl: string | null;
+  snapshotUrl: string | null;
+  message: string;
+};
+
+export type ProfileMonitoringUiAdapter = {
+  mode: string;
+  pluginId: string | null;
+  displayName: string;
+  available: boolean;
+  operations: {
+    status: string;
+    webcamInfo: string;
+    platesList: string;
+    start: string;
+    deletePlate: string;
+    pause: string;
+    resume: string;
+    cancel: string;
+    emergencyStop: string;
+  } | null;
+  parseStatusPayload: (payload: unknown, contextKey?: string) => PrinterMonitoringSnapshot;
+  parseWebcamInfoPayload: (payload: unknown, host: string, port: number) => PrinterMonitoringWebcamInfo;
+};
+
 const ATHENA_NANODLP_NETWORK_ADAPTER: ProfileNetworkUiAdapter = {
   mode: 'nanodlp',
   pluginId: 'athena',
@@ -84,6 +131,59 @@ const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>([
   [ATHENA_NANODLP_NETWORK_ADAPTER.mode, ATHENA_NANODLP_NETWORK_ADAPTER],
 ]);
 
+const ATHENA_NANODLP_MONITORING_ADAPTER: ProfileMonitoringUiAdapter = {
+  mode: 'nanodlp',
+  pluginId: 'athena',
+  displayName: 'Athena Monitoring',
+  available: true,
+  operations: {
+    status: 'nanodlp/printer/status',
+    webcamInfo: 'nanodlp/printer/webcam/info',
+    platesList: 'nanodlp/plates/list/json',
+    start: 'nanodlp/printer/start',
+    deletePlate: 'nanodlp/plate/delete',
+    pause: 'nanodlp/printer/pause',
+    resume: 'nanodlp/printer/unpause',
+    cancel: 'nanodlp/printer/stop',
+    emergencyStop: 'nanodlp/printer/force-stop',
+  },
+  parseStatusPayload: (payload, contextKey) => resolveNanodlpMonitoringSnapshot(payload, contextKey),
+  parseWebcamInfoPayload: (payload, host, port) => resolveNanodlpWebcamFeedInfo(payload, host, port),
+};
+
+const GENERIC_MONITORING_STUB_ADAPTER: ProfileMonitoringUiAdapter = {
+  mode: 'generic',
+  pluginId: null,
+  displayName: 'Generic Monitoring Stub',
+  available: false,
+  operations: null,
+  parseStatusPayload: () => ({
+    connected: false,
+    stateText: 'Monitoring unavailable for this backend.',
+    isPrinting: false,
+    isPaused: false,
+    cancelLatched: false,
+    pauseLatched: false,
+    finished: false,
+    progressPct: null,
+    currentLayer: null,
+    totalLayers: null,
+    plateId: null,
+    jobName: null,
+    etaSec: null,
+  }),
+  parseWebcamInfoPayload: () => ({
+    available: false,
+    streamUrl: null,
+    snapshotUrl: null,
+    message: 'Webcam feed unavailable for this backend.',
+  }),
+};
+
+const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>([
+  [ATHENA_NANODLP_MONITORING_ADAPTER.mode, ATHENA_NANODLP_MONITORING_ADAPTER],
+]);
+
 export function getProfileNetworkUiAdapter(mode: string | null | undefined): ProfileNetworkUiAdapter | null {
   if (!mode || typeof mode !== 'string') return null;
   return NETWORK_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? null;
@@ -91,6 +191,11 @@ export function getProfileNetworkUiAdapter(mode: string | null | undefined): Pro
 
 export function getDefaultProfileNetworkUiAdapter(): ProfileNetworkUiAdapter {
   return ATHENA_NANODLP_NETWORK_ADAPTER;
+}
+
+export function getProfileMonitoringUiAdapter(mode: string | null | undefined): ProfileMonitoringUiAdapter {
+  if (!mode || typeof mode !== 'string') return GENERIC_MONITORING_STUB_ADAPTER;
+  return MONITORING_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? GENERIC_MONITORING_STUB_ADAPTER;
 }
 
 export type InstalledProfilePlugin = {
@@ -221,6 +326,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
     antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
     networkSupport: value.networkSupport === 'nanodlp' ? 'nanodlp' : undefined,
+    networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),
     pixelSize,
     bitDepth: sanitizeBitDepth((value as any).bitDepth),
@@ -233,6 +339,12 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       resolutionX,
       resolutionY,
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
+      mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
+        ? (value as any).display.mirrorX
+        : undefined,
+      mirrorY: typeof (value as any).display?.mirrorY === 'boolean'
+        ? (value as any).display.mirrorY
+        : undefined,
     },
   };
 }

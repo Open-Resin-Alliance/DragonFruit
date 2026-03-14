@@ -12,3 +12,4 @@
 
 export * from './nanodlp';
 export * from './nanodlpUploadWithProgress';
+export * from './nanodlpMonitoring';

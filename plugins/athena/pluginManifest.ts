@@ -145,6 +145,12 @@ export const ATHENA_PLUGIN_MANIFEST = {
       || (preset as any).display?.outputFormat === '.lumen')
       ? (preset as any).display.outputFormat
       : '.nanodlp';
+    const mirrorX = typeof (preset as any).display?.mirrorX === 'boolean'
+      ? (preset as any).display.mirrorX
+      : undefined;
+    const mirrorY = typeof (preset as any).display?.mirrorY === 'boolean'
+      ? (preset as any).display.mirrorY
+      : undefined;
 
     return {
       presetId: String((preset as any).presetId),
@@ -177,8 +183,13 @@ export const ATHENA_PLUGIN_MANIFEST = {
         resolutionX,
         resolutionY,
         outputFormat,
+        mirrorX,
+        mirrorY,
       },
       networkSupport: (preset as any).networkSupport === 'nanodlp' ? 'nanodlp' as const : undefined,
+      networkFilter: typeof (preset as any).networkFilter === 'string' && (preset as any).networkFilter.trim().length > 0
+        ? (preset as any).networkFilter.trim()
+        : undefined,
     };
   }) as PrinterPreset[],
   materialTemplates: [],

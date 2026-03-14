@@ -85,6 +85,8 @@ export type SolidSliceMeshForWasm = {
   computeBackend: 'auto' | 'cpu' | 'gpu';
   pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   bvhAccelerationEnabled: boolean;
+  mirrorX: boolean;
+  mirrorY: boolean;
   modelTriangleCount: number;
   buildWidthMm: number;
   buildDepthMm: number;
@@ -1768,6 +1770,8 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
         : 'auto',
     pngCompressionStrategy: perfSettings.pngCompressionStrategy,
     bvhAccelerationEnabled: perfSettings.bvhAccelerationEnabled,
+    mirrorX: settings.mirrorX,
+    mirrorY: settings.mirrorY,
     modelTriangleCount,
     buildWidthMm: Math.max(1, options.printerProfile.buildVolumeMm.width),
     buildDepthMm: Math.max(1, options.printerProfile.buildVolumeMm.depth),

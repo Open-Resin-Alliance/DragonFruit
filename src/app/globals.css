@@ -189,6 +189,51 @@ body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--topbar-accent), white 40%) inset;
 }
 
+@keyframes uiTopbarMonitorActivePulse {
+  0%,
+  100% {
+    color: #22c55e;
+    opacity: 0.84;
+    filter: none;
+  }
+  50% {
+    color: #85c59d;
+    opacity: 1;
+    filter: none;
+  }
+}
+
+@keyframes uiTopbarMonitorPausedBlink {
+  0%,
+  100% {
+    color: #facc15;
+    opacity: 0.92;
+    filter: drop-shadow(0 0 4px rgba(250, 204, 21, 0.34));
+  }
+  50% {
+    color: #fb923c;
+    opacity: 1;
+    filter: drop-shadow(0 0 12px rgba(251, 146, 60, 0.82));
+  }
+}
+
+.ui-topbar-monitor-active {
+  color: #22c55e;
+  animation: uiTopbarMonitorActivePulse 3.8s ease-in-out infinite;
+}
+
+.ui-topbar-monitor-paused {
+  color: #facc15;
+  animation: uiTopbarMonitorPausedBlink 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-topbar-monitor-active,
+  .ui-topbar-monitor-paused {
+    animation: none !important;
+  }
+}
+
 .ui-divider {
   width: 1px;
   height: 32px;

@@ -1,7 +1,6 @@
 import React from 'react';
-import { Download, Printer } from 'lucide-react';
+import { ChevronDown, Download, Printer } from 'lucide-react';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
-import { hostname } from 'os';
 
 type PrintingPanelProps = {
   outputName: string | null;
@@ -15,6 +14,9 @@ type PrintingPanelProps = {
   canSendToPrinter: boolean;
   sendBusy: boolean;
   sendStatusText: string | null;
+  sendButtonLabel?: string;
+  showSendTargetPicker?: boolean;
+  onOpenSendTargetPicker?: () => void;
   onDownload: () => void;
   onSendToPrinter: () => void;
 };
@@ -31,13 +33,16 @@ export function PrintingPanel({
   canSendToPrinter,
   sendBusy,
   sendStatusText,
+  sendButtonLabel = 'Send to Printer',
+  showSendTargetPicker = false,
+  onOpenSendTargetPicker,
   onDownload,
   onSendToPrinter,
 }: PrintingPanelProps) {
   const [isExpanded, setIsExpanded] = React.useState(true);
 
   return (
-    <Card className="w-72">
+    <Card className="w-[22rem]">
       <CardHeader
         left={(
           <>
@@ -102,18 +107,50 @@ export function PrintingPanel({
             Export as {outputFormat ? `${outputFormat}` : 'file'}
           </Button>
 
-          <Button
-            variant="secondary"
-            className="!h-9 inline-flex items-center justify-center gap-1.5"
-            onClick={onSendToPrinter}
-            disabled={!canSendToPrinter || sendBusy}
-            title={canSendToPrinter
-              ? 'Send generated print file to connected printer'
-              : 'Requires connected printer with supported upload capability and a generated print file'}
-          >
-            <Printer className="h-4 w-4" />
-            {sendBusy ? 'Sending…' : `Send to Printer`}
-          </Button>
+          {showSendTargetPicker && onOpenSendTargetPicker ? (
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="secondary"
+                className="!h-9 flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 text-[12px]"
+                onClick={onSendToPrinter}
+                disabled={!canSendToPrinter || sendBusy}
+                title={canSendToPrinter
+                  ? 'Send generated print file to selected printer'
+                  : 'Requires connected printer with supported upload capability and a generated print file'}
+              >
+                <Printer className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 truncate whitespace-nowrap" title={sendBusy ? 'Sending…' : sendButtonLabel}>
+                  {sendBusy ? 'Sending…' : sendButtonLabel}
+                </span>
+              </Button>
+
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-9 w-10 shrink-0 inline-flex items-center justify-center rounded-md"
+                onClick={onOpenSendTargetPicker}
+                disabled={!canSendToPrinter || sendBusy}
+                title="Choose upload target printer"
+                aria-label="Choose upload target printer"
+              >
+                <ChevronDown className="h-4.5 w-4.5" />
+              </button>
+            </div>
+          ) : (
+            <Button
+              variant="secondary"
+              className="!h-9 inline-flex items-center justify-center gap-1.5 text-[12px]"
+              onClick={onSendToPrinter}
+              disabled={!canSendToPrinter || sendBusy}
+              title={canSendToPrinter
+                ? 'Send generated print file to connected printer'
+                : 'Requires connected printer with supported upload capability and a generated print file'}
+            >
+              <Printer className="h-4 w-4" />
+              <span className="min-w-0 truncate whitespace-nowrap" title={sendBusy ? 'Sending…' : sendButtonLabel}>
+                {sendBusy ? 'Sending…' : sendButtonLabel}
+              </span>
+            </Button>
+          )}
         </div>
 
         {sendStatusText && (

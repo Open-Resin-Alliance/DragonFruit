@@ -8,7 +8,7 @@ import type { SupportMode } from '@/supports/types';
 import type { MatcapVariant, MeshShaderType } from '@/features/shaders/mesh';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { Button } from '@/components/ui/primitives';
-import { AlertTriangle, ChevronDown, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, X } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronDown, FolderOpen, Lock, Maximize2, Minimize2, Power, Printer, Save, Square, X } from 'lucide-react';
 import {
   applyThemeCustomColors,
   getSavedThemeCustomColors,
@@ -77,6 +77,11 @@ interface TopBarProps {
   onSaveScene?: () => void;
   onOpenScene?: () => void;
   onCloseProgram?: () => void;
+  showMonitorButton?: boolean;
+  monitorButtonActive?: boolean;
+  monitorButtonPaused?: boolean;
+  onOpenMonitor?: () => void;
+  warnBeforeProfileSettingsOpen?: boolean;
 }
 
 export function TopBar({
@@ -128,11 +133,17 @@ export function TopBar({
   onSaveScene,
   onOpenScene,
   onCloseProgram,
+  showMonitorButton = false,
+  monitorButtonActive = false,
+  monitorButtonPaused = false,
+  onOpenMonitor,
+  warnBeforeProfileSettingsOpen = false,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
+  const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
   const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
@@ -391,6 +402,67 @@ export function TopBar({
   }, [activePrinterProfile?.id, activePrinterProfile?.imageDataUrl]);
 
   const activePrinterThumbnailSrc = printerThumbnailFailed ? undefined : activePrinterProfile?.imageDataUrl;
+  const topbarFleetPrinterName = React.useMemo(() => {
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    if (fleet.length === 0) return null;
+
+    const preferred = fleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
+      ?? fleet.find((device) => device.connected)
+      ?? fleet[0]
+      ?? null;
+    if (!preferred) return null;
+
+    return preferred.displayName || preferred.hostName || preferred.ipAddress || null;
+  }, [activePrinterProfile?.activeNetworkDeviceId, activePrinterProfile?.networkFleet]);
+  const topbarUsesFleetLabelOrder = React.useMemo(() => {
+    return (activePrinterProfile?.networkFleet?.length ?? 0) > 1;
+  }, [activePrinterProfile?.networkFleet]);
+  const topbarPrinterLabelTop = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      return activePrinterProfile?.name ?? 'Select Profile';
+    }
+    return 'Printer';
+  }, [activePrinterProfile?.name, topbarUsesFleetLabelOrder]);
+  const topbarPrinterLabelBottom = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      return topbarFleetPrinterName ?? 'No active printer';
+    }
+    return activePrinterProfile?.name ?? 'Select Printer';
+  }, [activePrinterProfile?.name, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
+  const topbarPrinterButtonTitle = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      const profileName = activePrinterProfile?.name ?? 'Select Profile';
+      const printerName = topbarFleetPrinterName ?? 'No active printer';
+      return `Printer profile: ${profileName} • Active printer: ${printerName}`;
+    }
+    return activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile';
+  }, [activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
+  const topbarPrinterButtonAriaLabel = React.useMemo(() => {
+    if (topbarUsesFleetLabelOrder) {
+      const profileName = activePrinterProfile?.name ?? 'Select profile';
+      const printerName = topbarFleetPrinterName ?? 'No active printer';
+      return `Printer profile ${profileName}, active printer ${printerName}`;
+    }
+    return activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile';
+  }, [activePrinterProfile, topbarFleetPrinterName, topbarUsesFleetLabelOrder]);
+  const monitorButtonAnimationClass = monitorButtonPaused
+    ? 'ui-topbar-monitor-paused'
+    : (monitorButtonActive ? 'ui-topbar-monitor-active' : '');
+
+  const openProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
+    setProfileModalTab(tab);
+    setIsProfileModalOpen(true);
+  }, []);
+
+  const requestOpenProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
+    if (topbarActionsDisabled) return;
+    if (warnBeforeProfileSettingsOpen) {
+      setProfileModalTab(tab);
+      setShowProfileChangeWarning(true);
+      return;
+    }
+    openProfileSettings(tab);
+  }, [openProfileSettings, topbarActionsDisabled, warnBeforeProfileSettingsOpen]);
 
   const steps: Array<{
     mode: SupportMode;
@@ -457,12 +529,11 @@ export function TopBar({
               openAppMenu();
             }
           }}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md border transition-colors"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md transition-colors"
           style={{
-            borderColor: 'var(--border-subtle)',
             background: isAppMenuOpen
-              ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
-              : 'color-mix(in srgb, var(--surface-1), transparent 8%)',
+              ? 'color-mix(in srgb, var(--accent), transparent 80%)'
+              : 'transparent',
           }}
           title="DragonFruit menu"
           aria-label="Open DragonFruit menu"
@@ -471,7 +542,7 @@ export function TopBar({
           <img
             src="/dragonfruit_assets/branding/simple_icon.svg"
             alt="DragonFruit"
-            className="h-6 w-6 object-contain"
+            className="h-7 w-7 object-contain"
             draggable={false}
           />
         </button>
@@ -485,16 +556,13 @@ export function TopBar({
         <button
           type="button"
           disabled={topbarActionsDisabled}
-          onClick={() => {
-            setProfileModalTab('printer');
-            setIsProfileModalOpen(true);
-          }}
+          onClick={() => requestOpenProfileSettings('printer')}
           className="group inline-flex h-10 max-w-[300px] items-center gap-2 rounded-md px-2 transition-colors"
           style={{
             background: 'transparent',
           }}
-          title={activePrinterProfile ? `Printer profile: ${activePrinterProfile.name}` : 'Select printer profile'}
-          aria-label={activePrinterProfile ? `Printer profile ${activePrinterProfile.name}` : 'Select printer profile'}
+          title={topbarPrinterButtonTitle}
+          aria-label={topbarPrinterButtonAriaLabel}
           data-no-window-drag="true"
         >
           <div className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-sm shrink-0">
@@ -511,15 +579,46 @@ export function TopBar({
             )}
           </div>
           <span className="min-w-0 flex flex-col items-start leading-none gap-[2px]">
-            <span className="text-[9px] uppercase tracking-[0.11em]" style={{ color: 'var(--text-muted)' }}>
-              Printer
+            <span
+              className={topbarUsesFleetLabelOrder
+                ? 'truncate text-[10px] tracking-[0.01em]'
+                : 'text-[9px] uppercase tracking-[0.11em]'}
+              style={{ color: 'var(--text-muted)' }}
+              title={topbarPrinterLabelTop}
+            >
+              {topbarPrinterLabelTop}
             </span>
             <span className="truncate text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>
-              {activePrinterProfile?.name ?? 'Select Printer'}
+              {topbarPrinterLabelBottom}
             </span>
           </span>
           <ChevronDown className="h-3.5 w-3.5 ml-auto shrink-0" style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
         </button>
+
+        {showMonitorButton && (
+          <button
+            type="button"
+            disabled={topbarActionsDisabled || !onOpenMonitor}
+            onClick={() => onOpenMonitor?.()}
+            className="group inline-flex h-10 items-center gap-1.5 rounded-md px-2 transition-colors"
+            style={{
+              background: 'transparent',
+              color: 'var(--text-strong)',
+            }}
+            title="Open printer monitor"
+            aria-label="Open printer monitor"
+            data-no-window-drag="true"
+          >
+            <Activity
+              className={`h-3.5 w-3.5 ${monitorButtonAnimationClass}`}
+            />
+            <span
+              className={`text-[11px] font-semibold ${monitorButtonAnimationClass}`}
+            >
+              Monitor
+            </span>
+          </button>
+        )}
       </div>
 
       {isAppMenuOpen && appMenuPosition && (
@@ -800,6 +899,90 @@ export function TopBar({
           </div>
         )}
       </div>
+
+      {showProfileChangeWarning && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" data-no-window-drag="true">
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Changing printer profile requires re-slice"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Re-slice required after profile change
+                  </h2>
+                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Changing printer model and/or material profile invalidates the current sliced file.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close warning"
+                onClick={() => setShowProfileChangeWarning(false)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => setShowProfileChangeWarning(false)}
+                >
+                  Keep Current Profiles
+                </button>
+                <button
+                  type="button"
+                  className="ui-button !h-9 px-3 text-xs"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
+                    color: '#fde68a',
+                  }}
+                  onClick={() => {
+                    setShowProfileChangeWarning(false);
+                    openProfileSettings(profileModalTab);
+                  }}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SettingsModal
         isOpen={isSettingsOpen}

@@ -109,6 +109,48 @@ export function resolveNanoDlpPrinterName(status: NanoDlpStatusPayload): string 
 }
 
 /**
+ * Resolve printer model from NanoDLP status payload aliases.
+ */
+export function resolveNanoDlpPrinterModel(status: NanoDlpStatusPayload): string {
+  const candidates = [
+    status.Model,
+    status.model,
+    status.PrinterModel,
+    status.printerModel,
+    status.Machine,
+    status.machine,
+    status.Name,
+    status.Build,
+  ];
+
+  for (const value of candidates) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+
+  return '';
+}
+
+export type SupportedAthenaModel = 'athena' | 'athena-2';
+
+export function resolveSupportedAthenaModel(status: NanoDlpStatusPayload): SupportedAthenaModel | null {
+  const model = resolveNanoDlpPrinterModel(status);
+  if (!model) return null;
+
+  const normalized = model
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (/\bathena\s*2\b/.test(normalized) || normalized.includes('athena2')) return 'athena-2';
+  if (normalized.includes('athena')) return 'athena';
+
+  return null;
+}
+
+/**
  * Heuristically determine whether an object resembles NanoDLP `/status` JSON.
  *
  * We score known keys and require at least three matches to reduce false
