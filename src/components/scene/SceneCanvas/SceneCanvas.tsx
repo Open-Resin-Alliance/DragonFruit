@@ -1,6 +1,6 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { OrbitControls } from '@react-three/drei';
@@ -767,7 +767,7 @@ export function SceneCanvas({
   const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
   const hoveredSupportModelIdFromStore = React.useMemo(() => {
     const category = supportStateForBounds.hoveredCategory;
-    if (category !== 'support' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
+    if (category !== 'support' && category !== 'contactDisk' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
       return null;
     }
     return getModelIdForSupportEntityId(supportStateForBounds.hoveredId);
@@ -1189,6 +1189,7 @@ export function SceneCanvas({
   const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
   const supportHoverTargetActive = supportStateForBounds.hoveredCategory === 'support'
+    || supportStateForBounds.hoveredCategory === 'contactDisk'
     || supportStateForBounds.hoveredCategory === 'segment'
     || supportStateForBounds.hoveredCategory === 'joint'
     || supportStateForBounds.hoveredCategory === 'knot';
@@ -2785,9 +2786,10 @@ export function SceneCanvas({
     }
 
     if (mode === 'support') {
+      if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSelection();
     }
-  }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive]);
+  }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();

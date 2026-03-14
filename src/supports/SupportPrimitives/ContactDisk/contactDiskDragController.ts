@@ -54,7 +54,10 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
     const { camera, domElement, scene, onHit, onEnd, initialEvent, modelId } = options;
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
+    const modelMeshes = collectModelMeshes(scene, modelId);
     let stopped = false;
+    let rafId: number | null = null;
+    let pendingEvent: PointerEvent | MouseEvent | null = null;
 
     const processPointerEvent = (event: PointerEvent | MouseEvent | any) => {
         const pointerPosition = getPointerClientPosition(event);
@@ -67,7 +70,6 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
         pointer.y = -((pointerPosition.clientY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
 
-        const modelMeshes = collectModelMeshes(scene, modelId);
         if (modelMeshes.length === 0) return;
 
         const hits = raycaster.intersectObjects(modelMeshes, true);
@@ -82,12 +84,25 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
 
     const handlePointerMove = (event: PointerEvent) => {
         if (stopped) return;
-        processPointerEvent(event);
+        pendingEvent = event;
+        if (rafId === null) {
+            rafId = requestAnimationFrame(() => {
+                rafId = null;
+                if (pendingEvent && !stopped) {
+                    processPointerEvent(pendingEvent);
+                    pendingEvent = null;
+                }
+            });
+        }
     };
 
     const stop = () => {
         if (stopped) return;
         stopped = true;
+        if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+        }
         window.removeEventListener('pointermove', handlePointerMove, true);
         if (onEnd) onEnd();
     };

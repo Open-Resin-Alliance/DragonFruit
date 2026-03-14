@@ -1,15 +1,11 @@
-import React, { useMemo, useSyncExternalStore } from 'react';
-import * as THREE from 'three';
+import React, { useMemo } from 'react';
 import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
-import { getConeCenterPosition, getConeQuaternion, getSocketPosition } from './contactConeUtils';
-import { getJointRadius } from '../../constants';
-import { subscribe, getSnapshot } from '../../state';
+import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
-import { JointRenderer } from '../Joint/JointRenderer';
 
 interface ContactConeRendererProps {
     contactDiskId?: string;
@@ -34,6 +30,7 @@ interface ContactConeRendererProps {
     socketJointId?: string;
     isInteractable?: boolean;
     isParentSelected?: boolean;
+    isContactDiskSelected?: boolean;
     onDiskHudHoverChange?: (hovered: boolean) => void;
     onDiskHudPointerDown?: (e: any) => void;
     onDiskHudPointerUp?: (e: any) => void;
@@ -70,9 +67,9 @@ export function ContactConeRenderer({
     bodyColor,
     onDiskHudHoverChange,
     onDiskHudPointerDown,
-    onDiskHudPointerUp
+    onDiskHudPointerUp,
+    isContactDiskSelected = false,
 }: ContactConeRendererProps) {
-    const state = useSyncExternalStore(subscribe, getSnapshot);
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
     const length = profile.lengthMm;
@@ -80,8 +77,7 @@ export function ContactConeRenderer({
 
     // Resolve accurate colors logic
     const finalDiskColor = diskColor || color;
-    const isSelected = !!contactDiskId && state.selectedId === contactDiskId;
-    const finalBodyColor = bodyColor || (isSelected ? '#c11f61' : color);
+    const finalBodyColor = bodyColor || (isContactDiskSelected ? '#c11f61' : color);
 
     // Fallback: If no surfaceNormal provided, assume it aligns with cone axis
     const effectiveSurfaceNormal = surfaceNormal || normal;
@@ -122,7 +118,7 @@ export function ContactConeRenderer({
     const quaternion = getConeQuaternion(normal);
     const handleConeClick = (e: any) => {
         if (!contactDiskId) return;
-        handleContactDiskClick(e, contactDiskId, isInteractable, isParentSelected, isSelected);
+        handleContactDiskClick(e, contactDiskId, isInteractable, isParentSelected, isContactDiskSelected);
     };
 
     // Socket joint position (at the large end of the cone)
@@ -152,6 +148,7 @@ export function ContactConeRenderer({
                     raycast={raycast}
                     isInteractable={isInteractable}
                     isParentSelected={isParentSelected}
+                    isContactDiskSelected={isContactDiskSelected}
                     onHudHoverChange={onDiskHudHoverChange}
                     onHudPointerDown={onDiskHudPointerDown}
                     onHudPointerUp={onDiskHudPointerUp}

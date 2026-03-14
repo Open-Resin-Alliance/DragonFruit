@@ -43,6 +43,8 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
     const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
+    const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+    const [, setDragTick] = React.useState(0);
 
     // Use universal highlight hook
     const { pickRef, visuals } = useHighlight({
@@ -77,10 +79,10 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     }, []);
 
     const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
-        console.log('[TrunkDrag] HUD pointerDown fired | isSelected:', isSelected, '| hasCone:', !!trunk.contactCone);
         if (!isSelected || !trunk.contactCone) return;
         if (!isPrimaryPointerPress(e)) return;
-        console.log('[TrunkDrag] Starting drag session...');
+
+        const socketAnchor = getFinalSocketPosition(trunk.contactCone);
 
         dragSessionRef.current?.stop();
         dragSessionRef.current = startContactDiskDragSession({
@@ -90,18 +92,21 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
             initialEvent: e,
             modelId: trunk.modelId,
             onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
-                const latestTrunk = supportState.trunks[trunk.id];
-                if (!latestTrunk?.contactCone) return;
-                updateTrunk({
-                    ...latestTrunk,
-                    contactCone: recomputeContactConeForMovedDisk(latestTrunk.contactCone, point, surfaceNormal),
-                });
+                const latest = getSnapshot().trunks[trunk.id];
+                if (!latest?.contactCone) return;
+                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor);
+                setDragTick(t => t + 1);
             },
             onEnd: () => {
+                if (liveDragConeRef.current) {
+                    const latest = getSnapshot().trunks[trunk.id];
+                    if (latest) updateTrunk({ ...latest, contactCone: liveDragConeRef.current });
+                }
+                liveDragConeRef.current = null;
                 dragSessionRef.current = null;
             },
         });
-    }, [camera, gl.domElement, isInteractable, isSelected, scene, supportState, trunk.id, trunk.contactCone]);
+    }, [camera, gl.domElement, isSelected, scene, trunk.id, trunk.contactCone, trunk.modelId]);
 
     const handleContactDiskHudPointerUp = React.useCallback(() => {
         dragSessionRef.current?.stop();
@@ -237,24 +242,27 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     });
 
     // --- Render Contact Cone ---
+    const effectiveCone = liveDragConeRef.current ?? trunk.contactCone;
     let coneRender = null;
-    if (trunk.contactCone && !deferContactConesToSceneBatch) {
+    if (effectiveCone && !deferContactConesToSceneBatch) {
+        const isConeSelected = !!effectiveCone.id && supportState.selectedId === effectiveCone.id;
         coneRender = (
             <ContactConeRenderer
-                contactDiskId={trunk.contactCone.id}
-                pos={trunk.contactCone.pos}
-                normal={trunk.contactCone.normal}
-                surfaceNormal={trunk.contactCone.surfaceNormal}
-                diskLengthOverride={trunk.contactCone.diskLengthOverride}
-                profile={trunk.contactCone.profile}
+                contactDiskId={effectiveCone.id}
+                pos={effectiveCone.pos}
+                normal={effectiveCone.normal}
+                surfaceNormal={effectiveCone.surfaceNormal}
+                diskLengthOverride={effectiveCone.diskLengthOverride}
+                profile={effectiveCone.profile}
                 color={visuals.color}
                 emissive={visuals.emissive}
                 emissiveIntensity={visuals.emissiveIntensity}
                 radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
                 sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
-                socketJointId={trunk.contactCone.socketJointId}
+                socketJointId={effectiveCone.socketJointId}
                 isInteractable={isInteractable}
                 isParentSelected={isSelected}
+                isContactDiskSelected={isConeSelected}
                 onDiskHudHoverChange={onContactDiskHudHoverChange}
                 onDiskHudPointerDown={handleContactDiskHudPointerDown}
                 onDiskHudPointerUp={handleContactDiskHudPointerUp}

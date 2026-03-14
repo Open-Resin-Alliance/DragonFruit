@@ -67,7 +67,6 @@ export function ContactDiskHud({
     }, [isDragging, isHovered, onPointerUp, setDragging]);
 
     const handlePointerDownInternal = React.useCallback((e: any) => {
-        console.log('[DiskHud] pointerDown | isInteractable:', isInteractable, '| hasOnPointerDown:', !!onPointerDown);
         if (!isInteractable) return;
         if (typeof e?.pointerId === 'number') {
             activePointerIdRef.current = e.pointerId;

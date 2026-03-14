@@ -53,6 +53,9 @@ export const StickRenderer = React.memo(function StickRenderer({
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
   const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
+  const liveDragConeARef = React.useRef<ContactCone | null>(null);
+  const liveDragConeBRef = React.useRef<ContactCone | null>(null);
+  const [, setDragTick] = React.useState(0);
 
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
@@ -79,7 +82,10 @@ export const StickRenderer = React.memo(function StickRenderer({
   }, []);
 
   const startConeDrag = React.useCallback((coneKey: 'contactConeA' | 'contactConeB', initialEvent?: any) => {
-    console.log('[StickDrag] startConeDrag |', coneKey);
+    const cone = stick[coneKey];
+    if (!cone) return;
+    const socketAnchor = getFinalSocketPosition(cone);
+
     dragSessionRef.current?.stop();
     dragSessionRef.current = startContactDiskDragSession({
       camera,
@@ -88,19 +94,33 @@ export const StickRenderer = React.memo(function StickRenderer({
       initialEvent,
       modelId: stick.modelId,
       onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
-        const latestStick = supportState.sticks[stick.id];
+        const latestStick = getSnapshot().sticks[stick.id];
         const latestCone = latestStick?.[coneKey] as ContactCone | undefined;
         if (!latestStick || !latestCone) return;
-        updateStick({
-          ...latestStick,
-          [coneKey]: recomputeContactConeForMovedDisk(latestCone, point, surfaceNormal),
-        });
+        const newCone = recomputeContactConeForMovedDisk(latestCone, point, surfaceNormal, socketAnchor);
+        if (coneKey === 'contactConeA') liveDragConeARef.current = newCone;
+        else liveDragConeBRef.current = newCone;
+        setDragTick(t => t + 1);
       },
       onEnd: () => {
+        const dragA = liveDragConeARef.current;
+        const dragB = liveDragConeBRef.current;
+        if (dragA || dragB) {
+          const latestStick = getSnapshot().sticks[stick.id];
+          if (latestStick) {
+            updateStick({
+              ...latestStick,
+              ...(dragA ? { contactConeA: dragA } : {}),
+              ...(dragB ? { contactConeB: dragB } : {}),
+            });
+          }
+        }
+        liveDragConeARef.current = null;
+        liveDragConeBRef.current = null;
         dragSessionRef.current = null;
       },
     });
-  }, [camera, gl.domElement, scene, stick.id, supportState]);
+  }, [camera, gl.domElement, scene, stick.id, stick.contactConeA, stick.contactConeB, stick.modelId]);
 
   const handleContactDiskHudPointerDownA = React.useCallback((e: any) => {
     if (!isSelected || !stick.contactConeA) return;
@@ -204,22 +224,28 @@ export const StickRenderer = React.memo(function StickRenderer({
     }
   });
 
+  const effectiveConeA = liveDragConeARef.current ?? stick.contactConeA;
+  const effectiveConeB = liveDragConeBRef.current ?? stick.contactConeB;
+  const isConeASelected = !!effectiveConeA.id && supportState.selectedId === effectiveConeA.id;
+  const isConeBSelected = !!effectiveConeB.id && supportState.selectedId === effectiveConeB.id;
+
   const coneA = !deferContactConesToSceneBatch && (
     <ContactConeRenderer
-      contactDiskId={stick.contactConeA.id}
-      pos={stick.contactConeA.pos}
-      normal={stick.contactConeA.normal}
-      surfaceNormal={stick.contactConeA.surfaceNormal}
-      diskLengthOverride={stick.contactConeA.diskLengthOverride}
-      profile={stick.contactConeA.profile}
+      contactDiskId={effectiveConeA.id}
+      pos={effectiveConeA.pos}
+      normal={effectiveConeA.normal}
+      surfaceNormal={effectiveConeA.surfaceNormal}
+      diskLengthOverride={effectiveConeA.diskLengthOverride}
+      profile={effectiveConeA.profile}
       color={visuals.color}
       emissive={visuals.emissive}
       emissiveIntensity={visuals.emissiveIntensity}
       radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
-      socketJointId={stick.contactConeA.socketJointId}
+      socketJointId={effectiveConeA.socketJointId}
       isInteractable={isInteractable}
       isParentSelected={isSelected}
+      isContactDiskSelected={isConeASelected}
       onDiskHudHoverChange={onContactDiskHudHoverChange}
       onDiskHudPointerDown={handleContactDiskHudPointerDownA}
       onDiskHudPointerUp={handleContactDiskHudPointerUp}
@@ -228,20 +254,21 @@ export const StickRenderer = React.memo(function StickRenderer({
 
   const coneB = !deferContactConesToSceneBatch && (
     <ContactConeRenderer
-      contactDiskId={stick.contactConeB.id}
-      pos={stick.contactConeB.pos}
-      normal={stick.contactConeB.normal}
-      surfaceNormal={stick.contactConeB.surfaceNormal}
-      diskLengthOverride={stick.contactConeB.diskLengthOverride}
-      profile={stick.contactConeB.profile}
+      contactDiskId={effectiveConeB.id}
+      pos={effectiveConeB.pos}
+      normal={effectiveConeB.normal}
+      surfaceNormal={effectiveConeB.surfaceNormal}
+      diskLengthOverride={effectiveConeB.diskLengthOverride}
+      profile={effectiveConeB.profile}
       color={visuals.color}
       emissive={visuals.emissive}
       emissiveIntensity={visuals.emissiveIntensity}
       radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
       sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
-      socketJointId={stick.contactConeB.socketJointId}
+      socketJointId={effectiveConeB.socketJointId}
       isInteractable={isInteractable}
       isParentSelected={isSelected}
+      isContactDiskSelected={isConeBSelected}
       onDiskHudHoverChange={onContactDiskHudHoverChange}
       onDiskHudPointerDown={handleContactDiskHudPointerDownB}
       onDiskHudPointerUp={handleContactDiskHudPointerUp}

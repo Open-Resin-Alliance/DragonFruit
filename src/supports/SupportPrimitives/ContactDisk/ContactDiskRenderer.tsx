@@ -1,10 +1,9 @@
-import React, { useMemo, useSyncExternalStore } from 'react';
+import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { ContactDiskProfile } from '../ContactCone/types';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './contactDiskUtils';
 import { ContactDiskHud } from './ContactDiskHud';
-import { subscribe, getSnapshot } from '../../state';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setContactDiskHudDraggingActive, setContactDiskHudHoverActive, setContactDiskHudInteractionTarget, setContactDiskHudPointerCaptureActive } from './contactDiskHudInteraction';
 
@@ -25,6 +24,7 @@ interface ContactDiskRendererProps {
     raycast?: any;
     isInteractable?: boolean;
     isParentSelected?: boolean;
+    isContactDiskSelected?: boolean;
     onHudHoverChange?: (hovered: boolean) => void;
     onHudPointerDown?: (e: any) => void;
     onHudPointerUp?: (e: any) => void;
@@ -47,12 +47,11 @@ export function ContactDiskRenderer({
     raycast,
     isInteractable = true,
     isParentSelected = false,
+    isContactDiskSelected = false,
     onHudHoverChange,
     onHudPointerDown,
     onHudPointerUp,
 }: ContactDiskRendererProps) {
-    const state = useSyncExternalStore(subscribe, getSnapshot);
-    const isSelected = !!id && state.selectedId === id;
     
     // Calculate geometry based on angle between Surface Normal and Cone Axis
     // Use overrideThickness if provided (from collision logic)
@@ -77,11 +76,11 @@ export function ContactDiskRenderer({
     // Tip Center is at Local Y = +thickness / 2.
 
     const effectivePenetration = Math.max(0, penetrationMm);
-    const displayColor = isSelected ? '#c11f61' : color;
+    const displayColor = isContactDiskSelected ? '#c11f61' : color;
 
     const handleClick = (e: any) => {
         if (!id) return;
-        handleContactDiskClick(e, id, isInteractable, isParentSelected, isSelected);
+        handleContactDiskClick(e, id, isInteractable, isParentSelected, isContactDiskSelected);
     };
 
     const handleHudHoverChange = React.useCallback((hovered: boolean) => {
@@ -104,7 +103,7 @@ export function ContactDiskRenderer({
     }, [onHudPointerUp]);
 
     React.useEffect(() => {
-        if (!isSelected || !id) return;
+        if (!isContactDiskSelected || !id) return;
         setContactDiskHudInteractionTarget(id);
         return () => {
             setContactDiskHudPointerCaptureActive(false);
@@ -112,7 +111,7 @@ export function ContactDiskRenderer({
             setContactDiskHudHoverActive(false);
             setContactDiskHudInteractionTarget(null);
         };
-    }, [id, isSelected]);
+    }, [id, isContactDiskSelected]);
 
     React.useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -131,7 +130,7 @@ export function ContactDiskRenderer({
 
     return (
         <group position={[center.x, center.y, center.z]} quaternion={rotation}>
-            {isSelected ? (
+            {isContactDiskSelected ? (
                 <ContactDiskHud
                     radius={radius}
                     color="#ffffff"
