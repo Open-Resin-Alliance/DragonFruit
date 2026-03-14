@@ -206,13 +206,11 @@ jobs:
             echo "should_preview=${{ steps.preview_decision.outputs.should_preview }}"
           } > "$SUMMARY_PATH"
 
-      - name: Upload runner health summary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: self-hosted-macos-health-summary
-          path: ${{ runner.temp }}/self-hosted-macos-health-summary.txt
-          if-no-files-found: error
-          retention-days: 7
+      - name: Publish runner health summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat "$RUNNER_TEMP/self-hosted-macos-health-summary.txt" >> "$GITHUB_STEP_SUMMARY"
 
   build-preview:
     needs: self-hosted-macos-preflight

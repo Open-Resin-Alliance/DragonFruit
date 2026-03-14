@@ -198,13 +198,11 @@ jobs:
             echo "src-tauri/tauri.conf.json=${{ steps.version_check.outputs.tauri_version }}"
           } > "$SUMMARY_PATH"
 
-      - name: Upload preflight health summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: self-hosted-main-preflight-summary
-          path: ${{ runner.temp }}/self-hosted-main-preflight-summary.txt
-          if-no-files-found: error
-          retention-days: 7
+      - name: Publish preflight health summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat "$RUNNER_TEMP/self-hosted-main-preflight-summary.txt" >> "$GITHUB_STEP_SUMMARY"
 
   hosted-main-preflight-fallback:
     needs: self-hosted-main-preflight
