@@ -81,6 +81,7 @@ interface TopBarProps {
   monitorButtonActive?: boolean;
   monitorButtonPaused?: boolean;
   onOpenMonitor?: () => void;
+  warnBeforeProfileSettingsOpen?: boolean;
 }
 
 export function TopBar({
@@ -136,11 +137,13 @@ export function TopBar({
   monitorButtonActive = false,
   monitorButtonPaused = false,
   onOpenMonitor,
+  warnBeforeProfileSettingsOpen = false,
 }: TopBarProps) {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
+  const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
   const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
@@ -446,6 +449,21 @@ export function TopBar({
     ? 'ui-topbar-monitor-paused'
     : (monitorButtonActive ? 'ui-topbar-monitor-active' : '');
 
+  const openProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
+    setProfileModalTab(tab);
+    setIsProfileModalOpen(true);
+  }, []);
+
+  const requestOpenProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
+    if (topbarActionsDisabled) return;
+    if (warnBeforeProfileSettingsOpen) {
+      setProfileModalTab(tab);
+      setShowProfileChangeWarning(true);
+      return;
+    }
+    openProfileSettings(tab);
+  }, [openProfileSettings, topbarActionsDisabled, warnBeforeProfileSettingsOpen]);
+
   const steps: Array<{
     mode: SupportMode;
     label: string;
@@ -538,10 +556,7 @@ export function TopBar({
         <button
           type="button"
           disabled={topbarActionsDisabled}
-          onClick={() => {
-            setProfileModalTab('printer');
-            setIsProfileModalOpen(true);
-          }}
+          onClick={() => requestOpenProfileSettings('printer')}
           className="group inline-flex h-10 max-w-[300px] items-center gap-2 rounded-md px-2 transition-colors"
           style={{
             background: 'transparent',
@@ -884,6 +899,90 @@ export function TopBar({
           </div>
         )}
       </div>
+
+      {showProfileChangeWarning && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3" data-no-window-drag="true">
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Changing printer profile requires re-slice"
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Re-slice required after profile change
+                  </h2>
+                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Changing printer model and/or material profile invalidates the current sliced file.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close warning"
+                onClick={() => setShowProfileChangeWarning(false)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                You can continue to adjust profiles, but you’ll be prompted to re-slice before printing with the updated settings.
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => setShowProfileChangeWarning(false)}
+                >
+                  Keep Current Profiles
+                </button>
+                <button
+                  type="button"
+                  className="ui-button !h-9 px-3 text-xs"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
+                    color: '#fde68a',
+                  }}
+                  onClick={() => {
+                    setShowProfileChangeWarning(false);
+                    openProfileSettings(profileModalTab);
+                  }}
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SettingsModal
         isOpen={isSettingsOpen}

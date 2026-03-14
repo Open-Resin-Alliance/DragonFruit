@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, ChevronDown, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -723,6 +723,7 @@ export default function Home() {
   const [printingArtifact, setPrintingArtifact] = React.useState<SliceExportArtifact | null>(null);
   const [printingSlicingBenchmark, setPrintingSlicingBenchmark] = React.useState<SliceExportResult['benchmark'] | null>(null);
   const [printingArtifactIsInvalid, setPrintingArtifactIsInvalid] = React.useState(false);
+  const slicedArtifactProfileFingerprintRef = React.useRef<string | null>(null);
   const [printingEstimatedResinMl, setPrintingEstimatedResinMl] = React.useState<number | null>(null);
   const [isPrintingEstimatedResinBusy, setIsPrintingEstimatedResinBusy] = React.useState(false);
   const printingBaseResinMlCacheRef = React.useRef<Map<string, number | null>>(new Map());
@@ -773,6 +774,7 @@ export default function Home() {
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
   const printingMonitorThumbnailCacheRef = React.useRef<Map<string, string>>(new Map());
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
+  const [printerReachabilityByDeviceId, setPrinterReachabilityByDeviceId] = React.useState<Record<string, boolean | null>>({});
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
   const printingUploadProcessingHandoffTimeoutRef = React.useRef<number | null>(null);
@@ -1500,6 +1502,7 @@ export default function Home() {
     printingDisplayedLayerTargetRef.current = 1;
     setPrintingArtifact(null);
     setPrintingArtifactIsInvalid(false);
+    slicedArtifactProfileFingerprintRef.current = null;
     setPrintingReadyPlateId(null);
   }, [clearPrintingLayerPreviewUrls]);
 
@@ -1887,6 +1890,11 @@ export default function Home() {
   }, [selectedPrintingLayerPreviewUrl]);
 
   const hasPrintingWorkspaceData = printingPreviewTotalLayers > 0 && printingArtifact !== null;
+  const activeSliceProfileFingerprint = React.useMemo(() => {
+    const printerProfileId = String(activePrinterProfile?.id ?? '').trim();
+    const materialProfileId = String(activeMaterialProfile?.id ?? '').trim();
+    return `${printerProfileId}::${materialProfileId}`;
+  }, [activeMaterialProfile?.id, activePrinterProfile?.id]);
 
   const handleSliceArtifactReady = React.useCallback((artifact: SliceExportArtifact) => {
     setPrintingArtifact(artifact);
@@ -2936,6 +2944,116 @@ export default function Home() {
     return true;
   }, [activePrinterProfile?.networkSupport, hasConnectedMonitorTarget, printingMonitoringAdapter]);
 
+  React.useEffect(() => {
+    const shouldProbeFleetReachability = Boolean(
+      (printingTargetPickerOpen || printingMonitorModalOpen)
+      && activePrinterProfile?.networkSupport === 'nanodlp'
+      && printingMonitoringAdapter.available
+      && printingMonitoringAdapter.pluginId
+      && printingMonitoringAdapter.operations?.status,
+    );
+
+    if (!shouldProbeFleetReachability) return;
+
+    const connectedFleet = (activePrinterProfile?.networkFleet ?? []).filter((device) => {
+      const host = (device.ipAddress || '').trim();
+      return device.connected && host.length > 0;
+    });
+
+    if (connectedFleet.length === 0) {
+      setPrinterReachabilityByDeviceId({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const probeWithTimeout = async (device: PrinterNetworkDevice): Promise<boolean> => {
+      const host = (device.ipAddress || '').trim();
+      const port = device.port || 80;
+      if (!host) return false;
+
+      // Deterministic debug behavior for local dummy endpoints.
+      const normalizedHost = host.toLowerCase();
+      const normalizedName = `${device.displayName ?? ''} ${device.hostName ?? ''}`.toLowerCase();
+      if (normalizedHost.endsWith('999.999') || normalizedName.includes('debug dummy athena a')) {
+        return true;
+      }
+      if (normalizedHost.endsWith('999.998') || normalizedName.includes('debug dummy athena b')) {
+        return false;
+      }
+
+      try {
+        const result = await Promise.race([
+          pluginNetworkFetch({
+            pluginId: printingMonitoringAdapter.pluginId!,
+            operation: printingMonitoringAdapter.operations!.status,
+            ipAddress: host,
+            port,
+          }).then((response) => response.ok),
+          new Promise<boolean>((resolve) => {
+            window.setTimeout(() => resolve(false), 4000);
+          }),
+        ]);
+
+        return result === true;
+      } catch {
+        return false;
+      }
+    };
+
+    const probeAll = async () => {
+      const entries = await Promise.all(
+        connectedFleet.map(async (device) => {
+          const reachable = await probeWithTimeout(device);
+          return [device.id, reachable] as const;
+        }),
+      );
+
+      if (cancelled) return;
+
+      const nextMap: Record<string, boolean | null> = {};
+      for (const [id, reachable] of entries) {
+        nextMap[id] = reachable;
+      }
+      setPrinterReachabilityByDeviceId(nextMap);
+    };
+
+    void probeAll();
+
+    const intervalId = window.setInterval(() => {
+      void probeAll();
+    }, 9000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [
+    activePrinterProfile?.networkFleet,
+    activePrinterProfile?.networkSupport,
+    printingMonitorModalOpen,
+    printingMonitoringAdapter,
+    printingTargetPickerOpen,
+  ]);
+
+  React.useEffect(() => {
+    if (!printingTargetPickerOpen) return;
+    if (!printingTargetDeviceId) return;
+    if (printerReachabilityByDeviceId[printingTargetDeviceId] !== false) return;
+
+    const fallbackOnline = printableConnectedPrinterFleet.find(
+      (device) => printerReachabilityByDeviceId[device.id] !== false,
+    );
+    if (fallbackOnline) {
+      setPrintingTargetDeviceId(fallbackOnline.id);
+    }
+  }, [
+    printableConnectedPrinterFleet,
+    printerReachabilityByDeviceId,
+    printingTargetDeviceId,
+    printingTargetPickerOpen,
+  ]);
+
   // Best-effort background cleanup of stale DragonFruit temp artifacts from prior runs.
   React.useEffect(() => {
     void cleanupStalePrintTempArtifacts(3 * 24 * 60 * 60)
@@ -3003,11 +3121,14 @@ export default function Home() {
       return;
     }
 
-    const fallbackTarget = printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile.activeNetworkDeviceId)
-      ?? printableConnectedPrinterFleet[0]
+    const reachableFleet = printableConnectedPrinterFleet.filter((device) => printerReachabilityByDeviceId[device.id] !== false);
+    const preferredPool = reachableFleet.length > 0 ? reachableFleet : printableConnectedPrinterFleet;
+
+    const fallbackTarget = preferredPool.find((device) => device.id === activePrinterProfile.activeNetworkDeviceId)
+      ?? preferredPool[0]
       ?? null;
     setPrintingTargetDeviceId(fallbackTarget?.id ?? null);
-  }, [activePrinterProfile, printableConnectedPrinterFleet, printingTargetDeviceId]);
+  }, [activePrinterProfile, printableConnectedPrinterFleet, printerReachabilityByDeviceId, printingTargetDeviceId]);
 
   React.useEffect(() => {
     if (!printingTargetPickerOpen) {
@@ -5946,6 +6067,33 @@ export default function Home() {
     };
   }, [printingArtifact, printingArtifactIsInvalid]);
 
+  // Bind slice artifact to active printer/material profile fingerprint.
+  React.useEffect(() => {
+    if (!printingArtifact) {
+      slicedArtifactProfileFingerprintRef.current = null;
+      return;
+    }
+
+    if (!slicedArtifactProfileFingerprintRef.current) {
+      slicedArtifactProfileFingerprintRef.current = activeSliceProfileFingerprint;
+    }
+  }, [activeSliceProfileFingerprint, printingArtifact]);
+
+  // Invalidate slicing output when printer and/or material profile changes.
+  React.useEffect(() => {
+    if (!printingArtifact || printingArtifactIsInvalid) return;
+
+    const baselineFingerprint = slicedArtifactProfileFingerprintRef.current;
+    if (!baselineFingerprint) {
+      slicedArtifactProfileFingerprintRef.current = activeSliceProfileFingerprint;
+      return;
+    }
+
+    if (baselineFingerprint !== activeSliceProfileFingerprint) {
+      setPrintingArtifactIsInvalid(true);
+    }
+  }, [activeSliceProfileFingerprint, printingArtifact, printingArtifactIsInvalid]);
+
   // Lock printing workspace when no models exist
   React.useEffect(() => {
     if (scene.models.length === 0 && scene.mode === 'printing') {
@@ -8476,6 +8624,7 @@ export default function Home() {
         showMonitorButton={showTopbarMonitorButton}
         monitorButtonActive={selectedPrinterHasActivePrint}
         monitorButtonPaused={selectedPrinterHasPausedAlert}
+        warnBeforeProfileSettingsOpen={Boolean(printingArtifact && !printingArtifactIsInvalid)}
         onOpenMonitor={() => setPrintingMonitorModalOpen(true)}
       />
 
@@ -9811,13 +9960,25 @@ export default function Home() {
                     {printableConnectedPrinterFleet.map((device) => {
                       const isSelected = device.id === (printingTargetDeviceId ?? printingTargetDevice?.id);
                       const deviceLayerMatch = isLayerHeightMatch(device.selectedMaterialLayerHeightMm ?? null);
+                      const isDeviceOffline = printerReachabilityByDeviceId[device.id] === false;
                       return (
                         <button
                           key={device.id}
                           type="button"
-                          onClick={() => setPrintingTargetDeviceId(device.id)}
-                          className="w-full rounded-lg border px-3 py-2.5 text-left"
-                          style={isSelected
+                          onClick={() => {
+                            if (isDeviceOffline) return;
+                            setPrintingTargetDeviceId(device.id);
+                          }}
+                          disabled={isDeviceOffline}
+                          className="relative w-full rounded-lg border px-3 py-2.5 pr-9 text-left"
+                          style={isDeviceOffline
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--border-subtle), black 18%)',
+                                background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+                                color: 'var(--text-muted)',
+                                opacity: 0.55,
+                              }
+                            : isSelected
                             ? {
                                 borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
                                 background: 'color-mix(in srgb, var(--accent), var(--surface-1) 89%)',
@@ -9833,15 +9994,31 @@ export default function Home() {
                                 {device.displayName || device.hostName || device.ipAddress}
                               </div>
                               <div className="text-[12px] leading-tight mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                {device.ipAddress} • {deviceLayerMatch ? 'Layer match' : 'Layer mismatch'}
+                                {device.ipAddress} • {isDeviceOffline ? 'Offline' : (deviceLayerMatch ? 'Layer match' : 'Layer mismatch')}
                               </div>
                             </div>
-                            {isSelected && (
-                              <div className="self-center text-[11px] font-semibold" style={{ color: 'var(--accent-secondary)' }}>
-                                Selected
-                              </div>
-                            )}
                           </div>
+                          {isDeviceOffline ? (
+                            <span
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-wide"
+                              style={{ color: 'var(--text-muted)' }}
+                              aria-label="Printer offline"
+                            >
+                              Offline
+                            </span>
+                          ) : (isSelected && (
+                            <div
+                              className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
+                              style={{
+                                color: '#86efac',
+                                background: 'color-mix(in srgb, #22c55e, transparent 84%)',
+                              }}
+                              aria-label="Selected printer"
+                              title="Selected"
+                            >
+                              <CheckCircle2 className="h-4 w-4" />
+                            </div>
+                          ))}
                         </button>
                       );
                     })}
@@ -9871,7 +10048,7 @@ export default function Home() {
                                   key={material.id}
                                   type="button"
                                   onClick={() => setPrintingTargetMaterialId(material.id)}
-                                  className="w-full rounded-md border px-2.5 py-2 text-left"
+                                  className="relative w-full rounded-md border px-2.5 py-2 pr-9 text-left"
                                   style={isSelectedMaterial
                                     ? {
                                         borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
@@ -9886,15 +10063,23 @@ export default function Home() {
                                     <div className="min-w-0 text-[13px] font-medium truncate" style={{ color: 'var(--text-strong)' }} title={material.name}>
                                       {material.name}
                                     </div>
-                                    {isSelectedMaterial && (
-                                      <div className="self-start text-[11px] font-semibold leading-none pt-[1px]" style={{ color: 'var(--accent-secondary)' }}>
-                                        Selected
-                                      </div>
-                                    )}
                                   </div>
                                   {material.layerHeightMm != null && (
                                     <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                                       {material.layerHeightMm.toFixed(3)} mm
+                                    </div>
+                                  )}
+                                  {isSelectedMaterial && (
+                                    <div
+                                      className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded-full"
+                                      style={{
+                                        color: '#86efac',
+                                        background: 'color-mix(in srgb, #22c55e, transparent 84%)',
+                                      }}
+                                      aria-label="Selected material"
+                                      title="Selected"
+                                    >
+                                      <CheckCircle2 className="h-4 w-4" />
                                     </div>
                                   )}
                                 </button>
@@ -9918,6 +10103,12 @@ export default function Home() {
                 </div>
               )}
 
+              {printingTargetDevice && printerReachabilityByDeviceId[printingTargetDevice.id] === false && (
+                <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  Selected printer is offline. Choose an online printer to continue.
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button
                   type="button"
@@ -9930,7 +10121,13 @@ export default function Home() {
                 <button
                   type="button"
                   className="ui-button ui-button-accent !h-9 px-3 text-xs"
-                  disabled={printingSendBusy || isPrintingTargetMaterialsLoading || !printingTargetDevice || !printingTargetMaterialId}
+                  disabled={
+                    printingSendBusy
+                    || isPrintingTargetMaterialsLoading
+                    || !printingTargetDevice
+                    || !printingTargetMaterialId
+                    || printerReachabilityByDeviceId[printingTargetDevice.id] === false
+                  }
                   onClick={() => {
                     if (!printingTargetDevice || !printingTargetMaterialId) return;
                     setPrintingTargetPickerOpen(false);
@@ -10241,12 +10438,19 @@ export default function Home() {
                       {monitorSelectableDevices.map((device) => {
                         const selected = monitoringDevice?.id === device.id;
                         const display = device.displayName || device.hostName || device.ipAddress || `Printer ${device.id}`;
+                        const isOffline = printerReachabilityByDeviceId[device.id] === false;
                         return (
                           <button
                             key={device.id}
                             type="button"
                             className="w-full rounded-md border px-2.5 py-2 text-left"
-                            style={selected
+                            style={isOffline
+                              ? {
+                                  borderColor: 'color-mix(in srgb, var(--border-subtle), black 18%)',
+                                  background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+                                  opacity: 0.55,
+                                }
+                              : selected
                               ? {
                                   borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
                                   background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
@@ -10255,7 +10459,9 @@ export default function Home() {
                                   borderColor: 'var(--border-subtle)',
                                   background: 'var(--surface-1)',
                                 }}
+                            disabled={isOffline}
                             onClick={() => {
+                              if (isOffline) return;
                               setPrintingMonitorDeviceId(device.id);
                               setIsPrintingMonitorPrinterMenuOpen(false);
                             }}
@@ -10279,7 +10485,7 @@ export default function Home() {
                                   {display}
                                 </div>
                                 <div className="mt-0.5 truncate text-[10px]" style={{ color: 'var(--text-muted)' }} title={device.ipAddress || undefined}>
-                                  {device.ipAddress || 'No IP'}
+                                  {device.ipAddress || 'No IP'} • {isOffline ? 'Offline' : 'Online'}
                                 </div>
                               </div>
                             </div>
