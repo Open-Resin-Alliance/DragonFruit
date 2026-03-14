@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, Play, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Play, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -739,6 +739,8 @@ export default function Home() {
   const printingTargetMaterialsCacheRef = React.useRef<Map<string, FleetUploadMaterialOption[]>>(new Map());
   const [printingMonitorSnapshot, setPrintingMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const [printingMonitorWebcamInfo, setPrintingMonitorWebcamInfo] = React.useState<PrinterMonitoringWebcamInfo | null>(null);
+  const [isPrintingMonitorThumbnailLoaded, setIsPrintingMonitorThumbnailLoaded] = React.useState(false);
+  const [isPrintingMonitorWebcamLoaded, setIsPrintingMonitorWebcamLoaded] = React.useState(false);
   const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
   const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
@@ -750,8 +752,11 @@ export default function Home() {
   const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
   const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
   const [printingMonitorPendingConfirmation, setPrintingMonitorPendingConfirmation] = React.useState<PrintingMonitorPendingConfirmation | null>(null);
+  const [printingMonitorDeviceId, setPrintingMonitorDeviceId] = React.useState<string | null>(null);
+  const [isPrintingMonitorPrinterMenuOpen, setIsPrintingMonitorPrinterMenuOpen] = React.useState(false);
   const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
+  const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
@@ -2546,9 +2551,25 @@ export default function Home() {
       port: selectedKnownPrinterDevice?.port || 80,
     };
   }, [activePrinterProfile?.network?.ipAddress, selectedKnownPrinterDevice?.ipAddress, selectedKnownPrinterDevice?.port]);
+  const monitorSelectableDevices = React.useMemo(() => {
+    if (printableConnectedPrinterFleet.length > 0) {
+      return printableConnectedPrinterFleet;
+    }
+
+    if (selectedKnownPrinterDevice) {
+      return [selectedKnownPrinterDevice];
+    }
+
+    return [] as PrinterNetworkDevice[];
+  }, [printableConnectedPrinterFleet, selectedKnownPrinterDevice]);
   const monitoringDevice = React.useMemo(() => {
-    if (printingTargetDevice) return printingTargetDevice;
-    if (selectedKnownPrinterDevice) return selectedKnownPrinterDevice;
+    if (monitorSelectableDevices.length > 0) {
+      return monitorSelectableDevices.find((device) => device.id === printingMonitorDeviceId)
+        ?? monitorSelectableDevices.find((device) => device.id === printingTargetDevice?.id)
+        ?? monitorSelectableDevices.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
+        ?? monitorSelectableDevices[0]
+        ?? null;
+    }
 
     const fallbackHost = (activePrinterProfile?.network?.ipAddress || '').trim();
     if (!fallbackHost) return null;
@@ -2561,7 +2582,7 @@ export default function Home() {
       port: 80,
       connected: false,
     };
-  }, [activePrinterProfile?.name, activePrinterProfile?.network?.ipAddress, printingTargetDevice, selectedKnownPrinterDevice]);
+  }, [activePrinterProfile?.activeNetworkDeviceId, activePrinterProfile?.name, activePrinterProfile?.network?.ipAddress, monitorSelectableDevices, printingMonitorDeviceId, printingTargetDevice?.id]);
   const printingTargetMaterialGroups = React.useMemo(() => {
     const groups = new Map<string, FleetUploadMaterialOption[]>();
     for (const material of printingTargetMaterialOptions) {
@@ -3310,8 +3331,64 @@ export default function Home() {
   }, [monitoringDevice, printingMonitoringAdapter, printingMonitorModalOpen]);
 
   React.useEffect(() => {
+    setIsPrintingMonitorThumbnailLoaded(false);
+  }, [printingMonitorThumbnailUrl]);
+
+  React.useEffect(() => {
+    setIsPrintingMonitorWebcamLoaded(false);
+  }, [printingMonitorWebcamUrl]);
+
+  React.useEffect(() => {
     setPrintingMonitorWebcamAspectRatio(null);
   }, [printingMonitorWebcamUrl]);
+
+  React.useEffect(() => {
+    if (!printingMonitorModalOpen) {
+      setIsPrintingMonitorPrinterMenuOpen(false);
+      return;
+    }
+
+    if (monitorSelectableDevices.length === 0) {
+      setPrintingMonitorDeviceId(null);
+      return;
+    }
+
+    setPrintingMonitorDeviceId((previous) => {
+      if (previous && monitorSelectableDevices.some((device) => device.id === previous)) {
+        return previous;
+      }
+
+      if (printingTargetDevice?.id && monitorSelectableDevices.some((device) => device.id === printingTargetDevice.id)) {
+        return printingTargetDevice.id;
+      }
+
+      return monitorSelectableDevices[0]?.id ?? null;
+    });
+  }, [monitorSelectableDevices, printingMonitorModalOpen, printingTargetDevice?.id]);
+
+  React.useEffect(() => {
+    if (!isPrintingMonitorPrinterMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (printingMonitorPrinterMenuRef.current?.contains(target)) return;
+      setIsPrintingMonitorPrinterMenuOpen(false);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsPrintingMonitorPrinterMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isPrintingMonitorPrinterMenuOpen]);
 
   React.useEffect(() => {
     if (!printingMonitorModalOpen) {
@@ -9808,17 +9885,78 @@ export default function Home() {
             aria-label="Printer monitor"
           >
             <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-              <div>
-                <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                  Printer Monitor
-                </div>
-                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  {monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer'}
-                </div>
+              <div className="relative" ref={printingMonitorPrinterMenuRef}>
+                {monitorSelectableDevices.length > 1 ? (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-sm font-semibold transition-colors"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-strong)',
+                    }}
+                    onClick={() => setIsPrintingMonitorPrinterMenuOpen((previous) => !previous)}
+                    aria-label="Select monitored printer"
+                    title="Switch monitored printer"
+                  >
+                    <span className="max-w-[280px] truncate">
+                      {monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer'}
+                    </span>
+                    <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isPrintingMonitorPrinterMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                ) : (
+                  <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer'}
+                  </div>
+                )}
+
+                {isPrintingMonitorPrinterMenuOpen && monitorSelectableDevices.length > 1 && (
+                  <div
+                    className="absolute left-0 top-full z-20 mt-2 w-[min(360px,82vw)] rounded-lg border p-1.5 shadow-xl"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'color-mix(in srgb, var(--surface-0), #000 8%)',
+                    }}
+                  >
+                    <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-1 pr-0.5">
+                      {monitorSelectableDevices.map((device) => {
+                        const selected = monitoringDevice?.id === device.id;
+                        const display = device.displayName || device.hostName || device.ipAddress || `Printer ${device.id}`;
+                        return (
+                          <button
+                            key={device.id}
+                            type="button"
+                            className="w-full rounded-md border px-2.5 py-2 text-left"
+                            style={selected
+                              ? {
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 35%)',
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
+                                }
+                              : {
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'var(--surface-1)',
+                                }}
+                            onClick={() => {
+                              setPrintingMonitorDeviceId(device.id);
+                              setIsPrintingMonitorPrinterMenuOpen(false);
+                            }}
+                          >
+                            <div className="truncate text-[12px] font-semibold" style={{ color: 'var(--text-strong)' }} title={display}>
+                              {display}
+                            </div>
+                            <div className="mt-0.5 truncate text-[10px]" style={{ color: 'var(--text-muted)' }} title={device.ipAddress || undefined}>
+                              {device.ipAddress || 'No IP'}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
               <button
                 type="button"
-                className="ui-button ui-button-secondary !p-2"
+                className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-8 !w-8 !p-0"
                 onClick={() => setPrintingMonitorModalOpen(false)}
                 aria-label="Close printer monitor"
                 title="Close monitor"
@@ -9849,14 +9987,35 @@ export default function Home() {
                   <div className="mt-1.5 rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
                     <div className="aspect-[4/3] w-full">
                       {printingMonitorHasActivePrint && printingMonitorThumbnailUrl ? (
-                        <img
-                          src={printingMonitorThumbnailUrl}
-                          alt="Active print thumbnail"
-                          className="block h-full w-full object-contain"
-                          loading="eager"
-                          decoding="async"
-                          fetchPriority="high"
-                        />
+                        <div className="relative h-full w-full">
+                          {!isPrintingMonitorThumbnailLoaded && (
+                            <div className="absolute inset-0 flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              <div className="w-[74%]">
+                                <div
+                                  className="ui-loading-track h-2.5 w-full rounded-full"
+                                  style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+                                >
+                                  <div
+                                    className="ui-loading-indicator"
+                                    style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
+                                  />
+                                </div>
+                                <div className="mt-2 text-center">Loading thumbnail…</div>
+                              </div>
+                            </div>
+                          )}
+                          <img
+                            src={printingMonitorThumbnailUrl}
+                            alt="Active print thumbnail"
+                            className="block h-full w-full object-contain transition-opacity duration-150"
+                            style={{ opacity: isPrintingMonitorThumbnailLoaded ? 1 : 0 }}
+                            onLoad={() => setIsPrintingMonitorThumbnailLoaded(true)}
+                            onError={() => setIsPrintingMonitorThumbnailLoaded(true)}
+                            loading="eager"
+                            decoding="async"
+                            fetchPriority="high"
+                          />
+                        </div>
                       ) : (
                         <div className="h-full w-full p-2">
                           {printingMonitorRecentPlates.length > 0 ? (
@@ -10080,12 +10239,28 @@ export default function Home() {
                 {printingMonitorWebcamInfo?.available && printingMonitorWebcamUrl ? (
                   <div className="mt-1.5 flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
                     <div
-                      className="rounded-md border overflow-hidden h-full max-h-full max-w-full"
+                      className="relative rounded-md border overflow-hidden h-full max-h-full max-w-full"
                       style={{
                         borderColor: 'var(--border-subtle)',
                         background: 'color-mix(in srgb, var(--surface-1), #000 6%)',
                       }}
                     >
+                      {!isPrintingMonitorWebcamLoaded && (
+                        <div className="absolute inset-0 z-[1] flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          <div className="w-[74%]">
+                            <div
+                              className="ui-loading-track h-2.5 w-full rounded-full"
+                              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+                            >
+                              <div
+                                className="ui-loading-indicator"
+                                style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
+                              />
+                            </div>
+                            <div className="mt-2 text-center">Loading camera feed…</div>
+                          </div>
+                        </div>
+                      )}
                       <div
                         className="h-full"
                         style={monitorWebcamDisplayAspectRatio != null
@@ -10100,8 +10275,9 @@ export default function Home() {
                         <img
                           src={printingMonitorWebcamUrl}
                           alt="Printer webcam preview"
-                          className="block h-full w-auto max-w-full object-contain"
+                          className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
                           style={{
+                            opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
                             transform: shouldRotateMonitorWebcam
                               ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
                               : undefined,
@@ -10117,7 +10293,9 @@ export default function Home() {
                               if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
                               return ratio;
                             });
+                            setIsPrintingMonitorWebcamLoaded(true);
                           }}
+                          onError={() => setIsPrintingMonitorWebcamLoaded(true)}
                           loading="eager"
                           decoding="async"
                           fetchPriority="high"
