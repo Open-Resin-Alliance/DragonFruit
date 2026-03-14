@@ -517,6 +517,62 @@ function findPlate(
   return null;
 }
 
+function normalizeNanoDlpFileLocation(value: unknown): 'Local' | 'Usb' {
+  if (typeof value !== 'string') return 'Local';
+
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return 'Local';
+  if (normalized === 'usb' || normalized === 'external') return 'Usb';
+  if (normalized === 'local' || normalized === 'internal') return 'Local';
+  return 'Local';
+}
+
+async function resolveNanoDlpPlateFileTarget(
+  host: string,
+  port: number,
+  plateId: number,
+): Promise<{ location: 'Local' | 'Usb'; filePath: string } | null> {
+  try {
+    const response = await fetch(`${buildNanoDlpBaseUrl(host, port).replace(/\/+$/, '')}/plates/list/json`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (response.status !== 200) return null;
+
+    const decoded = await response.json().catch(() => null);
+    if (!decoded) return null;
+
+    const entries = extractListFromJson(decoded, ['plates', 'files', 'data']);
+    const plates = entries
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry) => entry as Record<string, unknown>);
+
+    const matched = findPlate(plates, { plateId, jobName: null });
+    if (!matched) return null;
+
+    const rawPath = matched.Path ?? matched.path ?? matched.File ?? matched.file ?? matched.Name ?? matched.name;
+    const filePath = typeof rawPath === 'string' ? rawPath.trim() : '';
+    if (!filePath) return null;
+
+    const rawLocation = matched.Location
+      ?? matched.location
+      ?? matched.LocationCategory
+      ?? matched.locationCategory
+      ?? matched.storage
+      ?? matched.Storage;
+
+    return {
+      location: normalizeNanoDlpFileLocation(rawLocation),
+      filePath,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isPlateMetadataReady(plate: Record<string, unknown>): boolean {
   const candidates = [
     plate.LayerHeight,
@@ -1304,27 +1360,40 @@ async function handleNanoDlpPlateDelete(payload: unknown): Promise<HandlerResult
   const plateId = Math.round(plateIdRaw);
   const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
   const baseNoSlash = buildNanoDlpBaseUrl(parsedHost.host, port).replace(/\/+$/, '');
-  const endpointPaths = [
-    `/plate/delete/${plateId}`,
-    `/plates/delete/${plateId}`,
-    `/plate/remove/${plateId}`,
-  ];
+  const fileTarget = await resolveNanoDlpPlateFileTarget(parsedHost.host, port, plateId);
 
-  const attempted: Array<{ path: string; status: number }> = [];
+  const endpointAttempts: Array<{ method: 'DELETE' | 'GET'; path: string }> = [];
+
+  if (fileTarget) {
+    const query = new URLSearchParams({
+      location: fileTarget.location,
+      file_path: fileTarget.filePath,
+    });
+    endpointAttempts.push({ method: 'DELETE', path: `/file?${query.toString()}` });
+  }
+
+  endpointAttempts.push(
+    { method: 'GET', path: `/plate/delete/${plateId}` },
+    { method: 'GET', path: `/plates/delete/${plateId}` },
+    { method: 'GET', path: `/plate/remove/${plateId}` },
+  );
+
+  const attempted: Array<{ method: string; path: string; status: number }> = [];
   let lastNetworkError: unknown = null;
 
-  for (const endpointPath of endpointPaths) {
+  for (const endpoint of endpointAttempts) {
+    const endpointPath = endpoint.path;
     try {
       const response = await fetch(`${baseNoSlash}${endpointPath}`, {
-        method: 'GET',
+        method: endpoint.method,
         redirect: 'manual',
         cache: 'no-store',
         signal: AbortSignal.timeout(15_000),
       });
 
-      attempted.push({ path: endpointPath, status: response.status });
+      attempted.push({ method: endpoint.method, path: endpointPath, status: response.status });
 
-      if (response.status === 200 || response.status === 302) {
+      if (response.status === 200 || response.status === 202 || response.status === 204 || response.status === 302) {
         return {
           status: 200,
           body: {
@@ -1333,6 +1402,7 @@ async function handleNanoDlpPlateDelete(payload: unknown): Promise<HandlerResult
             port,
             plateId,
             status: response.status,
+            method: endpoint.method,
             endpoint: endpointPath,
             message: `Deleted plate #${plateId}.`,
             attempted,

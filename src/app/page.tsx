@@ -740,6 +740,7 @@ export default function Home() {
   const [printingMonitorSnapshot, setPrintingMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const [printingMonitorWebcamInfo, setPrintingMonitorWebcamInfo] = React.useState<PrinterMonitoringWebcamInfo | null>(null);
   const [isPrintingMonitorThumbnailLoaded, setIsPrintingMonitorThumbnailLoaded] = React.useState(false);
+  const [printingMonitorThumbnailDisplayUrl, setPrintingMonitorThumbnailDisplayUrl] = React.useState<string | null>(null);
   const [isPrintingMonitorWebcamLoaded, setIsPrintingMonitorWebcamLoaded] = React.useState(false);
   const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
   const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
@@ -757,6 +758,7 @@ export default function Home() {
   const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const printingMonitorThumbnailCacheRef = React.useRef<Map<string, string>>(new Map());
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
@@ -2652,6 +2654,13 @@ export default function Home() {
     const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
     return `${base}/static/plates/${printingMonitorPlateId}/3d.png`;
   }, [monitoringDevice, printingMonitorPlateId]);
+  const printingMonitorThumbnailCacheKey = React.useMemo(() => {
+    if (!monitoringDevice || printingMonitorPlateId == null) return null;
+    const host = (monitoringDevice.ipAddress || '').trim();
+    if (!host) return null;
+    const port = monitoringDevice.port || 80;
+    return `${host}:${port}|${printingMonitorPlateId}`;
+  }, [monitoringDevice, printingMonitorPlateId]);
   const printingMonitorWebcamUrl = React.useMemo(() => {
     return printingMonitorWebcamInfo?.streamUrl ?? printingMonitorWebcamInfo?.snapshotUrl ?? null;
   }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl]);
@@ -2703,10 +2712,12 @@ export default function Home() {
     if (!printingMonitorHasActivePrint) return 0;
     const totalRaw = printingMonitorSnapshot?.totalLayers;
     const currentRaw = printingMonitorSnapshot?.currentLayer;
-    if (!Number.isFinite(totalRaw) || !Number.isFinite(currentRaw)) return 0;
+    const totalNumeric = Number(totalRaw);
+    const currentNumeric = Number(currentRaw);
+    if (!Number.isFinite(totalNumeric) || !Number.isFinite(currentNumeric)) return 0;
 
-    const total = Math.max(0, Math.round(totalRaw));
-    const current = Math.max(0, Math.round(currentRaw));
+    const total = Math.max(0, Math.round(totalNumeric));
+    const current = Math.max(0, Math.round(currentNumeric));
     if (total <= 0) return 0;
 
     const completedLayers = Math.max(0, Math.min(total, current - 1));
@@ -3126,7 +3137,7 @@ export default function Home() {
         throw new Error(reason);
       }
 
-      const parsed = (Array.isArray(payload?.plates) ? payload.plates : [])
+      const parsed: PrintingMonitorRecentPlate[] = (Array.isArray(payload?.plates) ? payload.plates : [])
         .map((entry: unknown) => {
           if (!entry || typeof entry !== 'object') return null;
           const plate = entry as Record<string, unknown>;
@@ -3227,7 +3238,7 @@ export default function Home() {
           } satisfies PrintingMonitorRecentPlate;
         })
         .filter((item: PrintingMonitorRecentPlate | null): item is PrintingMonitorRecentPlate => item !== null)
-        .sort((a, b) => {
+        .sort((a: PrintingMonitorRecentPlate, b: PrintingMonitorRecentPlate) => {
           const aModified = a.lastModifiedEpochSec ?? 0;
           const bModified = b.lastModifiedEpochSec ?? 0;
           if (aModified !== bModified) return bModified - aModified;
@@ -3237,8 +3248,8 @@ export default function Home() {
 
       setPrintingMonitorRecentPlates(parsed);
       setPrintingMonitorSelectedPlateId((previous) => {
-        if (previous != null && parsed.some((plate) => plate.plateId === previous)) return previous;
-        if (printingMonitorPlateId != null && parsed.some((plate) => plate.plateId === printingMonitorPlateId)) {
+        if (previous != null && parsed.some((plate: PrintingMonitorRecentPlate) => plate.plateId === previous)) return previous;
+        if (printingMonitorPlateId != null && parsed.some((plate: PrintingMonitorRecentPlate) => plate.plateId === printingMonitorPlateId)) {
           return printingMonitorPlateId;
         }
         return parsed[0]?.plateId ?? null;
@@ -3331,8 +3342,42 @@ export default function Home() {
   }, [monitoringDevice, printingMonitoringAdapter, printingMonitorModalOpen]);
 
   React.useEffect(() => {
-    setIsPrintingMonitorThumbnailLoaded(false);
-  }, [printingMonitorThumbnailUrl]);
+    if (!printingMonitorHasActivePrint || !printingMonitorThumbnailUrl || !printingMonitorThumbnailCacheKey) {
+      setPrintingMonitorThumbnailDisplayUrl(null);
+      setIsPrintingMonitorThumbnailLoaded(false);
+      return;
+    }
+
+    const cached = printingMonitorThumbnailCacheRef.current.get(printingMonitorThumbnailCacheKey) ?? null;
+    if (cached) {
+      setPrintingMonitorThumbnailDisplayUrl(cached);
+      setIsPrintingMonitorThumbnailLoaded(true);
+    } else {
+      setPrintingMonitorThumbnailDisplayUrl(null);
+      setIsPrintingMonitorThumbnailLoaded(false);
+    }
+
+    let cancelled = false;
+    const probeImage = new Image();
+    probeImage.decoding = 'async';
+    probeImage.onload = () => {
+      if (cancelled) return;
+      printingMonitorThumbnailCacheRef.current.set(printingMonitorThumbnailCacheKey, printingMonitorThumbnailUrl);
+      setPrintingMonitorThumbnailDisplayUrl(printingMonitorThumbnailUrl);
+      setIsPrintingMonitorThumbnailLoaded(true);
+    };
+    probeImage.onerror = () => {
+      if (cancelled) return;
+      const fallback = printingMonitorThumbnailCacheRef.current.get(printingMonitorThumbnailCacheKey) ?? null;
+      setPrintingMonitorThumbnailDisplayUrl(fallback);
+      setIsPrintingMonitorThumbnailLoaded(Boolean(fallback));
+    };
+    probeImage.src = printingMonitorThumbnailUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [printingMonitorHasActivePrint, printingMonitorThumbnailCacheKey, printingMonitorThumbnailUrl]);
 
   React.useEffect(() => {
     setIsPrintingMonitorWebcamLoaded(false);
@@ -9986,7 +10031,7 @@ export default function Home() {
                   </div>
                   <div className="mt-1.5 rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
                     <div className="aspect-[4/3] w-full">
-                      {printingMonitorHasActivePrint && printingMonitorThumbnailUrl ? (
+                      {printingMonitorHasActivePrint && (printingMonitorThumbnailDisplayUrl || printingMonitorThumbnailUrl) ? (
                         <div className="relative h-full w-full">
                           {!isPrintingMonitorThumbnailLoaded && (
                             <div className="absolute inset-0 flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
@@ -10005,12 +10050,10 @@ export default function Home() {
                             </div>
                           )}
                           <img
-                            src={printingMonitorThumbnailUrl}
+                            src={printingMonitorThumbnailDisplayUrl ?? printingMonitorThumbnailUrl ?? undefined}
                             alt="Active print thumbnail"
                             className="block h-full w-full object-contain transition-opacity duration-150"
                             style={{ opacity: isPrintingMonitorThumbnailLoaded ? 1 : 0 }}
-                            onLoad={() => setIsPrintingMonitorThumbnailLoaded(true)}
-                            onError={() => setIsPrintingMonitorThumbnailLoaded(true)}
                             loading="eager"
                             decoding="async"
                             fetchPriority="high"

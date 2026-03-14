@@ -923,6 +923,63 @@ fn is_plate_metadata_ready(plate: &Value) -> bool {
     false
 }
 
+fn normalize_nanodlp_file_location(value: Option<&str>) -> &'static str {
+    let normalized = value.unwrap_or("").trim().to_lowercase();
+    if normalized == "usb" || normalized == "external" {
+        return "Usb";
+    }
+    if normalized == "local" || normalized == "internal" {
+        return "Local";
+    }
+    "Local"
+}
+
+async fn resolve_nanodlp_plate_file_target(
+    host: &str,
+    port: u16,
+    plate_id: u64,
+) -> Option<(String, &'static str)> {
+    let base_url = build_base_url(host, port).trim_end_matches('/').to_string();
+    let resp = http_client()
+        .get(format!("{base_url}/plates/list/json"))
+        .header("Accept", "application/json")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .ok()?;
+
+    if resp.status().as_u16() != 200 {
+        return None;
+    }
+
+    let decoded: Value = resp.json().await.ok()?;
+    let entries = extract_list(&decoded, &["plates", "files", "data"]);
+    let plates: Vec<Value> = entries.into_iter().filter(|e| e.is_object()).collect();
+    let matched = find_plate(&plates, Some(plate_id), "")?;
+
+    let file_path = matched
+        .get("Path")
+        .or_else(|| matched.get("path"))
+        .or_else(|| matched.get("File"))
+        .or_else(|| matched.get("file"))
+        .or_else(|| matched.get("Name"))
+        .or_else(|| matched.get("name"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())?;
+
+    let location_raw = matched
+        .get("Location")
+        .or_else(|| matched.get("location"))
+        .or_else(|| matched.get("LocationCategory"))
+        .or_else(|| matched.get("locationCategory"))
+        .or_else(|| matched.get("storage"))
+        .or_else(|| matched.get("Storage"))
+        .and_then(|value| value.as_str());
+
+    Some((file_path, normalize_nanodlp_file_location(location_raw)))
+}
+
 // ---------------------------------------------------------------------------
 // Hostname / IP normalization helpers
 // ---------------------------------------------------------------------------
@@ -2032,6 +2089,50 @@ async fn nanodlp_plate_delete(payload: &Value) -> (u16, Value) {
     let mut attempted: Vec<Value> = Vec::new();
     let mut last_error_message: Option<String> = None;
 
+    if let Some((file_path, location)) = resolve_nanodlp_plate_file_target(&parsed.0, port, plate_id).await {
+        let endpoint_path = "/file".to_string();
+        match http_client()
+            .request(reqwest::Method::DELETE, format!("{base_url}{endpoint_path}"))
+            .query(&[("location", location), ("file_path", file_path.as_str())])
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                attempted.push(json!({
+                    "method": "DELETE",
+                    "path": endpoint_path,
+                    "status": status,
+                    "query": {
+                        "location": location,
+                        "file_path": file_path,
+                    }
+                }));
+
+                if status == 200 || status == 202 || status == 204 || status == 302 {
+                    return (
+                        200,
+                        json!({
+                            "ok": true,
+                            "ipAddress": parsed.0,
+                            "port": port,
+                            "plateId": plate_id,
+                            "status": status,
+                            "method": "DELETE",
+                            "endpoint": endpoint_path,
+                            "message": format!("Deleted plate #{plate_id}."),
+                            "attempted": attempted,
+                        }),
+                    );
+                }
+            }
+            Err(err) => {
+                last_error_message = Some(err.to_string());
+            }
+        }
+    }
+
     for endpoint_path in endpoint_paths {
         match http_client()
             .get(format!("{base_url}{endpoint_path}"))
@@ -2042,11 +2143,12 @@ async fn nanodlp_plate_delete(payload: &Value) -> (u16, Value) {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 attempted.push(json!({
+                    "method": "GET",
                     "path": endpoint_path,
                     "status": status,
                 }));
 
-                if status == 200 || status == 302 {
+                if status == 200 || status == 202 || status == 204 || status == 302 {
                     return (
                         200,
                         json!({
@@ -2055,6 +2157,7 @@ async fn nanodlp_plate_delete(payload: &Value) -> (u16, Value) {
                             "port": port,
                             "plateId": plate_id,
                             "status": status,
+                            "method": "GET",
                             "endpoint": endpoint_path,
                             "message": format!("Deleted plate #{plate_id}."),
                             "attempted": attempted,
