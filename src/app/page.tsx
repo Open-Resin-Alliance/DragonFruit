@@ -685,7 +685,7 @@ export default function Home() {
   const [printingSelectedLayer, setPrintingSelectedLayer] = React.useState(1);
   const [printingDisplayedLayer, setPrintingDisplayedLayer] = React.useState(1);
   const [isPrintingLayerScrubbing, setIsPrintingLayerScrubbing] = React.useState(false);
-  const [isPrintingPngLoaded, setIsPrintingPngLoaded] = React.useState(false);
+  const [printingPngLoadedUrl, setPrintingPngLoadedUrl] = React.useState<string | null>(null);
   const [isSceneLayerScrubbing, setIsSceneLayerScrubbing] = React.useState(false);
   const [isSlicingBusy, setIsSlicingBusy] = React.useState(false);
   const [isPrintingPreviewSettled, setIsPrintingPreviewSettled] = React.useState(false);
@@ -1506,6 +1506,11 @@ export default function Home() {
     return printingLayerPreviewUrls[printingDisplayedLayer - 1] ?? null;
   }, [printingLayerPreviewUrls, printingDisplayedLayer]);
 
+  const isPrintingPngLoaded = React.useMemo(() => {
+    if (!selectedPrintingLayerPreviewUrl) return false;
+    return printingPngLoadedUrl === selectedPrintingLayerPreviewUrl;
+  }, [printingPngLoadedUrl, selectedPrintingLayerPreviewUrl]);
+
   React.useEffect(() => {
     if (scene.mode !== 'printing') return;
     if (!printingArtifact?.nativeTempPath) return;
@@ -1575,26 +1580,28 @@ export default function Home() {
   ]);
 
   React.useEffect(() => {
-    // Reset load state whenever we change the displayed layer's preview URL.
-    setIsPrintingPngLoaded(false);
-    if (!selectedPrintingLayerPreviewUrl) return;
+    if (!selectedPrintingLayerPreviewUrl) {
+      setPrintingPngLoadedUrl(null);
+      return;
+    }
 
     const loadNonce = ++printingPreviewLoadNonceRef.current;
     let cancelled = false;
+    const targetUrl = selectedPrintingLayerPreviewUrl;
     const image = new Image();
     image.decoding = 'async';
     image.onload = () => {
       if (cancelled) return;
       if (loadNonce !== printingPreviewLoadNonceRef.current) return;
-      setIsPrintingPngLoaded(true);
+      setPrintingPngLoadedUrl(targetUrl);
     };
     image.onerror = () => {
       // Fail-open so we do not get stuck in scrub preview if decode/load fails once.
       if (cancelled) return;
       if (loadNonce !== printingPreviewLoadNonceRef.current) return;
-      setIsPrintingPngLoaded(true);
+      setPrintingPngLoadedUrl(targetUrl);
     };
-    image.src = selectedPrintingLayerPreviewUrl;
+    image.src = targetUrl;
 
     return () => {
       cancelled = true;
@@ -4360,11 +4367,13 @@ export default function Home() {
       setPrintingSelectedLayer((previous) => (previous === pending ? previous : pending));
     }
     setIsPrintingLayerScrubbing(false);
-    // Immediately show the proper PNG for the selected layer when released
-    setPrintingDisplayedLayer((previous) => {
-      const targetLayer = pending ?? previous;
-      return Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), targetLayer));
-    });
+    // Switch display target to the released layer immediately.
+    // If that layer PNG is not loaded yet, UI falls back to cross-section preview
+    // instead of showing stale PNG from the previously displayed layer.
+    const targetLayer = pending ?? printingSelectedLayerRef.current;
+    setPrintingDisplayedLayer(
+      Math.max(1, Math.min(Math.max(1, printingPreviewTotalLayers), targetLayer)),
+    );
     schedulePrintingPreviewSettle();
   }, [schedulePrintingPreviewSettle, printingPreviewTotalLayers]);
 
