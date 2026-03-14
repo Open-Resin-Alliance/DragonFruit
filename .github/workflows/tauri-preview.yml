@@ -2,7 +2,7 @@ name: Tauri Preview Builds (Self-hosted)
 
 on:
   push:
-    branches:
+    branches-ignore:
       - main
   workflow_dispatch:
 
@@ -77,22 +77,47 @@ jobs:
         run: |
           set -euo pipefail
 
-          if docker info >/dev/null 2>&1; then
+          check_docker_daemon() {
+            docker info >/dev/null 2>&1 &
+            local pid=$!
+            local waited=0
+
+            while kill -0 "$pid" >/dev/null 2>&1; do
+              if (( waited >= 8 )); then
+                kill "$pid" >/dev/null 2>&1 || true
+                wait "$pid" 2>/dev/null || true
+                return 124
+              fi
+              sleep 1
+              waited=$((waited + 1))
+            done
+
+            wait "$pid"
+          }
+
+          if check_docker_daemon; then
             exit 0
           fi
 
           echo "Docker daemon not reachable; attempting to launch Docker Desktop..."
-          open -a Docker || true
+          if [[ -d "/Applications/Docker.app" ]]; then
+            open -gj -a Docker || true
+          else
+            echo "Docker.app not found under /Applications; skipping auto-launch."
+          fi
 
-          for _ in {1..18}; do
-            if docker info >/dev/null 2>&1; then
+          for attempt in {1..24}; do
+            if check_docker_daemon; then
               echo "Docker daemon is now available."
               exit 0
             fi
+            echo "Waiting for Docker daemon... (${attempt}/24)"
             sleep 5
           done
 
-          echo "Docker daemon is still unavailable. Start Docker Desktop (or another Docker daemon) on the runner and retry."
+          echo "Docker daemon is still unavailable after waiting ~2 minutes."
+          echo "Start Docker Desktop (or another Docker daemon) on the runner and retry."
+          docker context ls || true
           exit 1
 
       - name: Verify required Rust targets are installed
@@ -147,22 +172,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          if [[ '${{ github.ref }}' != 'refs/heads/main' ]]; then
-            echo "should_preview=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          VERSION_TAG="v${{ steps.version_check.outputs.package_version }}"
-          git fetch --force --tags origin
-
-          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
-            echo "Tag ${VERSION_TAG} already exists; running preview build."
-            echo "should_preview=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Tag ${VERSION_TAG} does not exist; release workflow should handle this push."
-            echo "should_preview=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "should_preview=true" >> "$GITHUB_OUTPUT"
 
       - name: Generate runner health summary
         shell: bash

@@ -1,4 +1,4 @@
-name: Tauri Releases (GitHub-hosted)
+name: Tauri Main Orchestrator (Release or Preview)
 
 on:
   push:
@@ -16,18 +16,53 @@ permissions:
   contents: write
 
 jobs:
-  self-hosted-resolver-preflight:
+  self-hosted-main-preflight:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.use_github_fallback != true }}
     runs-on:
       - self-hosted
       - macOS
+    outputs:
+      package_version: ${{ steps.version_check.outputs.package_version }}
+      tauri_version: ${{ steps.version_check.outputs.tauri_version }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+
       - name: Check resolver prerequisites on self-hosted macOS
         shell: bash
         run: |
           set -euo pipefail
+
+          if [[ -d "$HOME/.cargo/bin" ]]; then
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+
+          if ! command -v rustup >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+            echo "Rust toolchain missing; installing rustup/cargo..."
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "Docker CLI missing; attempting install via Homebrew..."
+            if command -v brew >/dev/null 2>&1; then
+              brew install docker || true
+              if ! command -v docker >/dev/null 2>&1; then
+                brew install --cask docker || true
+              fi
+            fi
+          fi
+
           missing=()
-          required_cmds=(git node)
+          required_cmds=(git node npm rustup cargo docker)
 
           for cmd in "${required_cmds[@]}"; do
             if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -40,162 +75,319 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Docker daemon availability
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_docker_daemon() {
+            docker info >/dev/null 2>&1 &
+            local pid=$!
+            local waited=0
+
+            while kill -0 "$pid" >/dev/null 2>&1; do
+              if (( waited >= 8 )); then
+                kill "$pid" >/dev/null 2>&1 || true
+                wait "$pid" 2>/dev/null || true
+                return 124
+              fi
+              sleep 1
+              waited=$((waited + 1))
+            done
+
+            wait "$pid"
+          }
+
+          if check_docker_daemon; then
+            exit 0
+          fi
+
+          echo "Docker daemon not reachable; attempting to launch Docker Desktop..."
+          if [[ -d "/Applications/Docker.app" ]]; then
+            open -gj -a Docker || true
+          else
+            echo "Docker.app not found under /Applications; skipping auto-launch."
+          fi
+
+          for attempt in {1..24}; do
+            if check_docker_daemon; then
+              echo "Docker daemon is now available."
+              exit 0
+            fi
+            echo "Waiting for Docker daemon... (${attempt}/24)"
+            sleep 5
+          done
+
+          echo "Docker daemon is still unavailable after waiting ~2 minutes."
+          echo "Check Docker Desktop is installed and running for the runner user session."
+          docker context ls || true
+          exit 1
+
+      - name: Verify required Rust targets are installed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_targets=(
+            aarch64-apple-darwin
+            x86_64-apple-darwin
+            x86_64-unknown-linux-gnu
+            x86_64-pc-windows-gnu
+          )
+
+          installed_targets="$(rustup target list --installed)"
+          missing_targets=()
+
+          for target in "${required_targets[@]}"; do
+            if ! grep -Fxq "$target" <<< "$installed_targets"; then
+              missing_targets+=("$target")
+            fi
+          done
+
+          if [[ ${#missing_targets[@]} -gt 0 ]]; then
+            echo "Missing Rust targets; installing: ${missing_targets[*]}"
+            rustup target add "${missing_targets[@]}"
+          fi
+
+      - name: Validate package and Tauri versions
+        id: version_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          TAURI_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version")"
+
+          if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
+            echo "Unable to determine one or both app versions."
+            exit 1
+          fi
+
+          if [[ "$PACKAGE_VERSION" != "$TAURI_VERSION" ]]; then
+            echo "Version mismatch detected: package.json=$PACKAGE_VERSION, src-tauri/tauri.conf.json=$TAURI_VERSION"
+            exit 1
+          fi
+
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tauri_version=${TAURI_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate preflight health summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUMMARY_PATH="$RUNNER_TEMP/self-hosted-main-preflight-summary.txt"
+          {
+            echo "DragonFruit self-hosted main preflight summary"
+            echo "Generated (UTC): $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "Runner: ${RUNNER_NAME:-unknown}"
+            echo "OS: ${RUNNER_OS:-unknown}"
+            echo "Arch: ${RUNNER_ARCH:-unknown}"
+            echo
+            echo "## Tool versions"
+            git --version
+            node --version
+            npm --version
+            rustup --version
+            cargo --version
+            docker --version
+            echo
+            echo "## Installed Rust targets"
+            rustup target list --installed | sort
+            echo
+            echo "## Version parity"
+            echo "package.json=${{ steps.version_check.outputs.package_version }}"
+            echo "src-tauri/tauri.conf.json=${{ steps.version_check.outputs.tauri_version }}"
+          } > "$SUMMARY_PATH"
+
+      - name: Upload preflight health summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-hosted-main-preflight-summary
+          path: ${{ runner.temp }}/self-hosted-main-preflight-summary.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  hosted-main-preflight-fallback:
+    needs: self-hosted-main-preflight
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' && inputs.use_github_fallback == true || needs.self-hosted-main-preflight.result != 'success') }}
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.version_check.outputs.package_version }}
+      tauri_version: ${{ steps.version_check.outputs.tauri_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+
+      - name: Validate package and Tauri versions
+        id: version_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          TAURI_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version")"
+
+          if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
+            echo "Unable to determine one or both app versions."
+            exit 1
+          fi
+
+          if [[ "$PACKAGE_VERSION" != "$TAURI_VERSION" ]]; then
+            echo "Version mismatch detected: package.json=$PACKAGE_VERSION, src-tauri/tauri.conf.json=$TAURI_VERSION"
+            exit 1
+          fi
+
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tauri_version=${TAURI_VERSION}" >> "$GITHUB_OUTPUT"
+
   resolve-version-tag:
-    needs: self-hosted-resolver-preflight
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.use_github_fallback != true }}
+    needs:
+      - self-hosted-main-preflight
+      - hosted-main-preflight-fallback
+    if: ${{ always() && (needs.self-hosted-main-preflight.result == 'success' || needs.hosted-main-preflight-fallback.result == 'success') }}
+    runs-on:
+      - ubuntu-latest
+    outputs:
+      version_tag: ${{ steps.version_check.outputs.version_tag }}
+      should_release: ${{ steps.release_decision.outputs.should_release }}
+      tag_exists: ${{ steps.tag_lookup.outputs.tag_exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+
+      - name: Validate package and Tauri versions
+        id: version_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          TAURI_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version")"
+
+          if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
+            echo "Unable to determine one or both app versions."
+            exit 1
+          fi
+
+          if [[ "$PACKAGE_VERSION" != "$TAURI_VERSION" ]]; then
+            echo "Version mismatch detected: package.json=$PACKAGE_VERSION, src-tauri/tauri.conf.json=$TAURI_VERSION"
+            exit 1
+          fi
+
+          echo "version_tag=v${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch tags
+        run: git fetch --force --tags origin
+
+      - name: Check whether version tag already exists
+        id: tag_lookup
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide release mode
+        id: release_decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHOULD_RELEASE=false
+          if [[ '${{ github.ref }}' == 'refs/heads/main' && '${{ steps.tag_lookup.outputs.tag_exists }}' != 'true' ]]; then
+            SHOULD_RELEASE=true
+          fi
+          echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push version tag
+        if: steps.release_decision.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION_TAG" -m "Release $VERSION_TAG"
+          git push origin "$VERSION_TAG"
+
+  build-preview-main:
+    needs: resolve-version-tag
+    if: ${{ needs.resolve-version-tag.outputs.should_release != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles app
+            artifactName: dragonfruit-macos-arm64-preview-app-main
+            artifactPath: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DragonFruit.app
+          - target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles app
+            artifactName: dragonfruit-macos-x64-preview-app-main
+            artifactPath: src-tauri/target/x86_64-apple-darwin/release/bundle/macos/DragonFruit.app
+          - target: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles none
+            artifactName: dragonfruit-linux-x64-preview-main
+            artifactPath: src-tauri/target/x86_64-unknown-linux-gnu/release/dragonfruit-desktop
+          - target: x86_64-pc-windows-gnu
+            args: --target x86_64-pc-windows-gnu --bundles none
+            artifactName: dragonfruit-windows-x64-preview-main
+            artifactPath: src-tauri/target/x86_64-pc-windows-gnu/release/dragonfruit-desktop.exe
+
     runs-on:
       - self-hosted
       - macOS
-    outputs:
-      version_tag: ${{ steps.version_check.outputs.version_tag }}
-      should_release: ${{ steps.release_decision.outputs.should_release }}
-      tag_exists: ${{ steps.tag_lookup.outputs.tag_exists }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20.18.0"
+          cache: npm
 
-      - name: Validate package and Tauri versions
-        id: version_check
-        shell: bash
-        run: |
-          set -euo pipefail
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          TAURI_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version")"
-
-          if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
-            echo "Unable to determine one or both app versions."
-            exit 1
-          fi
-
-          if [[ "$PACKAGE_VERSION" != "$TAURI_VERSION" ]]; then
-            echo "Version mismatch detected: package.json=$PACKAGE_VERSION, src-tauri/tauri.conf.json=$TAURI_VERSION"
-            exit 1
-          fi
-
-          echo "version_tag=v${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Fetch tags
-        run: git fetch --force --tags origin
-
-      - name: Check whether version tag already exists
-        id: tag_lookup
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
-          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
-            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Decide release mode
-        id: release_decision
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHOULD_RELEASE=false
-          if [[ '${{ github.ref }}' == 'refs/heads/main' && '${{ steps.tag_lookup.outputs.tag_exists }}' != 'true' ]]; then
-            SHOULD_RELEASE=true
-          fi
-          echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"
-
-      - name: Create and push version tag
-        if: steps.release_decision.outputs.should_release == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$VERSION_TAG" -m "Release $VERSION_TAG"
-          git push origin "$VERSION_TAG"
-
-  resolve-version-tag-fallback:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_fallback == true }}
-    runs-on: ubuntu-latest
-    outputs:
-      version_tag: ${{ steps.version_check.outputs.version_tag }}
-      should_release: ${{ steps.release_decision.outputs.should_release }}
-      tag_exists: ${{ steps.tag_lookup.outputs.tag_exists }}
-    steps:
-      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
-          fetch-depth: 0
+          targets: ${{ matrix.target }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
         with:
-          node-version: "20.18.0"
+          workspaces: ./src-tauri -> target
 
-      - name: Validate package and Tauri versions
-        id: version_check
-        shell: bash
-        run: |
-          set -euo pipefail
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          TAURI_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version")"
+      - name: Install frontend dependencies
+        run: npm ci
 
-          if [[ -z "$PACKAGE_VERSION" || -z "$TAURI_VERSION" ]]; then
-            echo "Unable to determine one or both app versions."
-            exit 1
-          fi
+      - name: Build preview artifact (main)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tauriScript: npx tauri
+          args: ${{ matrix.args }}
 
-          if [[ "$PACKAGE_VERSION" != "$TAURI_VERSION" ]]; then
-            echo "Version mismatch detected: package.json=$PACKAGE_VERSION, src-tauri/tauri.conf.json=$TAURI_VERSION"
-            exit 1
-          fi
-
-          echo "version_tag=v${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Fetch tags
-        run: git fetch --force --tags origin
-
-      - name: Check whether version tag already exists
-        id: tag_lookup
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
-          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION_TAG}" >/dev/null 2>&1; then
-            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Decide release mode
-        id: release_decision
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHOULD_RELEASE=false
-          if [[ '${{ github.ref }}' == 'refs/heads/main' && '${{ steps.tag_lookup.outputs.tag_exists }}' != 'true' ]]; then
-            SHOULD_RELEASE=true
-          fi
-          echo "should_release=${SHOULD_RELEASE}" >> "$GITHUB_OUTPUT"
-
-      - name: Create and push version tag
-        if: steps.release_decision.outputs.should_release == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION_TAG='${{ steps.version_check.outputs.version_tag }}'
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$VERSION_TAG" -m "Release $VERSION_TAG"
-          git push origin "$VERSION_TAG"
+      - name: Upload preview artifacts (main)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifactName }}
+          path: ${{ matrix.artifactPath }}
+          if-no-files-found: error
+          retention-days: 7
 
   publish-release:
-    needs:
-      - resolve-version-tag
-      - resolve-version-tag-fallback
-    if: ${{ always() && (needs.resolve-version-tag.result == 'success' || needs.resolve-version-tag.result == 'skipped') && (needs.resolve-version-tag-fallback.result == 'success' || needs.resolve-version-tag-fallback.result == 'skipped') && (needs.resolve-version-tag.outputs.should_release || needs.resolve-version-tag-fallback.outputs.should_release) == 'true' }}
+    needs: resolve-version-tag
+    if: ${{ needs.resolve-version-tag.outputs.should_release == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -249,8 +441,8 @@ jobs:
         with:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
-          tagName: ${{ needs.resolve-version-tag.outputs.version_tag || needs.resolve-version-tag-fallback.outputs.version_tag }}
-          releaseName: "DragonFruit ${{ needs.resolve-version-tag.outputs.version_tag || needs.resolve-version-tag-fallback.outputs.version_tag }}"
+          tagName: ${{ needs.resolve-version-tag.outputs.version_tag }}
+          releaseName: "DragonFruit ${{ needs.resolve-version-tag.outputs.version_tag }}"
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
