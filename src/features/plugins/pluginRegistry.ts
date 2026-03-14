@@ -92,6 +92,9 @@ export type ProfileMonitoringUiAdapter = {
   operations: {
     status: string;
     webcamInfo: string;
+    platesList: string;
+    start: string;
+    deletePlate: string;
     pause: string;
     resume: string;
     cancel: string;
@@ -136,6 +139,9 @@ const ATHENA_NANODLP_MONITORING_ADAPTER: ProfileMonitoringUiAdapter = {
   operations: {
     status: 'nanodlp/printer/status',
     webcamInfo: 'nanodlp/printer/webcam/info',
+    platesList: 'nanodlp/plates/list/json',
+    start: 'nanodlp/printer/start',
+    deletePlate: 'nanodlp/plate/delete',
     pause: 'nanodlp/printer/pause',
     resume: 'nanodlp/printer/unpause',
     cancel: 'nanodlp/printer/stop',

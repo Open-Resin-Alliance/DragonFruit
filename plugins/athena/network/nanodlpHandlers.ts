@@ -1194,6 +1194,7 @@ export async function handleAthenaNetworkOperation(operationPath: string[], payl
   if (op === 'materials/edit') return handleNanoDlpMaterialsEdit(payload);
   if (op === 'job/import') return handleNanoDlpJobImport(payload);
   if (op === 'plates/list/json') return handleNanoDlpPlatesListJson(payload);
+  if (op === 'plate/delete') return handleNanoDlpPlateDelete(payload);
   if (op === 'printer/start') return handleNanoDlpPrinterStart(payload);
   if (op === 'printer/pause') return handleNanoDlpPrinterPause(payload);
   if (op === 'printer/unpause' || op === 'printer/resume') return handleNanoDlpPrinterResume(payload);
@@ -1286,6 +1287,79 @@ async function handleNanoDlpPlatesListJson(payload: unknown): Promise<HandlerRes
       },
     };
   }
+}
+
+async function handleNanoDlpPlateDelete(payload: unknown): Promise<HandlerResult> {
+  const rawHost = resolveNanoDlpRawHost(payload);
+  const parsedHost = parseNanoDlpHostAndPort(rawHost);
+  if (!parsedHost) {
+    return { status: 400, body: { ok: false, error: 'Invalid host or IP address' } };
+  }
+
+  const plateIdRaw = Number((payload as any)?.plateId);
+  if (!Number.isFinite(plateIdRaw) || plateIdRaw <= 0) {
+    return { status: 400, body: { ok: false, error: 'Invalid plateId' } };
+  }
+
+  const plateId = Math.round(plateIdRaw);
+  const port = resolveNanoDlpPort((payload as any)?.port, parsedHost.port);
+  const baseNoSlash = buildNanoDlpBaseUrl(parsedHost.host, port).replace(/\/+$/, '');
+  const endpointPaths = [
+    `/plate/delete/${plateId}`,
+    `/plates/delete/${plateId}`,
+    `/plate/remove/${plateId}`,
+  ];
+
+  const attempted: Array<{ path: string; status: number }> = [];
+  let lastNetworkError: unknown = null;
+
+  for (const endpointPath of endpointPaths) {
+    try {
+      const response = await fetch(`${baseNoSlash}${endpointPath}`, {
+        method: 'GET',
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      attempted.push({ path: endpointPath, status: response.status });
+
+      if (response.status === 200 || response.status === 302) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            ipAddress: parsedHost.host,
+            port,
+            plateId,
+            status: response.status,
+            endpoint: endpointPath,
+            message: `Deleted plate #${plateId}.`,
+            attempted,
+          },
+        };
+      }
+    } catch (error) {
+      lastNetworkError = error;
+    }
+  }
+
+  const lastAttempt = attempted[attempted.length - 1] ?? null;
+  const lastStatus = lastAttempt?.status ?? null;
+  const networkMessage = lastNetworkError instanceof Error ? lastNetworkError.message : null;
+
+  return {
+    status: lastStatus != null ? 502 : 500,
+    body: {
+      ok: false,
+      ipAddress: parsedHost.host,
+      port,
+      plateId,
+      status: lastStatus,
+      error: networkMessage ?? `Delete plate command failed for plate #${plateId}.`,
+      attempted,
+    },
+  };
 }
 
 async function handleNanoDlpPrinterStart(payload: unknown): Promise<HandlerResult> {

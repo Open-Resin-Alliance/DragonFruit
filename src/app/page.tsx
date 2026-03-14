@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Redo2, Undo2 } from 'lucide-react';
+import { AlertTriangle, Play, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -158,6 +158,28 @@ type FleetUploadMaterialOption = {
   name: string;
   layerHeightMm: number | null;
 };
+
+type PrintingMonitorRecentPlate = {
+  plateId: number;
+  name: string;
+  materialProfileName: string | null;
+  lastModifiedEpochSec: number | null;
+  layerCount: number | null;
+  printTimeSec: number | null;
+  usedMaterialMl: number | null;
+};
+
+type PrintingMonitorPendingConfirmation =
+  | {
+      kind: 'control';
+      action: 'cancel' | 'emergency-stop';
+    }
+  | {
+      kind: 'plate';
+      action: 'start' | 'delete';
+      plateId: number;
+      plateName: string;
+    };
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
 
@@ -414,6 +436,90 @@ function resolveInitialExportThumbnailRenderOptions(): ExportThumbnailRenderOpti
   }
 }
 
+function formatPrintingMonitorEstimatedTime(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return '—';
+
+  const rounded = Math.max(1, Math.round(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m`;
+  }
+
+  return '<1m';
+}
+
+function formatPrintingMonitorUsedMaterial(ml: number | null): string {
+  if (ml == null || !Number.isFinite(ml) || ml <= 0) return '—';
+  return `${ml.toFixed(2)} mL`;
+}
+
+function parsePrintingMonitorSeconds(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.round(value);
+  }
+
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return Math.round(numeric);
+  }
+
+  const hms = trimmed.match(/^(\d{1,3}):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (hms) {
+    const h = Number(hms[1]);
+    const m = Number(hms[2]);
+    const s = Number(hms[3] ?? '0');
+    if ([h, m, s].every((n) => Number.isFinite(n) && n >= 0)) {
+      const total = (hms[3] == null)
+        ? (h * 60 + m)
+        : (h * 3600 + m * 60 + s);
+      return total > 0 ? total : null;
+    }
+  }
+
+  const units = trimmed.match(/(?:(\d+(?:\.\d+)?)\s*h)?\s*(?:(\d+(?:\.\d+)?)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?/i);
+  if (units) {
+    const h = Number(units[1] ?? 0);
+    const m = Number(units[2] ?? 0);
+    const s = Number(units[3] ?? 0);
+    if ([h, m, s].every((n) => Number.isFinite(n) && n >= 0)) {
+      const total = Math.round(h * 3600 + m * 60 + s);
+      return total > 0 ? total : null;
+    }
+  }
+
+  return null;
+}
+
+function parsePrintingMonitorMaterialMl(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+
+  const extracted = trimmed.match(/(\d+(?:\.\d+)?)/);
+  if (!extracted) return null;
+  const parsed = Number(extracted[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
@@ -635,10 +741,15 @@ export default function Home() {
   const [printingMonitorWebcamInfo, setPrintingMonitorWebcamInfo] = React.useState<PrinterMonitoringWebcamInfo | null>(null);
   const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
   const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
+  const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
+  const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
+  const [printingMonitorRecentPlatesError, setPrintingMonitorRecentPlatesError] = React.useState<string | null>(null);
+  const [printingMonitorSelectedPlateId, setPrintingMonitorSelectedPlateId] = React.useState<number | null>(null);
   const [isPrintingMonitorPolling, setIsPrintingMonitorPolling] = React.useState(false);
   const [printingMonitorError, setPrintingMonitorError] = React.useState<string | null>(null);
-  const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
+  const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
   const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
+  const [printingMonitorPendingConfirmation, setPrintingMonitorPendingConfirmation] = React.useState<PrintingMonitorPendingConfirmation | null>(null);
   const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
@@ -2507,13 +2618,6 @@ export default function Home() {
     return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
   }, [printingDeviceProcessingElapsedSec]);
 
-  const printingMonitorEtaLabel = React.useMemo(() => {
-    const totalSeconds = printingMonitorSnapshot?.etaSec;
-    if (totalSeconds == null || !Number.isFinite(totalSeconds) || totalSeconds < 0) return '—';
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = Math.floor(totalSeconds % 60);
-    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
-  }, [printingMonitorSnapshot?.etaSec]);
   const printingMonitorPlateId = React.useMemo(() => {
     const candidate = printingMonitorSnapshot?.plateId ?? printingReadyPlateId;
     if (candidate == null || !Number.isFinite(candidate) || candidate <= 0) return null;
@@ -2576,10 +2680,17 @@ export default function Home() {
   ]);
   const printingMonitorDisplayProgressPct = React.useMemo(() => {
     if (!printingMonitorHasActivePrint) return 0;
-    const raw = printingMonitorSnapshot?.progressPct;
-    if (raw == null || !Number.isFinite(raw)) return 0;
-    return Math.max(0, Math.min(100, raw));
-  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.progressPct]);
+    const totalRaw = printingMonitorSnapshot?.totalLayers;
+    const currentRaw = printingMonitorSnapshot?.currentLayer;
+    if (!Number.isFinite(totalRaw) || !Number.isFinite(currentRaw)) return 0;
+
+    const total = Math.max(0, Math.round(totalRaw));
+    const current = Math.max(0, Math.round(currentRaw));
+    if (total <= 0) return 0;
+
+    const completedLayers = Math.max(0, Math.min(total, current - 1));
+    return (completedLayers / total) * 100;
+  }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.currentLayer, printingMonitorSnapshot?.totalLayers]);
   const printingMonitorDisplayCurrentLayer = React.useMemo(() => {
     if (!printingMonitorHasActivePrint) return 0;
     const raw = printingMonitorSnapshot?.currentLayer;
@@ -2592,6 +2703,22 @@ export default function Home() {
     if (raw == null || !Number.isFinite(raw) || raw < 0) return 0;
     return Math.max(0, Math.round(raw));
   }, [printingMonitorHasActivePrint, printingMonitorSnapshot?.totalLayers]);
+  const printingMonitorDisplayMaterialProfile = React.useMemo(() => {
+    if (!printingMonitorHasActivePrint) return '—';
+
+    const activePlateId = printingMonitorPlateId;
+    if (activePlateId != null) {
+      const activePlate = printingMonitorRecentPlates.find((plate) => plate.plateId === activePlateId);
+      if (activePlate?.materialProfileName) return activePlate.materialProfileName;
+    }
+
+    if (printingMonitorSelectedPlateId != null) {
+      const selectedPlate = printingMonitorRecentPlates.find((plate) => plate.plateId === printingMonitorSelectedPlateId);
+      if (selectedPlate?.materialProfileName) return selectedPlate.materialProfileName;
+    }
+
+    return '—';
+  }, [printingMonitorHasActivePrint, printingMonitorPlateId, printingMonitorRecentPlates, printingMonitorSelectedPlateId]);
   const selectedPrinterHasActivePrint = React.useMemo(() => {
     return Boolean(
       selectedPrinterMonitorSnapshot?.isPrinting
@@ -2939,6 +3066,205 @@ export default function Home() {
     printingReadyPlateId,
   ]);
 
+  const refreshPrintingMonitorRecentPlates = React.useCallback(async () => {
+    const canLoadRecentPlates = Boolean(
+      printingMonitorModalOpen
+      && monitoringDevice
+      && printingMonitoringAdapter.available
+      && printingMonitoringAdapter.pluginId
+      && printingMonitoringAdapter.operations?.platesList,
+    );
+    if (!canLoadRecentPlates) {
+      setPrintingMonitorRecentPlates([]);
+      setPrintingMonitorRecentPlatesError(null);
+      return;
+    }
+
+    const host = (monitoringDevice?.ipAddress || '').trim();
+    const port = monitoringDevice?.port || 80;
+    if (!host) {
+      setPrintingMonitorRecentPlates([]);
+      setPrintingMonitorRecentPlatesError('No printer IP available for recent print files.');
+      return;
+    }
+
+    setIsPrintingMonitorRecentPlatesLoading(true);
+    setPrintingMonitorRecentPlatesError(null);
+
+    try {
+      const response = await pluginNetworkFetch({
+        pluginId: printingMonitoringAdapter.pluginId,
+        operation: printingMonitoringAdapter.operations!.platesList,
+        ipAddress: host,
+        port,
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (!response.ok || payload?.ok === false) {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        throw new Error(reason);
+      }
+
+      const parsed = (Array.isArray(payload?.plates) ? payload.plates : [])
+        .map((entry: unknown) => {
+          if (!entry || typeof entry !== 'object') return null;
+          const plate = entry as Record<string, unknown>;
+          const rawPlateId = plate.PlateID ?? plate.plateId ?? plate.plate_id ?? plate.id;
+          const plateId = Number(String(rawPlateId ?? '').trim());
+          if (!Number.isFinite(plateId) || plateId <= 0) return null;
+
+          const rawName = plate.Path ?? plate.path ?? plate.File ?? plate.file ?? plate.Name ?? plate.name;
+          const fullName = typeof rawName === 'string' ? rawName.trim() : `Plate #${Math.round(plateId)}`;
+          const cleanName = fullName.split('/').filter(Boolean).pop() || fullName;
+
+          const rawMaterialProfile =
+            plate.ProfileName
+            ?? plate.profileName
+            ?? plate.MaterialName
+            ?? plate.materialName
+            ?? plate.ResinName
+            ?? plate.resinName
+            ?? plate.Profile
+            ?? plate.profile;
+          const materialProfileFromName = typeof rawMaterialProfile === 'string'
+            ? rawMaterialProfile.trim()
+            : '';
+
+          const rawProfileId =
+            plate.ProfileID
+            ?? plate.profileId
+            ?? plate.profile_id
+            ?? plate.MaterialID
+            ?? plate.materialId;
+          const profileId = Number(String(rawProfileId ?? '').trim());
+          const materialProfileName = materialProfileFromName.length > 0
+            ? materialProfileFromName
+            : (Number.isFinite(profileId) && profileId > 0 ? `Profile #${Math.round(profileId)}` : null);
+
+          const rawFileData = plate.file_data ?? plate.fileData;
+          let fileData: Record<string, unknown> | undefined;
+          if (rawFileData && typeof rawFileData === 'object' && !Array.isArray(rawFileData)) {
+            fileData = rawFileData as Record<string, unknown>;
+          } else if (typeof rawFileData === 'string' && rawFileData.trim().length > 0) {
+            try {
+              const parsedFileData = JSON.parse(rawFileData) as unknown;
+              if (parsedFileData && typeof parsedFileData === 'object' && !Array.isArray(parsedFileData)) {
+                fileData = parsedFileData as Record<string, unknown>;
+              }
+            } catch {
+              fileData = undefined;
+            }
+          }
+          const rawLastModified = fileData?.last_modified ?? fileData?.lastModified ?? plate.lastModified;
+          const lastModifiedEpochSec = Number(String(rawLastModified ?? '').trim());
+          const rawLayerCount = plate.LayersCount ?? plate.layerCount ?? fileData?.layer_count;
+          const rawPrintTime =
+            plate.PrintTime
+            ?? plate.printTime
+            ?? plate.print_time
+            ?? plate.EstimatedTime
+            ?? plate.estimatedTime
+            ?? plate.estimated_time
+            ?? plate.Duration
+            ?? plate.duration
+            ?? fileData?.PrintTime
+            ?? fileData?.printTime
+            ?? fileData?.print_time
+            ?? fileData?.EstimatedTime
+            ?? fileData?.estimatedTime
+            ?? fileData?.estimated_time
+            ?? fileData?.Duration
+            ?? fileData?.duration;
+          const rawUsedMaterial =
+            plate.UsedMaterial
+            ?? plate.usedMaterial
+            ?? plate.used_material
+            ?? plate.MaterialUsage
+            ?? plate.materialUsage
+            ?? plate.material_usage
+            ?? fileData?.UsedMaterial
+            ?? fileData?.usedMaterial
+            ?? fileData?.used_material
+            ?? fileData?.MaterialUsage
+            ?? fileData?.materialUsage
+            ?? fileData?.material_usage;
+          const parsedPrintTimeSec = parsePrintingMonitorSeconds(rawPrintTime);
+          const parsedUsedMaterialMl = parsePrintingMonitorMaterialMl(rawUsedMaterial);
+
+          return {
+            plateId: Math.round(plateId),
+            name: cleanName,
+            materialProfileName,
+            lastModifiedEpochSec: Number.isFinite(lastModifiedEpochSec) && lastModifiedEpochSec > 0
+              ? Math.round(lastModifiedEpochSec)
+              : null,
+            layerCount: Number.isFinite(Number(rawLayerCount)) && Number(rawLayerCount) > 0
+              ? Math.round(Number(rawLayerCount))
+              : null,
+            printTimeSec: parsedPrintTimeSec,
+            usedMaterialMl: parsedUsedMaterialMl,
+          } satisfies PrintingMonitorRecentPlate;
+        })
+        .filter((item: PrintingMonitorRecentPlate | null): item is PrintingMonitorRecentPlate => item !== null)
+        .sort((a, b) => {
+          const aModified = a.lastModifiedEpochSec ?? 0;
+          const bModified = b.lastModifiedEpochSec ?? 0;
+          if (aModified !== bModified) return bModified - aModified;
+          return b.plateId - a.plateId;
+        })
+        .slice(0, 20);
+
+      setPrintingMonitorRecentPlates(parsed);
+      setPrintingMonitorSelectedPlateId((previous) => {
+        if (previous != null && parsed.some((plate) => plate.plateId === previous)) return previous;
+        if (printingMonitorPlateId != null && parsed.some((plate) => plate.plateId === printingMonitorPlateId)) {
+          return printingMonitorPlateId;
+        }
+        return parsed[0]?.plateId ?? null;
+      });
+      setPrintingMonitorRecentPlatesError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load recent print files.';
+      setPrintingMonitorRecentPlatesError(message);
+    } finally {
+      setIsPrintingMonitorRecentPlatesLoading(false);
+    }
+  }, [
+    monitoringDevice,
+    printingMonitorModalOpen,
+    printingMonitorPlateId,
+    printingMonitoringAdapter,
+  ]);
+
+  React.useEffect(() => {
+    if (!printingMonitorModalOpen) {
+      setPrintingMonitorRecentPlates([]);
+      setPrintingMonitorRecentPlatesError(null);
+      setPrintingMonitorSelectedPlateId(null);
+      setIsPrintingMonitorRecentPlatesLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    void refreshPrintingMonitorRecentPlates();
+
+    const intervalId = window.setInterval(() => {
+      if (cancelled) return;
+      void refreshPrintingMonitorRecentPlates();
+    }, 15_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [printingMonitorModalOpen, refreshPrintingMonitorRecentPlates]);
+
+  React.useEffect(() => {
+    if (printingMonitorPlateId == null) return;
+    setPrintingMonitorSelectedPlateId((previous) => previous ?? printingMonitorPlateId);
+  }, [printingMonitorPlateId]);
+
   React.useEffect(() => {
     const canResolveWebcam = Boolean(
       printingMonitorModalOpen
@@ -2992,6 +3318,7 @@ export default function Home() {
       setPrintingMonitorLeftColumnHeight(null);
       setPrintingMonitorActionBusy(null);
       setPrintingMonitorActionStatus(null);
+      setPrintingMonitorPendingConfirmation(null);
       return;
     }
 
@@ -3615,20 +3942,138 @@ export default function Home() {
     }
   }, [activePrinterProfile, printingReadyPlateId, printingTargetDevice]);
 
-  const handlePrintingMonitorControlAction = React.useCallback(async (
+  const executeStartMonitorRecentPlate = React.useCallback(async (plateId: number) => {
+    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.start) return;
+    if (!Number.isFinite(plateId) || plateId <= 0) return;
+
+    const roundedPlateId = Math.round(plateId);
+
+    const host = (monitoringDevice?.ipAddress || '').trim();
+    const port = monitoringDevice?.port || 80;
+    if (!host) {
+      setPrintingMonitorError('No printer IP available to start selected file.');
+      return;
+    }
+
+    setPrintingMonitorActionBusy('start');
+    setPrintingMonitorActionStatus(null);
+
+    try {
+      const response = await pluginNetworkFetch({
+        pluginId: printingMonitoringAdapter.pluginId,
+        operation: printingMonitoringAdapter.operations.start,
+        ipAddress: host,
+        port,
+        plateId: roundedPlateId,
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (!response.ok || payload?.ok === false) {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        throw new Error(reason);
+      }
+
+      setPrintingReadyPlateId(roundedPlateId);
+      setPrintingMonitorSelectedPlateId(roundedPlateId);
+      setPrintingMonitorActionStatus(`Started plate #${roundedPlateId}.`);
+      setPrintingMonitorError(null);
+      void refreshPrintingMonitorRecentPlates();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start selected print file.';
+      setPrintingMonitorError(message);
+      setPrintingMonitorActionStatus(null);
+    } finally {
+      setPrintingMonitorActionBusy(null);
+    }
+  }, [
+    monitoringDevice?.ipAddress,
+    monitoringDevice?.port,
+    printingMonitoringAdapter,
+    refreshPrintingMonitorRecentPlates,
+  ]);
+
+  const handleStartMonitorRecentPlate = React.useCallback((plateId: number) => {
+    if (!Number.isFinite(plateId) || plateId <= 0) return;
+    const roundedPlateId = Math.round(plateId);
+    const matched = printingMonitorRecentPlates.find((plate) => plate.plateId === roundedPlateId);
+    setPrintingMonitorPendingConfirmation({
+      kind: 'plate',
+      action: 'start',
+      plateId: roundedPlateId,
+      plateName: matched?.name ?? `Plate #${roundedPlateId}`,
+    });
+  }, [printingMonitorRecentPlates]);
+
+  const executeDeleteMonitorRecentPlate = React.useCallback(async (plateId: number) => {
+    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.deletePlate) return;
+    if (!Number.isFinite(plateId) || plateId <= 0) return;
+
+    const roundedPlateId = Math.round(plateId);
+
+    const host = (monitoringDevice?.ipAddress || '').trim();
+    const port = monitoringDevice?.port || 80;
+    if (!host) {
+      setPrintingMonitorError('No printer IP available to delete selected file.');
+      return;
+    }
+
+    setPrintingMonitorActionBusy('delete');
+    setPrintingMonitorActionStatus(null);
+
+    try {
+      const response = await pluginNetworkFetch({
+        pluginId: printingMonitoringAdapter.pluginId,
+        operation: printingMonitoringAdapter.operations.deletePlate,
+        ipAddress: host,
+        port,
+        plateId: roundedPlateId,
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      if (!response.ok || payload?.ok === false) {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        throw new Error(reason);
+      }
+
+      setPrintingMonitorActionStatus(`Deleted plate #${roundedPlateId}.`);
+      setPrintingMonitorError(null);
+      setPrintingMonitorRecentPlates((previous) => previous.filter((plate) => plate.plateId !== roundedPlateId));
+      setPrintingMonitorSelectedPlateId((previous) => (previous === roundedPlateId ? null : previous));
+      if (printingReadyPlateId === roundedPlateId) {
+        setPrintingReadyPlateId(null);
+      }
+      void refreshPrintingMonitorRecentPlates();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete selected print file.';
+      setPrintingMonitorError(message);
+      setPrintingMonitorActionStatus(null);
+    } finally {
+      setPrintingMonitorActionBusy(null);
+    }
+  }, [
+    monitoringDevice?.ipAddress,
+    monitoringDevice?.port,
+    printingMonitoringAdapter,
+    printingReadyPlateId,
+    refreshPrintingMonitorRecentPlates,
+  ]);
+
+  const handleDeleteMonitorRecentPlate = React.useCallback((plateId: number) => {
+    if (!Number.isFinite(plateId) || plateId <= 0) return;
+    const roundedPlateId = Math.round(plateId);
+    const matched = printingMonitorRecentPlates.find((plate) => plate.plateId === roundedPlateId);
+    setPrintingMonitorPendingConfirmation({
+      kind: 'plate',
+      action: 'delete',
+      plateId: roundedPlateId,
+      plateName: matched?.name ?? `Plate #${roundedPlateId}`,
+    });
+  }, [printingMonitorRecentPlates]);
+
+  const executePrintingMonitorControlAction = React.useCallback(async (
     action: 'pause' | 'resume' | 'cancel' | 'emergency-stop',
   ) => {
     if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations) return;
-
-    if (action === 'cancel') {
-      const confirmed = window.confirm('Cancel the current print job? This cannot be undone.');
-      if (!confirmed) return;
-    }
-
-    if (action === 'emergency-stop') {
-      const confirmed = window.confirm('Emergency Stop immediately halts the printer. Continue?');
-      if (!confirmed) return;
-    }
 
     const host = (monitoringDevice?.ipAddress || '').trim();
     const port = monitoringDevice?.port || 80;
@@ -3699,6 +4144,32 @@ export default function Home() {
       setPrintingMonitorActionBusy(null);
     }
   }, [monitoringDevice?.ipAddress, monitoringDevice?.port, printingMonitorPlateId, printingMonitoringAdapter]);
+
+  const handlePrintingMonitorControlAction = React.useCallback((
+    action: 'pause' | 'resume' | 'cancel' | 'emergency-stop',
+  ) => {
+    if (action === 'cancel' || action === 'emergency-stop') {
+      setPrintingMonitorPendingConfirmation({ kind: 'control', action });
+      return;
+    }
+
+    void executePrintingMonitorControlAction(action);
+  }, [executePrintingMonitorControlAction]);
+
+  React.useEffect(() => {
+    if (!printingMonitorPendingConfirmation) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPrintingMonitorPendingConfirmation(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [printingMonitorPendingConfirmation]);
 
   const handlePrintingLayerChange = React.useCallback((nextLayer: number) => {
     if (!Number.isFinite(nextLayer)) return;
@@ -8771,6 +9242,175 @@ export default function Home() {
         onConfirm={handleConfirmDestructiveTransform}
       />
 
+      {printingMonitorPendingConfirmation && (
+        <div
+          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setPrintingMonitorPendingConfirmation(null);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+            style={{
+              background: 'var(--surface-0)',
+              borderColor: 'var(--border-subtle)',
+              boxShadow: '0 24px 46px rgba(0,0,0,0.42)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              printingMonitorPendingConfirmation.kind === 'control'
+                ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Confirm cancel print' : 'Confirm emergency stop')
+                : (printingMonitorPendingConfirmation.action === 'start' ? 'Confirm start recent file' : 'Confirm delete recent file')
+            }
+          >
+            <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border"
+                  style={{
+                    borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)',
+                    background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                    color: '#f59e0b',
+                  }}
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {printingMonitorPendingConfirmation.kind === 'control'
+                      ? (printingMonitorPendingConfirmation.action === 'cancel' ? 'Cancel Print Job' : 'Emergency Stop')
+                      : (printingMonitorPendingConfirmation.action === 'start' ? 'Start Recent Print File' : 'Delete Recent Print File')}
+                  </h2>
+                  <p className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    {printingMonitorPendingConfirmation.kind === 'control'
+                      ? (
+                        printingMonitorPendingConfirmation.action === 'cancel'
+                          ? 'This action cannot be undone.'
+                          : 'This will immediately halt the printer.'
+                      )
+                      : (
+                        printingMonitorPendingConfirmation.action === 'start'
+                          ? 'Start this recent file on the selected printer now?'
+                          : 'This will remove the file from the printer.'
+                      )}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="h-8 w-8 inline-flex items-center justify-center rounded-md border transition-colors"
+                style={{
+                  borderColor: 'var(--border-subtle)',
+                  background: 'var(--surface-1)',
+                  color: 'var(--text-muted)',
+                }}
+                aria-label="Close monitor confirmation modal"
+                onClick={() => setPrintingMonitorPendingConfirmation(null)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {printingMonitorPendingConfirmation.kind === 'plate' && (
+                <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                  <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>File</div>
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={`#${printingMonitorPendingConfirmation.plateId} • ${printingMonitorPendingConfirmation.plateName}`}>
+                    {`#${printingMonitorPendingConfirmation.plateId} • ${printingMonitorPendingConfirmation.plateName}`}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Printer</div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  {monitoringDevice?.displayName || monitoringDevice?.hostName || monitoringDevice?.ipAddress || 'Selected printer'}
+                </div>
+              </div>
+
+              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                {printingMonitorPendingConfirmation.kind === 'control'
+                  ? (
+                    printingMonitorPendingConfirmation.action === 'cancel'
+                      ? 'Canceling will stop the current print job and clear queued progress for this plate.'
+                      : 'Emergency Stop is for immediate intervention and should be used only when necessary.'
+                  )
+                  : (
+                    printingMonitorPendingConfirmation.action === 'start'
+                      ? 'The selected plate will begin printing immediately on this machine.'
+                      : 'Deleted files cannot be restored from this monitor.'
+                  )}
+              </p>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                  onClick={() => setPrintingMonitorPendingConfirmation(null)}
+                >
+                  {printingMonitorPendingConfirmation.kind === 'plate' ? 'Keep File' : 'Keep Printing'}
+                </button>
+                <button
+                  type="button"
+                  className="ui-button !h-9 px-3 text-xs"
+                  style={
+                    printingMonitorPendingConfirmation.kind === 'plate'
+                      ? (
+                        printingMonitorPendingConfirmation.action === 'start'
+                          ? {
+                              borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, #22c55e, var(--surface-1) 84%)',
+                              color: '#bbf7d0',
+                            }
+                          : {
+                              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
+                              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
+                              color: '#fee2e2',
+                            }
+                      )
+                      : (
+                        printingMonitorPendingConfirmation.action === 'cancel'
+                          ? {
+                              borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                              background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 86%)',
+                              color: '#fde68a',
+                            }
+                          : {
+                              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
+                              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
+                              color: '#fee2e2',
+                            }
+                      )
+                  }
+                  onClick={() => {
+                    const pending = printingMonitorPendingConfirmation;
+                    if (!pending) return;
+                    setPrintingMonitorPendingConfirmation(null);
+                    if (pending.kind === 'control') {
+                      void executePrintingMonitorControlAction(pending.action);
+                      return;
+                    }
+                    if (pending.action === 'start') {
+                      void executeStartMonitorRecentPlate(pending.plateId);
+                    } else {
+                      void executeDeleteMonitorRecentPlate(pending.plateId);
+                    }
+                  }}
+                >
+                  {printingMonitorPendingConfirmation.kind === 'plate'
+                    ? (printingMonitorPendingConfirmation.action === 'start' ? 'Confirm Start' : 'Confirm Delete')
+                    : (printingMonitorPendingConfirmation.action === 'cancel' ? 'Confirm Cancel' : 'Confirm Emergency Stop')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <PrintingResliceModal
         isOpen={showPrintingResliceModal}
         onCancel={() => {
@@ -9178,18 +9818,33 @@ export default function Home() {
               </div>
               <button
                 type="button"
-                className="ui-button ui-button-secondary !h-8 px-2.5 text-xs"
+                className="ui-button ui-button-secondary !p-2"
                 onClick={() => setPrintingMonitorModalOpen(false)}
+                aria-label="Close printer monitor"
+                title="Close monitor"
               >
-                Close
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="p-4 grid items-start gap-3 lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]">
               <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
                 <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
-                  <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
-                    Print Preview
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                      Print Preview
+                    </div>
+                    <IconButton
+                      onClick={() => {
+                        void refreshPrintingMonitorRecentPlates();
+                      }}
+                      disabled={printingMonitorActionBusy !== null || isPrintingMonitorRecentPlatesLoading}
+                      className="!p-1.5"
+                      title="Refresh recent print files"
+                      aria-label="Refresh recent print files"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isPrintingMonitorRecentPlatesLoading ? 'animate-spin' : ''}`} />
+                    </IconButton>
                   </div>
                   <div className="mt-1.5 rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
                     <div className="aspect-[4/3] w-full">
@@ -9203,8 +9858,80 @@ export default function Home() {
                           fetchPriority="high"
                         />
                       ) : (
-                        <div className="flex h-full w-full items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          {printingMonitorHasActivePrint ? 'No print thumbnail available yet.' : 'No active print.'}
+                        <div className="h-full w-full p-2">
+                          {printingMonitorRecentPlates.length > 0 ? (
+                            <div className="flex h-full min-h-0 flex-col">
+                              <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar space-y-1 pr-1">
+                                {printingMonitorRecentPlates.map((plate) => {
+                                  return (
+                                    <div
+                                      key={plate.plateId}
+                                      className="w-full rounded-md border px-2 py-1.5"
+                                      style={{
+                                        borderColor: 'var(--border-subtle)',
+                                        background: 'var(--surface-1)',
+                                      }}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <div className="min-w-0 flex-1 text-left">
+                                          <div className="truncate text-[11px]" style={{ color: 'var(--text-strong)' }}>
+                                            {`#${plate.plateId} • ${plate.name}`}
+                                          </div>
+                                          <div className="mt-0.5 text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
+                                            {plate.materialProfileName ?? 'Material profile unavailable'}
+                                          </div>
+                                          <div className="mt-0.5 text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
+                                            {`Est. ${formatPrintingMonitorEstimatedTime(plate.printTimeSec)} • ${formatPrintingMonitorUsedMaterial(plate.usedMaterialMl)}`}
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          <IconButton
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              void handleStartMonitorRecentPlate(plate.plateId);
+                                            }}
+                                            className="!p-1.5"
+                                            style={{
+                                              borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 45%)',
+                                              background: 'color-mix(in srgb, #22c55e, var(--surface-1) 86%)',
+                                              color: '#bbf7d0',
+                                            }}
+                                            title={`Start plate #${plate.plateId}`}
+                                            disabled={printingMonitorActionBusy !== null || printingMonitorHasActivePrint}
+                                          >
+                                            <Play className="w-3.5 h-3.5" />
+                                          </IconButton>
+                                          <IconButton
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              void handleDeleteMonitorRecentPlate(plate.plateId);
+                                            }}
+                                            className="!p-1.5"
+                                            style={{
+                                              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
+                                              background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
+                                              color: '#fecaca',
+                                            }}
+                                            title={`Delete plate #${plate.plateId}`}
+                                            disabled={printingMonitorActionBusy !== null}
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </IconButton>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              {isPrintingMonitorRecentPlatesLoading
+                                ? 'Loading recent print files…'
+                                : (printingMonitorRecentPlatesError ?? (printingMonitorHasActivePrint ? 'No print thumbnail available yet.' : 'No active print.'))}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -9252,19 +9979,35 @@ export default function Home() {
                       </span>
                     </div>
                     <div className="rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                      ETA:{' '}
-                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorEtaLabel}</span>
+                      Material:{' '}
+                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorDisplayMaterialProfile}</span>
                     </div>
-                    <div className="col-span-2 rounded-md border px-2.5 py-2 truncate" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }} title={printingMonitorSnapshot?.jobName ?? undefined}>
+                    <div
+                      className="col-span-2 rounded-md border px-2.5 py-2 truncate"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
+                      title={printingMonitorHasActivePrint ? (printingMonitorSnapshot?.jobName ?? undefined) : undefined}
+                    >
                       Job:{' '}
-                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorSnapshot?.jobName ?? '—'}</span>
+                      <span style={{ color: 'var(--text-strong)' }}>{printingMonitorHasActivePrint ? (printingMonitorSnapshot?.jobName ?? '—') : '—'}</span>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      className="ui-button ui-button-secondary !h-8 px-2.5 text-[11px]"
+                      className="ui-button !h-9 px-3 text-xs"
+                      style={printingMonitorHasActivePrint
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 87%)',
+                            color: 'var(--text-strong)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+                            color: 'var(--text-muted)',
+                            opacity: 0.55,
+                          }}
                       onClick={() => {
                         void handlePrintingMonitorControlAction(printingMonitorSnapshot?.isPaused ? 'resume' : 'pause');
                       }}
@@ -9277,7 +10020,19 @@ export default function Home() {
 
                     <button
                       type="button"
-                      className="ui-button ui-button-secondary !h-8 px-2.5 text-[11px]"
+                      className="ui-button !h-9 px-3 text-xs"
+                      style={printingMonitorHasActivePrint
+                        ? {
+                            borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 48%)',
+                            background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 88%)',
+                            color: '#fde68a',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+                            color: 'var(--text-muted)',
+                            opacity: 0.55,
+                          }}
                       onClick={() => {
                         void handlePrintingMonitorControlAction('cancel');
                       }}
@@ -9288,11 +10043,11 @@ export default function Home() {
 
                     <button
                       type="button"
-                      className="ui-button !h-8 px-2.5 text-[11px] col-span-2"
+                      className="ui-button !h-9 px-3 text-xs col-span-2"
                       style={{
-                        borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 45%)',
-                        background: 'color-mix(in srgb, #ef4444, var(--surface-1) 88%)',
-                        color: '#fecaca',
+                        borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 40%)',
+                        background: 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)',
+                        color: '#fee2e2',
                       }}
                       onClick={() => {
                         void handlePrintingMonitorControlAction('emergency-stop');
@@ -9302,12 +10057,6 @@ export default function Home() {
                       {printingMonitorActionBusy === 'emergency-stop' ? 'Emergency Stop…' : 'Emergency Stop'}
                     </button>
                   </div>
-
-                  {printingMonitorActionStatus && !printingMonitorError && (
-                    <div className="text-[11px] rounded-md border px-2.5 py-2" style={{ color: 'var(--text-muted)', borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                      {printingMonitorActionStatus}
-                    </div>
-                  )}
 
                   {printingMonitorError && (
                     <div className="text-[11px] rounded-md border px-2.5 py-2" style={{ color: '#fca5a5', borderColor: 'color-mix(in srgb, #fca5a5, var(--border-subtle) 60%)' }}>

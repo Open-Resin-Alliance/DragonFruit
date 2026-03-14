@@ -533,17 +533,23 @@ export function TopBar({
             onClick={() => onOpenMonitor?.()}
             className="group inline-flex h-10 items-center gap-1.5 rounded-md px-2 transition-colors"
             style={{
-              background: monitorButtonActive
-                ? 'color-mix(in srgb, var(--accent), transparent 82%)'
-                : 'transparent',
-              color: monitorButtonActive ? 'var(--accent)' : 'var(--text-strong)',
+              background: 'transparent',
+              color: 'var(--text-strong)',
             }}
             title="Open printer monitor"
             aria-label="Open printer monitor"
             data-no-window-drag="true"
           >
-            <Activity className="h-3.5 w-3.5" />
-            <span className="text-[11px] font-semibold">Monitor</span>
+            <Activity
+              className={`h-3.5 w-3.5 ${monitorButtonActive ? 'motion-safe:animate-pulse' : ''}`}
+              style={{ color: monitorButtonActive ? '#22c55e' : 'currentColor' }}
+            />
+            <span
+              className={`text-[11px] font-semibold ${monitorButtonActive ? 'motion-safe:animate-pulse' : ''}`}
+              style={{ color: monitorButtonActive ? '#22c55e' : 'currentColor' }}
+            >
+              Monitor
+            </span>
           </button>
         )}
       </div>

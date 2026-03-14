@@ -1997,6 +1997,97 @@ async fn nanodlp_printer_start(payload: &Value) -> (u16, Value) {
     }
 }
 
+async fn nanodlp_plate_delete(payload: &Value) -> (u16, Value) {
+    let raw_host = resolve_raw_host(payload);
+    let parsed = match parse_host_and_port(&raw_host) {
+        Some(p) => p,
+        None => {
+            return (
+                400,
+                json!({ "ok": false, "error": "Invalid host or IP address" }),
+            )
+        }
+    };
+
+    let plate_id = payload
+        .get("plateId")
+        .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)))
+        .filter(|&id| id > 0);
+    let plate_id = match plate_id {
+        Some(id) => id,
+        None => return (400, json!({ "ok": false, "error": "Invalid plateId" })),
+    };
+
+    let port = resolve_port(payload.get("port"), parsed.1);
+    let base_url = build_base_url(&parsed.0, port)
+        .trim_end_matches('/')
+        .to_string();
+
+    let endpoint_paths = [
+        format!("/plate/delete/{plate_id}"),
+        format!("/plates/delete/{plate_id}"),
+        format!("/plate/remove/{plate_id}"),
+    ];
+
+    let mut attempted: Vec<Value> = Vec::new();
+    let mut last_error_message: Option<String> = None;
+
+    for endpoint_path in endpoint_paths {
+        match http_client()
+            .get(format!("{base_url}{endpoint_path}"))
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                attempted.push(json!({
+                    "path": endpoint_path,
+                    "status": status,
+                }));
+
+                if status == 200 || status == 302 {
+                    return (
+                        200,
+                        json!({
+                            "ok": true,
+                            "ipAddress": parsed.0,
+                            "port": port,
+                            "plateId": plate_id,
+                            "status": status,
+                            "endpoint": endpoint_path,
+                            "message": format!("Deleted plate #{plate_id}."),
+                            "attempted": attempted,
+                        }),
+                    );
+                }
+            }
+            Err(err) => {
+                last_error_message = Some(err.to_string());
+            }
+        }
+    }
+
+    let last_status = attempted
+        .last()
+        .and_then(|entry| entry.get("status"))
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u16::try_from(value).ok());
+
+    (
+        if last_status.is_some() { 502 } else { 500 },
+        json!({
+            "ok": false,
+            "ipAddress": parsed.0,
+            "port": port,
+            "plateId": plate_id,
+            "status": last_status,
+            "error": last_error_message.unwrap_or_else(|| format!("Delete plate command failed for plate #{plate_id}.")),
+            "attempted": attempted,
+        }),
+    )
+}
+
 async fn nanodlp_printer_control(
     payload: &Value,
     action: &str,
@@ -2350,6 +2441,7 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
         "materials/edit" => nanodlp_materials_edit(payload).await,
         "job/import" => nanodlp_job_import(payload).await,
         "plates/list/json" => nanodlp_plates_list_json(payload).await,
+        "plate/delete" => nanodlp_plate_delete(payload).await,
         "printer/start" => nanodlp_printer_start(payload).await,
         "printer/pause" => nanodlp_printer_pause(payload).await,
         "printer/unpause" | "printer/resume" => nanodlp_printer_resume(payload).await,
