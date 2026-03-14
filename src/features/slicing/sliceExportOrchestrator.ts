@@ -190,6 +190,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
     aaOnSupports: options.aaOnSupports ?? false,
+    mirrorX: solidMesh.mirrorX,
+    mirrorY: solidMesh.mirrorY,
     modelTriangleCount: solidMesh.modelTriangleCount,
     containerCompressionLevel: 2,
     buildWidthMm: solidMesh.buildWidthMm,
