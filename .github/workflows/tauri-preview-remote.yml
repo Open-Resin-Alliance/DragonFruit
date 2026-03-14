@@ -1,0 +1,85 @@
+name: Tauri Preview Builds (GitHub-hosted, Disabled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_remote_preview:
+        description: "Set true to run this disabled remote preview workflow"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  remote-preview:
+    if: ${{ inputs.enable_remote_preview == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles app
+            artifactName: dragonfruit-macos-arm64-preview-remote-app
+            artifactPath: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DragonFruit.app
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles app
+            artifactName: dragonfruit-macos-x64-preview-remote-app
+            artifactPath: src-tauri/target/x86_64-apple-darwin/release/bundle/macos/DragonFruit.app
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles none
+            artifactName: dragonfruit-linux-x64-preview-remote
+            artifactPath: src-tauri/target/x86_64-unknown-linux-gnu/release/dragonfruit-desktop
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --bundles none
+            artifactName: dragonfruit-windows-x64-preview-remote
+            artifactPath: src-tauri/target/x86_64-pc-windows-msvc/release/dragonfruit-desktop.exe
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.runner == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.0"
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build preview artifact
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tauriScript: npx tauri
+          args: ${{ matrix.args }}
+
+      - name: Upload preview artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifactName }}
+          path: ${{ matrix.artifactPath }}
+          if-no-files-found: error
+          retention-days: 7
