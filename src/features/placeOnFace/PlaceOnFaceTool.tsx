@@ -14,6 +14,7 @@ interface PlaceOnFaceToolProps {
   onAnimatedTransformChange: (pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => void;
   resolveAnimatedTransform: (candidate: ModelTransform) => ModelTransform;
   onFaceSelect: (modelId: string) => void;
+  onBeforeFaceApply?: (normal: THREE.Vector3, continueApply: () => void) => boolean;
 }
 
 interface AnimState {
@@ -33,6 +34,7 @@ export function PlaceOnFaceTool({
   onAnimatedTransformChange,
   resolveAnimatedTransform,
   onFaceSelect,
+  onBeforeFaceApply,
 }: PlaceOnFaceToolProps) {
   const { scene } = useThree();
   const toolGroupRef = useRef<THREE.Group>(null);
@@ -46,6 +48,28 @@ export function PlaceOnFaceTool({
   });
 
   const [animState, setAnimState] = useState<AnimState | null>(null);
+  const activeModel = useMemo(() => models.find(m => m.id === activeModelId), [models, activeModelId]);
+  const transform = activeTransform || activeModel?.transform;
+
+  const startFaceApplyAnimation = React.useCallback((normal: THREE.Vector3) => {
+    if (animState || !activeModel || !activeModelId || !transform) return;
+
+    const targetWorldNormal = new THREE.Vector3(0, 0, -1);
+    const currentWorldQuat = quaternionFromGlobalEuler(transform.rotation);
+    const currentWorldNormal = normal.clone().applyQuaternion(currentWorldQuat).normalize();
+    const deltaQuat = new THREE.Quaternion().setFromUnitVectors(currentWorldNormal, targetWorldNormal);
+    const targetQuat = deltaQuat.multiply(currentWorldQuat);
+
+    onAnimationStart();
+    setAnimState({
+      startQuat: currentWorldQuat.clone(),
+      targetQuat,
+      startTime: performance.now(),
+      modelId: activeModelId,
+      startPosition: transform.position.clone(),
+      scale: transform.scale.clone(),
+    });
+  }, [activeModel, activeModelId, animState, onAnimationStart, transform]);
 
   // Find the actual THREE.Group for the active model in the scene
   useEffect(() => {
@@ -60,30 +84,19 @@ export function PlaceOnFaceTool({
     targetMeshGroupRef.current = found;
   }, [scene, activeModelId]);
 
-  const activeModel = useMemo(() => models.find(m => m.id === activeModelId), [models, activeModelId]);
-  const transform = activeTransform || activeModel?.transform;
-
   const handleFaceSelect = React.useCallback(
     (normal: THREE.Vector3) => {
       if (animState || !activeModel || !activeModelId || !transform) return; // Prevent multiple clicks during animation
 
-      const targetWorldNormal = new THREE.Vector3(0, 0, -1);
-      const currentWorldQuat = quaternionFromGlobalEuler(transform.rotation);
-      const currentWorldNormal = normal.clone().applyQuaternion(currentWorldQuat).normalize();
-      const deltaQuat = new THREE.Quaternion().setFromUnitVectors(currentWorldNormal, targetWorldNormal);
-      const targetQuat = deltaQuat.multiply(currentWorldQuat);
+      const proceedImmediately = onBeforeFaceApply
+        ? onBeforeFaceApply(normal.clone(), () => startFaceApplyAnimation(normal.clone()))
+        : true;
 
-      onAnimationStart();
-      setAnimState({
-        startQuat: currentWorldQuat.clone(),
-        targetQuat,
-        startTime: performance.now(),
-        modelId: activeModelId,
-        startPosition: transform.position.clone(),
-        scale: transform.scale.clone(),
-      });
+      if (!proceedImmediately) return;
+
+      startFaceApplyAnimation(normal);
     },
-    [activeModel, animState, activeModelId, onAnimationStart, transform]
+    [activeModel, activeModelId, animState, onBeforeFaceApply, startFaceApplyAnimation, transform]
   );
 
   useFrame(() => {
