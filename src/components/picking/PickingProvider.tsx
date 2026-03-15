@@ -53,11 +53,16 @@ export function PickingProvider({
     a: PickingResult,
     b: PickingResult,
   ): boolean => {
+    const aParentId = 'parentId' in a ? a.parentId : undefined;
+    const bParentId = 'parentId' in b ? b.parentId : undefined;
+    const aGizmoHandle = 'gizmoHandle' in a ? a.gizmoHandle : undefined;
+    const bGizmoHandle = 'gizmoHandle' in b ? b.gizmoHandle : undefined;
+
     return a.pickId === b.pickId
       && a.category === b.category
       && a.objectId === b.objectId
-      && a.parentId === b.parentId
-      && a.gizmoHandle === b.gizmoHandle;
+      && aParentId === bParentId
+      && aGizmoHandle === bGizmoHandle;
   }, []);
 
   // Configuration state

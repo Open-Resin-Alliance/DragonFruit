@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
 import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
@@ -854,8 +855,9 @@ export function useSceneCollectionManager() {
     const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
     const center = bbox.getCenter(new THREE.Vector3());
     const size = bbox.getSize(new THREE.Vector3());
+    const flatteningPlanes = computeFlatteningPlanes(geometry);
 
-    return { geometry, bbox, center, size };
+    return { geometry, bbox, center, size, flatteningPlanes };
   }, [getDebugPresetDims]);
 
   const addDebugPrimitive = useCallback((type: DebugPrimitiveType, preset: DebugPrimitiveSizePreset) => {
@@ -1098,6 +1100,12 @@ export function useSceneCollectionManager() {
         bbox: source.bbox.clone(),
         center: source.center.clone(),
         size: source.size.clone(),
+        flatteningPlanes: source.flatteningPlanes.map((plane) => ({
+          ...plane,
+          vertices: plane.vertices.map((vertex) => vertex.clone()),
+          normal: plane.normal.clone(),
+          center: plane.center.clone(),
+        })),
       };
     }
 
@@ -1122,6 +1130,12 @@ export function useSceneCollectionManager() {
       bbox: source.bbox.clone(),
       center: source.center.clone(),
       size: source.size.clone(),
+      flatteningPlanes: source.flatteningPlanes.map((plane) => ({
+        ...plane,
+        vertices: plane.vertices.map((vertex) => vertex.clone()),
+        normal: plane.normal.clone(),
+        center: plane.center.clone(),
+      })),
     };
   }, []);
 
