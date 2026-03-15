@@ -1223,6 +1223,8 @@ export function SceneCanvas({
   const outOfBoundsRotateGraceTimeoutRef = React.useRef<number | null>(null);
   const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
   const postGizmoInteractionTimeoutRef = React.useRef<number | null>(null);
+  const [localPostDragDeltaHold, setLocalPostDragDeltaHold] = React.useState(false);
+  const localPostDragDeltaHoldTimeoutRef = React.useRef<number | null>(null);
   const initialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
   const gizmoTransformStartSnapshotRef = React.useRef<{
     modelId: string;
@@ -1302,6 +1304,36 @@ export function SceneCanvas({
     if (isGizmoDragging) return;
     setLiveDragTransformVersion((value) => value + 1);
   }, [isGizmoDragging]);
+
+  React.useEffect(() => {
+    if (holdSupportDragDelta) {
+      setLocalPostDragDeltaHold(false);
+      if (localPostDragDeltaHoldTimeoutRef.current !== null) {
+        window.clearTimeout(localPostDragDeltaHoldTimeoutRef.current);
+        localPostDragDeltaHoldTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    if (!localPostDragDeltaHold) return;
+
+    if (localPostDragDeltaHoldTimeoutRef.current !== null) {
+      window.clearTimeout(localPostDragDeltaHoldTimeoutRef.current);
+    }
+
+    // Bridge one-frame parent state propagation lag after gizmo release.
+    localPostDragDeltaHoldTimeoutRef.current = window.setTimeout(() => {
+      setLocalPostDragDeltaHold(false);
+      localPostDragDeltaHoldTimeoutRef.current = null;
+    }, 220);
+
+    return () => {
+      if (localPostDragDeltaHoldTimeoutRef.current !== null) {
+        window.clearTimeout(localPostDragDeltaHoldTimeoutRef.current);
+        localPostDragDeltaHoldTimeoutRef.current = null;
+      }
+    };
+  }, [holdSupportDragDelta, localPostDragDeltaHold]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2181,6 +2213,8 @@ export function SceneCanvas({
     return true;
   }, []);
 
+  const effectiveHoldSupportDragDelta = Boolean(holdSupportDragDelta || localPostDragDeltaHold);
+
   React.useEffect(() => {
     // During active gizmo drags, `applySupportGroupDelta` owns this matrix.
     if (isGizmoDragging) return;
@@ -2207,7 +2241,7 @@ export function SceneCanvas({
     // Outside the explicit post-drag hold window we should never keep a
     // reconciliation delta alive, otherwise stale support clouds can persist
     // while selection remains active.
-    if (!holdSupportDragDelta) {
+    if (!effectiveHoldSupportDragDelta) {
       if (!dragGroup.matrixAutoUpdate) {
         dragGroup.matrix.identity();
         dragGroup.matrixAutoUpdate = true;
@@ -2242,7 +2276,7 @@ export function SceneCanvas({
     transformMode,
     models,
     supportDragGroupRef,
-    holdSupportDragDelta,
+    effectiveHoldSupportDragDelta,
     transform,
   ]);
 
@@ -4731,6 +4765,7 @@ export function SceneCanvas({
     window.__gizmoDragEndedThisFrame = true;
     suppressNextCanvasClickRef.current = true;
     setIsPostGizmoInteractionGuardActive(true);
+    setLocalPostDragDeltaHold(true);
 
     if (postGizmoInteractionTimeoutRef.current !== null) {
       window.clearTimeout(postGizmoInteractionTimeoutRef.current);
@@ -4748,6 +4783,9 @@ export function SceneCanvas({
     return () => {
       if (postGizmoInteractionTimeoutRef.current !== null) {
         window.clearTimeout(postGizmoInteractionTimeoutRef.current);
+      }
+      if (localPostDragDeltaHoldTimeoutRef.current !== null) {
+        window.clearTimeout(localPostDragDeltaHoldTimeoutRef.current);
       }
     };
   }, []);
@@ -5378,7 +5416,7 @@ export function SceneCanvas({
                 <CrossSectionStencilCap
                   entries={crossSectionCapEntries}
                   sourceObject={supportDragGroupRef?.current ?? null}
-                  sourceObjectVersion={supportRenderRefreshNonce + (isGizmoDragging ? 1 : 0) + (holdSupportDragDelta ? 1 : 0)}
+                  sourceObjectVersion={supportRenderRefreshNonce + (isGizmoDragging ? 1 : 0) + (effectiveHoldSupportDragDelta ? 1 : 0)}
                   y={clipUpper}
                   color="#FFFFFF"
                   planeWidthMm={crossSectionPlaneWidthMm}

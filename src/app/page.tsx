@@ -332,6 +332,7 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 };
 
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
+const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 
 function getFileExtension(name: string): string {
   const trimmed = name.trim().toLowerCase();
@@ -974,11 +975,43 @@ export default function Home() {
     const releasedAt = pendingSupportSyncReleasePerfRef.current;
     if (releasedAt == null) return;
 
-    const synced =
+    const activeModelId = scene.activeModelId;
+    if (!activeModelId) {
+      setHoldSupportDragDeltaUntilSupportSync(false);
+      pendingSupportSyncReleasePerfRef.current = null;
+      if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+        supportSyncFallbackTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    const modelObservedPerf = transformDebugTimelineRef.current.activeModelStoreObservedAt?.perfMs ?? 0;
+    const modelSynced = modelObservedPerf > releasedAt;
+    if (!modelSynced) return;
+
+    const supportIds = getSupportsForModel(supportStateSnapshot, activeModelId);
+    const kickstandCount = Object.values(kickstandStateSnapshot.kickstands)
+      .filter((kickstand) => kickstand.modelId === activeModelId)
+      .length;
+    const hasSupportEntities = (
+      supportIds.roots.length
+      + supportIds.trunks.length
+      + supportIds.branches.length
+      + supportIds.braces.length
+      + supportIds.leaves.length
+      + supportIds.twigs.length
+      + supportIds.sticks.length
+      + kickstandCount
+    ) > 0;
+
+    const supportSynced =
       lastSupportStoreUpdatePerfRef.current > releasedAt
       || lastKickstandStoreUpdatePerfRef.current > releasedAt;
 
-    if (!synced) return;
+    // If this model owns supports, require support-store propagation after
+    // release before clearing hold. Otherwise model-store sync is sufficient.
+    if (hasSupportEntities && !supportSynced) return;
 
     setHoldSupportDragDeltaUntilSupportSync(false);
     pendingSupportSyncReleasePerfRef.current = null;
@@ -986,7 +1019,12 @@ export default function Home() {
       window.clearTimeout(supportSyncFallbackTimeoutRef.current);
       supportSyncFallbackTimeoutRef.current = null;
     }
-  }, [holdSupportDragDeltaUntilSupportSync, kickstandStateSnapshot, supportStateSnapshot]);
+  }, [
+    holdSupportDragDeltaUntilSupportSync,
+    kickstandStateSnapshot,
+    scene.activeModelId,
+    supportStateSnapshot,
+  ]);
 
   React.useEffect(() => {
     const activeModel = scene.models.find((m) => m.id === scene.activeModelId);
@@ -7625,19 +7663,6 @@ export default function Home() {
   ) => {
     const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
     const releasePerf = performance.now();
-    pendingSupportSyncReleasePerfRef.current = releasePerf;
-    setHoldSupportDragDeltaUntilSupportSync(true);
-    if (typeof window !== 'undefined') {
-      if (supportSyncFallbackTimeoutRef.current !== null) {
-        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
-      }
-      // Fallback release guard: avoid indefinite hold when no support updates occur.
-      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
-        setHoldSupportDragDeltaUntilSupportSync(false);
-        pendingSupportSyncReleasePerfRef.current = null;
-        supportSyncFallbackTimeoutRef.current = null;
-      }, 120);
-    }
 
     transformDebugTimelineRef.current.lastOperation = operation;
     transformDebugTimelineRef.current.dragReleasedAt = {
@@ -7653,6 +7678,26 @@ export default function Home() {
       transformMgr.pendingTransformRef.current = null;
       invalidatePendingTransformHistory();
       return;
+    }
+
+    pendingSupportSyncReleasePerfRef.current = releasePerf;
+    setHoldSupportDragDeltaUntilSupportSync(true);
+    if (typeof window !== 'undefined') {
+      if (supportSyncFallbackTimeoutRef.current !== null) {
+        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+      }
+      const hasSupportEntities = getSupportPrimitiveCountForModel(scene.activeModelId) > 0;
+      const fallbackMs = hasSupportEntities
+        ? Math.max(SUPPORT_DRAG_HOLD_FALLBACK_MS, 520)
+        : SUPPORT_DRAG_HOLD_FALLBACK_MS;
+      // Fallback release guard: avoid indefinite hold when no support updates occur.
+      // Keep this window conservative because support transforms can complete a bit
+      // after model commit on heavier scenes.
+      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
+        setHoldSupportDragDeltaUntilSupportSync(false);
+        pendingSupportSyncReleasePerfRef.current = null;
+        supportSyncFallbackTimeoutRef.current = null;
+      }, fallbackMs);
     }
 
     // Flush the final model transform into the store synchronously so
@@ -7705,6 +7750,9 @@ export default function Home() {
           scale: current.scale.clone(),
         }, explicitBeforeTransform);
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
+        // Anchor support-sync release to post-store-update time so unrelated
+        // support updates right after pointer-up don't release the drag delta early.
+        pendingSupportSyncReleasePerfRef.current = transformDebugTimelineRef.current.storeUpdatedAt.perfMs;
         // Prevent the persistence effect from applying the same delta a second time
         transformEndFlushedRef.current = true;
       }
@@ -8581,8 +8629,17 @@ export default function Home() {
 
   const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
     ensurePendingTransformHistoryForActiveModel('rotate');
+
+    // Place-On-Face is an orientation-to-plate operation, so it should
+    // restore gravity/auto-snap behavior even if manual Z translation had
+    // previously disabled it.
+    if (scene.activeModelId) {
+      scene.setModelManualZMoveOverride(scene.activeModelId, false);
+    }
+    transformMgr.transformHook.setAutoSnapEnabled(true);
+
     transformMgr.setIsTransforming(true);
-  }, [ensurePendingTransformHistoryForActiveModel, transformMgr]);
+  }, [ensurePendingTransformHistoryForActiveModel, scene, transformMgr]);
 
   const handlePlaceOnFace = React.useCallback((modelId: string) => {
     if (scene.activeModelId !== modelId) return;
