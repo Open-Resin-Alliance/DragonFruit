@@ -16,7 +16,7 @@ import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/suppo
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
@@ -2506,6 +2506,7 @@ export function useSceneCollectionManager() {
           color,
           polygonCount: processed.geometry.getAttribute('position').count / 3,
           ignoreAutoLift: true,
+          manualZMoveOverride: true,
         };
 
         setModels(prev => [...prev, model]);
@@ -2648,13 +2649,14 @@ export function useSceneCollectionManager() {
             geometry,
             transform: {
               position: new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
-              rotation: new THREE.Euler(model.transform.rotation.x, model.transform.rotation.y, model.transform.rotation.z),
+              rotation: eulerFromGlobalEuler(model.transform.rotation),
               scale: new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z),
             },
             visible: model.visible,
             color,
             polygonCount,
             ignoreAutoLift: true,
+            manualZMoveOverride: true,
           });
         } catch (error) {
           console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);

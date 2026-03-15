@@ -1214,6 +1214,11 @@ export function SceneCanvas({
   const effectiveModelSelected = isModelSelected || !!activeModelId;
   const [isGizmoDragging, setIsGizmoDragging] = React.useState(false);
   const [isGizmoRetargeting, setIsGizmoRetargeting] = React.useState(false);
+  const [activeGizmoDragDescriptor, setActiveGizmoDragDescriptor] = React.useState<{
+    operation: 'move' | 'rotate' | 'scale';
+    axis?: 'x' | 'y' | 'z' | 'uniform';
+    isUniform?: boolean;
+  } | null>(null);
   const [outOfBoundsRotateGraceActive, setOutOfBoundsRotateGraceActive] = React.useState(false);
   const outOfBoundsRotateGraceTimeoutRef = React.useRef<number | null>(null);
   const [isPostGizmoInteractionGuardActive, setIsPostGizmoInteractionGuardActive] = React.useState(false);
@@ -1323,12 +1328,19 @@ export function SceneCanvas({
   }, [isGizmoDragging, queueLiveDragTransform]);
 
   React.useEffect(() => {
+    if (isGizmoDragging) return;
+    if (activeGizmoDragDescriptor === null) return;
+    setActiveGizmoDragDescriptor(null);
+  }, [activeGizmoDragDescriptor, isGizmoDragging]);
+
+  React.useEffect(() => {
     // Hard reset transient drag caches whenever selection target changes.
     // This prevents stale live transforms from the previous model from being
     // reused after delete/import/undo flows.
     liveDragTransformRef.current = null;
     setLiveDragTransformVersion((value) => value + 1);
     gizmoTransformStartSnapshotRef.current = null;
+    setActiveGizmoDragDescriptor(null);
     setGizmoGroupStartSnapshot(null);
   }, [activeModelId]);
 
@@ -1341,10 +1353,12 @@ export function SceneCanvas({
     liveDragTransformRef.current = null;
     setLiveDragTransformVersion((value) => value + 1);
     gizmoTransformStartSnapshotRef.current = null;
+    setActiveGizmoDragDescriptor(null);
     setGizmoGroupStartSnapshot(null);
     setIsGizmoDragging(false);
     resetSupportDragGroupNow();
   }, [
+    setActiveGizmoDragDescriptor,
     cancelPendingSupportDragResets,
     historyTransformResyncToken,
     resetSupportDragGroupNow,
@@ -2085,9 +2099,15 @@ export function SceneCanvas({
     return models.find((m) => m.id === activeModelId) ?? null;
   }, [models, activeModelId]);
 
+  const isActiveGizmoMove = activeGizmoDragDescriptor?.operation === 'move';
+  const isActiveGizmoZMove = activeGizmoDragDescriptor?.operation === 'move'
+    && activeGizmoDragDescriptor.axis === 'z';
+
   const useActiveModelAttachedSupportProxy = mode === 'prepare'
     && transformMode === 'transform'
     && isGizmoDragging
+    && !isActiveGizmoMove
+    && !isActiveGizmoZMove
     && !!activeModelId;
 
   const activeModelAttachedSupportLocalMatrix = React.useMemo(() => {
@@ -2123,6 +2143,12 @@ export function SceneCanvas({
     const dragGroup = supportDragGroupRef?.current;
     if (!beforeMat || !group || !dragGroup) return;
 
+    if (isActiveGizmoZMove) {
+      dragGroup.matrix.identity();
+      dragGroup.matrixAutoUpdate = true;
+      return;
+    }
+
     const logicalPosition = _dragWorkPosition.current.copy(group.position);
     const modelDropOffsetZ = activeModelId ? (modelDropOffsetsRef.current[activeModelId] ?? 0) : 0;
     if (mode === 'prepare' && modelDropOffsetZ > 0.0001) {
@@ -2134,7 +2160,7 @@ export function SceneCanvas({
     // delta = currentMatrix * inverse(beforeMatrix)
     dragGroup.matrix.multiplyMatrices(cur, inv);
     dragGroup.matrixAutoUpdate = false;
-  }, [activeGroupRef, activeModelId, mode, supportDragGroupRef]);
+  }, [activeGroupRef, activeModelId, isActiveGizmoZMove, mode, supportDragGroupRef]);
 
   const composeModelTransformMatrix = React.useCallback((t: ModelTransform) => {
     return new THREE.Matrix4().compose(
@@ -2159,6 +2185,14 @@ export function SceneCanvas({
 
     const dragGroup = supportDragGroupRef?.current;
     if (!dragGroup) return;
+
+    if (isActiveGizmoZMove) {
+      if (!dragGroup.matrixAutoUpdate) {
+        dragGroup.matrix.identity();
+        dragGroup.matrixAutoUpdate = true;
+      }
+      return;
+    }
 
     if (mode !== 'prepare' || transformMode !== 'transform' || !activeModelId || !transform) {
       if (!dragGroup.matrixAutoUpdate) {
@@ -2198,6 +2232,7 @@ export function SceneCanvas({
     dragGroup.matrixAutoUpdate = false;
   }, [
     activeModelId,
+    isActiveGizmoZMove,
     composeModelTransformMatrix,
     isGizmoDragging,
     matricesApproximatelyEqual,
@@ -5475,8 +5510,10 @@ export function SceneCanvas({
                     onMoveStart={(axis) => {
                     stopActiveModelDropAnimation();
                     captureGizmoDragBeforeMatrix();
-                      const shouldProceed = onTransformStart?.('move', axis ? { axis } : undefined);
+                      const details = axis ? { axis } : undefined;
+                      const shouldProceed = onTransformStart?.('move', details);
                       if (shouldProceed === false) return false;
+                      setActiveGizmoDragDescriptor({ operation: 'move', axis });
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
                       const idsForCage = isMultiGizmoSelection
@@ -5607,6 +5644,7 @@ export function SceneCanvas({
                       }
                     }
                     gizmoTransformStartSnapshotRef.current = null;
+                    setActiveGizmoDragDescriptor(null);
                     onTransformEnd?.('move', live ?? undefined, { skipStoreCommit: isMultiGizmoSelection });
                     queueLiveDragTransform(null);
                     setGizmoGroupStartSnapshot(null);
@@ -5646,6 +5684,7 @@ export function SceneCanvas({
                     captureGizmoDragBeforeMatrix();
                     const shouldProceed = onTransformStart?.('rotate', { axis });
                     if (shouldProceed === false) return false;
+                    setActiveGizmoDragDescriptor({ operation: 'rotate', axis });
                     clearDragCornerCageBaseData();
                     setGizmoGroupStartSnapshot(null);
                     if (activeModelId && activeModel) {
@@ -5702,6 +5741,7 @@ export function SceneCanvas({
                       });
                     }
                     gizmoTransformStartSnapshotRef.current = null;
+                    setActiveGizmoDragDescriptor(null);
                     onTransformEnd?.('rotate', live ?? undefined);
                     queueLiveDragTransform(null);
                     clearDragCornerCageBaseData();
@@ -5715,6 +5755,7 @@ export function SceneCanvas({
                     const startAxis = isUniform ? 'uniform' : axis;
                     const shouldProceed = onTransformStart?.('scale', { axis: startAxis, isUniform });
                     if (shouldProceed === false) return false;
+                    setActiveGizmoDragDescriptor({ operation: 'scale', axis: startAxis, isUniform });
                     if (activeGroupRef.current) {
                       initialScaleRef.current.copy(activeGroupRef.current.scale);
                     }
@@ -5881,6 +5922,7 @@ export function SceneCanvas({
                       }
                     }
                     gizmoTransformStartSnapshotRef.current = null;
+                    setActiveGizmoDragDescriptor(null);
                     onTransformEnd?.('scale', live ?? undefined, { skipStoreCommit: isMultiGizmoSelection });
                     queueLiveDragTransform(null);
                     setGizmoGroupStartSnapshot(null);
