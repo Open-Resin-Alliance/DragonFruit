@@ -41,6 +41,7 @@ export function PlaceOnFaceTool({
   const targetMeshGroupRef = useRef<THREE.Group | null>(null);
   const tempQuatRef = useRef(new THREE.Quaternion());
   const tempEulerRef = useRef(new THREE.Euler(0, 0, 0, 'ZYX'));
+  const tempPositionRef = useRef(new THREE.Vector3());
   const tempCandidateRef = useRef<ModelTransform>({
     position: new THREE.Vector3(),
     rotation: new THREE.Euler(0, 0, 0, 'ZYX'),
@@ -119,14 +120,17 @@ export function PlaceOnFaceTool({
       rotation: candidate.rotation,
       scale: candidate.scale,
     });
+    const easedPosition = tempPositionRef.current
+      .copy(animState.startPosition)
+      .lerp(resolvedTransform.position, easeT);
     const resolvedQuat = quaternionFromGlobalEuler(resolvedTransform.rotation);
 
-    toolGroupRef.current.position.copy(resolvedTransform.position);
+    toolGroupRef.current.position.copy(easedPosition);
     toolGroupRef.current.quaternion.copy(resolvedQuat);
     toolGroupRef.current.scale.copy(resolvedTransform.scale);
 
     if (targetMeshGroupRef.current) {
-      targetMeshGroupRef.current.position.copy(resolvedTransform.position);
+      targetMeshGroupRef.current.position.copy(easedPosition);
       targetMeshGroupRef.current.quaternion.copy(resolvedQuat);
       targetMeshGroupRef.current.scale.copy(resolvedTransform.scale);
     }
