@@ -557,6 +557,7 @@ export default function Home() {
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
+  const [supportDragTransactionId, setSupportDragTransactionId] = React.useState(0);
   const pendingSupportSyncReleasePerfRef = React.useRef<number | null>(null);
   const supportSyncFallbackTimeoutRef = React.useRef<number | null>(null);
   const lastSupportStoreUpdatePerfRef = React.useRef<number>(0);
@@ -7680,6 +7681,9 @@ export default function Home() {
       return;
     }
 
+    // Start a new deterministic support-drag transaction for this gizmo release.
+    setSupportDragTransactionId((value) => value + 1);
+
     pendingSupportSyncReleasePerfRef.current = releasePerf;
     setHoldSupportDragDeltaUntilSupportSync(true);
     if (typeof window !== 'undefined') {
@@ -9494,6 +9498,7 @@ export default function Home() {
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
+            supportDragTransactionId={supportDragTransactionId}
             ghostData={ghostData}
             duplicatePreviewModel={
               isDuplicating
