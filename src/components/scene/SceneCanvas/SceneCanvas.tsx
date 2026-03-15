@@ -1339,6 +1339,8 @@ export function SceneCanvas({
     // reused after delete/import/undo flows.
     liveDragTransformRef.current = null;
     setLiveDragTransformVersion((value) => value + 1);
+    setIsGizmoDragging(false);
+    setIsGizmoRetargeting(false);
     gizmoTransformStartSnapshotRef.current = null;
     setActiveGizmoDragDescriptor(null);
     setGizmoGroupStartSnapshot(null);
@@ -2851,7 +2853,14 @@ export function SceneCanvas({
     const liveGroup = meshRefs.current[modelId];
     if (!liveGroup) {
       if (modelId === activeModelId) {
-        return liveDragTransformRef.current ?? transform ?? model.transform;
+        const activeLiveDrag = (
+          isGizmoDragging
+          || isGizmoRetargeting
+          || isPostGizmoInteractionGuardActive
+        )
+          ? liveDragTransformRef.current
+          : null;
+        return activeLiveDrag ?? transform ?? model.transform;
       }
       return multiGizmoPreviewTransformsById[modelId] ?? model.transform;
     }
@@ -2861,7 +2870,14 @@ export function SceneCanvas({
       rotation: new THREE.Euler().setFromQuaternion(liveGroup.quaternion, 'ZYX'),
       scale: liveGroup.scale.clone(),
     };
-  }, [activeModelId, multiGizmoPreviewTransformsById, transform]);
+  }, [
+    activeModelId,
+    isGizmoDragging,
+    isGizmoRetargeting,
+    isPostGizmoInteractionGuardActive,
+    multiGizmoPreviewTransformsById,
+    transform,
+  ]);
 
   const dragCornerCageModelIds = React.useMemo(() => {
     if (mode !== 'prepare') return [] as string[];
@@ -4904,8 +4920,18 @@ export function SceneCanvas({
                   && duplicatePreviewModel
                   && model.id === duplicatePreviewModel.id,
                 );
+                // Use live drag transform only during active/guarded gizmo interaction.
+                // Otherwise stale refs can mask immediate panel-driven updates (e.g. reset scale).
+                const liveDragTransformForRender = (
+                  isGizmoDragging
+                  || isGizmoRetargeting
+                  || isPostGizmoInteractionGuardActive
+                )
+                  ? liveDragTransformRef.current
+                  : null;
+
                 // Use props.transform if active (for smooth drag), else model.transform
-                const rawActiveTransformForRender = liveDragTransformRef.current
+                const rawActiveTransformForRender = liveDragTransformForRender
                   ?? (isMultiGizmoSelection
                     ? (liveActiveTransformForMultiPreview ?? model.transform)
                     : (transform ?? model.transform));
@@ -4992,6 +5018,7 @@ export function SceneCanvas({
                         isActive
                         && mode === 'prepare'
                         && transformMode === 'transform'
+                        && !!liveDragTransformRef.current
                         && (isGizmoDragging || isPostGizmoInteractionGuardActive)
                       }
                     >
