@@ -1516,24 +1516,47 @@ export function useSceneCollectionManager() {
   // Model Management
   const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
     const currentModel = modelsRef.current.find((m) => m.id === id);
-    if (!currentModel) return;
+    if (!currentModel) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
 
     if (previousTransformOverride && modelsRef.current.length === 1) {
       reassignAllSupportModelIds(id);
     }
 
     const beforeTransform = previousTransformOverride ?? currentModel.transform;
-    if (transformsEqual(beforeTransform, transform)) return;
+    if (transformsEqual(beforeTransform, transform)) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
+
+    let transformCommit = {
+      supportsChanged: false,
+      kickstandsChanged: false,
+    };
 
     if (previousTransformOverride && modelsRef.current.length === 1) {
-      transformAllSupportsForSingleModel(beforeTransform, transform);
+      transformCommit = transformAllSupportsForSingleModel(beforeTransform, transform);
     } else {
-      transformSupportsForModel(id, beforeTransform, transform);
+      transformCommit = transformSupportsForModel(id, beforeTransform, transform);
     }
 
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, transform } : m
     ));
+
+    return {
+      updated: true,
+      supportsChanged: transformCommit.supportsChanged,
+      kickstandsChanged: transformCommit.kickstandsChanged,
+    };
   }, []);
 
   const commitModelTransformHistory = useCallback((id: string, beforeTransform: ModelTransform, afterTransform: ModelTransform, description?: string) => {
@@ -1566,7 +1589,13 @@ export function useSceneCollectionManager() {
   }, [pushSceneSnapshotHistory]);
 
   const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
-    if (updates.length === 0) return;
+    if (updates.length === 0) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
 
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
@@ -1575,14 +1604,28 @@ export function useSceneCollectionManager() {
     const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
 
     const updateMap = new Map<string, ModelTransform>();
+    let supportsChanged = false;
+    let kickstandsChanged = false;
+    let updated = false;
     updates.forEach((entry) => {
       updateMap.set(entry.id, entry.transform);
 
       const currentModel = currentModels.find((model) => model.id === entry.id);
       if (!currentModel) return;
       if (transformsEqual(currentModel.transform, entry.transform)) return;
-      transformSupportsForModel(entry.id, currentModel.transform, entry.transform);
+      const commit = transformSupportsForModel(entry.id, currentModel.transform, entry.transform);
+      supportsChanged = supportsChanged || commit.supportsChanged;
+      kickstandsChanged = kickstandsChanged || commit.kickstandsChanged;
+      updated = true;
     });
+
+    if (!updated) {
+      return {
+        updated: false,
+        supportsChanged,
+        kickstandsChanged,
+      };
+    }
 
     const nextModels = currentModels.map((m) => {
       const nextTransform = updateMap.get(m.id);
@@ -1593,6 +1636,12 @@ export function useSceneCollectionManager() {
 
     const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
     pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
+
+    return {
+      updated,
+      supportsChanged,
+      kickstandsChanged,
+    };
   }, [pushSceneSnapshotHistory]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {

@@ -1400,15 +1400,12 @@ export function SceneCanvas({
     return models.find((m) => m.id === activeModelId) ?? null;
   }, [models, activeModelId]);
 
-  const isActiveGizmoMove = activeGizmoDragDescriptor?.operation === 'move';
   const isActiveGizmoZMove = activeGizmoDragDescriptor?.operation === 'move'
     && activeGizmoDragDescriptor.axis === 'z';
 
   const useActiveModelAttachedSupportProxy = mode === 'prepare'
     && transformMode === 'transform'
-    && isGizmoDragging
-    && !isActiveGizmoMove
-    && !isActiveGizmoZMove
+    && (isGizmoDragging || effectiveHoldSupportDragDelta)
     && !!activeModelId;
 
   const activeModelAttachedSupportLocalMatrix = React.useMemo(() => {
@@ -2030,8 +2027,9 @@ export function SceneCanvas({
   const supportBaseExcludeModelIds = React.useMemo(() => {
     const ids = [...multiGizmoSupportPreviewIds];
     if (duplicateSourceSupportPreviewModelId) ids.push(duplicateSourceSupportPreviewModelId);
+    if (useActiveModelAttachedSupportProxy && activeModelId) ids.push(activeModelId);
     return Array.from(new Set(ids));
-  }, [duplicateSourceSupportPreviewModelId, multiGizmoSupportPreviewIds]);
+  }, [activeModelId, duplicateSourceSupportPreviewModelId, multiGizmoSupportPreviewIds, useActiveModelAttachedSupportProxy]);
 
   const arrangeSupportPreviewDeltas = React.useMemo(() => {
     if (!arrangeArrayPreviewItems || arrangeArrayPreviewItems.length === 0) {
@@ -4133,7 +4131,7 @@ export function SceneCanvas({
                       return true;
                   }}
                   onMoveEnd={() => {
-                    markGizmoDragEnded(!isMultiGizmoSelection);
+                    markGizmoDragEnded(true);
                     const live = captureActiveGroupTransform();
                     if (live) {
                       if (onTransformChange && !isMultiGizmoSelection) {
@@ -4411,7 +4409,7 @@ export function SceneCanvas({
                     }
                   }}
                   onScaleEnd={() => {
-                    markGizmoDragEnded(!isMultiGizmoSelection);
+                    markGizmoDragEnded(true);
                     const live = captureActiveGroupTransform();
                     if (live) {
                       if (onTransformChange && !isMultiGizmoSelection) {

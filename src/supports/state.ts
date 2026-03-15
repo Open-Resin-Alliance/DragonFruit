@@ -924,12 +924,22 @@ function eulersRoughlyEqual(a: THREE.Euler, b: THREE.Euler, epsilon = 1e-8) {
         && a.order === b.order;
 }
 
+export type SupportTransformCommitResult = {
+    supportsChanged: boolean;
+    kickstandsChanged: boolean;
+};
+
 export function transformSupportsForModel(
     modelId: string,
     beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
     afterTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
-) {
-    if (!modelId) return;
+): SupportTransformCommitResult {
+    if (!modelId) {
+        return {
+            supportsChanged: false,
+            kickstandsChanged: false,
+        };
+    }
 
     const beforeMatrix = new THREE.Matrix4().compose(
         beforeTransform.position.clone(),
@@ -943,7 +953,10 @@ export function transformSupportsForModel(
     );
 
     if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
-        return;
+        return {
+            supportsChanged: false,
+            kickstandsChanged: false,
+        };
     }
 
     const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
@@ -1318,13 +1331,25 @@ export function transformSupportsForModel(
         notify();
     }
 
-    transformKickstandsForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds, preserveRootZ);
+    const kickstandsChanged = transformKickstandsForModel(
+        modelId,
+        deltaMatrix,
+        touchedRootIds,
+        touchedKnotIds,
+        touchedSegmentIds,
+        preserveRootZ,
+    );
+
+    return {
+        supportsChanged: changed,
+        kickstandsChanged,
+    };
 }
 
 export function transformAllSupportsForSingleModel(
     beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
     afterTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
-) {
+): SupportTransformCommitResult {
     const beforeMatrix = new THREE.Matrix4().compose(
         beforeTransform.position.clone(),
         quaternionFromGlobalEuler(beforeTransform.rotation),
@@ -1337,7 +1362,10 @@ export function transformAllSupportsForSingleModel(
     );
 
     if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
-        return;
+        return {
+            supportsChanged: false,
+            kickstandsChanged: false,
+        };
     }
 
     const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
@@ -1444,7 +1472,12 @@ export function transformAllSupportsForSingleModel(
     };
     notify();
 
-    transformAllKickstands(deltaMatrix, preserveRootZ);
+    const kickstandsChanged = transformAllKickstands(deltaMatrix, preserveRootZ);
+
+    return {
+        supportsChanged: true,
+        kickstandsChanged,
+    };
 }
 
 export function removeRootById(rootId: string): Roots | null {

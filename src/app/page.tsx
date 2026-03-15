@@ -334,6 +334,34 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
 
+type TransformStoreCommitResult = {
+  updated: boolean;
+  supportsChanged: boolean;
+  kickstandsChanged: boolean;
+};
+
+type PendingSupportDragSyncTransaction = {
+  transactionId: number;
+  expectedModelTransformKeys: Map<string, string>;
+  expectedSupportStoreVersion: number;
+  expectedKickstandStoreVersion: number;
+};
+
+function createModelTransformKey(modelId: string, transform: ModelTransform): string {
+  return [
+    modelId,
+    transform.position.x.toFixed(6),
+    transform.position.y.toFixed(6),
+    transform.position.z.toFixed(6),
+    transform.rotation.x.toFixed(6),
+    transform.rotation.y.toFixed(6),
+    transform.rotation.z.toFixed(6),
+    transform.scale.x.toFixed(6),
+    transform.scale.y.toFixed(6),
+    transform.scale.z.toFixed(6),
+  ].join('|');
+}
+
 function getFileExtension(name: string): string {
   const trimmed = name.trim().toLowerCase();
   const dotIndex = trimmed.lastIndexOf('.');
@@ -558,10 +586,11 @@ export default function Home() {
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
   const [supportDragTransactionId, setSupportDragTransactionId] = React.useState(0);
-  const pendingSupportSyncReleasePerfRef = React.useRef<number | null>(null);
+  const supportDragTransactionIdRef = React.useRef(0);
+  const pendingSupportDragSyncRef = React.useRef<PendingSupportDragSyncTransaction | null>(null);
+  const supportStoreVersionRef = React.useRef(0);
+  const kickstandStoreVersionRef = React.useRef(0);
   const supportSyncFallbackTimeoutRef = React.useRef<number | null>(null);
-  const lastSupportStoreUpdatePerfRef = React.useRef<number>(0);
-  const lastKickstandStoreUpdatePerfRef = React.useRef<number>(0);
   const transformDebugTimelineRef = React.useRef<{
     lastOperation: 'move' | 'rotate' | 'scale' | null;
     dragReleasedAt: { perfMs: number; epochMs: number } | null;
@@ -955,11 +984,89 @@ export default function Home() {
   );
 
   React.useEffect(() => {
+    supportDragTransactionIdRef.current = supportDragTransactionId;
+  }, [supportDragTransactionId]);
+
+  const clearSupportSyncFallbackTimeout = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (supportSyncFallbackTimeoutRef.current !== null) {
+      window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+      supportSyncFallbackTimeoutRef.current = null;
+    }
+  }, []);
+
+  const finalizeSupportDragSyncTransaction = React.useCallback((transactionId?: number) => {
+    if (
+      transactionId !== undefined
+      && pendingSupportDragSyncRef.current
+      && pendingSupportDragSyncRef.current.transactionId !== transactionId
+    ) {
+      return;
+    }
+
+    pendingSupportDragSyncRef.current = null;
+    clearSupportSyncFallbackTimeout();
+    setHoldSupportDragDeltaUntilSupportSync(false);
+  }, [clearSupportSyncFallbackTimeout]);
+
+  const beginSupportDragSyncTransaction = React.useCallback((
+    expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }>,
+    commitResult: TransformStoreCommitResult,
+  ) => {
+    const nextTransactionId = supportDragTransactionIdRef.current + 1;
+    supportDragTransactionIdRef.current = nextTransactionId;
+    setSupportDragTransactionId(nextTransactionId);
+
+    const expectedModelTransformKeys = new Map<string, string>();
+    expectedModelTransforms.forEach(({ modelId, transform }) => {
+      expectedModelTransformKeys.set(modelId, createModelTransformKey(modelId, transform));
+    });
+
+    const expectedSupportStoreVersion = supportStoreVersionRef.current + (commitResult.supportsChanged ? 1 : 0);
+    const expectedKickstandStoreVersion = kickstandStoreVersionRef.current + (commitResult.kickstandsChanged ? 1 : 0);
+    const needsHold = (
+      expectedModelTransformKeys.size > 0
+      || expectedSupportStoreVersion > supportStoreVersionRef.current
+      || expectedKickstandStoreVersion > kickstandStoreVersionRef.current
+    );
+
+    if (!needsHold) {
+      finalizeSupportDragSyncTransaction();
+      return;
+    }
+
+    pendingSupportDragSyncRef.current = {
+      transactionId: nextTransactionId,
+      expectedModelTransformKeys,
+      expectedSupportStoreVersion,
+      expectedKickstandStoreVersion,
+    };
+    setHoldSupportDragDeltaUntilSupportSync(true);
+
+    if (typeof window !== 'undefined') {
+      clearSupportSyncFallbackTimeout();
+      const requiresSupportSync = commitResult.supportsChanged || commitResult.kickstandsChanged;
+      const fallbackMs = requiresSupportSync
+        ? Math.max(SUPPORT_DRAG_HOLD_FALLBACK_MS, 520)
+        : SUPPORT_DRAG_HOLD_FALLBACK_MS;
+      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
+        finalizeSupportDragSyncTransaction(nextTransactionId);
+      }, fallbackMs);
+    }
+  }, [clearSupportSyncFallbackTimeout, finalizeSupportDragSyncTransaction]);
+
+  React.useEffect(() => {
+    return () => {
+      clearSupportSyncFallbackTimeout();
+    };
+  }, [clearSupportSyncFallbackTimeout]);
+
+  React.useEffect(() => {
     transformDebugTimelineRef.current.supportStoreUpdatedAt = {
       perfMs: performance.now(),
       epochMs: Date.now(),
     };
-    lastSupportStoreUpdatePerfRef.current = transformDebugTimelineRef.current.supportStoreUpdatedAt.perfMs;
+    supportStoreVersionRef.current += 1;
   }, [supportStateSnapshot]);
 
   React.useEffect(() => {
@@ -967,63 +1074,40 @@ export default function Home() {
       perfMs: performance.now(),
       epochMs: Date.now(),
     };
-    lastKickstandStoreUpdatePerfRef.current = transformDebugTimelineRef.current.kickstandStoreUpdatedAt.perfMs;
+    kickstandStoreVersionRef.current += 1;
   }, [kickstandStateSnapshot]);
 
   React.useEffect(() => {
     if (!holdSupportDragDeltaUntilSupportSync) return;
 
-    const releasedAt = pendingSupportSyncReleasePerfRef.current;
-    if (releasedAt == null) return;
-
-    const activeModelId = scene.activeModelId;
-    if (!activeModelId) {
-      setHoldSupportDragDeltaUntilSupportSync(false);
-      pendingSupportSyncReleasePerfRef.current = null;
-      if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
-        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
-        supportSyncFallbackTimeoutRef.current = null;
-      }
+    const pendingTransaction = pendingSupportDragSyncRef.current;
+    if (!pendingTransaction) {
+      finalizeSupportDragSyncTransaction();
       return;
     }
 
-    const modelObservedPerf = transformDebugTimelineRef.current.activeModelStoreObservedAt?.perfMs ?? 0;
-    const modelSynced = modelObservedPerf > releasedAt;
-    if (!modelSynced) return;
+    if (supportDragTransactionId < pendingTransaction.transactionId) return;
 
-    const supportIds = getSupportsForModel(supportStateSnapshot, activeModelId);
-    const kickstandCount = Object.values(kickstandStateSnapshot.kickstands)
-      .filter((kickstand) => kickstand.modelId === activeModelId)
-      .length;
-    const hasSupportEntities = (
-      supportIds.roots.length
-      + supportIds.trunks.length
-      + supportIds.branches.length
-      + supportIds.braces.length
-      + supportIds.leaves.length
-      + supportIds.twigs.length
-      + supportIds.sticks.length
-      + kickstandCount
-    ) > 0;
+    const modelsById = new Map(scene.models.map((model) => [model.id, model]));
+    const modelTransformsSynced = Array.from(pendingTransaction.expectedModelTransformKeys.entries()).every(
+      ([modelId, expectedTransformKey]) => {
+        const model = modelsById.get(modelId);
+        if (!model) return false;
+        return createModelTransformKey(modelId, model.transform) === expectedTransformKey;
+      },
+    );
+    if (!modelTransformsSynced) return;
 
-    const supportSynced =
-      lastSupportStoreUpdatePerfRef.current > releasedAt
-      || lastKickstandStoreUpdatePerfRef.current > releasedAt;
+    if (supportStoreVersionRef.current < pendingTransaction.expectedSupportStoreVersion) return;
+    if (kickstandStoreVersionRef.current < pendingTransaction.expectedKickstandStoreVersion) return;
 
-    // If this model owns supports, require support-store propagation after
-    // release before clearing hold. Otherwise model-store sync is sufficient.
-    if (hasSupportEntities && !supportSynced) return;
-
-    setHoldSupportDragDeltaUntilSupportSync(false);
-    pendingSupportSyncReleasePerfRef.current = null;
-    if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
-      window.clearTimeout(supportSyncFallbackTimeoutRef.current);
-      supportSyncFallbackTimeoutRef.current = null;
-    }
+    finalizeSupportDragSyncTransaction(pendingTransaction.transactionId);
   }, [
+    finalizeSupportDragSyncTransaction,
     holdSupportDragDeltaUntilSupportSync,
     kickstandStateSnapshot,
-    scene.activeModelId,
+    scene.models,
+    supportDragTransactionId,
     supportStateSnapshot,
   ]);
 
@@ -1035,18 +1119,7 @@ export default function Home() {
     }
 
     const t = activeModel.transform;
-    const key = [
-      activeModel.id,
-      t.position.x.toFixed(6),
-      t.position.y.toFixed(6),
-      t.position.z.toFixed(6),
-      t.rotation.x.toFixed(6),
-      t.rotation.y.toFixed(6),
-      t.rotation.z.toFixed(6),
-      t.scale.x.toFixed(6),
-      t.scale.y.toFixed(6),
-      t.scale.z.toFixed(6),
-    ].join('|');
+    const key = createModelTransformKey(activeModel.id, t);
 
     if (activeModelStoreTransformKeyRef.current === key) return;
     activeModelStoreTransformKeyRef.current = key;
@@ -7681,28 +7754,12 @@ export default function Home() {
       return;
     }
 
-    // Start a new deterministic support-drag transaction for this gizmo release.
-    setSupportDragTransactionId((value) => value + 1);
-
-    pendingSupportSyncReleasePerfRef.current = releasePerf;
-    setHoldSupportDragDeltaUntilSupportSync(true);
-    if (typeof window !== 'undefined') {
-      if (supportSyncFallbackTimeoutRef.current !== null) {
-        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
-      }
-      const hasSupportEntities = getSupportPrimitiveCountForModel(scene.activeModelId) > 0;
-      const fallbackMs = hasSupportEntities
-        ? Math.max(SUPPORT_DRAG_HOLD_FALLBACK_MS, 520)
-        : SUPPORT_DRAG_HOLD_FALLBACK_MS;
-      // Fallback release guard: avoid indefinite hold when no support updates occur.
-      // Keep this window conservative because support transforms can complete a bit
-      // after model commit on heavier scenes.
-      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
-        setHoldSupportDragDeltaUntilSupportSync(false);
-        pendingSupportSyncReleasePerfRef.current = null;
-        supportSyncFallbackTimeoutRef.current = null;
-      }, fallbackMs);
-    }
+    let transformCommitResult: TransformStoreCommitResult = {
+      updated: false,
+      supportsChanged: false,
+      kickstandsChanged: false,
+    };
+    const expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }> = [];
 
     // Flush the final model transform into the store synchronously so
     // transformSupportsForModel() recalculates all support positions before
@@ -7748,18 +7805,37 @@ export default function Home() {
           : undefined;
 
         transformDebugTimelineRef.current.storeUpdateStartedAt = stampNow();
-        scene.updateModelTransform(scene.activeModelId, {
+        const committedTransform = {
           position: current.position.clone(),
           rotation: current.rotation.clone(),
           scale: current.scale.clone(),
-        }, explicitBeforeTransform);
+        };
+        transformCommitResult = scene.updateModelTransform(
+          scene.activeModelId,
+          committedTransform,
+          explicitBeforeTransform,
+        );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
-        // Anchor support-sync release to post-store-update time so unrelated
-        // support updates right after pointer-up don't release the drag delta early.
-        pendingSupportSyncReleasePerfRef.current = transformDebugTimelineRef.current.storeUpdatedAt.perfMs;
+
+        if (transformCommitResult.updated) {
+          expectedModelTransforms.push({
+            modelId: scene.activeModelId,
+            transform: {
+              position: committedTransform.position.clone(),
+              rotation: committedTransform.rotation.clone(),
+              scale: committedTransform.scale.clone(),
+            },
+          });
+        }
+
+        beginSupportDragSyncTransaction(expectedModelTransforms, transformCommitResult);
         // Prevent the persistence effect from applying the same delta a second time
         transformEndFlushedRef.current = true;
       }
+    }
+
+    if (expectedModelTransforms.length === 0) {
+      beginSupportDragSyncTransaction(expectedModelTransforms, transformCommitResult);
     }
 
     // Do not eagerly reset support drag-group matrix here.
@@ -7962,9 +8038,29 @@ export default function Home() {
     })));
     console.groupEnd();
 
-    if (updates.length === 0) return;
+    if (updates.length === 0) {
+      beginSupportDragSyncTransaction([], {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      });
+      return;
+    }
 
-    scene.updateModelTransforms(updates);
+    const transformCommitResult = scene.updateModelTransforms(updates);
+    beginSupportDragSyncTransaction(
+      transformCommitResult.updated
+        ? updates.map((entry) => ({
+            modelId: entry.id,
+            transform: {
+              position: entry.transform.position.clone(),
+              rotation: entry.transform.rotation.clone(),
+              scale: entry.transform.scale.clone(),
+            },
+          }))
+        : [],
+      transformCommitResult,
+    );
 
     const activeUpdate = scene.activeModelId
       ? updates.find((entry) => entry.id === scene.activeModelId)
@@ -7978,7 +8074,7 @@ export default function Home() {
 
     setSupportRenderRefreshNonce((value) => value + 1);
     skipNextTransformEndCommitRef.current = null;
-  }, [isFiniteTransform, scene, transformMgr.transformHook]);
+  }, [beginSupportDragSyncTransaction, isFiniteTransform, scene, transformMgr.transformHook]);
 
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     if (scene.activeModelId) {
