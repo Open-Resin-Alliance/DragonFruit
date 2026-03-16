@@ -38,6 +38,7 @@ export type PrinterNetworkConnectionState = {
 export type PrinterNetworkDevice = PrinterNetworkConnectionState & {
   id: string;
   displayName: string;
+  imageDataUrl?: string;
 };
 
 export type PrinterPlatformBadge = {
@@ -291,6 +292,9 @@ function sanitizePrinterNetworkDevice(
       ? source.id.trim()
       : createId('network-device'),
     displayName: displayNameRaw || connection.hostName || connection.ipAddress || 'Printer',
+    imageDataUrl: typeof source.imageDataUrl === 'string' && source.imageDataUrl.trim().length > 0
+      ? source.imageDataUrl
+      : undefined,
     ...connection,
   };
 }
@@ -1332,11 +1336,19 @@ export function upsertPrinterNetworkDevice(
     normalizedIp,
   );
 
+  const hasImageDataUrlOverride = Object.prototype.hasOwnProperty.call(deviceInput, 'imageDataUrl');
+  const nextImageDataUrl = hasImageDataUrlOverride
+    ? (typeof deviceInput.imageDataUrl === 'string' && deviceInput.imageDataUrl.trim().length > 0
+      ? deviceInput.imageDataUrl
+      : undefined)
+    : existing.imageDataUrl;
+
   const nextDevice: PrinterNetworkDevice = {
     id: existing.id,
     displayName: typeof deviceInput.displayName === 'string' && deviceInput.displayName.trim().length > 0
       ? deviceInput.displayName.trim()
       : existing.displayName || nextConnection.hostName || nextConnection.ipAddress || 'Printer',
+    imageDataUrl: nextImageDataUrl,
     ...nextConnection,
   };
 
