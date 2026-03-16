@@ -2,9 +2,10 @@ import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
+import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromLychee, mergeFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -15,7 +16,7 @@ import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/suppo
 import { useLycheeImport, type LycheeImportResult } from '@/components/lys-import/useLycheeImport';
 import { useLysImport } from '@/components/lys-import/useLysImport';
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
-import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
 import { generateUuid } from '@/utils/uuid';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
 import { getKickstandSnapshot, setKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
@@ -854,8 +855,9 @@ export function useSceneCollectionManager() {
     const bbox = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3();
     const center = bbox.getCenter(new THREE.Vector3());
     const size = bbox.getSize(new THREE.Vector3());
+    const flatteningPlanes = computeFlatteningPlanes(geometry);
 
-    return { geometry, bbox, center, size };
+    return { geometry, bbox, center, size, flatteningPlanes };
   }, [getDebugPresetDims]);
 
   const addDebugPrimitive = useCallback((type: DebugPrimitiveType, preset: DebugPrimitiveSizePreset) => {
@@ -1003,6 +1005,207 @@ export function useSceneCollectionManager() {
     return new THREE.Vector2(0, 0);
   }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
+  type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
+
+  const intersectsRect = useCallback((a: Rect2D, b: Rect2D) => {
+    return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
+  }, []);
+
+  const isRectInsidePlate = useCallback((rect: Rect2D) => {
+    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+    const maxX = minX + view3dSettings.widthMm;
+    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+    const maxY = minY + view3dSettings.depthMm;
+
+    return (
+      rect.minX >= minX
+      && rect.maxX <= maxX
+      && rect.minY >= minY
+      && rect.maxY <= maxY
+    );
+  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+
+  const footprintForTransform = useCallback((size: THREE.Vector3, transform: ModelTransform) => {
+    const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
+    const baseD = Math.max(2, Math.abs(size.y * transform.scale.y));
+    const rz = transform.rotation.z;
+    const c = Math.abs(Math.cos(rz));
+    const s = Math.abs(Math.sin(rz));
+    return {
+      width: (baseW * c) + (baseD * s),
+      depth: (baseW * s) + (baseD * c),
+    };
+  }, []);
+
+  const buildMeshPlacementOffsets = useCallback((
+    center: { x: number; y: number },
+    size: THREE.Vector3,
+    transform: ModelTransform,
+  ) => {
+    const footprint = footprintForTransform(size, transform);
+    const meshRect: Rect2D = {
+      minX: center.x - (footprint.width * 0.5),
+      maxX: center.x + (footprint.width * 0.5),
+      minY: center.y - (footprint.depth * 0.5),
+      maxY: center.y + (footprint.depth * 0.5),
+    };
+
+    return {
+      minXOffset: meshRect.minX - center.x,
+      maxXOffset: meshRect.maxX - center.x,
+      minYOffset: meshRect.minY - center.y,
+      maxYOffset: meshRect.maxY - center.y,
+      width: Math.max(2, meshRect.maxX - meshRect.minX),
+      depth: Math.max(2, meshRect.maxY - meshRect.minY),
+    };
+  }, [footprintForTransform]);
+
+  const findFreeSpotCentersForModels = useCallback((
+    incomingModels: Array<Pick<LoadedModel, 'geometry' | 'transform'>>,
+    spacingMm = 5,
+  ): Array<{ x: number; y: number }> => {
+    if (incomingModels.length === 0) return [];
+
+    const centerX = defaultImportCenterXY.x;
+    const centerY = defaultImportCenterXY.y;
+    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+    const maxX = minX + view3dSettings.widthMm;
+    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+    const maxY = minY + view3dSettings.depthMm;
+
+    const placementOffsets = incomingModels.map((model) => buildMeshPlacementOffsets(
+      { x: model.transform.position.x, y: model.transform.position.y },
+      model.geometry.size,
+      model.transform,
+    ));
+
+    const maxWidth = Math.max(...placementOffsets.map((entry) => entry.width));
+    const maxDepth = Math.max(...placementOffsets.map((entry) => entry.depth));
+    const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
+    const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
+
+    const blockedRects: Rect2D[] = modelsRef.current
+      .filter((model) => model.visible)
+      .map((model) => {
+        const meshPlacement = buildMeshPlacementOffsets(
+          { x: model.transform.position.x, y: model.transform.position.y },
+          model.geometry.size,
+          model.transform,
+        );
+
+        const meshRect: Rect2D = {
+          minX: model.transform.position.x + meshPlacement.minXOffset,
+          maxX: model.transform.position.x + meshPlacement.maxXOffset,
+          minY: model.transform.position.y + meshPlacement.minYOffset,
+          maxY: model.transform.position.y + meshPlacement.maxYOffset,
+        };
+
+        const supportBounds = estimateSupportBoundsForModel(model.id);
+        if (!supportBounds) {
+          return meshRect;
+        }
+
+        return {
+          minX: Math.min(meshRect.minX, supportBounds.minX),
+          maxX: Math.max(meshRect.maxX, supportBounds.maxX),
+          minY: Math.min(meshRect.minY, supportBounds.minY),
+          maxY: Math.max(meshRect.maxY, supportBounds.maxY),
+        };
+      });
+
+    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+    const halfSpanX = Math.max(Math.abs(centerX - minX), Math.abs(maxX - centerX));
+    const halfSpanY = Math.max(Math.abs(centerY - minY), Math.abs(maxY - centerY));
+    const inPlateRingX = Math.ceil(halfSpanX / stepX) + 2;
+    const inPlateRingY = Math.ceil(halfSpanY / stepY) + 2;
+    const maxInPlateRing = Math.max(inPlateRingX, inPlateRingY);
+    const outsideRings = 12;
+    const maxRing = maxInPlateRing + outsideRings;
+
+    for (let ring = 0; ring <= maxRing; ring += 1) {
+      if (ring === 0) {
+        candidateCenters.push({ x: centerX, y: centerY, distSq: 0 });
+        continue;
+      }
+
+      for (let gx = -ring; gx <= ring; gx += 1) {
+        const gyTop = ring;
+        const gyBottom = -ring;
+        const x = centerX + gx * stepX;
+
+        const yTop = centerY + gyTop * stepY;
+        const dxTop = x - centerX;
+        const dyTop = yTop - centerY;
+        candidateCenters.push({ x, y: yTop, distSq: (dxTop * dxTop) + (dyTop * dyTop) });
+
+        if (gyBottom !== gyTop) {
+          const yBottom = centerY + gyBottom * stepY;
+          const dxBottom = x - centerX;
+          const dyBottom = yBottom - centerY;
+          candidateCenters.push({ x, y: yBottom, distSq: (dxBottom * dxBottom) + (dyBottom * dyBottom) });
+        }
+      }
+
+      for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
+        const gxRight = ring;
+        const gxLeft = -ring;
+        const y = centerY + gy * stepY;
+
+        const xRight = centerX + gxRight * stepX;
+        const dxRight = xRight - centerX;
+        const dyRight = y - centerY;
+        candidateCenters.push({ x: xRight, y, distSq: (dxRight * dxRight) + (dyRight * dyRight) });
+
+        if (gxLeft !== gxRight) {
+          const xLeft = centerX + gxLeft * stepX;
+          const dxLeft = xLeft - centerX;
+          const dyLeft = y - centerY;
+          candidateCenters.push({ x: xLeft, y, distSq: (dxLeft * dxLeft) + (dyLeft * dyLeft) });
+        }
+      }
+    }
+
+    candidateCenters.sort((a, b) => a.distSq - b.distSq);
+
+    const assignedCenters: Array<{ x: number; y: number }> = incomingModels.map((_, entryIndex) => {
+      const placement = placementOffsets[entryIndex];
+
+      const makeRectAt = (x: number, y: number): Rect2D => ({
+        minX: x + placement.minXOffset,
+        maxX: x + placement.maxXOffset,
+        minY: y + placement.minYOffset,
+        maxY: y + placement.maxYOffset,
+      });
+
+      for (const candidate of candidateCenters) {
+        const rect = makeRectAt(candidate.x, candidate.y);
+        if (!isRectInsidePlate(rect)) continue;
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      for (const candidate of candidateCenters) {
+        const rect = makeRectAt(candidate.x, candidate.y);
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
+      const fallbackY = centerY;
+      blockedRects.push({
+        minX: fallbackX + placement.minXOffset,
+        maxX: fallbackX + placement.maxXOffset,
+        minY: fallbackY + placement.minYOffset,
+        maxY: fallbackY + placement.maxYOffset,
+      });
+      return { x: fallbackX, y: fallbackY };
+    });
+
+    return assignedCenters;
+  }, [buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+
   useEffect(() => {
     const prev = readMeshAppearanceFromLocalStorage();
 
@@ -1098,6 +1301,12 @@ export function useSceneCollectionManager() {
         bbox: source.bbox.clone(),
         center: source.center.clone(),
         size: source.size.clone(),
+        flatteningPlanes: source.flatteningPlanes.map((plane) => ({
+          ...plane,
+          vertices: plane.vertices.map((vertex) => vertex.clone()),
+          normal: plane.normal.clone(),
+          center: plane.center.clone(),
+        })),
       };
     }
 
@@ -1122,6 +1331,12 @@ export function useSceneCollectionManager() {
       bbox: source.bbox.clone(),
       center: source.center.clone(),
       size: source.size.clone(),
+      flatteningPlanes: source.flatteningPlanes.map((plane) => ({
+        ...plane,
+        vertices: plane.vertices.map((vertex) => vertex.clone()),
+        normal: plane.normal.clone(),
+        center: plane.center.clone(),
+      })),
     };
   }, []);
 
@@ -1473,6 +1688,13 @@ export function useSceneCollectionManager() {
       }
 
       if (newModels.length > 0) {
+        const assignedCenters = findFreeSpotCentersForModels(newModels, 5);
+        newModels.forEach((model, index) => {
+          const center = assignedCenters[index];
+          if (!center) return;
+          model.transform.position.set(center.x, center.y, model.transform.position.z);
+        });
+
         setModels(prev => [...prev, ...newModels]);
         // If no active model, select the first new one
         if (!activeModelId) {
@@ -1489,7 +1711,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -1502,24 +1724,47 @@ export function useSceneCollectionManager() {
   // Model Management
   const updateModelTransform = useCallback((id: string, transform: ModelTransform, previousTransformOverride?: ModelTransform) => {
     const currentModel = modelsRef.current.find((m) => m.id === id);
-    if (!currentModel) return;
+    if (!currentModel) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
 
     if (previousTransformOverride && modelsRef.current.length === 1) {
       reassignAllSupportModelIds(id);
     }
 
     const beforeTransform = previousTransformOverride ?? currentModel.transform;
-    if (transformsEqual(beforeTransform, transform)) return;
+    if (transformsEqual(beforeTransform, transform)) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
+
+    let transformCommit = {
+      supportsChanged: false,
+      kickstandsChanged: false,
+    };
 
     if (previousTransformOverride && modelsRef.current.length === 1) {
-      transformAllSupportsForSingleModel(beforeTransform, transform);
+      transformCommit = transformAllSupportsForSingleModel(beforeTransform, transform);
     } else {
-      transformSupportsForModel(id, beforeTransform, transform);
+      transformCommit = transformSupportsForModel(id, beforeTransform, transform);
     }
 
     setModels(prev => prev.map(m =>
       m.id === id ? { ...m, transform } : m
     ));
+
+    return {
+      updated: true,
+      supportsChanged: transformCommit.supportsChanged,
+      kickstandsChanged: transformCommit.kickstandsChanged,
+    };
   }, []);
 
   const commitModelTransformHistory = useCallback((id: string, beforeTransform: ModelTransform, afterTransform: ModelTransform, description?: string) => {
@@ -1552,7 +1797,13 @@ export function useSceneCollectionManager() {
   }, [pushSceneSnapshotHistory]);
 
   const updateModelTransforms = useCallback((updates: Array<{ id: string; transform: ModelTransform }>) => {
-    if (updates.length === 0) return;
+    if (updates.length === 0) {
+      return {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      };
+    }
 
     const currentModels = modelsRef.current;
     const currentActiveModelId = activeModelIdRef.current;
@@ -1561,14 +1812,28 @@ export function useSceneCollectionManager() {
     const before = captureSceneSnapshot(currentModels, currentActiveModelId, currentSelectedModelIds);
 
     const updateMap = new Map<string, ModelTransform>();
+    let supportsChanged = false;
+    let kickstandsChanged = false;
+    let updated = false;
     updates.forEach((entry) => {
       updateMap.set(entry.id, entry.transform);
 
       const currentModel = currentModels.find((model) => model.id === entry.id);
       if (!currentModel) return;
       if (transformsEqual(currentModel.transform, entry.transform)) return;
-      transformSupportsForModel(entry.id, currentModel.transform, entry.transform);
+      const commit = transformSupportsForModel(entry.id, currentModel.transform, entry.transform);
+      supportsChanged = supportsChanged || commit.supportsChanged;
+      kickstandsChanged = kickstandsChanged || commit.kickstandsChanged;
+      updated = true;
     });
+
+    if (!updated) {
+      return {
+        updated: false,
+        supportsChanged,
+        kickstandsChanged,
+      };
+    }
 
     const nextModels = currentModels.map((m) => {
       const nextTransform = updateMap.get(m.id);
@@ -1579,6 +1844,12 @@ export function useSceneCollectionManager() {
 
     const after = captureSceneSnapshot(nextModels, currentActiveModelId, currentSelectedModelIds);
     pushSceneSnapshotHistory(before, after, updates.length === 1 ? 'Update Model Transform' : 'Update Model Transforms');
+
+    return {
+      updated,
+      supportsChanged,
+      kickstandsChanged,
+    };
   }, [pushSceneSnapshotHistory]);
 
   const setModelVisibility = useCallback((id: string, visible: boolean) => {
@@ -2442,16 +2713,26 @@ export function useSceneCollectionManager() {
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
 
-  const handleImportLysFile = useCallback(async (file: File) => {
-    trackRecentOpenedFiles([file], 'scene');
+  type SceneImportRunOptions = {
+    suppressProgress?: boolean;
+    suppressReport?: boolean;
+    suppressRecentTracking?: boolean;
+  };
 
-    setImportProgress({
-      active: true,
-      type: 'scene',
-      label: 'Importing scene…',
-      detail: file.name,
-      progress: null,
-    });
+  const handleImportLysFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
+    if (!options?.suppressRecentTracking) {
+      trackRecentOpenedFiles([file], 'scene');
+    }
+
+    if (!options?.suppressProgress) {
+      setImportProgress({
+        active: true,
+        type: 'scene',
+        label: 'Importing scene…',
+        detail: file.name,
+        progress: null,
+      });
+    }
 
     await waitForUiYield();
 
@@ -2471,11 +2752,34 @@ export function useSceneCollectionManager() {
         // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
         const color = '#a3a3a3';
 
-        const finalPosition = new THREE.Vector3(
+        const originalPosition = new THREE.Vector3(
           importedTransform.position.x,
           importedTransform.position.y,
           importedTransform.position.z
         );
+
+        const assignedCenter = findFreeSpotCentersForModels([
+          {
+            geometry: processed,
+            transform: {
+              position: originalPosition.clone(),
+              rotation: importedTransform.rotation,
+              scale: importedTransform.scale,
+            },
+          },
+        ], 5)[0];
+
+        const finalPosition = new THREE.Vector3(
+          assignedCenter?.x ?? originalPosition.x,
+          assignedCenter?.y ?? originalPosition.y,
+          originalPosition.z,
+        );
+
+        const sourceTransform: ModelTransform = {
+          position: originalPosition.clone(),
+          rotation: importedTransform.rotation.clone(),
+          scale: importedTransform.scale.clone(),
+        };
 
         const model: LoadedModel = {
           id: importedModelId || generateId(),
@@ -2492,6 +2796,7 @@ export function useSceneCollectionManager() {
           color,
           polygonCount: processed.geometry.getAttribute('position').count / 3,
           ignoreAutoLift: true,
+          manualZMoveOverride: true,
         };
 
         setModels(prev => [...prev, model]);
@@ -2501,58 +2806,79 @@ export function useSceneCollectionManager() {
         if (supportData) {
           if (typeof window !== 'undefined') {
             requestAnimationFrame(() => {
-              loadFromLychee(supportData);
+              mergeFromLychee(supportData);
+              if (!transformsEqual(sourceTransform, model.transform)) {
+                transformSupportsForModel(model.id, sourceTransform, model.transform);
+              }
             });
           } else {
-            loadFromLychee(supportData);
+            mergeFromLychee(supportData);
+            if (!transformsEqual(sourceTransform, model.transform)) {
+              transformSupportsForModel(model.id, sourceTransform, model.transform);
+            }
           }
         }
 
         const supportCount = countSupportEntries(supportData ?? null);
-        emitSceneImportReport(
-          supportCount > 0
-            ? `Imported LYS scene: 1 model, ${supportCount} supports.`
-            : 'Imported LYS scene: 1 model.',
-          'success',
-        );
+        if (!options?.suppressReport) {
+          emitSceneImportReport(
+            supportCount > 0
+              ? `Imported LYS scene: 1 model, ${supportCount} supports.`
+              : 'Imported LYS scene: 1 model.',
+            'success',
+          );
+        }
 
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
+        return true;
       } else {
         const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
         console.error('[SceneCollection] LYS import failed:', errorMessage);
-        emitSceneImportReport(`LYS import failed: ${errorMessage}`, 'error');
-        if (typeof window !== 'undefined') {
+        if (!options?.suppressReport) {
+          emitSceneImportReport(`LYS import failed: ${errorMessage}`, 'error');
+        }
+        if (!options?.suppressReport && typeof window !== 'undefined') {
           window.alert(`Import Scene failed:\n${errorMessage}`);
         }
+        return false;
       }
     } catch (err) {
       console.error("[SceneCollection] Failed to process LYS geometry:", err);
       const msg = err instanceof Error ? err.message : String(err);
-      emitSceneImportReport(`LYS import failed: ${msg}`, 'error');
-      if (typeof window !== 'undefined') {
+      if (!options?.suppressReport) {
+        emitSceneImportReport(`LYS import failed: ${msg}`, 'error');
+      }
+      if (!options?.suppressReport && typeof window !== 'undefined') {
         window.alert(`Import Scene failed:\n${msg}`);
       }
+      return false;
     } finally {
+      if (!options?.suppressProgress) {
+        setImportProgress({
+          active: false,
+          type: null,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
+    }
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, lysImport, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
+
+  const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
+    if (!options?.suppressRecentTracking) {
+      trackRecentOpenedFiles([file], 'scene');
+    }
+
+    if (!options?.suppressProgress) {
       setImportProgress({
-        active: false,
-        type: null,
-        label: '',
-        detail: '',
+        active: true,
+        type: 'scene',
+        label: 'Importing VOXL scene…',
+        detail: file.name,
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield, emitSceneImportReport]);
-
-  const handleImportVoxlFile = useCallback(async (file: File) => {
-    trackRecentOpenedFiles([file], 'scene');
-
-    setImportProgress({
-      active: true,
-      type: 'scene',
-      label: 'Importing VOXL scene…',
-      detail: file.name,
-      progress: null,
-    });
 
     await waitForUiYield();
 
@@ -2634,13 +2960,14 @@ export function useSceneCollectionManager() {
             geometry,
             transform: {
               position: new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
-              rotation: new THREE.Euler(model.transform.rotation.x, model.transform.rotation.y, model.transform.rotation.z),
+              rotation: eulerFromGlobalEuler(model.transform.rotation),
               scale: new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z),
             },
             visible: model.visible,
             color,
             polygonCount,
             ignoreAutoLift: true,
+            manualZMoveOverride: true,
           });
         } catch (error) {
           console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);
@@ -2652,7 +2979,19 @@ export function useSceneCollectionManager() {
         }
       }
 
+      const sourceTransformsByModelId = new Map<string, ModelTransform>();
+      for (const imported of importedModels) {
+        sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
+      }
+
       if (importedModels.length > 0) {
+        const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
+        importedModels.forEach((model, index) => {
+          const center = assignedCenters[index];
+          if (!center) return;
+          model.transform.position.set(center.x, center.y, model.transform.position.z);
+        });
+
         setModels((prev) => [...prev, ...importedModels]);
 
         const mappedActiveId = (document.scene.activeModelId && idMap.get(document.scene.activeModelId))
@@ -2673,7 +3012,14 @@ export function useSceneCollectionManager() {
 
       if (voxlSupportsContainData(document)) {
         const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
-        loadFromLychee(remappedSupports);
+        mergeFromLychee(remappedSupports);
+
+        for (const imported of importedModels) {
+          const sourceTransform = sourceTransformsByModelId.get(imported.id);
+          if (!sourceTransform) continue;
+          if (transformsEqual(sourceTransform, imported.transform)) continue;
+          transformSupportsForModel(imported.id, sourceTransform, imported.transform);
+        }
       }
 
       const importedSupportCount = countSupportEntries(document.supports);
@@ -2684,54 +3030,124 @@ export function useSceneCollectionManager() {
       const skippedClause = skippedModels > 0 ? `, skipped ${skippedModels} ${skippedNoun}` : '';
 
       if (importedModelCount > 0) {
-        emitSceneImportReport(
-          `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
-          skippedModels > 0 ? 'warning' : 'success',
-        );
+        if (!options?.suppressReport) {
+          emitSceneImportReport(
+            `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
+            skippedModels > 0 ? 'warning' : 'success',
+          );
+        }
       }
 
       if (importedModels.length === 0) {
         console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-file meshes).');
-        emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+        if (!options?.suppressReport) {
+          emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+        }
+        return false;
       }
+      return true;
     } catch (error) {
       console.error('[SceneCollection] VOXL import failed:', error);
       const message = error instanceof Error ? error.message : String(error);
-      emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
-      if (typeof window !== 'undefined') {
+      if (!options?.suppressReport) {
+        emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
+      }
+      if (!options?.suppressReport && typeof window !== 'undefined') {
         window.alert(`Import VOXL failed:\n${message}`);
       }
+      return false;
     } finally {
-      setImportProgress({
-        active: false,
-        type: null,
-        label: '',
-        detail: '',
-        progress: null,
-      });
+      if (!options?.suppressProgress) {
+        setImportProgress({
+          active: false,
+          type: null,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
     }
-  }, [generateId, trackRecentOpenedFiles, waitForUiYield, emitSceneImportReport]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, trackRecentOpenedFiles, waitForUiYield]);
 
-  const importSceneFile = useCallback(async (file: File) => {
+  const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
     if (extension === '.voxl') {
-      await handleImportVoxlFile(file);
-      return;
+      return await handleImportVoxlFile(file, options);
     }
     if (extension === '.lys') {
-      await handleImportLysFile(file);
-      return;
+      return await handleImportLysFile(file, options);
     }
 
     console.warn(`[SceneCollection] Unsupported scene file: ${file.name}`);
+    return false;
   }, [getSceneExtension, handleImportLysFile, handleImportVoxlFile]);
+
+  const importSceneFiles = useCallback(async (filesInput: FileList | File[]) => {
+    const files = Array.from(filesInput).filter((file) => getSceneExtension(file.name) !== null);
+    if (files.length === 0) return;
+
+    if (files.length === 1) {
+      await importSceneFile(files[0]);
+      return;
+    }
+
+    trackRecentOpenedFiles(files, 'scene');
+
+    setImportProgress({
+      active: true,
+      type: 'scene',
+      label: 'Importing scenes…',
+      detail: `Preparing 0/${files.length}`,
+      progress: null,
+    });
+
+    await waitForUiYield();
+
+    let successCount = 0;
+    let failureCount = 0;
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      setImportProgress({
+        active: true,
+        type: 'scene',
+        label: 'Importing scenes…',
+        detail: `${i + 1}/${files.length}: ${file.name}`,
+        progress: null,
+      });
+
+      const ok = await importSceneFile(file, {
+        suppressProgress: true,
+        suppressReport: true,
+        suppressRecentTracking: true,
+      });
+
+      if (ok) successCount += 1;
+      else failureCount += 1;
+    }
+
+    setImportProgress({
+      active: false,
+      type: null,
+      label: '',
+      detail: '',
+      progress: null,
+    });
+
+    if (failureCount === 0) {
+      emitSceneImportReport(`Imported ${successCount} scene files.`, 'success');
+    } else if (successCount > 0) {
+      emitSceneImportReport(`Imported ${successCount}/${files.length} scene files (${failureCount} failed).`, 'warning');
+    } else {
+      emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
+    }
+  }, [emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      void importSceneFile(e.target.files[0]);
+      void importSceneFiles(e.target.files);
       e.target.value = '';
     }
-  }, [importSceneFile]);
+  }, [importSceneFiles]);
 
   const reopenRecentOpenedFile = useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
@@ -3125,6 +3541,7 @@ export function useSceneCollectionManager() {
 
     // LYS Import (1-step)
     importLysFile: handleImportLysFile,
+    importSceneFiles,
     onImportLysChange,
     isLysLoading: lysImport.isLoading,
     lysError: lysImport.error,

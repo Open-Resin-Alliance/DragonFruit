@@ -9,7 +9,6 @@ import * as THREE from 'three';
  * @returns The lowest Z coordinate in world space
  */
 export function computeLowestZ(geometry: THREE.BufferGeometry, matrix: THREE.Matrix4): number {
-    const start = performance.now();
     const positionAttribute = geometry.getAttribute('position');
     if (!positionAttribute) return 0;
 
@@ -81,8 +80,6 @@ export function computeLowestZ(geometry: THREE.BufferGeometry, matrix: THREE.Mat
         }
     }
 
-    const end = performance.now();
-    console.log(`[computeLowestZ] Took ${(end - start).toFixed(2)}ms. Result: ${minZ}`);
     return minZ;
 }
 
@@ -91,7 +88,6 @@ export function computeLowestZ(geometry: THREE.BufferGeometry, matrix: THREE.Mat
  * This avoids cloning the geometry.
  */
 export function computeBoundsZ(geometry: THREE.BufferGeometry, matrix: THREE.Matrix4): { min: number, max: number } {
-    const start = performance.now();
     const positionAttribute = geometry.getAttribute('position');
     if (!positionAttribute) return { min: 0, max: 0 };
 
@@ -149,7 +145,5 @@ export function computeBoundsZ(geometry: THREE.BufferGeometry, matrix: THREE.Mat
         }
     }
 
-    const end = performance.now();
-    console.log(`[computeBoundsZ] Took ${(end - start).toFixed(2)}ms. Result: [${minZ}, ${maxZ}]`);
     return { min: minZ, max: maxZ };
 }

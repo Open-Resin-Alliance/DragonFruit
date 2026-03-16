@@ -166,7 +166,7 @@ export function transformKickstandsForModel(
     touchedKnotIds?: Set<string>,
     touchedSegmentIds?: Set<string>,
     preserveRootZ = false,
-) {
+): boolean {
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(deltaMatrix);
 
     let changed = false;
@@ -220,7 +220,7 @@ export function transformKickstandsForModel(
         }
     }
 
-    if (!changed) return;
+    if (!changed) return false;
 
     state = {
         ...state,
@@ -229,6 +229,7 @@ export function transformKickstandsForModel(
         knots: nextKnots,
     };
     notify();
+    return true;
 }
 
 export function transformAllKickstands(deltaMatrix: THREE.Matrix4, preserveRootZ = false): boolean {

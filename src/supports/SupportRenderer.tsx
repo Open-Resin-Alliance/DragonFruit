@@ -810,10 +810,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const trunkShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
-
-        const rootsSettings = settings.roots;
-        const baseFlare = settings.baseFlare;
-        const baseFlareEnabled = baseFlare.enabled;
+        const hasSolidBottom = raftSettings.bottomMode === 'solid';
+        const raftThickness = raftSettings.thickness ?? 0;
 
         for (const trunk of Object.values(state.trunks)) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
@@ -823,10 +821,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const shafts: InstancedShaft[] = [];
 
             const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-            const diskHeight = rootsSettings.diskHeightMm;
-            const coneHeight = baseFlareEnabled ? baseFlare.heightMm : ((root as unknown as { height?: number }).height ?? 1.5);
-            const effectiveConeHeight = baseFlareEnabled ? coneHeight : 0;
-            let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, diskHeight + effectiveConeHeight));
+            const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
+            const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+            let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
 
             for (const segment of trunk.segments) {
                 if (segment.type === 'bezier') {
@@ -877,7 +874,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.trunks, state.roots, settings.baseFlare, settings.roots, isModelVisible]);
+    }, [raftSettings.bottomMode, raftSettings.thickness, state.trunks, state.roots, isModelVisible]);
 
     const branchShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1086,6 +1083,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const kickstandShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
+        const hasSolidBottom = raftSettings.bottomMode === 'solid';
+        const raftThickness = raftSettings.thickness ?? 0;
 
         for (const kickstand of Object.values(kickstandState.kickstands)) {
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
@@ -1095,8 +1094,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!root || !hostKnot) continue;
 
             const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-            const startZ = root.diskHeight + root.coneHeight;
-            let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, startZ));
+            const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
+            const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+            let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
 
             const shafts: InstancedShaft[] = [];
             let fullyBatchable = true;
@@ -1139,7 +1139,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, isModelVisible]);
+    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
 
     const segmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();

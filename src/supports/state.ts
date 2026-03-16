@@ -9,6 +9,7 @@ import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, remov
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { generateUuid } from '@/utils/uuid';
 
 const listeners = new Set<() => void>();
 
@@ -924,12 +925,22 @@ function eulersRoughlyEqual(a: THREE.Euler, b: THREE.Euler, epsilon = 1e-8) {
         && a.order === b.order;
 }
 
+export type SupportTransformCommitResult = {
+    supportsChanged: boolean;
+    kickstandsChanged: boolean;
+};
+
 export function transformSupportsForModel(
     modelId: string,
     beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
     afterTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
-) {
-    if (!modelId) return;
+): SupportTransformCommitResult {
+    if (!modelId) {
+        return {
+            supportsChanged: false,
+            kickstandsChanged: false,
+        };
+    }
 
     const beforeMatrix = new THREE.Matrix4().compose(
         beforeTransform.position.clone(),
@@ -943,7 +954,10 @@ export function transformSupportsForModel(
     );
 
     if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
-        return;
+        return {
+            supportsChanged: false,
+            kickstandsChanged: false,
+        };
     }
 
     const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
@@ -1318,13 +1332,25 @@ export function transformSupportsForModel(
         notify();
     }
 
-    transformKickstandsForModel(modelId, deltaMatrix, touchedRootIds, touchedKnotIds, touchedSegmentIds, preserveRootZ);
+    const kickstandsChanged = transformKickstandsForModel(
+        modelId,
+        deltaMatrix,
+        touchedRootIds,
+        touchedKnotIds,
+        touchedSegmentIds,
+        preserveRootZ,
+    );
+
+    return {
+        supportsChanged: changed,
+        kickstandsChanged,
+    };
 }
 
 export function transformAllSupportsForSingleModel(
     beforeTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
     afterTransform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 },
-) {
+): SupportTransformCommitResult {
     const beforeMatrix = new THREE.Matrix4().compose(
         beforeTransform.position.clone(),
         quaternionFromGlobalEuler(beforeTransform.rotation),
@@ -1337,7 +1363,10 @@ export function transformAllSupportsForSingleModel(
     );
 
     if (transformsRoughlyEqual(beforeMatrix, afterMatrix)) {
-        return;
+        return {
+            supportsChanged: false,
+            kickstandsChanged: false,
+        };
     }
 
     const isPureTranslation = eulersRoughlyEqual(beforeTransform.rotation, afterTransform.rotation)
@@ -1444,7 +1473,12 @@ export function transformAllSupportsForSingleModel(
     };
     notify();
 
-    transformAllKickstands(deltaMatrix, preserveRootZ);
+    const kickstandsChanged = transformAllKickstands(deltaMatrix, preserveRootZ);
+
+    return {
+        supportsChanged: true,
+        kickstandsChanged,
+    };
 }
 
 export function removeRootById(rootId: string): Roots | null {
@@ -1785,6 +1819,321 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
 
     state = newState;
     console.log('[SupportStore] Loaded from Lychee:', {
+        roots: Object.keys(state.roots).length,
+        trunks: Object.keys(state.trunks).length,
+        branches: Object.keys(state.branches).length,
+        leaves: Object.keys(state.leaves).length,
+        twigs: Object.keys(state.twigs).length,
+        sticks: Object.keys(state.sticks).length,
+        braces: Object.keys(state.braces).length,
+        knots: Object.keys(state.knots).length,
+        kickstands: Object.keys(getKickstandSnapshot().kickstands).length,
+    });
+    notify();
+}
+
+function getOrCreateMappedId(sourceId: string, idMap: Map<string, string>): string {
+    const mapped = idMap.get(sourceId);
+    if (mapped) return mapped;
+    const created = generateUuid();
+    idMap.set(sourceId, created);
+    return created;
+}
+
+function remapSupportJoint<T extends { id: string }>(
+    joint: T | undefined,
+    jointIdMap: Map<string, string>,
+): T | undefined {
+    if (!joint) return joint;
+    const mappedId = getOrCreateMappedId(joint.id, jointIdMap);
+    return {
+        ...joint,
+        id: mappedId,
+    };
+}
+
+/**
+ * Regenerates support primitive IDs (and rewires internal references) so imported payloads
+ * are isolated from existing scene data and cannot overwrite by dictionary key collisions.
+ */
+function isolateImportedSupportPayload(data: DragonfruitImportFormat): DragonfruitImportFormat {
+    const cloned = deepClone(data);
+
+    const rootIdMap = new Map<string, string>();
+    const knotIdMap = new Map<string, string>();
+    const leafIdMap = new Map<string, string>();
+    const braceIdMap = new Map<string, string>();
+    const segmentIdMap = new Map<string, string>();
+    const jointIdMap = new Map<string, string>();
+
+    const kickstandRootIdMap = new Map<string, string>();
+    const kickstandKnotIdMap = new Map<string, string>();
+
+    cloned.knots.forEach((knot) => {
+        knotIdMap.set(knot.id, generateUuid());
+    });
+
+    cloned.roots = cloned.roots.map((root) => {
+        const nextId = generateUuid();
+        rootIdMap.set(root.id, nextId);
+        return {
+            ...root,
+            id: nextId,
+        };
+    });
+
+    cloned.trunks = cloned.trunks.map((trunk) => {
+        const nextSegments = trunk.segments.map((segment) => {
+            const nextSegmentId = generateUuid();
+            segmentIdMap.set(segment.id, nextSegmentId);
+            return {
+                ...segment,
+                id: nextSegmentId,
+                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
+                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+            };
+        });
+
+        return {
+            ...trunk,
+            id: generateUuid(),
+            rootId: getOrCreateMappedId(trunk.rootId, rootIdMap),
+            segments: nextSegments,
+            contactCone: trunk.contactCone
+                ? {
+                    ...trunk.contactCone,
+                    id: generateUuid(),
+                    socketJointId: trunk.contactCone.socketJointId
+                        ? getOrCreateMappedId(trunk.contactCone.socketJointId, jointIdMap)
+                        : trunk.contactCone.socketJointId,
+                }
+                : trunk.contactCone,
+        };
+    });
+
+    cloned.branches = cloned.branches.map((branch) => {
+        const nextSegments = branch.segments.map((segment) => {
+            const nextSegmentId = generateUuid();
+            segmentIdMap.set(segment.id, nextSegmentId);
+            return {
+                ...segment,
+                id: nextSegmentId,
+                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
+                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+            };
+        });
+
+        return {
+            ...branch,
+            id: generateUuid(),
+            parentKnotId: getOrCreateMappedId(branch.parentKnotId, knotIdMap),
+            segments: nextSegments,
+            contactCone: branch.contactCone
+                ? {
+                    ...branch.contactCone,
+                    id: generateUuid(),
+                    socketJointId: branch.contactCone.socketJointId
+                        ? getOrCreateMappedId(branch.contactCone.socketJointId, jointIdMap)
+                        : branch.contactCone.socketJointId,
+                }
+                : branch.contactCone,
+        };
+    });
+
+    cloned.leaves = cloned.leaves.map((leaf) => {
+        const nextId = generateUuid();
+        leafIdMap.set(leaf.id, nextId);
+        return {
+            ...leaf,
+            id: nextId,
+            parentKnotId: getOrCreateMappedId(leaf.parentKnotId, knotIdMap),
+            contactCone: {
+                ...leaf.contactCone,
+                id: generateUuid(),
+                socketJointId: leaf.contactCone.socketJointId
+                    ? getOrCreateMappedId(leaf.contactCone.socketJointId, jointIdMap)
+                    : leaf.contactCone.socketJointId,
+            },
+        };
+    });
+
+    cloned.twigs = (cloned.twigs ?? []).map((twig) => {
+        const nextSegments = twig.segments.map((segment) => {
+            const nextSegmentId = generateUuid();
+            segmentIdMap.set(segment.id, nextSegmentId);
+            return {
+                ...segment,
+                id: nextSegmentId,
+                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
+                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+            };
+        });
+
+        return {
+            ...twig,
+            id: generateUuid(),
+            segments: nextSegments,
+            contactDiskA: {
+                ...twig.contactDiskA,
+                id: generateUuid(),
+            },
+            contactDiskB: {
+                ...twig.contactDiskB,
+                id: generateUuid(),
+            },
+        };
+    });
+
+    cloned.sticks = (cloned.sticks ?? []).map((stick) => {
+        const nextSegments = stick.segments.map((segment) => {
+            const nextSegmentId = generateUuid();
+            segmentIdMap.set(segment.id, nextSegmentId);
+            return {
+                ...segment,
+                id: nextSegmentId,
+                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
+                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+            };
+        });
+
+        return {
+            ...stick,
+            id: generateUuid(),
+            segments: nextSegments,
+            contactConeA: {
+                ...stick.contactConeA,
+                id: generateUuid(),
+                socketJointId: stick.contactConeA.socketJointId
+                    ? getOrCreateMappedId(stick.contactConeA.socketJointId, jointIdMap)
+                    : stick.contactConeA.socketJointId,
+            },
+            contactConeB: {
+                ...stick.contactConeB,
+                id: generateUuid(),
+                socketJointId: stick.contactConeB.socketJointId
+                    ? getOrCreateMappedId(stick.contactConeB.socketJointId, jointIdMap)
+                    : stick.contactConeB.socketJointId,
+            },
+        };
+    });
+
+    cloned.braces = cloned.braces.map((brace) => {
+        const nextId = generateUuid();
+        braceIdMap.set(brace.id, nextId);
+        return {
+            ...brace,
+            id: nextId,
+            startKnotId: getOrCreateMappedId(brace.startKnotId, knotIdMap),
+            endKnotId: getOrCreateMappedId(brace.endKnotId, knotIdMap),
+        };
+    });
+
+    cloned.knots = cloned.knots.map((knot) => {
+        let parentShaftId = knot.parentShaftId;
+        if (parentShaftId.startsWith('leafCone:')) {
+            const leafId = parentShaftId.slice('leafCone:'.length);
+            parentShaftId = `leafCone:${getOrCreateMappedId(leafId, leafIdMap)}`;
+        } else if (parentShaftId.startsWith('braceSegment:')) {
+            const braceId = parentShaftId.slice('braceSegment:'.length);
+            parentShaftId = `braceSegment:${getOrCreateMappedId(braceId, braceIdMap)}`;
+        } else {
+            parentShaftId = getOrCreateMappedId(parentShaftId, segmentIdMap);
+        }
+
+        return {
+            ...knot,
+            id: getOrCreateMappedId(knot.id, knotIdMap),
+            parentShaftId,
+        };
+    });
+
+    cloned.kickstands = (cloned.kickstands ?? []).map((build) => {
+        const nextRootId = generateUuid();
+        kickstandRootIdMap.set(build.root.id, nextRootId);
+
+        const nextHostKnotId = generateUuid();
+        kickstandKnotIdMap.set(build.hostKnot.id, nextHostKnotId);
+
+        const nextKickstandSegments = build.kickstand.segments.map((segment) => {
+            const nextSegmentId = generateUuid();
+            segmentIdMap.set(segment.id, nextSegmentId);
+            return {
+                ...segment,
+                id: nextSegmentId,
+                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
+                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+            };
+        });
+
+        const hostParentShaftId = build.hostKnot.parentShaftId.startsWith('leafCone:')
+            ? `leafCone:${getOrCreateMappedId(build.hostKnot.parentShaftId.slice('leafCone:'.length), leafIdMap)}`
+            : build.hostKnot.parentShaftId.startsWith('braceSegment:')
+                ? `braceSegment:${getOrCreateMappedId(build.hostKnot.parentShaftId.slice('braceSegment:'.length), braceIdMap)}`
+                : getOrCreateMappedId(build.hostKnot.parentShaftId, segmentIdMap);
+
+        return {
+            root: {
+                ...build.root,
+                id: nextRootId,
+            },
+            hostKnot: {
+                ...build.hostKnot,
+                id: nextHostKnotId,
+                parentShaftId: hostParentShaftId,
+            },
+            kickstand: {
+                ...build.kickstand,
+                id: generateUuid(),
+                rootId: getOrCreateMappedId(build.kickstand.rootId, kickstandRootIdMap),
+                hostKnotId: getOrCreateMappedId(build.kickstand.hostKnotId, kickstandKnotIdMap),
+                hostSegmentId: getOrCreateMappedId(build.kickstand.hostSegmentId, segmentIdMap),
+                segments: nextKickstandSegments,
+            },
+        } as KickstandBuildResult;
+    });
+
+    return cloned;
+}
+
+/**
+ * Merges support data from the DragonFruit Interchange Format into the existing scene state,
+ * preserving supports for all models already in the scene.
+ * Use this when importing an additional scene file into an already-populated scene.
+ */
+export function mergeFromLychee(data: DragonfruitImportFormat) {
+    const isolated = isolateImportedSupportPayload(data);
+
+    const merged: SupportState = {
+        ...state,
+        roots: { ...state.roots },
+        trunks: { ...state.trunks },
+        branches: { ...state.branches },
+        leaves: { ...state.leaves },
+        twigs: { ...state.twigs },
+        sticks: { ...state.sticks },
+        braces: { ...state.braces },
+        knots: { ...state.knots },
+    };
+
+    isolated.roots.forEach(r => { merged.roots[r.id] = r; });
+    isolated.trunks.forEach(t => { merged.trunks[t.id] = t; });
+    isolated.branches.forEach(b => { merged.branches[b.id] = b; });
+    isolated.leaves.forEach(l => { merged.leaves[l.id] = l; });
+    if (isolated.twigs) { isolated.twigs.forEach(t => { merged.twigs[t.id] = t; }); }
+    if (isolated.sticks) { isolated.sticks.forEach(s => { merged.sticks[s.id] = s; }); }
+    isolated.braces.forEach(br => { merged.braces[br.id] = br; });
+    if (isolated.knots) { isolated.knots.forEach(k => { merged.knots[k.id] = k; }); }
+
+    for (const kickstandBuild of isolated.kickstands ?? []) {
+        addKickstand(kickstandBuild);
+    }
+
+    const normalized = normalizeLoadedKnotAndLeafGeometry(merged);
+    merged.knots = normalized.knots;
+    merged.leaves = normalized.leaves;
+
+    state = merged;
+    console.log('[SupportStore] Merged from Lychee:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
         branches: Object.keys(state.branches).length,

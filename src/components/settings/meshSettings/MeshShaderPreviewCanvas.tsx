@@ -524,8 +524,8 @@ export function MeshShaderPreviewCanvas({
   selectedTintColor?: string;
   hoverTintStrength: number;
   selectedTintStrength: number;
-  isSelected: boolean;
-  isHovered: boolean;
+  isSelected?: boolean;
+  isHovered?: boolean;
   onHoverChange?: (hovered: boolean) => void;
   onPress?: () => void;
   onCanvasPress?: () => void;

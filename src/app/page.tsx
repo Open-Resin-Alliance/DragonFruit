@@ -332,6 +332,35 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 };
 
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
+const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
+
+type TransformStoreCommitResult = {
+  updated: boolean;
+  supportsChanged: boolean;
+  kickstandsChanged: boolean;
+};
+
+type PendingSupportDragSyncTransaction = {
+  transactionId: number;
+  expectedModelTransformKeys: Map<string, string>;
+  expectedSupportStoreVersion: number;
+  expectedKickstandStoreVersion: number;
+};
+
+function createModelTransformKey(modelId: string, transform: ModelTransform): string {
+  return [
+    modelId,
+    transform.position.x.toFixed(6),
+    transform.position.y.toFixed(6),
+    transform.position.z.toFixed(6),
+    transform.rotation.x.toFixed(6),
+    transform.rotation.y.toFixed(6),
+    transform.rotation.z.toFixed(6),
+    transform.scale.x.toFixed(6),
+    transform.scale.y.toFixed(6),
+    transform.scale.z.toFixed(6),
+  ].join('|');
+}
 
 function getFileExtension(name: string): string {
   const trimmed = name.trim().toLowerCase();
@@ -556,10 +585,12 @@ export default function Home() {
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
-  const pendingSupportSyncReleasePerfRef = React.useRef<number | null>(null);
+  const [supportDragTransactionId, setSupportDragTransactionId] = React.useState(0);
+  const supportDragTransactionIdRef = React.useRef(0);
+  const pendingSupportDragSyncRef = React.useRef<PendingSupportDragSyncTransaction | null>(null);
+  const supportStoreVersionRef = React.useRef(0);
+  const kickstandStoreVersionRef = React.useRef(0);
   const supportSyncFallbackTimeoutRef = React.useRef<number | null>(null);
-  const lastSupportStoreUpdatePerfRef = React.useRef<number>(0);
-  const lastKickstandStoreUpdatePerfRef = React.useRef<number>(0);
   const transformDebugTimelineRef = React.useRef<{
     lastOperation: 'move' | 'rotate' | 'scale' | null;
     dragReleasedAt: { perfMs: number; epochMs: number } | null;
@@ -953,11 +984,89 @@ export default function Home() {
   );
 
   React.useEffect(() => {
+    supportDragTransactionIdRef.current = supportDragTransactionId;
+  }, [supportDragTransactionId]);
+
+  const clearSupportSyncFallbackTimeout = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (supportSyncFallbackTimeoutRef.current !== null) {
+      window.clearTimeout(supportSyncFallbackTimeoutRef.current);
+      supportSyncFallbackTimeoutRef.current = null;
+    }
+  }, []);
+
+  const finalizeSupportDragSyncTransaction = React.useCallback((transactionId?: number) => {
+    if (
+      transactionId !== undefined
+      && pendingSupportDragSyncRef.current
+      && pendingSupportDragSyncRef.current.transactionId !== transactionId
+    ) {
+      return;
+    }
+
+    pendingSupportDragSyncRef.current = null;
+    clearSupportSyncFallbackTimeout();
+    setHoldSupportDragDeltaUntilSupportSync(false);
+  }, [clearSupportSyncFallbackTimeout]);
+
+  const beginSupportDragSyncTransaction = React.useCallback((
+    expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }>,
+    commitResult: TransformStoreCommitResult,
+  ) => {
+    const nextTransactionId = supportDragTransactionIdRef.current + 1;
+    supportDragTransactionIdRef.current = nextTransactionId;
+    setSupportDragTransactionId(nextTransactionId);
+
+    const expectedModelTransformKeys = new Map<string, string>();
+    expectedModelTransforms.forEach(({ modelId, transform }) => {
+      expectedModelTransformKeys.set(modelId, createModelTransformKey(modelId, transform));
+    });
+
+    const expectedSupportStoreVersion = supportStoreVersionRef.current + (commitResult.supportsChanged ? 1 : 0);
+    const expectedKickstandStoreVersion = kickstandStoreVersionRef.current + (commitResult.kickstandsChanged ? 1 : 0);
+    const needsHold = (
+      expectedModelTransformKeys.size > 0
+      || expectedSupportStoreVersion > supportStoreVersionRef.current
+      || expectedKickstandStoreVersion > kickstandStoreVersionRef.current
+    );
+
+    if (!needsHold) {
+      finalizeSupportDragSyncTransaction();
+      return;
+    }
+
+    pendingSupportDragSyncRef.current = {
+      transactionId: nextTransactionId,
+      expectedModelTransformKeys,
+      expectedSupportStoreVersion,
+      expectedKickstandStoreVersion,
+    };
+    setHoldSupportDragDeltaUntilSupportSync(true);
+
+    if (typeof window !== 'undefined') {
+      clearSupportSyncFallbackTimeout();
+      const requiresSupportSync = commitResult.supportsChanged || commitResult.kickstandsChanged;
+      const fallbackMs = requiresSupportSync
+        ? Math.max(SUPPORT_DRAG_HOLD_FALLBACK_MS, 520)
+        : SUPPORT_DRAG_HOLD_FALLBACK_MS;
+      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
+        finalizeSupportDragSyncTransaction(nextTransactionId);
+      }, fallbackMs);
+    }
+  }, [clearSupportSyncFallbackTimeout, finalizeSupportDragSyncTransaction]);
+
+  React.useEffect(() => {
+    return () => {
+      clearSupportSyncFallbackTimeout();
+    };
+  }, [clearSupportSyncFallbackTimeout]);
+
+  React.useEffect(() => {
     transformDebugTimelineRef.current.supportStoreUpdatedAt = {
       perfMs: performance.now(),
       epochMs: Date.now(),
     };
-    lastSupportStoreUpdatePerfRef.current = transformDebugTimelineRef.current.supportStoreUpdatedAt.perfMs;
+    supportStoreVersionRef.current += 1;
   }, [supportStateSnapshot]);
 
   React.useEffect(() => {
@@ -965,28 +1074,42 @@ export default function Home() {
       perfMs: performance.now(),
       epochMs: Date.now(),
     };
-    lastKickstandStoreUpdatePerfRef.current = transformDebugTimelineRef.current.kickstandStoreUpdatedAt.perfMs;
+    kickstandStoreVersionRef.current += 1;
   }, [kickstandStateSnapshot]);
 
   React.useEffect(() => {
     if (!holdSupportDragDeltaUntilSupportSync) return;
 
-    const releasedAt = pendingSupportSyncReleasePerfRef.current;
-    if (releasedAt == null) return;
-
-    const synced =
-      lastSupportStoreUpdatePerfRef.current > releasedAt
-      || lastKickstandStoreUpdatePerfRef.current > releasedAt;
-
-    if (!synced) return;
-
-    setHoldSupportDragDeltaUntilSupportSync(false);
-    pendingSupportSyncReleasePerfRef.current = null;
-    if (typeof window !== 'undefined' && supportSyncFallbackTimeoutRef.current !== null) {
-      window.clearTimeout(supportSyncFallbackTimeoutRef.current);
-      supportSyncFallbackTimeoutRef.current = null;
+    const pendingTransaction = pendingSupportDragSyncRef.current;
+    if (!pendingTransaction) {
+      finalizeSupportDragSyncTransaction();
+      return;
     }
-  }, [holdSupportDragDeltaUntilSupportSync, kickstandStateSnapshot, supportStateSnapshot]);
+
+    if (supportDragTransactionId < pendingTransaction.transactionId) return;
+
+    const modelsById = new Map(scene.models.map((model) => [model.id, model]));
+    const modelTransformsSynced = Array.from(pendingTransaction.expectedModelTransformKeys.entries()).every(
+      ([modelId, expectedTransformKey]) => {
+        const model = modelsById.get(modelId);
+        if (!model) return false;
+        return createModelTransformKey(modelId, model.transform) === expectedTransformKey;
+      },
+    );
+    if (!modelTransformsSynced) return;
+
+    if (supportStoreVersionRef.current < pendingTransaction.expectedSupportStoreVersion) return;
+    if (kickstandStoreVersionRef.current < pendingTransaction.expectedKickstandStoreVersion) return;
+
+    finalizeSupportDragSyncTransaction(pendingTransaction.transactionId);
+  }, [
+    finalizeSupportDragSyncTransaction,
+    holdSupportDragDeltaUntilSupportSync,
+    kickstandStateSnapshot,
+    scene.models,
+    supportDragTransactionId,
+    supportStateSnapshot,
+  ]);
 
   React.useEffect(() => {
     const activeModel = scene.models.find((m) => m.id === scene.activeModelId);
@@ -996,18 +1119,7 @@ export default function Home() {
     }
 
     const t = activeModel.transform;
-    const key = [
-      activeModel.id,
-      t.position.x.toFixed(6),
-      t.position.y.toFixed(6),
-      t.position.z.toFixed(6),
-      t.rotation.x.toFixed(6),
-      t.rotation.y.toFixed(6),
-      t.rotation.z.toFixed(6),
-      t.scale.x.toFixed(6),
-      t.scale.y.toFixed(6),
-      t.scale.z.toFixed(6),
-    ].join('|');
+    const key = createModelTransformKey(activeModel.id, t);
 
     if (activeModelStoreTransformKeyRef.current === key) return;
     activeModelStoreTransformKeyRef.current = key;
@@ -4005,42 +4117,47 @@ export default function Home() {
   }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
-    const nativeFiles = await pickFilesWithNativeDialog('scene', false);
+    const nativeFiles = await pickFilesWithNativeDialog('scene', true);
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      scene.onImportLysChange(buildSyntheticFileChangeEvent([nativeFiles[0]]));
+      await scene.importSceneFiles(nativeFiles);
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.voxl,.lys', false);
+    const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
     if (webFiles.length === 0) return;
-    scene.onImportLysChange(buildSyntheticFileChangeEvent([webFiles[0]]));
-  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+    await scene.importSceneFiles(webFiles);
+  }, [pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
 
-    const sceneEntry = entries.find((entry) => {
+    const sceneEntries = entries.filter((entry) => {
       const name = (entry.name || getFileNameFromPath(entry.path)).trim();
       return isSceneFileName(name);
     });
 
-    if (!sceneEntry) return false;
+    if (sceneEntries.length === 0) return false;
 
     const core = await import('@tauri-apps/api/core');
-    const sourcePath = sceneEntry.path.trim();
-    if (!sourcePath) return false;
 
-    const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-    const name = sceneEntry.name || getFileNameFromPath(sourcePath);
-    const file = new File([new Uint8Array(bytes)], name, {
-      type: getDroppedFileMimeType(name),
-      lastModified: Date.now(),
-    });
+    const files: File[] = [];
+    for (const sceneEntry of sceneEntries) {
+      const sourcePath = sceneEntry.path.trim();
+      if (!sourcePath) continue;
 
-    scene.onImportLysChange(buildSyntheticFileChangeEvent([file]));
+      const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+      const name = sceneEntry.name || getFileNameFromPath(sourcePath);
+      files.push(new File([new Uint8Array(bytes)], name, {
+        type: getDroppedFileMimeType(name),
+        lastModified: Date.now(),
+      }));
+    }
+
+    if (files.length === 0) return false;
+    await scene.importSceneFiles(files);
     return true;
-  }, [buildSyntheticFileChangeEvent, scene]);
+  }, [scene]);
 
   const importSceneFromPaths = React.useCallback(async (paths: string[]): Promise<boolean> => {
     if (!paths || paths.length === 0) return false;
@@ -4822,8 +4939,7 @@ export default function Home() {
       // Match "Import Scene" button behavior: when a scene file is present,
       // treat the drop as a scene import path and don't separately load mesh files.
       // Use the same handler as the Import Scene button.
-      const sceneEvent = buildSyntheticFileChangeEvent([sceneFiles[0]]);
-      scene.onImportLysChange(sceneEvent);
+      await scene.importSceneFiles(sceneFiles);
       return;
     }
 
@@ -7585,7 +7701,27 @@ export default function Home() {
   }, [scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && importOverlayState.active;
-  const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active;
+  const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
+
+  React.useEffect(() => {
+    const isSceneImportActive =
+      (scene.importProgress.active && scene.importProgress.type === 'scene')
+      || scene.isLysLoading
+      || scene.lycheeImportPhase === 'processing';
+
+    if (isSceneImportActive && scene.models.length === 0) {
+      setHoldEmptyStateSceneImportUi(true);
+      return;
+    }
+
+    if (!isSceneImportActive && holdEmptyStateSceneImportUi) {
+      setHoldEmptyStateSceneImportUi(false);
+    }
+  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.isLysLoading, scene.lycheeImportPhase, scene.models.length]);
+
+  const showEmptyStatePanel = scene.models.length === 0 || holdEmptyStateSceneImportUi;
+  const showEmptyStateLoading = showInlineEmptyLoading || holdEmptyStateSceneImportUi;
+  const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active && !holdEmptyStateSceneImportUi;
   const showEmptySceneDialog = scene.models.length === 0;
 
   const renderId = useRef(0);
@@ -7625,19 +7761,6 @@ export default function Home() {
   ) => {
     const stampNow = () => ({ perfMs: performance.now(), epochMs: Date.now() });
     const releasePerf = performance.now();
-    pendingSupportSyncReleasePerfRef.current = releasePerf;
-    setHoldSupportDragDeltaUntilSupportSync(true);
-    if (typeof window !== 'undefined') {
-      if (supportSyncFallbackTimeoutRef.current !== null) {
-        window.clearTimeout(supportSyncFallbackTimeoutRef.current);
-      }
-      // Fallback release guard: avoid indefinite hold when no support updates occur.
-      supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
-        setHoldSupportDragDeltaUntilSupportSync(false);
-        pendingSupportSyncReleasePerfRef.current = null;
-        supportSyncFallbackTimeoutRef.current = null;
-      }, 120);
-    }
 
     transformDebugTimelineRef.current.lastOperation = operation;
     transformDebugTimelineRef.current.dragReleasedAt = {
@@ -7654,6 +7777,13 @@ export default function Home() {
       invalidatePendingTransformHistory();
       return;
     }
+
+    let transformCommitResult: TransformStoreCommitResult = {
+      updated: false,
+      supportsChanged: false,
+      kickstandsChanged: false,
+    };
+    const expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }> = [];
 
     // Flush the final model transform into the store synchronously so
     // transformSupportsForModel() recalculates all support positions before
@@ -7699,15 +7829,47 @@ export default function Home() {
           : undefined;
 
         transformDebugTimelineRef.current.storeUpdateStartedAt = stampNow();
-        scene.updateModelTransform(scene.activeModelId, {
+        const committedTransform = {
           position: current.position.clone(),
           rotation: current.rotation.clone(),
           scale: current.scale.clone(),
-        }, explicitBeforeTransform);
+        };
+        transformCommitResult = scene.updateModelTransform(
+          scene.activeModelId,
+          committedTransform,
+          explicitBeforeTransform,
+        );
         transformDebugTimelineRef.current.storeUpdatedAt = stampNow();
+
+        if (transformCommitResult.updated) {
+          expectedModelTransforms.push({
+            modelId: scene.activeModelId,
+            transform: {
+              position: committedTransform.position.clone(),
+              rotation: committedTransform.rotation.clone(),
+              scale: committedTransform.scale.clone(),
+            },
+          });
+        }
+
+        beginSupportDragSyncTransaction(expectedModelTransforms, transformCommitResult);
         // Prevent the persistence effect from applying the same delta a second time
         transformEndFlushedRef.current = true;
+
+        // Eagerly sync transformMgr so the `transform` prop into SceneCanvas reflects
+        // the final position in the same React batch as `isGizmoDragging = false`.
+        // Without this, rawActiveTransformForRender falls through to the stale
+        // transformMgr.transform for one frame, causing a one-frame position flash.
+        if (transformCommitResult.updated) {
+          transformMgr.transformHook.setPosition(committedTransform.position.x, committedTransform.position.y, committedTransform.position.z);
+          transformMgr.transformHook.setRotation(committedTransform.rotation.x, committedTransform.rotation.y, committedTransform.rotation.z);
+          transformMgr.transformHook.setScale(committedTransform.scale.x, committedTransform.scale.y, committedTransform.scale.z);
+        }
       }
+    }
+
+    if (expectedModelTransforms.length === 0) {
+      beginSupportDragSyncTransaction(expectedModelTransforms, transformCommitResult);
     }
 
     // Do not eagerly reset support drag-group matrix here.
@@ -7910,9 +8072,29 @@ export default function Home() {
     })));
     console.groupEnd();
 
-    if (updates.length === 0) return;
+    if (updates.length === 0) {
+      beginSupportDragSyncTransaction([], {
+        updated: false,
+        supportsChanged: false,
+        kickstandsChanged: false,
+      });
+      return;
+    }
 
-    scene.updateModelTransforms(updates);
+    const transformCommitResult = scene.updateModelTransforms(updates);
+    beginSupportDragSyncTransaction(
+      transformCommitResult.updated
+        ? updates.map((entry) => ({
+            modelId: entry.id,
+            transform: {
+              position: entry.transform.position.clone(),
+              rotation: entry.transform.rotation.clone(),
+              scale: entry.transform.scale.clone(),
+            },
+          }))
+        : [],
+      transformCommitResult,
+    );
 
     const activeUpdate = scene.activeModelId
       ? updates.find((entry) => entry.id === scene.activeModelId)
@@ -7926,7 +8108,7 @@ export default function Home() {
 
     setSupportRenderRefreshNonce((value) => value + 1);
     skipNextTransformEndCommitRef.current = null;
-  }, [isFiniteTransform, scene, transformMgr.transformHook]);
+  }, [beginSupportDragSyncTransaction, isFiniteTransform, scene, transformMgr.transformHook]);
 
   const handleAutoLiftChange = React.useCallback((enabled: boolean) => {
     if (scene.activeModelId) {
@@ -7989,9 +8171,8 @@ export default function Home() {
       pendingRotateGizmoCommitRef.current = null;
     }
 
-    transformMgr.setIsTransforming(true);
     return true;
-  }, [disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, transformMgr]);
+  }, [disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
@@ -8581,8 +8762,17 @@ export default function Home() {
 
   const handlePlaceOnFaceAnimationStart = React.useCallback(() => {
     ensurePendingTransformHistoryForActiveModel('rotate');
+
+    // Place-On-Face is an orientation-to-plate operation, so it should
+    // restore gravity/auto-snap behavior even if manual Z translation had
+    // previously disabled it.
+    if (scene.activeModelId) {
+      scene.setModelManualZMoveOverride(scene.activeModelId, false);
+    }
+    transformMgr.transformHook.setAutoSnapEnabled(true);
+
     transformMgr.setIsTransforming(true);
-  }, [ensurePendingTransformHistoryForActiveModel, transformMgr]);
+  }, [ensurePendingTransformHistoryForActiveModel, scene, transformMgr]);
 
   const handlePlaceOnFace = React.useCallback((modelId: string) => {
     if (scene.activeModelId !== modelId) return;
@@ -9320,7 +9510,7 @@ export default function Home() {
           onDragLeave={handlePrepareDragLeave}
           onDrop={handlePrepareDrop}
         >
-          {scene.models.length === 0 && (
+          {showEmptyStatePanel && (
             <EmptySceneState
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onFileChange={scene.onFileChange}
@@ -9329,7 +9519,7 @@ export default function Home() {
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
               onReopenRecentFile={scene.reopenRecentOpenedFile}
-              isLoading={showInlineEmptyLoading}
+              isLoading={showEmptyStateLoading}
               loadingLabel={importOverlayState.label}
               loadingDetail={importOverlayState.detail}
               showFirstTimeOnboarding={!hasActivePrinterProfile && !allowPrepareWithoutPrinter}
@@ -9437,6 +9627,7 @@ export default function Home() {
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
+            supportDragTransactionId={supportDragTransactionId}
             ghostData={ghostData}
             duplicatePreviewModel={
               isDuplicating
@@ -9458,6 +9649,7 @@ export default function Home() {
             view3dSettings={scene.view3dSettings}
             onRegisterExportThumbnailCapture={handleRegisterExportThumbnailCapture}
             exportThumbnailRenderOptions={exportThumbnailRenderOptions}
+            deferCameraIntro={holdEmptyStateSceneImportUi}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />

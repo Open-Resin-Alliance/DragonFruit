@@ -20,12 +20,18 @@ type StlLoadCameraIntroState = {
   cameraHomeResetRunId: number;
 };
 
-export function useStlLoadCameraIntro(models: LoadedModel[], fallbackOrbitTarget?: THREE.Vector3): StlLoadCameraIntroState {
+export function useStlLoadCameraIntro(
+  models: LoadedModel[],
+  fallbackOrbitTarget?: THREE.Vector3,
+  options?: { deferIntro?: boolean },
+): StlLoadCameraIntroState {
   const [cameraIntroRunId, setCameraIntroRunId] = React.useState(0);
   const [cameraHomeResetRunId, setCameraHomeResetRunId] = React.useState(0);
   const prevModelCountRef = React.useRef(0);
   const lastAppliedIntroRunIdRef = React.useRef(0);
   const lastFallbackTargetRef = React.useRef<THREE.Vector3 | null>(null);
+  const pendingDeferredIntroRef = React.useRef(false);
+  const deferIntro = options?.deferIntro ?? false;
 
   const defaultCamera = React.useMemo<DefaultCameraConfig>(() => ({
     position: [
@@ -88,16 +94,30 @@ export function useStlLoadCameraIntro(models: LoadedModel[], fallbackOrbitTarget
     prevModelCountRef.current = next;
 
     if (prev === 0 && next > 0) {
-      setCameraIntroRunId((id) => id + 1);
+      if (deferIntro) {
+        pendingDeferredIntroRef.current = true;
+      } else {
+        setCameraIntroRunId((id) => id + 1);
+      }
       return;
     }
 
     if (prev > 0 && next === 0) {
+      pendingDeferredIntroRef.current = false;
       setCameraHomeResetRunId((id) => id + 1);
       setOrbitTarget([defaultOrbitTarget.x, defaultOrbitTarget.y, defaultOrbitTarget.z]);
       setIntroBoundsSnapshot(null);
     }
-  }, [defaultOrbitTarget.x, defaultOrbitTarget.y, defaultOrbitTarget.z, models.length]);
+  }, [defaultOrbitTarget.x, defaultOrbitTarget.y, defaultOrbitTarget.z, deferIntro, models.length]);
+
+  React.useLayoutEffect(() => {
+    if (deferIntro) return;
+    if (!pendingDeferredIntroRef.current) return;
+    if (models.length === 0) return;
+
+    pendingDeferredIntroRef.current = false;
+    setCameraIntroRunId((id) => id + 1);
+  }, [deferIntro, models.length]);
 
   const sceneWorldBounds = React.useMemo(() => {
     if (models.length === 0) return null;
