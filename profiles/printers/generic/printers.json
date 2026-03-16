@@ -1,6 +1,7 @@
 [
   {
     "presetId": "generic-machine",
+    "profileVersion": 1,
     "manufacturer": "Generic",
     "name": "Generic Machine",
     "buildVolumeMm": { "width": 143, "depth": 89, "height": 175 },

@@ -4,12 +4,16 @@ import React from 'react';
 import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
 import {
+  applyOfficialMaterialProfileUpdate,
+  applyOfficialPrinterProfileUpdate,
   addMaterialProfile,
   addPrinterProfileFromPreset,
   disconnectPrinterNetworkDevice,
   duplicatePrinterProfileAsCustom,
   getActivePrinterProfile,
   getAvailablePrinterPresets,
+  getOfficialMaterialProfileUpdates,
+  getOfficialPrinterProfileUpdates,
   getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
@@ -238,6 +242,7 @@ export function ProfileSettingsModal({
   const [editingFleetUnitId, setEditingFleetUnitId] = React.useState<string | null>(null);
   const [editingFleetUnitNickname, setEditingFleetUnitNickname] = React.useState('');
   const [editingFleetUnitImageDataUrl, setEditingFleetUnitImageDataUrl] = React.useState<string | null>(null);
+  const [officialUpdateStatusMessage, setOfficialUpdateStatusMessage] = React.useState<string | null>(null);
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
   const fleetUnitImageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
@@ -247,6 +252,8 @@ export function ProfileSettingsModal({
   );
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
+  const officialPrinterUpdates = React.useMemo(() => getOfficialPrinterProfileUpdates(profileState), [profileState]);
+  const officialMaterialUpdates = React.useMemo(() => getOfficialMaterialProfileUpdates(profileState), [profileState]);
 
   const presetManufacturers = React.useMemo(() => {
     const uniq = new Set(availablePrinterPresets.map((preset) => preset.manufacturer));
@@ -436,6 +443,16 @@ export function ProfileSettingsModal({
     if (!selectedMaterialId) return filteredMaterialProfiles[0];
     return filteredMaterialProfiles.find((material) => material.id === selectedMaterialId) ?? filteredMaterialProfiles[0];
   }, [filteredMaterialProfiles, selectedMaterialId]);
+
+  const selectedPrinterUpdate = React.useMemo(() => {
+    if (!selectedPrinter) return null;
+    return officialPrinterUpdates.find((update) => update.printerProfileId === selectedPrinter.id) ?? null;
+  }, [officialPrinterUpdates, selectedPrinter]);
+
+  const selectedMaterialUpdate = React.useMemo(() => {
+    if (!selectedMaterial) return null;
+    return officialMaterialUpdates.find((update) => update.materialProfileId === selectedMaterial.id) ?? null;
+  }, [officialMaterialUpdates, selectedMaterial]);
 
   const selectedPrinterSupportsNetworkSettings = Boolean(selectedPrinter?.networkSupport);
   const networkUiAdapter = React.useMemo(
@@ -1725,6 +1742,50 @@ export function ProfileSettingsModal({
     setIsMaterialEditorOpen(false);
   }, [editMaterialDraft, selectedMaterial]);
 
+  const handleApplySelectedPrinterOfficialUpdate = React.useCallback(() => {
+    if (!selectedPrinterUpdate) return;
+    const result = applyOfficialPrinterProfileUpdate(selectedPrinterUpdate.printerProfileId);
+
+    if (result === 'updated') {
+      setOfficialUpdateStatusMessage(`Updated printer profile to v${selectedPrinterUpdate.latestVersion}.`);
+      return;
+    }
+
+    if (result === 'version-bumped-custom') {
+      setOfficialUpdateStatusMessage('Custom profile kept unchanged for safety. Baseline version marker was updated.');
+      return;
+    }
+
+    if (result === 'already-latest') {
+      setOfficialUpdateStatusMessage('Selected printer profile is already on the latest official version.');
+      return;
+    }
+
+    setOfficialUpdateStatusMessage('Unable to apply printer update (profile is no longer linked to an official preset).');
+  }, [selectedPrinterUpdate]);
+
+  const handleApplySelectedMaterialOfficialUpdate = React.useCallback(() => {
+    if (!selectedMaterialUpdate) return;
+    const result = applyOfficialMaterialProfileUpdate(selectedMaterialUpdate.materialProfileId);
+
+    if (result === 'updated') {
+      setOfficialUpdateStatusMessage(`Updated material profile to v${selectedMaterialUpdate.latestVersion}.`);
+      return;
+    }
+
+    if (result === 'version-bumped-custom') {
+      setOfficialUpdateStatusMessage('Custom material kept unchanged for safety. Baseline version marker was updated.');
+      return;
+    }
+
+    if (result === 'already-latest') {
+      setOfficialUpdateStatusMessage('Selected material profile is already on the latest official version.');
+      return;
+    }
+
+    setOfficialUpdateStatusMessage('Unable to apply material update (profile is no longer linked to an official template).');
+  }, [selectedMaterialUpdate]);
+
   const showOfficialProfileDialog = React.useCallback((profileId: string) => {
     setOfficialLockedProfileId(profileId);
     setShowOfficialLockDialog(true);
@@ -1937,6 +1998,35 @@ export function ProfileSettingsModal({
               </span>
             </div>
           )}
+          {(officialPrinterUpdates.length > 0 || officialMaterialUpdates.length > 0) && (
+            <div
+              className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 34%)',
+                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                color: 'var(--text-muted)',
+              }}
+            >
+              <Download className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
+              <span>
+                <strong style={{ color: 'var(--text-strong)' }}>Official profile updates found:</strong>{' '}
+                {officialPrinterUpdates.length} printer profile{officialPrinterUpdates.length === 1 ? '' : 's'} and{' '}
+                {officialMaterialUpdates.length} material profile{officialMaterialUpdates.length === 1 ? '' : 's'} have newer official versions available.
+              </span>
+            </div>
+          )}
+          {officialUpdateStatusMessage && (
+            <div
+              className="rounded-lg border px-3 py-2 text-xs"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 34%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 94%)',
+                color: 'var(--text-muted)',
+              }}
+            >
+              {officialUpdateStatusMessage}
+            </div>
+          )}
           {!hasPrinters && (
             <div
               className="rounded-xl border flex-1 h-full min-h-0 flex items-center justify-center px-4 py-10"
@@ -1989,6 +2079,11 @@ export function ProfileSettingsModal({
                       ? `Showing connected devices for ${selectedPrinter?.name ?? 'selected profile'}.`
                       : 'Each printer can store its own image and has a dedicated set of compatible resin/material profiles.'}
                   </p>
+                  {selectedPrinterUpdate && (
+                    <p className="text-[11px] mt-1" style={{ color: 'var(--accent-secondary)' }}>
+                      Update available for this printer profile (v{selectedPrinterUpdate.currentVersion} → v{selectedPrinterUpdate.latestVersion}).
+                    </p>
+                  )}
                 </div>
 
                 {!shouldRenderFleetRail && (
@@ -2522,6 +2617,22 @@ export function ProfileSettingsModal({
                           {regularNetworkActionLabel}
                         </button>
                       )}
+                      {selectedPrinterUpdate && (
+                        <button
+                          type="button"
+                          onClick={handleApplySelectedPrinterOfficialUpdate}
+                          className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                          style={{
+                            color: 'var(--accent-secondary)',
+                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                          }}
+                          title={`Update v${selectedPrinterUpdate.currentVersion} to v${selectedPrinterUpdate.latestVersion}`}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Update Printer
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -2601,19 +2712,44 @@ export function ProfileSettingsModal({
             }}
           >
             <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-              <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
-                <FlaskConical className="w-4 h-4" />
-                Material Settings
-              </h3>
-              <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                {shouldUseNanodlpOnDeviceMaterials
-                  ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
-                  : shouldShowNanodlpSelectedPrinterOfflineState
-                    ? <>The selected printer appears offline. Showing on-device materials view with offline status.</>
-                  : shouldShowNanodlpConnectInfo
-                    ? <>Connect to a machine to view on-device material profiles.</>
-                  : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
-              </p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
+                    <FlaskConical className="w-4 h-4" />
+                    Material Settings
+                  </h3>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    {shouldUseNanodlpOnDeviceMaterials
+                      ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
+                      : shouldShowNanodlpSelectedPrinterOfflineState
+                        ? <>The selected printer appears offline. Showing on-device materials view with offline status.</>
+                        : shouldShowNanodlpConnectInfo
+                          ? <>Connect to a machine to view on-device material profiles.</>
+                          : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
+                  </p>
+                  {selectedMaterialUpdate && (
+                    <p className="text-[11px] mt-1" style={{ color: 'var(--accent-secondary)' }}>
+                      Update available for selected material profile (v{selectedMaterialUpdate.currentVersion} → v{selectedMaterialUpdate.latestVersion}).
+                    </p>
+                  )}
+                </div>
+                {selectedMaterialUpdate && (
+                  <button
+                    type="button"
+                    onClick={handleApplySelectedMaterialOfficialUpdate}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
+                    style={{
+                      color: 'var(--accent-secondary)',
+                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                    }}
+                    title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Update Material
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="p-3 flex flex-col gap-3 flex-1 min-h-0">

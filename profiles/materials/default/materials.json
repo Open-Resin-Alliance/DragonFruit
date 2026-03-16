@@ -1,6 +1,7 @@
 [
   {
     "templateId": "standard-405",
+    "profileVersion": 1,
     "name": "Standard 405nm",
     "brand": "Default",
     "currencyCode": "USD",
@@ -18,6 +19,7 @@
   },
   {
     "templateId": "abs-like-405",
+    "profileVersion": 1,
     "name": "ABS-like 405nm",
     "brand": "Default",
     "currencyCode": "USD",
