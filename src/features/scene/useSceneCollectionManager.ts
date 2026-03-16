@@ -5,7 +5,7 @@ import { loadMeshGeometry, processGeometry, type GeometryWithBounds } from '@/ho
 import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import { parseVoxlDocument, type VoxlDocumentV1, type VoxlMeshRef } from '@/features/scene/voxl';
 import { clearPaintToBase } from '@/components/analysis/MeshPainter';
-import { getSnapshot, loadFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
+import { getSnapshot, loadFromLychee, mergeFromLychee, reassignAllSupportModelIds, setSnapshot as setSupportSnapshot, transformAllSupportsForSingleModel, transformSupportsForModel } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
 import type { SelectionHighlightMode } from '@/components/selection';
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
@@ -2565,10 +2565,10 @@ export function useSceneCollectionManager() {
         if (supportData) {
           if (typeof window !== 'undefined') {
             requestAnimationFrame(() => {
-              loadFromLychee(supportData);
+              mergeFromLychee(supportData);
             });
           } else {
-            loadFromLychee(supportData);
+            mergeFromLychee(supportData);
           }
         }
 
@@ -2738,7 +2738,7 @@ export function useSceneCollectionManager() {
 
       if (voxlSupportsContainData(document)) {
         const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
-        loadFromLychee(remappedSupports);
+        mergeFromLychee(remappedSupports);
       }
 
       const importedSupportCount = countSupportEntries(document.supports);
