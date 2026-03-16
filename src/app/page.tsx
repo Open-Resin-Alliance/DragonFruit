@@ -9649,6 +9649,7 @@ export default function Home() {
             view3dSettings={scene.view3dSettings}
             onRegisterExportThumbnailCapture={handleRegisterExportThumbnailCapture}
             exportThumbnailRenderOptions={exportThumbnailRenderOptions}
+            deferCameraIntro={holdEmptyStateSceneImportUi}
           >
             {scene.mode === 'prepare' && transformMgr.transformMode === 'smoothing' && (
               <MeshSmoothingBrushCursor />

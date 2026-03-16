@@ -215,6 +215,7 @@ export function SceneCanvas({
   isLayerScrubbing = false,
   onRegisterExportThumbnailCapture,
   exportThumbnailRenderOptions,
+  deferCameraIntro = false,
 }: {
   models?: LoadedModel[];
   activeModelId?: string | null;
@@ -357,6 +358,7 @@ export function SceneCanvas({
   isLayerScrubbing?: boolean;
   onRegisterExportThumbnailCapture?: (capture: (() => Promise<Uint8Array | null>) | null) => void;
   exportThumbnailRenderOptions?: ExportThumbnailRenderOptions;
+  deferCameraIntro?: boolean;
 }) {
   const DROP_ANIMATION_DURATION_MS = 760;
   const LARGE_MODEL_BOUNCE_THRESHOLD_POLYS = 900_000;
@@ -753,7 +755,7 @@ export function SceneCanvas({
   ]);
 
   const { defaultCamera, orbitTarget, setOrbitTargetFromPoint, introBoundsSnapshot, cameraIntroRunId, cameraHomeResetRunId } =
-    useStlLoadCameraIntro(models, buildVolumeCenterTarget);
+    useStlLoadCameraIntro(models, buildVolumeCenterTarget, { deferIntro: deferCameraIntro });
   const [cameraIntroCompletedRunId, setCameraIntroCompletedRunId] = React.useState(0);
 
   const lastHoveredModelPointRef = React.useRef<THREE.Vector3 | null>(null);
