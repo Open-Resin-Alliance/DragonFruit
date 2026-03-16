@@ -80,6 +80,7 @@ interface TopBarProps {
   showMonitorButton?: boolean;
   monitorButtonActive?: boolean;
   monitorButtonPaused?: boolean;
+  monitorButtonOffline?: boolean;
   onOpenMonitor?: () => void;
   warnBeforeProfileSettingsOpen?: boolean;
 }
@@ -136,6 +137,7 @@ export function TopBar({
   showMonitorButton = false,
   monitorButtonActive = false,
   monitorButtonPaused = false,
+  monitorButtonOffline = false,
   onOpenMonitor,
   warnBeforeProfileSettingsOpen = false,
 }: TopBarProps) {
@@ -143,6 +145,7 @@ export function TopBar({
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
+  const [profileModalOpenNetworkSettingsToken, setProfileModalOpenNetworkSettingsToken] = useState(0);
   const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
@@ -372,9 +375,10 @@ export function TopBar({
     if (typeof window === 'undefined') return;
 
     const handleOpenProfileModal = (event: Event) => {
-      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean }>;
+      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean; openNetworkSettings?: boolean }>;
       const requestedTab = customEvent.detail?.tab;
       const shouldOpenPrinterLibrary = customEvent.detail?.openPrinterLibrary === true;
+      const shouldOpenNetworkSettings = customEvent.detail?.openNetworkSettings === true;
       if (requestedTab === 'printer' || requestedTab === 'material') {
         setProfileModalTab(requestedTab);
       } else {
@@ -383,6 +387,10 @@ export function TopBar({
 
       if (shouldOpenPrinterLibrary) {
         setProfileModalOpenPrinterLibraryToken((prev) => prev + 1);
+      }
+
+      if (shouldOpenNetworkSettings) {
+        setProfileModalOpenNetworkSettingsToken((prev) => prev + 1);
       }
 
       setIsProfileModalOpen(true);
@@ -448,6 +456,10 @@ export function TopBar({
   const monitorButtonAnimationClass = monitorButtonPaused
     ? 'ui-topbar-monitor-paused'
     : (monitorButtonActive ? 'ui-topbar-monitor-active' : '');
+  const monitorButtonLabel = monitorButtonOffline ? 'Offline' : 'Monitor';
+  const monitorButtonTone = monitorButtonOffline
+    ? '#f87171'
+    : 'var(--text-strong)';
 
   const openProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
     setProfileModalTab(tab);
@@ -603,19 +615,21 @@ export function TopBar({
             className="group inline-flex h-10 items-center gap-1.5 rounded-md px-2 transition-colors"
             style={{
               background: 'transparent',
-              color: 'var(--text-strong)',
+              color: monitorButtonTone,
             }}
-            title="Open printer monitor"
-            aria-label="Open printer monitor"
+            title={monitorButtonOffline ? 'Selected printer is offline' : 'Open printer monitor'}
+            aria-label={monitorButtonOffline ? 'Selected printer is offline' : 'Open printer monitor'}
             data-no-window-drag="true"
           >
             <Activity
               className={`h-3.5 w-3.5 ${monitorButtonAnimationClass}`}
+              style={{ color: monitorButtonTone }}
             />
             <span
               className={`text-[11px] font-semibold ${monitorButtonAnimationClass}`}
+              style={{ color: monitorButtonTone }}
             >
-              Monitor
+              {monitorButtonLabel}
             </span>
           </button>
         )}
@@ -1032,6 +1046,7 @@ export function TopBar({
         onClose={() => setIsProfileModalOpen(false)}
         initialTab={profileModalTab}
         openPrinterLibraryToken={profileModalOpenPrinterLibraryToken}
+        openNetworkSettingsToken={profileModalOpenNetworkSettingsToken}
       />
     </div>
   );

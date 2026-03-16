@@ -46,6 +46,7 @@ type ProfileSettingsModalProps = {
   onClose: () => void;
   initialTab?: 'printer' | 'material';
   openPrinterLibraryToken?: number;
+  openNetworkSettingsToken?: number;
 };
 
 type DeleteConfirmTarget =
@@ -153,6 +154,7 @@ export function ProfileSettingsModal({
   onClose,
   initialTab = 'printer',
   openPrinterLibraryToken = 0,
+  openNetworkSettingsToken = 0,
 }: ProfileSettingsModalProps) {
   const logNetworkScanDebug = React.useCallback((scope: string, details: Record<string, unknown>) => {
     try {
@@ -453,6 +455,7 @@ export function ProfileSettingsModal({
 
   const selectedNanodlpMaterialIdRef = React.useRef('');
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
+  const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
   const discoveryInFlightRef = React.useRef(false);
   const discoveryRunIdRef = React.useRef(0);
@@ -723,8 +726,17 @@ export function ProfileSettingsModal({
       && openPrinterLibraryToken > 0
       && openPrinterLibraryToken > lastHandledOpenPrinterLibraryTokenRef.current;
 
+    const shouldOpenNetworkSettings =
+      initialTab === 'printer'
+      && openNetworkSettingsToken > 0
+      && openNetworkSettingsToken > lastHandledOpenNetworkSettingsTokenRef.current;
+
     if (shouldOpenPrinterLibrary) {
       lastHandledOpenPrinterLibraryTokenRef.current = openPrinterLibraryToken;
+    }
+
+    if (shouldOpenNetworkSettings) {
+      lastHandledOpenNetworkSettingsTokenRef.current = openNetworkSettingsToken;
     }
 
     setSelectedPrinterId(profileState.activePrinterProfileId);
@@ -732,13 +744,13 @@ export function ProfileSettingsModal({
     setSelectedResinFamily(null);
     setIsMaterialEditorOpen(false);
     setIsEditingPrinter(false);
-    setIsNetworkSettingsOpen(false);
-    setShowPresetPicker(shouldOpenPrinterLibrary);
+    setIsNetworkSettingsOpen(shouldOpenNetworkSettings);
+    setShowPresetPicker(shouldOpenPrinterLibrary && !shouldOpenNetworkSettings);
     setPresetSearch('');
     setSelectedPresetManufacturer('All');
     const materials = getMaterialProfilesForPrinter(profileState.activePrinterProfileId, profileState);
     setSelectedMaterialId(materials[0]?.id ?? null);
-  }, [initialTab, isOpen, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState]);
+  }, [initialTab, isOpen, openNetworkSettingsToken, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -1876,7 +1888,7 @@ export function ProfileSettingsModal({
                   className="ui-button ui-button-primary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
                 >
                   <Plus className="w-4 h-4" />
-                  Add Printer
+                  Printer Library
                 </button>
               </div>
             </div>
@@ -2179,7 +2191,7 @@ export function ProfileSettingsModal({
                     }}
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    Add Printer
+                    Printer Library
                   </button>
                   {selectedPrinterSupportsNetworkSettings && (
                     <button

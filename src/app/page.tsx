@@ -2726,16 +2726,15 @@ export default function Home() {
     };
   }, [activePrinterProfile?.network?.ipAddress, selectedKnownPrinterDevice?.ipAddress, selectedKnownPrinterDevice?.port]);
   const monitorSelectableDevices = React.useMemo(() => {
-    if (printableConnectedPrinterFleet.length > 0) {
-      return printableConnectedPrinterFleet;
-    }
-    return [] as PrinterNetworkDevice[];
-  }, [printableConnectedPrinterFleet]);
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    if (fleet.length === 0) return [] as PrinterNetworkDevice[];
+    return fleet.filter((device) => (device.ipAddress || '').trim().length > 0);
+  }, [activePrinterProfile?.networkFleet]);
   const monitoringDevice = React.useMemo(() => {
     if (monitorSelectableDevices.length > 0) {
       return monitorSelectableDevices.find((device) => device.id === printingMonitorDeviceId)
-        ?? monitorSelectableDevices.find((device) => device.id === printingTargetDevice?.id)
         ?? monitorSelectableDevices.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
+        ?? monitorSelectableDevices.find((device) => device.id === printingTargetDevice?.id)
         ?? monitorSelectableDevices[0]
         ?? null;
     }
@@ -3046,7 +3045,39 @@ export default function Home() {
       || selectedPrinterIsPauseTransition,
     );
   }, [selectedPrinterIsPauseTransition, selectedPrinterMonitorSnapshot?.isPaused]);
-  const hasConnectedMonitorTarget = printableConnectedPrinterFleet.length > 0;
+  const isTopbarSelectedPrinterOffline = React.useMemo(() => {
+    const selectedHost = (selectedKnownPrinterDevice?.ipAddress || activePrinterProfile?.network?.ipAddress || '').trim();
+    if (!selectedHost) return false;
+
+    if (selectedKnownPrinterDevice) {
+      if (printerReachabilityByDeviceId[selectedKnownPrinterDevice.id] === false) return true;
+      return selectedKnownPrinterDevice.connected !== true;
+    }
+
+    return activePrinterProfile?.networkConnection?.connected === false;
+  }, [
+    activePrinterProfile?.network?.ipAddress,
+    activePrinterProfile?.networkConnection?.connected,
+    printerReachabilityByDeviceId,
+    selectedKnownPrinterDevice,
+  ]);
+  const isPrintingMonitorSelectedPrinterOffline = React.useMemo(() => {
+    const monitorHost = (monitoringDevice?.ipAddress || activePrinterProfile?.network?.ipAddress || '').trim();
+    if (!monitorHost) return false;
+
+    if (monitoringDevice) {
+      if (printerReachabilityByDeviceId[monitoringDevice.id] === false) return true;
+      return monitoringDevice.connected !== true;
+    }
+
+    return activePrinterProfile?.networkConnection?.connected === false;
+  }, [
+    activePrinterProfile?.network?.ipAddress,
+    activePrinterProfile?.networkConnection?.connected,
+    monitoringDevice,
+    printerReachabilityByDeviceId,
+  ]);
+  const hasMonitorSelectableTarget = monitorSelectableDevices.length > 0;
   const printingMonitorPrinterThumbnailSrc = React.useMemo(() => {
     const source = activePrinterProfile?.imageDataUrl;
     if (typeof source !== 'string') return null;
@@ -3081,9 +3112,9 @@ export default function Home() {
       && activePrinterProfile?.networkSupport === 'nanodlp',
     );
     if (!hasMonitoring) return false;
-    if (!hasConnectedMonitorTarget) return false;
+    if (!hasMonitorSelectableTarget) return false;
     return true;
-  }, [activePrinterProfile?.networkSupport, hasConnectedMonitorTarget, printingMonitoringAdapter]);
+  }, [activePrinterProfile?.networkSupport, hasMonitorSelectableTarget, printingMonitoringAdapter]);
 
   React.useEffect(() => {
     const shouldProbeFleetReachability = Boolean(
@@ -3832,13 +3863,17 @@ export default function Home() {
         return previous;
       }
 
+      if (activePrinterProfile?.activeNetworkDeviceId && monitorSelectableDevices.some((device) => device.id === activePrinterProfile.activeNetworkDeviceId)) {
+        return activePrinterProfile.activeNetworkDeviceId;
+      }
+
       if (printingTargetDevice?.id && monitorSelectableDevices.some((device) => device.id === printingTargetDevice.id)) {
         return printingTargetDevice.id;
       }
 
       return monitorSelectableDevices[0]?.id ?? null;
     });
-  }, [monitorSelectableDevices, printingMonitorModalOpen, printingTargetDevice?.id]);
+  }, [activePrinterProfile?.activeNetworkDeviceId, monitorSelectableDevices, printingMonitorModalOpen, printingTargetDevice?.id]);
 
   React.useEffect(() => {
     if (!isPrintingMonitorPrinterMenuOpen) return;
@@ -8847,6 +8882,7 @@ export default function Home() {
         showMonitorButton={showTopbarMonitorButton}
         monitorButtonActive={selectedPrinterHasActivePrint}
         monitorButtonPaused={selectedPrinterHasPausedAlert}
+        monitorButtonOffline={isTopbarSelectedPrinterOffline}
         warnBeforeProfileSettingsOpen={Boolean(printingArtifact && !printingArtifactIsInvalid)}
         onOpenMonitor={() => setPrintingMonitorModalOpen(true)}
       />
@@ -10733,8 +10769,52 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="p-4 grid items-start gap-3 lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]">
-              <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
+            {isPrintingMonitorSelectedPrinterOffline ? (
+              <div className="p-4">
+                <div
+                  className="h-[min(62vh,520px)] rounded-xl border"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
+                  }}
+                >
+                  <div className="h-full w-full flex items-center justify-center p-6">
+                    <div className="max-w-md w-full rounded-xl border px-5 py-5 text-center" style={{
+                      borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 56%)',
+                      background: 'color-mix(in srgb, #7f1d1d, var(--surface-1) 72%)',
+                    }}>
+                      <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-lg border" style={{
+                        borderColor: 'color-mix(in srgb, #f87171, var(--border-subtle) 52%)',
+                        background: 'color-mix(in srgb, #f87171, transparent 84%)',
+                        color: '#fecaca',
+                      }}>
+                        <AlertTriangle className="h-5 w-5" />
+                      </div>
+                      <h3 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
+                        This machine is currently offline
+                      </h3>
+                      <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                        Reconnect this printer in Network Settings, or choose a different online printer from the selector above.
+                      </p>
+                      <div className="mt-4 flex items-center justify-center">
+                        <button
+                          type="button"
+                          className="ui-button ui-button-secondary !h-9 px-3 text-xs"
+                          onClick={() => {
+                            setPrintingMonitorModalOpen(false);
+                            openProfileSettingsModal('printer', { openNetworkSettings: true });
+                          }}
+                        >
+                          Open Network Settings
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 grid items-start gap-3 lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]">
+                <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
                 <div className="rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="flex items-center justify-between gap-2 px-1">
                     <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -11009,16 +11089,16 @@ export default function Home() {
                     </div>
                   )}
                 </div>
-              </section>
+                </section>
 
-              <section
-                className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
-                  height: printingMonitorLeftColumnHeight != null ? `${printingMonitorLeftColumnHeight}px` : undefined,
-                }}
-              >
+                <section
+                  className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
+                    height: printingMonitorLeftColumnHeight != null ? `${printingMonitorLeftColumnHeight}px` : undefined,
+                  }}
+                >
                 <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
                   Webcam
                 </div>
@@ -11094,8 +11174,9 @@ export default function Home() {
                     {printingMonitorWebcamInfo?.message ?? 'No webcam feed reported yet.'}
                   </div>
                 )}
-              </section>
-            </div>
+                </section>
+              </div>
+            )}
           </div>
         </div>
       )}
