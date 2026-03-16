@@ -110,8 +110,10 @@ import {
   getActivePrinterProfile,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
+  selectPrinterNetworkDevice,
   subscribeToProfileStore,
   type PrinterNetworkDevice,
+  upsertPrinterNetworkDevice,
 } from '@/features/profiles/profileStore';
 import {
   getPrinterReachabilityServerSnapshot,
@@ -2709,8 +2711,8 @@ export default function Home() {
   }, [connectedPrinterFleet]);
   const printingTargetDevice = React.useMemo(() => {
     if (printableConnectedPrinterFleet.length === 0) return null;
-    return printableConnectedPrinterFleet.find((device) => device.id === printingTargetDeviceId)
-      ?? printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
+    return printableConnectedPrinterFleet.find((device) => device.id === activePrinterProfile?.activeNetworkDeviceId)
+      ?? printableConnectedPrinterFleet.find((device) => device.id === printingTargetDeviceId)
       ?? printableConnectedPrinterFleet[0]
       ?? null;
   }, [activePrinterProfile?.activeNetworkDeviceId, printableConnectedPrinterFleet, printingTargetDeviceId]);
@@ -3294,6 +3296,16 @@ export default function Home() {
       return;
     }
 
+    const activeFleetDeviceId = (activePrinterProfile.activeNetworkDeviceId ?? '').trim();
+    if (
+      activeFleetDeviceId
+      && printableConnectedPrinterFleet.some((device) => device.id === activeFleetDeviceId)
+      && printingTargetDeviceId !== activeFleetDeviceId
+    ) {
+      setPrintingTargetDeviceId(activeFleetDeviceId);
+      return;
+    }
+
     if (printingTargetDeviceId && printableConnectedPrinterFleet.some((device) => device.id === printingTargetDeviceId)) {
       return;
     }
@@ -3304,7 +3316,14 @@ export default function Home() {
     const fallbackTarget = preferredPool.find((device) => device.id === activePrinterProfile.activeNetworkDeviceId)
       ?? preferredPool[0]
       ?? null;
-    setPrintingTargetDeviceId(fallbackTarget?.id ?? null);
+    if (fallbackTarget?.id) {
+      setPrintingTargetDeviceId(fallbackTarget.id);
+      if (fallbackTarget.id !== activePrinterProfile.activeNetworkDeviceId) {
+        selectPrinterNetworkDevice(activePrinterProfile.id, fallbackTarget.id);
+      }
+    } else {
+      setPrintingTargetDeviceId(null);
+    }
   }, [activePrinterProfile, printableConnectedPrinterFleet, printerReachabilityByDeviceId, printingTargetDeviceId]);
 
   React.useEffect(() => {
@@ -4319,6 +4338,20 @@ export default function Home() {
     }
 
     setPrintingTargetDeviceId(targetDevice.id);
+    selectPrinterNetworkDevice(activePrinterProfile.id, targetDevice.id);
+
+    const selectedMaterialOption = printingTargetMaterialOptions.find((material) => material.id === selectedMaterialId) ?? null;
+    upsertPrinterNetworkDevice(
+      activePrinterProfile.id,
+      {
+        id: targetDevice.id,
+        ipAddress: targetDevice.ipAddress,
+        selectedMaterialId,
+        selectedMaterialName: selectedMaterialOption?.name ?? targetDevice.selectedMaterialName ?? selectedMaterialId,
+        selectedMaterialLayerHeightMm: selectedMaterialOption?.layerHeightMm ?? targetDevice.selectedMaterialLayerHeightMm,
+      },
+      { select: true },
+    );
 
     setPrintingReadyPlateId(null);
     setPrintingSendBusy(true);
@@ -4513,7 +4546,13 @@ export default function Home() {
     } finally {
       setPrintingSendBusy(false);
     }
-  }, [activePrinterProfile, isLayerHeightMatch, printingArtifact, slicedLayerHeightMm]);
+  }, [
+    activePrinterProfile,
+    isLayerHeightMatch,
+    printingArtifact,
+    printingTargetMaterialOptions,
+    slicedLayerHeightMm,
+  ]);
 
   const handleSendToPrinter = React.useCallback(async () => {
     if (!printingArtifact || !activePrinterProfile) return;
@@ -10236,6 +10275,9 @@ export default function Home() {
                           onClick={() => {
                             if (isDeviceOffline) return;
                             setPrintingTargetDeviceId(device.id);
+                            if (activePrinterProfile?.id) {
+                              selectPrinterNetworkDevice(activePrinterProfile.id, device.id);
+                            }
                           }}
                           disabled={isDeviceOffline}
                           className="relative w-full rounded-lg border px-3 py-2.5 pr-9 text-left"
@@ -10315,7 +10357,22 @@ export default function Home() {
                                 <button
                                   key={material.id}
                                   type="button"
-                                  onClick={() => setPrintingTargetMaterialId(material.id)}
+                                  onClick={() => {
+                                    setPrintingTargetMaterialId(material.id);
+                                    if (activePrinterProfile?.id && printingTargetDevice) {
+                                      upsertPrinterNetworkDevice(
+                                        activePrinterProfile.id,
+                                        {
+                                          id: printingTargetDevice.id,
+                                          ipAddress: printingTargetDevice.ipAddress,
+                                          selectedMaterialId: material.id,
+                                          selectedMaterialName: material.name,
+                                          selectedMaterialLayerHeightMm: material.layerHeightMm ?? undefined,
+                                        },
+                                        { select: true },
+                                      );
+                                    }
+                                  }}
                                   className="relative w-full rounded-md border px-2.5 py-2 pr-9 text-left"
                                   style={isSelectedMaterial
                                     ? {
