@@ -8888,6 +8888,7 @@ export default function Home() {
         monitorButtonActive={selectedPrinterHasActivePrint}
         monitorButtonPaused={selectedPrinterHasPausedAlert}
         monitorButtonOffline={isTopbarSelectedPrinterOffline}
+        printerReachabilityByDeviceId={printerReachabilityByDeviceId}
         warnBeforeProfileSettingsOpen={Boolean(printingArtifact && !printingArtifactIsInvalid)}
         onOpenMonitor={() => setPrintingMonitorModalOpen(true)}
       />
