@@ -1005,6 +1005,207 @@ export function useSceneCollectionManager() {
     return new THREE.Vector2(0, 0);
   }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
+  type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
+
+  const intersectsRect = useCallback((a: Rect2D, b: Rect2D) => {
+    return !(a.maxX < b.minX || a.minX > b.maxX || a.maxY < b.minY || a.minY > b.maxY);
+  }, []);
+
+  const isRectInsidePlate = useCallback((rect: Rect2D) => {
+    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+    const maxX = minX + view3dSettings.widthMm;
+    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+    const maxY = minY + view3dSettings.depthMm;
+
+    return (
+      rect.minX >= minX
+      && rect.maxX <= maxX
+      && rect.minY >= minY
+      && rect.maxY <= maxY
+    );
+  }, [view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+
+  const footprintForTransform = useCallback((size: THREE.Vector3, transform: ModelTransform) => {
+    const baseW = Math.max(2, Math.abs(size.x * transform.scale.x));
+    const baseD = Math.max(2, Math.abs(size.y * transform.scale.y));
+    const rz = transform.rotation.z;
+    const c = Math.abs(Math.cos(rz));
+    const s = Math.abs(Math.sin(rz));
+    return {
+      width: (baseW * c) + (baseD * s),
+      depth: (baseW * s) + (baseD * c),
+    };
+  }, []);
+
+  const buildMeshPlacementOffsets = useCallback((
+    center: { x: number; y: number },
+    size: THREE.Vector3,
+    transform: ModelTransform,
+  ) => {
+    const footprint = footprintForTransform(size, transform);
+    const meshRect: Rect2D = {
+      minX: center.x - (footprint.width * 0.5),
+      maxX: center.x + (footprint.width * 0.5),
+      minY: center.y - (footprint.depth * 0.5),
+      maxY: center.y + (footprint.depth * 0.5),
+    };
+
+    return {
+      minXOffset: meshRect.minX - center.x,
+      maxXOffset: meshRect.maxX - center.x,
+      minYOffset: meshRect.minY - center.y,
+      maxYOffset: meshRect.maxY - center.y,
+      width: Math.max(2, meshRect.maxX - meshRect.minX),
+      depth: Math.max(2, meshRect.maxY - meshRect.minY),
+    };
+  }, [footprintForTransform]);
+
+  const findFreeSpotCentersForModels = useCallback((
+    incomingModels: Array<Pick<LoadedModel, 'geometry' | 'transform'>>,
+    spacingMm = 5,
+  ): Array<{ x: number; y: number }> => {
+    if (incomingModels.length === 0) return [];
+
+    const centerX = defaultImportCenterXY.x;
+    const centerY = defaultImportCenterXY.y;
+    const minX = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.widthMm * 0.5;
+    const maxX = minX + view3dSettings.widthMm;
+    const minY = view3dSettings.originMode === 'front_left' ? 0 : -view3dSettings.depthMm * 0.5;
+    const maxY = minY + view3dSettings.depthMm;
+
+    const placementOffsets = incomingModels.map((model) => buildMeshPlacementOffsets(
+      { x: model.transform.position.x, y: model.transform.position.y },
+      model.geometry.size,
+      model.transform,
+    ));
+
+    const maxWidth = Math.max(...placementOffsets.map((entry) => entry.width));
+    const maxDepth = Math.max(...placementOffsets.map((entry) => entry.depth));
+    const stepX = Math.max(4, maxWidth + Math.max(0, spacingMm));
+    const stepY = Math.max(4, maxDepth + Math.max(0, spacingMm));
+
+    const blockedRects: Rect2D[] = modelsRef.current
+      .filter((model) => model.visible)
+      .map((model) => {
+        const meshPlacement = buildMeshPlacementOffsets(
+          { x: model.transform.position.x, y: model.transform.position.y },
+          model.geometry.size,
+          model.transform,
+        );
+
+        const meshRect: Rect2D = {
+          minX: model.transform.position.x + meshPlacement.minXOffset,
+          maxX: model.transform.position.x + meshPlacement.maxXOffset,
+          minY: model.transform.position.y + meshPlacement.minYOffset,
+          maxY: model.transform.position.y + meshPlacement.maxYOffset,
+        };
+
+        const supportBounds = estimateSupportBoundsForModel(model.id);
+        if (!supportBounds) {
+          return meshRect;
+        }
+
+        return {
+          minX: Math.min(meshRect.minX, supportBounds.minX),
+          maxX: Math.max(meshRect.maxX, supportBounds.maxX),
+          minY: Math.min(meshRect.minY, supportBounds.minY),
+          maxY: Math.max(meshRect.maxY, supportBounds.maxY),
+        };
+      });
+
+    const candidateCenters: Array<{ x: number; y: number; distSq: number }> = [];
+    const halfSpanX = Math.max(Math.abs(centerX - minX), Math.abs(maxX - centerX));
+    const halfSpanY = Math.max(Math.abs(centerY - minY), Math.abs(maxY - centerY));
+    const inPlateRingX = Math.ceil(halfSpanX / stepX) + 2;
+    const inPlateRingY = Math.ceil(halfSpanY / stepY) + 2;
+    const maxInPlateRing = Math.max(inPlateRingX, inPlateRingY);
+    const outsideRings = 12;
+    const maxRing = maxInPlateRing + outsideRings;
+
+    for (let ring = 0; ring <= maxRing; ring += 1) {
+      if (ring === 0) {
+        candidateCenters.push({ x: centerX, y: centerY, distSq: 0 });
+        continue;
+      }
+
+      for (let gx = -ring; gx <= ring; gx += 1) {
+        const gyTop = ring;
+        const gyBottom = -ring;
+        const x = centerX + gx * stepX;
+
+        const yTop = centerY + gyTop * stepY;
+        const dxTop = x - centerX;
+        const dyTop = yTop - centerY;
+        candidateCenters.push({ x, y: yTop, distSq: (dxTop * dxTop) + (dyTop * dyTop) });
+
+        if (gyBottom !== gyTop) {
+          const yBottom = centerY + gyBottom * stepY;
+          const dxBottom = x - centerX;
+          const dyBottom = yBottom - centerY;
+          candidateCenters.push({ x, y: yBottom, distSq: (dxBottom * dxBottom) + (dyBottom * dyBottom) });
+        }
+      }
+
+      for (let gy = -ring + 1; gy <= ring - 1; gy += 1) {
+        const gxRight = ring;
+        const gxLeft = -ring;
+        const y = centerY + gy * stepY;
+
+        const xRight = centerX + gxRight * stepX;
+        const dxRight = xRight - centerX;
+        const dyRight = y - centerY;
+        candidateCenters.push({ x: xRight, y, distSq: (dxRight * dxRight) + (dyRight * dyRight) });
+
+        if (gxLeft !== gxRight) {
+          const xLeft = centerX + gxLeft * stepX;
+          const dxLeft = xLeft - centerX;
+          const dyLeft = y - centerY;
+          candidateCenters.push({ x: xLeft, y, distSq: (dxLeft * dxLeft) + (dyLeft * dyLeft) });
+        }
+      }
+    }
+
+    candidateCenters.sort((a, b) => a.distSq - b.distSq);
+
+    const assignedCenters: Array<{ x: number; y: number }> = incomingModels.map((_, entryIndex) => {
+      const placement = placementOffsets[entryIndex];
+
+      const makeRectAt = (x: number, y: number): Rect2D => ({
+        minX: x + placement.minXOffset,
+        maxX: x + placement.maxXOffset,
+        minY: y + placement.minYOffset,
+        maxY: y + placement.maxYOffset,
+      });
+
+      for (const candidate of candidateCenters) {
+        const rect = makeRectAt(candidate.x, candidate.y);
+        if (!isRectInsidePlate(rect)) continue;
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      for (const candidate of candidateCenters) {
+        const rect = makeRectAt(candidate.x, candidate.y);
+        if (blockedRects.some((blocked) => intersectsRect(rect, blocked))) continue;
+        blockedRects.push(rect);
+        return { x: candidate.x, y: candidate.y };
+      }
+
+      const fallbackX = centerX + (maxRing + 2 + blockedRects.length) * stepX;
+      const fallbackY = centerY;
+      blockedRects.push({
+        minX: fallbackX + placement.minXOffset,
+        maxX: fallbackX + placement.maxXOffset,
+        minY: fallbackY + placement.minYOffset,
+        maxY: fallbackY + placement.maxYOffset,
+      });
+      return { x: fallbackX, y: fallbackY };
+    });
+
+    return assignedCenters;
+  }, [buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+
   useEffect(() => {
     const prev = readMeshAppearanceFromLocalStorage();
 
@@ -1487,6 +1688,13 @@ export function useSceneCollectionManager() {
       }
 
       if (newModels.length > 0) {
+        const assignedCenters = findFreeSpotCentersForModels(newModels, 5);
+        newModels.forEach((model, index) => {
+          const center = assignedCenters[index];
+          if (!center) return;
+          model.transform.position.set(center.x, center.y, model.transform.position.z);
+        });
+
         setModels(prev => [...prev, ...newModels]);
         // If no active model, select the first new one
         if (!activeModelId) {
@@ -1503,7 +1711,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
+  }, [activeModelId, defaultImportCenterXY.x, defaultImportCenterXY.y, findFreeSpotCentersForModels, getMeshExtension, trackRecentOpenedFiles, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -2534,11 +2742,34 @@ export function useSceneCollectionManager() {
         // Keep mesh color metadata only; avoid eager vertex color buffer allocation.
         const color = '#a3a3a3';
 
-        const finalPosition = new THREE.Vector3(
+        const originalPosition = new THREE.Vector3(
           importedTransform.position.x,
           importedTransform.position.y,
           importedTransform.position.z
         );
+
+        const assignedCenter = findFreeSpotCentersForModels([
+          {
+            geometry: processed,
+            transform: {
+              position: originalPosition.clone(),
+              rotation: importedTransform.rotation,
+              scale: importedTransform.scale,
+            },
+          },
+        ], 5)[0];
+
+        const finalPosition = new THREE.Vector3(
+          assignedCenter?.x ?? originalPosition.x,
+          assignedCenter?.y ?? originalPosition.y,
+          originalPosition.z,
+        );
+
+        const sourceTransform: ModelTransform = {
+          position: originalPosition.clone(),
+          rotation: importedTransform.rotation.clone(),
+          scale: importedTransform.scale.clone(),
+        };
 
         const model: LoadedModel = {
           id: importedModelId || generateId(),
@@ -2566,9 +2797,15 @@ export function useSceneCollectionManager() {
           if (typeof window !== 'undefined') {
             requestAnimationFrame(() => {
               mergeFromLychee(supportData);
+              if (!transformsEqual(sourceTransform, model.transform)) {
+                transformSupportsForModel(model.id, sourceTransform, model.transform);
+              }
             });
           } else {
             mergeFromLychee(supportData);
+            if (!transformsEqual(sourceTransform, model.transform)) {
+              transformSupportsForModel(model.id, sourceTransform, model.transform);
+            }
           }
         }
 
@@ -2605,7 +2842,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, lysImport, generateId, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield, emitSceneImportReport]);
+  }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, lysImport, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File) => {
     trackRecentOpenedFiles([file], 'scene');
@@ -2717,7 +2954,19 @@ export function useSceneCollectionManager() {
         }
       }
 
+      const sourceTransformsByModelId = new Map<string, ModelTransform>();
+      for (const imported of importedModels) {
+        sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
+      }
+
       if (importedModels.length > 0) {
+        const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
+        importedModels.forEach((model, index) => {
+          const center = assignedCenters[index];
+          if (!center) return;
+          model.transform.position.set(center.x, center.y, model.transform.position.z);
+        });
+
         setModels((prev) => [...prev, ...importedModels]);
 
         const mappedActiveId = (document.scene.activeModelId && idMap.get(document.scene.activeModelId))
@@ -2739,6 +2988,13 @@ export function useSceneCollectionManager() {
       if (voxlSupportsContainData(document)) {
         const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
         mergeFromLychee(remappedSupports);
+
+        for (const imported of importedModels) {
+          const sourceTransform = sourceTransformsByModelId.get(imported.id);
+          if (!sourceTransform) continue;
+          if (transformsEqual(sourceTransform, imported.transform)) continue;
+          transformSupportsForModel(imported.id, sourceTransform, imported.transform);
+        }
       }
 
       const importedSupportCount = countSupportEntries(document.supports);
@@ -2775,7 +3031,7 @@ export function useSceneCollectionManager() {
         progress: null,
       });
     }
-  }, [generateId, trackRecentOpenedFiles, waitForUiYield, emitSceneImportReport]);
+  }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, trackRecentOpenedFiles, waitForUiYield]);
 
   const importSceneFile = useCallback(async (file: File) => {
     const extension = getSceneExtension(file.name);
