@@ -976,15 +976,20 @@ export default function Home() {
   const [modelStatsBottomClearancePx, setModelStatsBottomClearancePx] = React.useState(220);
   const arrangeHullFootprintCacheRef = React.useRef<Map<string, HullCacheEntry>>(new Map());
   const trackSupportCollectionsInHome = scene.mode !== 'support';
+  
+  // Stable snapshot functions for useSyncExternalStore
+  const getEmptySupportSnapshot = React.useCallback(() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT, []);
+  const getEmptyKickstandSnapshot = React.useCallback(() => EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT, []);
+  
   const supportStateSnapshot = React.useSyncExternalStore(
     subscribeSupportState,
-    trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT),
-    trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : (() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT),
+    trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : getEmptySupportSnapshot,
+    trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : getEmptySupportSnapshot,
   );
   const kickstandStateSnapshot = React.useSyncExternalStore(
     subscribeToKickstandStore,
-    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : (() => EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT),
-    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : (() => EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT),
+    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
+    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
   );
   const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   const bracePlacementSnapshot = React.useSyncExternalStore(
