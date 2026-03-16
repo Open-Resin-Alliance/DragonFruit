@@ -47,6 +47,7 @@ export function useHighlight({
 
     return {
         pickRef,
+        isPickingHovered,
         isHighlighted,
         visuals: {
             color,

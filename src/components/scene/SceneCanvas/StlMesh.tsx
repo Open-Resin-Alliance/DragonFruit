@@ -434,7 +434,7 @@ export function StlMesh({
         userData={{ modelId }}
         geometry={geometry}
         position={meshLocalOffset}
-        renderOrder={isSupportDimmed ? 2 : 0}
+        renderOrder={baseShaderType === 'xray' || isSupportDimmed ? 2 : 0}
         onClick={(e) => {
           if (isSupportShiftGesture(e)) {
             e.stopPropagation();
@@ -508,6 +508,8 @@ export function StlMesh({
             return;
           }
 
+          e.stopPropagation();
+
           schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
           onModelHoverModelChange?.(modelId);
@@ -549,7 +551,7 @@ export function StlMesh({
             }
 
             // Mute hover if hovering a gizmo OR support (using GPU picking for accuracy)
-            if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
+            if (isGizmoHoverCategory) {
               onSupportHover(null);
               return;
             }

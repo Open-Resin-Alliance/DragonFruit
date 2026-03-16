@@ -1,7 +1,7 @@
 import React from 'react';
 import { Leaf, Knot } from '../../types';
 import { ContactConeRenderer } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 
@@ -41,7 +41,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover,
+        enabled: !!isInteractable && !suppressHover && !isSelected,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -71,16 +71,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         handleSupportClick(e, leaf.id, !!isInteractable);
     };
 
-    const handlePointerMove = React.useCallback(() => {
-        emitSupportModelPointerHover(leaf.modelId ?? null);
-    }, [leaf.modelId]);
-
-    const handlePointerOut = React.useCallback(() => {
-        emitSupportModelPointerHover(null);
-    }, []);
-
     return (
-        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+        <group onClick={handleClick}>
             <group ref={pickRef as any}>
                 {leaf.contactCone && !deferContactConesToSceneBatch && (
                     <ContactConeRenderer

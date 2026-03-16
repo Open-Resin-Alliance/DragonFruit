@@ -33,14 +33,17 @@ import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
 import { clearSelection } from '../../interaction/SupportSelection';
+import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const isHoveringSupportTarget = supportState.hoveredCategory === 'support'
+    const immediateModelHoverId = useImmediateModelHoverId();
+    const rawHoveringSupportTarget = supportState.hoveredCategory === 'support'
         || supportState.hoveredCategory === 'segment'
         || supportState.hoveredCategory === 'joint'
         || supportState.hoveredCategory === 'knot';
+    const isHoveringSupportTarget = rawHoveringSupportTarget && immediateModelHoverId === null;
 
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);
     const meshKindRef = useRef<'twig' | 'stick' | null>(null);

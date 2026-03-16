@@ -9607,7 +9607,7 @@ export default function Home() {
             leafPlacementPreview={supports.leafPlacement.previewData}
             bracePlacementPreview={supports.bracePreview}
             kickstandPlacementPreview={supports.kickstandPreview}
-            blockSupportPlacement={supports.isPlacementDisabled}
+            blockSupportPlacement={supports.isPlacementHardDisabled}
             isBranchPlacementActive={supports.branchPlacement.isActive}
             isLeafPlacementActive={supports.leafPlacement.isActive}
             isBracePlacementActive={supports.bracePlacement.isActive}

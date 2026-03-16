@@ -6,7 +6,7 @@ import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 
@@ -48,7 +48,7 @@ export const StickRenderer = React.memo(function StickRenderer({
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -60,14 +60,6 @@ export const StickRenderer = React.memo(function StickRenderer({
   const handleClick = (e: any) => {
     handleSupportClick(e, stick.id, !!isInteractable);
   };
-
-  const handlePointerMove = React.useCallback(() => {
-    emitSupportModelPointerHover(stick.modelId ?? null);
-  }, [stick.modelId]);
-
-  const handlePointerOut = React.useCallback(() => {
-    emitSupportModelPointerHover(null);
-  }, []);
 
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
@@ -193,8 +185,6 @@ export const StickRenderer = React.memo(function StickRenderer({
   return (
     <group
       onClick={handleClick}
-      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
     >
       <group ref={pickRef as any}>
         <InstancedShaftGroup
