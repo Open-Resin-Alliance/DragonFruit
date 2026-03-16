@@ -12,6 +12,7 @@ type DiscoveredNetworkPrinter = {
 type FleetManagementProps = {
   printerName: string;
   managedPrinters: PrinterNetworkDevice[];
+  printerReachabilityByDeviceId?: Record<string, boolean | null>;
   activePrinterId: string | null;
   showAddPrinterFlow: boolean;
   onEnterAddPrinterFlow: () => void;
@@ -42,6 +43,7 @@ type FleetManagementProps = {
 export function FleetManagement({
   printerName,
   managedPrinters,
+  printerReachabilityByDeviceId,
   activePrinterId,
   showAddPrinterFlow,
   onEnterAddPrinterFlow,
@@ -70,6 +72,11 @@ export function FleetManagement({
 }: FleetManagementProps) {
   const connectedCount = managedPrinters.filter((device) => device.connected).length;
   const hasMultiplePrinters = managedPrinters.length > 1;
+  const activeManagedPrinter = managedPrinters.find((device) => device.id === activePrinterId) ?? null;
+  const nonActiveManagedPrinters = managedPrinters.filter((device) => device.id !== activePrinterId);
+  const orderedManagedPrinters = activeManagedPrinter
+    ? [activeManagedPrinter, ...nonActiveManagedPrinters]
+    : managedPrinters;
 
   return (
     <div className="w-full max-w-[920px] rounded-xl border shadow-2xl ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
@@ -112,54 +119,63 @@ export function FleetManagement({
             </div>
           ) : (
             <div className="mt-2.5 space-y-2 max-h-[328px] overflow-y-auto custom-scrollbar pr-1">
-              {managedPrinters.map((device) => {
+              {orderedManagedPrinters.map((device, index) => {
                 const isActive = device.id === activePrinterId;
+                const isOfflineByProbe = printerReachabilityByDeviceId?.[device.id] === false;
+                const isOnline = device.connected && !isOfflineByProbe;
+                const cardBackground = 'var(--surface-1)';
                 return (
-                  <div
-                    key={device.id}
-                    className="rounded-md border px-3 py-2.5"
-                    style={{
-                      borderColor: isActive
-                        ? 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)'
-                        : 'var(--border-subtle)',
-                      background: isActive
-                        ? 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)'
-                        : 'var(--surface-1)',
-                    }}
-                  >
+                  <React.Fragment key={device.id}>
+                    {activeManagedPrinter && index === 1 && (
+                      <div
+                        className="my-1.5 border-t pt-1"
+                        style={{ borderColor: 'var(--border-subtle)' }}
+                      >
+                        <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                          Other Printers
+                        </div>
+                      </div>
+                    )}
+                    <div
+                      className="relative rounded-md border px-3 py-2.5 pl-10"
+                      style={{
+                        borderColor: 'var(--border-subtle)',
+                        background: cardBackground,
+                      }}
+                    >
+                    <span
+                      className="absolute inset-y-0.5 left-0.5 w-14 rounded-md pointer-events-none"
+                      style={isOnline
+                        ? {
+                            background: 'linear-gradient(90deg, color-mix(in srgb, #22c55e, transparent 8%) 0%, color-mix(in srgb, #22c55e, transparent 40%) 20%, color-mix(in srgb, #22c55e, transparent 68%) 40%, color-mix(in srgb, #22c55e, transparent 84%) 62%, transparent 82%)',
+                          }
+                        : {
+                            background: 'linear-gradient(90deg, color-mix(in srgb, #ef4444, transparent 8%) 0%, color-mix(in srgb, #ef4444, transparent 40%) 20%, color-mix(in srgb, #ef4444, transparent 68%) 40%, color-mix(in srgb, #ef4444, transparent 84%) 62%, transparent 82%)',
+                          }}
+                      aria-hidden="true"
+                    />
+                    <span
+                      className="absolute left-1.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center pointer-events-none"
+                      style={{
+                        color: cardBackground,
+                      }}
+                      aria-label={isOnline ? 'Printer online' : 'Printer offline'}
+                      title={isOnline ? 'Online' : 'Offline'}
+                    >
+                      {isOnline
+                        ? <Check className="w-[18px] h-[18px]" strokeWidth={3} />
+                        : <X className="w-[18px] h-[18px]" strokeWidth={3} />}
+                    </span>
+
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <div className="text-xs font-semibold truncate" style={{ color: 'var(--text-strong)' }}>
                             {device.displayName || device.hostName || device.ipAddress}
                           </div>
-                          {isActive && (
-                            <span
-                              className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                              style={{
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 26%)',
-                                background: 'color-mix(in srgb, var(--accent-secondary), transparent 86%)',
-                                color: 'color-mix(in srgb, var(--accent-secondary), white 8%)',
-                              }}
-                            >
-                              Active
-                            </span>
-                          )}
-                          {!device.connected && (
-                            <span
-                              className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                              style={{
-                                borderColor: 'var(--border-subtle)',
-                                background: 'color-mix(in srgb, var(--surface-2), transparent 25%)',
-                                color: 'var(--text-muted)',
-                              }}
-                            >
-                              Offline
-                            </span>
-                          )}
                         </div>
                         <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                          {device.ipAddress}
+                          {device.ipAddress} • {isOnline ? 'Online' : 'Offline'}
                         </div>
                         {device.statusText && (
                           <div className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
@@ -210,7 +226,8 @@ export function FleetManagement({
                         )}
                       </div>
                     </div>
-                  </div>
+                    </div>
+                  </React.Fragment>
                 );
               })}
             </div>
@@ -344,7 +361,7 @@ export function FleetManagement({
                               {isEntryActive ? ' • Active' : savedEntry ? ' • Saved' : ''}
                             </div>
                             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              {entry.ipAddress} • {entry.status === 'online' ? 'Online' : 'Reachable'}
+                              {entry.ipAddress} • {entry.status === 'online' ? 'Online' : 'Offline'}
                             </div>
                           </div>
                           <button

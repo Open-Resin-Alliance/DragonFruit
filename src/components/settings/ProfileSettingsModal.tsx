@@ -34,6 +34,11 @@ import {
   getDefaultProfileNetworkUiAdapter,
   getProfileNetworkUiAdapter,
 } from '@/features/plugins/pluginRegistry';
+import {
+  getPrinterReachabilityServerSnapshot,
+  getPrinterReachabilitySnapshot,
+  subscribeToPrinterReachability,
+} from '@/features/network/printerReachabilityStore';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 type ProfileSettingsModalProps = {
@@ -226,6 +231,11 @@ export function ProfileSettingsModal({
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('All');
   const [buildDimensionModeByPrinterId, setBuildDimensionModeByPrinterId] = React.useState<Record<string, BuildDimensionEditMode>>({});
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
 
@@ -583,11 +593,31 @@ export function ProfileSettingsModal({
     () => managedNetworkPrinters.filter((device) => device.connected).length,
     [managedNetworkPrinters],
   );
+  const hasMultipleConnectedManagedPrinters = connectedManagedNetworkPrinterCount > 1;
   const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 1 ? 'Manage Fleet' : 'Network Settings';
   const activeManagedNetworkPrinter = React.useMemo(
     () => managedNetworkPrinters.find((device) => device.id === selectedPrinter?.activeNetworkDeviceId) ?? null,
     [managedNetworkPrinters, selectedPrinter?.activeNetworkDeviceId],
   );
+  const isSelectedNanodlpPrinterOffline = React.useMemo(() => {
+    if (!isNanodlpPrinter) return false;
+    if (!selectedNanodlpHost) return false;
+
+    if (activeManagedNetworkPrinter) {
+      if (printerReachabilityByDeviceId[activeManagedNetworkPrinter.id] === false) return true;
+      return activeManagedNetworkPrinter.connected !== true;
+    }
+
+    return selectedPrinter?.networkConnection?.connected === false;
+  }, [
+    activeManagedNetworkPrinter,
+    isNanodlpPrinter,
+    printerReachabilityByDeviceId,
+    selectedNanodlpHost,
+    selectedPrinter?.networkConnection?.connected,
+  ]);
+  const shouldShowNanodlpSelectedPrinterOfflineState = isSelectedNanodlpPrinterOffline && hasMultipleConnectedManagedPrinters;
+  const shouldShowNanodlpMaterialsPanel = shouldUseNanodlpOnDeviceMaterials || shouldShowNanodlpSelectedPrinterOfflineState;
 
   const primaryEditFields = effectiveNetworkUiAdapter.primaryEditFields;
   const basicEditSections = effectiveNetworkUiAdapter.basicSections;
@@ -2247,6 +2277,8 @@ export function ProfileSettingsModal({
               <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                 {shouldUseNanodlpOnDeviceMaterials
                   ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
+                  : shouldShowNanodlpSelectedPrinterOfflineState
+                    ? <>The selected printer appears offline. Showing on-device materials view with offline status.</>
                   : shouldShowNanodlpConnectInfo
                     ? <>Connect to a machine to view on-device material profiles.</>
                   : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
@@ -2264,7 +2296,7 @@ export function ProfileSettingsModal({
                       <button
                         type="button"
                         onClick={() => { void loadNanodlpMaterials(); }}
-                        disabled={isLoadingNanodlpMaterials}
+                        disabled={isLoadingNanodlpMaterials || !selectedNanodlpHost}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                         style={{ color: 'var(--text-strong)' }}
                       >
@@ -2367,6 +2399,40 @@ export function ProfileSettingsModal({
                     )}
                   </div>
                 </>
+              ) : shouldShowNanodlpSelectedPrinterOfflineState ? (
+                <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="text-center max-w-[520px]">
+                    <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)' }}>
+                      <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
+                    </div>
+                    <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      Selected Printer is Offline
+                    </h4>
+                    <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      Reconnect this printer in Fleet Management, then refresh to load on-device material profiles.
+                    </p>
+                    {selectedPrinterSupportsNetworkSettings && (
+                      <button
+                        type="button"
+                        onClick={handleOpenNetworkSettings}
+                        className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                        style={{
+                          color: 'var(--accent-secondary)',
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                        }}
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        Open Fleet Management
+                      </button>
+                    )}
+                    {nanodlpMaterialsError && (
+                      <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                        {nanodlpMaterialsError}
+                      </div>
+                    )}
+                  </div>
+                </div>
               ) : shouldShowNanodlpConnectInfo ? (
                 <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-center max-w-[520px]">
@@ -2775,6 +2841,7 @@ export function ProfileSettingsModal({
             <FleetManagement
               printerName={selectedPrinter.name}
               managedPrinters={managedNetworkPrinters}
+              printerReachabilityByDeviceId={printerReachabilityByDeviceId}
               activePrinterId={selectedPrinter.activeNetworkDeviceId ?? null}
               showAddPrinterFlow={isAddingNetworkPrinter || managedNetworkPrinters.length === 0}
               onEnterAddPrinterFlow={() => {

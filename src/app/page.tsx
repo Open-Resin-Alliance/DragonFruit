@@ -113,6 +113,12 @@ import {
   subscribeToProfileStore,
   type PrinterNetworkDevice,
 } from '@/features/profiles/profileStore';
+import {
+  getPrinterReachabilityServerSnapshot,
+  getPrinterReachabilitySnapshot,
+  setPrinterReachabilityMap,
+  subscribeToPrinterReachability,
+} from '@/features/network/printerReachabilityStore';
 import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/sliceExportOrchestrator';
 import {
   cleanupStalePrintTempArtifacts,
@@ -805,7 +811,11 @@ export default function Home() {
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
   const printingMonitorThumbnailCacheRef = React.useRef<Map<string, string>>(new Map());
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
-  const [printerReachabilityByDeviceId, setPrinterReachabilityByDeviceId] = React.useState<Record<string, boolean | null>>({});
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
   const [printingUploadDialogStage, setPrintingUploadDialogStage] = React.useState<'uploading' | 'processing' | 'ready' | 'starting' | 'failed' | 'started'>('uploading');
   const [printingUploadDisplayProgress, setPrintingUploadDisplayProgress] = React.useState(0);
   const printingUploadProcessingHandoffTimeoutRef = React.useRef<number | null>(null);
@@ -3077,14 +3087,16 @@ export default function Home() {
 
   React.useEffect(() => {
     const shouldProbeFleetReachability = Boolean(
-      (printingTargetPickerOpen || printingMonitorModalOpen)
-      && activePrinterProfile?.networkSupport === 'nanodlp'
+      activePrinterProfile?.networkSupport === 'nanodlp'
       && printingMonitoringAdapter.available
       && printingMonitoringAdapter.pluginId
       && printingMonitoringAdapter.operations?.status,
     );
 
-    if (!shouldProbeFleetReachability) return;
+    if (!shouldProbeFleetReachability) {
+      setPrinterReachabilityMap({});
+      return;
+    }
 
     const connectedFleet = (activePrinterProfile?.networkFleet ?? []).filter((device) => {
       const host = (device.ipAddress || '').trim();
@@ -3092,7 +3104,7 @@ export default function Home() {
     });
 
     if (connectedFleet.length === 0) {
-      setPrinterReachabilityByDeviceId({});
+      setPrinterReachabilityMap({});
       return;
     }
 
@@ -3146,7 +3158,7 @@ export default function Home() {
       for (const [id, reachable] of entries) {
         nextMap[id] = reachable;
       }
-      setPrinterReachabilityByDeviceId(nextMap);
+      setPrinterReachabilityMap(nextMap);
     };
 
     void probeAll();
@@ -3162,9 +3174,7 @@ export default function Home() {
   }, [
     activePrinterProfile?.networkFleet,
     activePrinterProfile?.networkSupport,
-    printingMonitorModalOpen,
     printingMonitoringAdapter,
-    printingTargetPickerOpen,
   ]);
 
   React.useEffect(() => {
