@@ -432,6 +432,7 @@ export function EmptySceneState({
             id="empty-state-scene-file-input"
             type="file"
             accept=".voxl,.lys"
+            multiple
             onChange={onImportSceneChange}
             className="hidden"
           />

@@ -2713,16 +2713,26 @@ export function useSceneCollectionManager() {
   // NEW: LYS Import (1-step)
   const lysImport = useLysImport();
 
-  const handleImportLysFile = useCallback(async (file: File) => {
-    trackRecentOpenedFiles([file], 'scene');
+  type SceneImportRunOptions = {
+    suppressProgress?: boolean;
+    suppressReport?: boolean;
+    suppressRecentTracking?: boolean;
+  };
 
-    setImportProgress({
-      active: true,
-      type: 'scene',
-      label: 'Importing scene…',
-      detail: file.name,
-      progress: null,
-    });
+  const handleImportLysFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
+    if (!options?.suppressRecentTracking) {
+      trackRecentOpenedFiles([file], 'scene');
+    }
+
+    if (!options?.suppressProgress) {
+      setImportProgress({
+        active: true,
+        type: 'scene',
+        label: 'Importing scene…',
+        detail: file.name,
+        progress: null,
+      });
+    }
 
     await waitForUiYield();
 
@@ -2810,50 +2820,65 @@ export function useSceneCollectionManager() {
         }
 
         const supportCount = countSupportEntries(supportData ?? null);
-        emitSceneImportReport(
-          supportCount > 0
-            ? `Imported LYS scene: 1 model, ${supportCount} supports.`
-            : 'Imported LYS scene: 1 model.',
-          'success',
-        );
+        if (!options?.suppressReport) {
+          emitSceneImportReport(
+            supportCount > 0
+              ? `Imported LYS scene: 1 model, ${supportCount} supports.`
+              : 'Imported LYS scene: 1 model.',
+            'success',
+          );
+        }
 
         console.log(`[SceneCollection] LYS Import successful: ${model.name}`);
+        return true;
       } else {
         const errorMessage = lysImport.error || 'LYS import failed before geometry could be produced.';
         console.error('[SceneCollection] LYS import failed:', errorMessage);
-        emitSceneImportReport(`LYS import failed: ${errorMessage}`, 'error');
-        if (typeof window !== 'undefined') {
+        if (!options?.suppressReport) {
+          emitSceneImportReport(`LYS import failed: ${errorMessage}`, 'error');
+        }
+        if (!options?.suppressReport && typeof window !== 'undefined') {
           window.alert(`Import Scene failed:\n${errorMessage}`);
         }
+        return false;
       }
     } catch (err) {
       console.error("[SceneCollection] Failed to process LYS geometry:", err);
       const msg = err instanceof Error ? err.message : String(err);
-      emitSceneImportReport(`LYS import failed: ${msg}`, 'error');
-      if (typeof window !== 'undefined') {
+      if (!options?.suppressReport) {
+        emitSceneImportReport(`LYS import failed: ${msg}`, 'error');
+      }
+      if (!options?.suppressReport && typeof window !== 'undefined') {
         window.alert(`Import Scene failed:\n${msg}`);
       }
+      return false;
     } finally {
-      setImportProgress({
-        active: false,
-        type: null,
-        label: '',
-        detail: '',
-        progress: null,
-      });
+      if (!options?.suppressProgress) {
+        setImportProgress({
+          active: false,
+          type: null,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
     }
   }, [defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, generateId, lysImport, processGeometry, setModels, setActiveModelId, trackRecentOpenedFiles, waitForUiYield]);
 
-  const handleImportVoxlFile = useCallback(async (file: File) => {
-    trackRecentOpenedFiles([file], 'scene');
+  const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
+    if (!options?.suppressRecentTracking) {
+      trackRecentOpenedFiles([file], 'scene');
+    }
 
-    setImportProgress({
-      active: true,
-      type: 'scene',
-      label: 'Importing VOXL scene…',
-      detail: file.name,
-      progress: null,
-    });
+    if (!options?.suppressProgress) {
+      setImportProgress({
+        active: true,
+        type: 'scene',
+        label: 'Importing VOXL scene…',
+        detail: file.name,
+        progress: null,
+      });
+    }
 
     await waitForUiYield();
 
@@ -3005,54 +3030,124 @@ export function useSceneCollectionManager() {
       const skippedClause = skippedModels > 0 ? `, skipped ${skippedModels} ${skippedNoun}` : '';
 
       if (importedModelCount > 0) {
-        emitSceneImportReport(
-          `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
-          skippedModels > 0 ? 'warning' : 'success',
-        );
+        if (!options?.suppressReport) {
+          emitSceneImportReport(
+            `Imported VOXL scene: ${importedModelCount} ${modelNoun}${supportsClause}${skippedClause}.`,
+            skippedModels > 0 ? 'warning' : 'success',
+          );
+        }
       }
 
       if (importedModels.length === 0) {
         console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-file meshes).');
-        emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+        if (!options?.suppressReport) {
+          emitSceneImportReport('VOXL import finished with no importable meshes.', 'warning');
+        }
+        return false;
       }
+      return true;
     } catch (error) {
       console.error('[SceneCollection] VOXL import failed:', error);
       const message = error instanceof Error ? error.message : String(error);
-      emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
-      if (typeof window !== 'undefined') {
+      if (!options?.suppressReport) {
+        emitSceneImportReport(`VOXL import failed: ${message}`, 'error');
+      }
+      if (!options?.suppressReport && typeof window !== 'undefined') {
         window.alert(`Import VOXL failed:\n${message}`);
       }
+      return false;
     } finally {
-      setImportProgress({
-        active: false,
-        type: null,
-        label: '',
-        detail: '',
-        progress: null,
-      });
+      if (!options?.suppressProgress) {
+        setImportProgress({
+          active: false,
+          type: null,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+      }
     }
   }, [emitSceneImportReport, findFreeSpotCentersForModels, generateId, trackRecentOpenedFiles, waitForUiYield]);
 
-  const importSceneFile = useCallback(async (file: File) => {
+  const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
     if (extension === '.voxl') {
-      await handleImportVoxlFile(file);
-      return;
+      return await handleImportVoxlFile(file, options);
     }
     if (extension === '.lys') {
-      await handleImportLysFile(file);
-      return;
+      return await handleImportLysFile(file, options);
     }
 
     console.warn(`[SceneCollection] Unsupported scene file: ${file.name}`);
+    return false;
   }, [getSceneExtension, handleImportLysFile, handleImportVoxlFile]);
+
+  const importSceneFiles = useCallback(async (filesInput: FileList | File[]) => {
+    const files = Array.from(filesInput).filter((file) => getSceneExtension(file.name) !== null);
+    if (files.length === 0) return;
+
+    if (files.length === 1) {
+      await importSceneFile(files[0]);
+      return;
+    }
+
+    trackRecentOpenedFiles(files, 'scene');
+
+    setImportProgress({
+      active: true,
+      type: 'scene',
+      label: 'Importing scenes…',
+      detail: `Preparing 0/${files.length}`,
+      progress: null,
+    });
+
+    await waitForUiYield();
+
+    let successCount = 0;
+    let failureCount = 0;
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      setImportProgress({
+        active: true,
+        type: 'scene',
+        label: 'Importing scenes…',
+        detail: `${i + 1}/${files.length}: ${file.name}`,
+        progress: null,
+      });
+
+      const ok = await importSceneFile(file, {
+        suppressProgress: true,
+        suppressReport: true,
+        suppressRecentTracking: true,
+      });
+
+      if (ok) successCount += 1;
+      else failureCount += 1;
+    }
+
+    setImportProgress({
+      active: false,
+      type: null,
+      label: '',
+      detail: '',
+      progress: null,
+    });
+
+    if (failureCount === 0) {
+      emitSceneImportReport(`Imported ${successCount} scene files.`, 'success');
+    } else if (successCount > 0) {
+      emitSceneImportReport(`Imported ${successCount}/${files.length} scene files (${failureCount} failed).`, 'warning');
+    } else {
+      emitSceneImportReport(`Scene import failed for all ${files.length} files.`, 'error');
+    }
+  }, [emitSceneImportReport, getSceneExtension, importSceneFile, trackRecentOpenedFiles, waitForUiYield]);
 
   const onImportLysChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      void importSceneFile(e.target.files[0]);
+      void importSceneFiles(e.target.files);
       e.target.value = '';
     }
-  }, [importSceneFile]);
+  }, [importSceneFiles]);
 
   const reopenRecentOpenedFile = useCallback(async (entryId: string) => {
     const entry = recentOpenedFiles.find((item) => item.id === entryId);
@@ -3446,6 +3541,7 @@ export function useSceneCollectionManager() {
 
     // LYS Import (1-step)
     importLysFile: handleImportLysFile,
+    importSceneFiles,
     onImportLysChange,
     isLysLoading: lysImport.isLoading,
     lysError: lysImport.error,

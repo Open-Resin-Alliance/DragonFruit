@@ -4117,42 +4117,47 @@ export default function Home() {
   }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
 
   const handleOpenSceneDialog = React.useCallback(async () => {
-    const nativeFiles = await pickFilesWithNativeDialog('scene', false);
+    const nativeFiles = await pickFilesWithNativeDialog('scene', true);
     if (nativeFiles) {
       if (nativeFiles.length === 0) return;
-      scene.onImportLysChange(buildSyntheticFileChangeEvent([nativeFiles[0]]));
+      await scene.importSceneFiles(nativeFiles);
       return;
     }
 
-    const webFiles = await pickFilesWithWebInput('.voxl,.lys', false);
+    const webFiles = await pickFilesWithWebInput('.voxl,.lys', true);
     if (webFiles.length === 0) return;
-    scene.onImportLysChange(buildSyntheticFileChangeEvent([webFiles[0]]));
-  }, [buildSyntheticFileChangeEvent, pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
+    await scene.importSceneFiles(webFiles);
+  }, [pickFilesWithNativeDialog, pickFilesWithWebInput, scene]);
 
   const importSceneFromLaunchEntries = React.useCallback(async (entries: LaunchSceneFileEntry[]): Promise<boolean> => {
     if (!entries || entries.length === 0) return false;
 
-    const sceneEntry = entries.find((entry) => {
+    const sceneEntries = entries.filter((entry) => {
       const name = (entry.name || getFileNameFromPath(entry.path)).trim();
       return isSceneFileName(name);
     });
 
-    if (!sceneEntry) return false;
+    if (sceneEntries.length === 0) return false;
 
     const core = await import('@tauri-apps/api/core');
-    const sourcePath = sceneEntry.path.trim();
-    if (!sourcePath) return false;
 
-    const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
-    const name = sceneEntry.name || getFileNameFromPath(sourcePath);
-    const file = new File([new Uint8Array(bytes)], name, {
-      type: getDroppedFileMimeType(name),
-      lastModified: Date.now(),
-    });
+    const files: File[] = [];
+    for (const sceneEntry of sceneEntries) {
+      const sourcePath = sceneEntry.path.trim();
+      if (!sourcePath) continue;
 
-    scene.onImportLysChange(buildSyntheticFileChangeEvent([file]));
+      const bytes = await core.invoke<ArrayBuffer>('read_print_file_bytes', { sourcePath });
+      const name = sceneEntry.name || getFileNameFromPath(sourcePath);
+      files.push(new File([new Uint8Array(bytes)], name, {
+        type: getDroppedFileMimeType(name),
+        lastModified: Date.now(),
+      }));
+    }
+
+    if (files.length === 0) return false;
+    await scene.importSceneFiles(files);
     return true;
-  }, [buildSyntheticFileChangeEvent, scene]);
+  }, [scene]);
 
   const importSceneFromPaths = React.useCallback(async (paths: string[]): Promise<boolean> => {
     if (!paths || paths.length === 0) return false;
@@ -4934,8 +4939,7 @@ export default function Home() {
       // Match "Import Scene" button behavior: when a scene file is present,
       // treat the drop as a scene import path and don't separately load mesh files.
       // Use the same handler as the Import Scene button.
-      const sceneEvent = buildSyntheticFileChangeEvent([sceneFiles[0]]);
-      scene.onImportLysChange(sceneEvent);
+      await scene.importSceneFiles(sceneFiles);
       return;
     }
 
@@ -7697,7 +7701,27 @@ export default function Home() {
   }, [scene.importProgress, scene.isLysLoading, scene.lycheeImportPhase]);
 
   const showInlineEmptyLoading = scene.models.length === 0 && importOverlayState.active;
-  const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active;
+  const [holdEmptyStateSceneImportUi, setHoldEmptyStateSceneImportUi] = React.useState(false);
+
+  React.useEffect(() => {
+    const isSceneImportActive =
+      (scene.importProgress.active && scene.importProgress.type === 'scene')
+      || scene.isLysLoading
+      || scene.lycheeImportPhase === 'processing';
+
+    if (isSceneImportActive && scene.models.length === 0) {
+      setHoldEmptyStateSceneImportUi(true);
+      return;
+    }
+
+    if (!isSceneImportActive && holdEmptyStateSceneImportUi) {
+      setHoldEmptyStateSceneImportUi(false);
+    }
+  }, [holdEmptyStateSceneImportUi, scene.importProgress.active, scene.importProgress.type, scene.isLysLoading, scene.lycheeImportPhase, scene.models.length]);
+
+  const showEmptyStatePanel = scene.models.length === 0 || holdEmptyStateSceneImportUi;
+  const showEmptyStateLoading = showInlineEmptyLoading || holdEmptyStateSceneImportUi;
+  const showSceneImportOverlay = scene.models.length > 0 && importOverlayState.active && !holdEmptyStateSceneImportUi;
   const showEmptySceneDialog = scene.models.length === 0;
 
   const renderId = useRef(0);
@@ -9486,7 +9510,7 @@ export default function Home() {
           onDragLeave={handlePrepareDragLeave}
           onDrop={handlePrepareDrop}
         >
-          {scene.models.length === 0 && (
+          {showEmptyStatePanel && (
             <EmptySceneState
               onLoadMeshClick={() => { void handleOpenMeshDialog(); }}
               onFileChange={scene.onFileChange}
@@ -9495,7 +9519,7 @@ export default function Home() {
               onDropMeshFiles={handleDroppedPrepareFiles}
               recentOpenedFiles={scene.recentOpenedFiles}
               onReopenRecentFile={scene.reopenRecentOpenedFile}
-              isLoading={showInlineEmptyLoading}
+              isLoading={showEmptyStateLoading}
               loadingLabel={importOverlayState.label}
               loadingDetail={importOverlayState.detail}
               showFirstTimeOnboarding={!hasActivePrinterProfile && !allowPrepareWithoutPrinter}
