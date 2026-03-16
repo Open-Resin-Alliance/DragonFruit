@@ -33,6 +33,7 @@ import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
 import { shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { clearSelection } from '../../interaction/SupportSelection';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
@@ -511,6 +512,7 @@ export function BranchPlacementController() {
                 meshHoverRef.current = null;
                 meshKindRef.current = null;
                 resetSnapping();
+                clearSelection();
                 return;
             }
 
@@ -554,6 +556,7 @@ export function BranchPlacementController() {
             // This prevents useFrame from re-setting preview before React re-renders
             branchPlacementStore.finalize();
             branchPlacementStore.reset();
+            clearSelection();
         };
 
         window.addEventListener('click', handleClick, true);
