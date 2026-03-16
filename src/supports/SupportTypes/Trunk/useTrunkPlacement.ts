@@ -11,6 +11,7 @@ import type { LimitationCode, WarningCode } from '../../types';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
+import { clearSelection } from '../../interaction/SupportSelection';
 
 export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 9;
@@ -242,6 +243,7 @@ export function useTrunkPlacementV2() {
                     knotUpdates: trunkUpdate?.knotUpdates ?? undefined,
                 },
             });
+            clearSelection();
             return;
         }
 
@@ -275,6 +277,8 @@ export function useTrunkPlacementV2() {
             const ok = applyTrunkReplacement(planWithBuild, before);
             if (!ok) {
                 setSnapshot(before);
+            } else {
+                clearSelection();
             }
 
             return;
@@ -298,6 +302,7 @@ export function useTrunkPlacementV2() {
             },
         });
         
+        clearSelection();
         console.log('[V2] Added trunk:', trunkBuild.trunk.id, 'to model:', modelId);
     }, [isPlacementDisabled]);
 
