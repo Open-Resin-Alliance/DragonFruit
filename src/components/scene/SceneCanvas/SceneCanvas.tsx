@@ -545,6 +545,9 @@ export function SceneCanvas({
   const _dragWorkCurrent = React.useRef(new THREE.Matrix4());
   const _dragWorkInvBefore = React.useRef(new THREE.Matrix4());
   const _dragWorkPosition = React.useRef(new THREE.Vector3());
+  // Move-drag Z lock (keeps non-Z drags on their original Z without per-drag geometry scans)
+  const dragMoveLockZEnabledRef = React.useRef<boolean>(false);
+  const dragMoveLockedZRef = React.useRef<number>(0);
   const modelDropOffsetsRef = React.useRef<Record<string, number>>({});
 
   const cancelPendingSupportDragResets = React.useCallback(() => {
@@ -2104,6 +2107,8 @@ export function SceneCanvas({
   }, [isMultiGizmoSelection, multiGizmoCenter, setMultiGizmoAnchorPosition]);
 
   const dragCornerCageRefs = React.useRef<Record<string, THREE.LineSegments | null>>({});
+  const dragCornerCagePrimeRafRef = React.useRef<number | null>(null);
+  const dragCornerCageUpdateRafRef = React.useRef<number | null>(null);
   const dragCornerCageBaseBoundsRef = React.useRef<Record<string, THREE.Box3>>({});
   const dragCornerCageBaseTransformsRef = React.useRef<Record<string, ModelTransform>>({});
   const dragCornerCageCurrentMatrixRef = React.useRef(new THREE.Matrix4());
@@ -2118,6 +2123,18 @@ export function SceneCanvas({
   const clearDragCornerCageBaseData = React.useCallback(() => {
     dragCornerCageBaseBoundsRef.current = {};
     dragCornerCageBaseTransformsRef.current = {};
+  }, []);
+
+  const cancelPendingDragCornerCagePrime = React.useCallback(() => {
+    if (dragCornerCagePrimeRafRef.current === null || typeof window === 'undefined') return;
+    window.cancelAnimationFrame(dragCornerCagePrimeRafRef.current);
+    dragCornerCagePrimeRafRef.current = null;
+  }, []);
+
+  const cancelPendingDragCornerCageUpdate = React.useCallback(() => {
+    if (dragCornerCageUpdateRafRef.current === null || typeof window === 'undefined') return;
+    window.cancelAnimationFrame(dragCornerCageUpdateRafRef.current);
+    dragCornerCageUpdateRafRef.current = null;
   }, []);
 
   const captureDragCornerCageBaseData = React.useCallback((ids: string[], activeBefore: ModelTransform | null) => {
@@ -2246,6 +2263,12 @@ export function SceneCanvas({
         const delta = dragCornerCageDeltaMatrixRef.current.multiplyMatrices(currentMatrix, baseMatrix.invert());
         bounds = transformBoundsByDelta(baseBounds, delta);
       } else {
+        // During initial drag-start, base cage data is primed asynchronously.
+        // Avoid expensive fallback world-bounds computation in per-pointer-move path.
+        if (isGizmoDragging) {
+          line.visible = false;
+          continue;
+        }
         bounds = computeModelWorldBounds(model, effectiveTransform, buildVolumeBounds);
       }
 
@@ -2270,10 +2293,33 @@ export function SceneCanvas({
     composeModelTransformMatrix,
     computeModelWorldBounds,
     dragCornerCageModelIds,
+    isGizmoDragging,
     modelById,
     resolveLiveTransformForCage,
     transformBoundsByDelta,
   ]);
+
+  const requestDragCornerCageUpdate = React.useCallback(() => {
+    if (typeof window === 'undefined') {
+      updateDragCornerCagesNow();
+      return;
+    }
+    if (dragCornerCageUpdateRafRef.current !== null) return;
+    dragCornerCageUpdateRafRef.current = window.requestAnimationFrame(() => {
+      dragCornerCageUpdateRafRef.current = null;
+      updateDragCornerCagesNow();
+    });
+  }, [updateDragCornerCagesNow]);
+
+  const scheduleDragCornerCagePrime = React.useCallback((ids: string[], activeBefore: ModelTransform | null) => {
+    if (typeof window === 'undefined') return;
+    cancelPendingDragCornerCagePrime();
+    dragCornerCagePrimeRafRef.current = window.requestAnimationFrame(() => {
+      dragCornerCagePrimeRafRef.current = null;
+      captureDragCornerCageBaseData(ids, activeBefore);
+      updateDragCornerCagesNow();
+    });
+  }, [cancelPendingDragCornerCagePrime, captureDragCornerCageBaseData, updateDragCornerCagesNow]);
 
   const updateDragCornerCagePulseOnly = React.useCallback(() => {
     if (dragCornerCageModelIds.length === 0) return;
@@ -2299,12 +2345,19 @@ export function SceneCanvas({
 
   React.useEffect(() => {
     if (dragCornerCageModelIds.length === 0) {
+      cancelPendingDragCornerCagePrime();
+      cancelPendingDragCornerCageUpdate();
       updateDragCornerCagesNow();
       return;
     }
 
-    // Prime geometry immediately when drag-set changes.
-    updateDragCornerCagesNow();
+    // Prime geometry on next paint to keep gizmo pointer-down responsive,
+    // especially for very large models/support graphs.
+    const primeRaf = typeof window !== 'undefined'
+      ? window.requestAnimationFrame(() => {
+          updateDragCornerCagesNow();
+        })
+      : null;
 
     let rafId: number | null = null;
     const tick = () => {
@@ -2315,6 +2368,10 @@ export function SceneCanvas({
     tick();
 
     return () => {
+      if (primeRaf !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(primeRaf);
+      }
+      cancelPendingDragCornerCageUpdate();
       if (rafId !== null) {
         window.cancelAnimationFrame(rafId);
       }
@@ -2327,9 +2384,18 @@ export function SceneCanvas({
     dragCornerCageModelIds,
     transformBoundsByDelta,
     models,
+    cancelPendingDragCornerCagePrime,
+    cancelPendingDragCornerCageUpdate,
     updateDragCornerCagePulseOnly,
     updateDragCornerCagesNow,
   ]);
+
+  React.useEffect(() => {
+    return () => {
+      cancelPendingDragCornerCagePrime();
+      cancelPendingDragCornerCageUpdate();
+    };
+  }, [cancelPendingDragCornerCagePrime, cancelPendingDragCornerCageUpdate]);
 
   const satDebugTargets = React.useMemo(() => {
     if (!activeBuildVolumeSettings.showSliceSatBoundingMesh) return [] as Array<{
@@ -4047,7 +4113,13 @@ export function SceneCanvas({
                       applySupportGroupDelta();
                       const live = captureActiveGroupTransform();
                       if (live) {
-                        const correctedLive = alignLiveTransformToLift(activeModel ?? null, live) ?? live;
+                        const correctedLive = dragMoveLockZEnabledRef.current
+                          ? {
+                              position: live.position.clone().setZ(dragMoveLockedZRef.current),
+                              rotation: live.rotation,
+                              scale: live.scale,
+                            }
+                          : live;
                         activeGroupRef.current.position.copy(correctedLive.position);
                         activeGroupRef.current.quaternion.copy(new THREE.Quaternion().setFromEuler(correctedLive.rotation));
                         activeGroupRef.current.scale.copy(correctedLive.scale);
@@ -4067,7 +4139,7 @@ export function SceneCanvas({
                           rotation: correctedLive.rotation.clone(),
                           scale: correctedLive.scale.clone(),
                         });
-                        updateDragCornerCagesNow();
+                        requestDragCornerCageUpdate();
                       }
                     }
                   }}
@@ -4080,11 +4152,12 @@ export function SceneCanvas({
                       setActiveGizmoDragDescriptor({ operation: 'move', axis });
                     if (activeModelId && activeModel) {
                       const sourceTransform = transform ?? activeModel.transform;
+                      dragMoveLockZEnabledRef.current = axis !== 'z';
+                      dragMoveLockedZRef.current = sourceTransform.position.z;
                       const idsForCage = isMultiGizmoSelection
                         ? selectedTransformableModelIds
                         : [activeModelId];
-                      captureDragCornerCageBaseData(idsForCage, sourceTransform);
-                      updateDragCornerCagesNow();
+                      scheduleDragCornerCagePrime(idsForCage, sourceTransform);
                       queueLiveDragTransform({
                         position: sourceTransform.position.clone(),
                         rotation: sourceTransform.rotation.clone(),
@@ -4132,6 +4205,8 @@ export function SceneCanvas({
                   }}
                   onMoveEnd={() => {
                     markGizmoDragEnded(true);
+                    dragMoveLockZEnabledRef.current = false;
+                    dragMoveLockedZRef.current = 0;
                     const live = captureActiveGroupTransform();
                     if (live) {
                       if (onTransformChange && !isMultiGizmoSelection) {
@@ -4328,8 +4403,7 @@ export function SceneCanvas({
                       const idsForCage = isMultiGizmoSelection
                         ? selectedTransformableModelIds
                         : [activeModelId];
-                      captureDragCornerCageBaseData(idsForCage, sourceTransform);
-                      updateDragCornerCagesNow();
+                      scheduleDragCornerCagePrime(idsForCage, sourceTransform);
                       queueLiveDragTransform({
                         position: sourceTransform.position.clone(),
                         rotation: sourceTransform.rotation.clone(),
@@ -4404,7 +4478,7 @@ export function SceneCanvas({
                           rotation: correctedLive.rotation.clone(),
                           scale: correctedLive.scale.clone(),
                         });
-                        updateDragCornerCagesNow();
+                        requestDragCornerCageUpdate();
                       }
                     }
                   }}

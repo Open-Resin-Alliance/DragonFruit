@@ -7831,6 +7831,16 @@ export default function Home() {
         beginSupportDragSyncTransaction(expectedModelTransforms, transformCommitResult);
         // Prevent the persistence effect from applying the same delta a second time
         transformEndFlushedRef.current = true;
+
+        // Eagerly sync transformMgr so the `transform` prop into SceneCanvas reflects
+        // the final position in the same React batch as `isGizmoDragging = false`.
+        // Without this, rawActiveTransformForRender falls through to the stale
+        // transformMgr.transform for one frame, causing a one-frame position flash.
+        if (transformCommitResult.updated) {
+          transformMgr.transformHook.setPosition(committedTransform.position.x, committedTransform.position.y, committedTransform.position.z);
+          transformMgr.transformHook.setRotation(committedTransform.rotation.x, committedTransform.rotation.y, committedTransform.rotation.z);
+          transformMgr.transformHook.setScale(committedTransform.scale.x, committedTransform.scale.y, committedTransform.scale.z);
+        }
       }
     }
 
@@ -8137,9 +8147,8 @@ export default function Home() {
       pendingRotateGizmoCommitRef.current = null;
     }
 
-    transformMgr.setIsTransforming(true);
     return true;
-  }, [disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, transformMgr]);
+  }, [disableAutoLiftForManualZMove, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
