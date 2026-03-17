@@ -1,11 +1,14 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
+import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
 import { ContactDiskProfile } from '../ContactCone/types';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './contactDiskUtils';
 import { ContactDiskHud } from './ContactDiskHud';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setContactDiskHudDraggingActive, setContactDiskHudHoverActive, setContactDiskHudInteractionTarget, setContactDiskHudPointerCaptureActive } from './contactDiskHudInteraction';
+import { setHoveredCategory, setHoveredId } from '../../state';
+import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface ContactDiskRendererProps {
     id?: string;
@@ -52,6 +55,9 @@ export function ContactDiskRenderer({
     onHudPointerDown,
     onHudPointerUp,
 }: ContactDiskRendererProps) {
+    const groupRef = React.useRef<any>(null);
+    const pickIdRef = React.useRef<number | null>(null);
+    const { register, unregister } = usePicking();
     
     // Calculate geometry based on angle between Surface Normal and Cone Axis
     // Use overrideThickness if provided (from collision logic)
@@ -82,6 +88,30 @@ export function ContactDiskRenderer({
         if (!id) return;
         handleContactDiskClick(e, id, isInteractable, isParentSelected, isContactDiskSelected);
     };
+
+    const handlePointerMove = React.useCallback((e: any) => {
+        if (!id || !isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            emitImmediateModelHover(frontModelId);
+            setHoveredId(null);
+            setHoveredCategory('none');
+            return;
+        }
+
+        emitImmediateModelHover(null);
+        setHoveredId(id);
+        setHoveredCategory('contactDisk');
+    }, [id, isInteractable, isParentSelected, isContactDiskSelected]);
+
+    const handlePointerOut = React.useCallback(() => {
+        if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        emitImmediateModelHover(null);
+        setHoveredId(null);
+        setHoveredCategory('none');
+    }, [isInteractable, isParentSelected, isContactDiskSelected]);
 
     const handleHudHoverChange = React.useCallback((hovered: boolean) => {
         setContactDiskHudHoverActive(hovered);
@@ -128,8 +158,32 @@ export function ContactDiskRenderer({
         };
     }, []);
 
+    React.useEffect(() => {
+        const canPick = !!groupRef.current && !!id && isInteractable && (isParentSelected || isContactDiskSelected);
+        if (!canPick) {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+            return;
+        }
+
+        pickIdRef.current = register({
+            category: 'contactDisk',
+            objectId: id,
+            object: groupRef.current,
+        });
+
+        return () => {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+        };
+    }, [register, unregister, id, isInteractable, isParentSelected, isContactDiskSelected]);
+
     return (
-        <group position={[center.x, center.y, center.z]} quaternion={rotation}>
+        <group ref={groupRef} position={[center.x, center.y, center.z]} quaternion={rotation}>
             {isContactDiskSelected ? (
                 <ContactDiskHud
                     radius={radius}
@@ -141,7 +195,7 @@ export function ContactDiskRenderer({
                     onPointerUp={handleHudPointerUp}
                 />
             ) : null}
-            <mesh position={[0, -effectivePenetration / 2, 0]} raycast={raycast} onClick={handleClick}>
+            <mesh position={[0, -effectivePenetration / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
                 {/*
                   Extend the disk into the model without moving the cone-side connection.
                   We keep the cone-side "top" aligned by:
@@ -161,7 +215,7 @@ export function ContactDiskRenderer({
             </mesh>
 
             {/* Round Tip: stays exactly where it was (cone side alignment) */}
-            <mesh position={[0, thickness / 2, 0]} raycast={raycast} onClick={handleClick}>
+            <mesh position={[0, thickness / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
                 <sphereGeometry args={[radius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                 <meshStandardMaterial
                     color={displayColor}

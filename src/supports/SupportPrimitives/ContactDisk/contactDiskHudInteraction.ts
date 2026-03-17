@@ -4,6 +4,8 @@ let contactDiskHudHoverActive = false;
 let contactDiskHudDraggingActive = false;
 let contactDiskHudId: string | null = null;
 let contactDiskHudPointerCaptureActive = false;
+let contactDiskHudPlacementSuppressUntilMs = 0;
+const CONTACT_DISK_HUD_POST_DRAG_SUPPRESS_MS = 250;
 
 function emitHudInteractionEvent() {
     if (typeof window === 'undefined') return;
@@ -30,7 +32,11 @@ export function setContactDiskHudHoverActive(active: boolean) {
 }
 
 export function setContactDiskHudDraggingActive(active: boolean) {
+    const wasDragging = contactDiskHudDraggingActive;
     contactDiskHudDraggingActive = active;
+    if (wasDragging && !active) {
+        contactDiskHudPlacementSuppressUntilMs = Date.now() + CONTACT_DISK_HUD_POST_DRAG_SUPPRESS_MS;
+    }
     if (active && contactDiskHudId) {
         setHoveredId(contactDiskHudId);
         setHoveredCategory('contactDisk');
@@ -58,7 +64,11 @@ export function isContactDiskHudDraggingActive() {
 }
 
 export function setContactDiskHudPointerCaptureActive(active: boolean) {
+    const wasPointerCaptureActive = contactDiskHudPointerCaptureActive;
     contactDiskHudPointerCaptureActive = active;
+    if (wasPointerCaptureActive && !active) {
+        contactDiskHudPlacementSuppressUntilMs = Date.now() + CONTACT_DISK_HUD_POST_DRAG_SUPPRESS_MS;
+    }
     if (active && contactDiskHudId) {
         setHoveredId(contactDiskHudId);
         setHoveredCategory('contactDisk');
@@ -70,5 +80,7 @@ export function setContactDiskHudPointerCaptureActive(active: boolean) {
 }
 
 export function shouldSuppressContactDiskHudPlacementCommit() {
-    return contactDiskHudPointerCaptureActive || contactDiskHudDraggingActive;
+    return contactDiskHudPointerCaptureActive
+        || contactDiskHudDraggingActive
+        || Date.now() < contactDiskHudPlacementSuppressUntilMs;
 }

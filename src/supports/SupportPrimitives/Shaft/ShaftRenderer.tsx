@@ -195,11 +195,10 @@ export function ShaftRenderer({
 
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
 
         const isTopPickedSegmentNow = enableSegmentInteraction
-            && immediateModelHoverId === null
             && hit.category === 'segment'
             && hit.objectId === id;
         if (!isTopPickedSegmentNow) return;
@@ -222,8 +221,8 @@ export function ShaftRenderer({
     const handlePointerOut = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
 
         if (!enableSegmentInteraction || !isTopPickedSegment) return;
 

@@ -1,8 +1,11 @@
 import React, { useMemo } from 'react';
+import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
 import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
+import { setHoveredCategory, setHoveredId } from '../../state';
+import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 // Primitives
 import { ContactDiskRenderer, calculateDiskThickness } from '../ContactDisk';
@@ -70,6 +73,9 @@ export function ContactConeRenderer({
     onDiskHudPointerUp,
     isContactDiskSelected = false,
 }: ContactConeRendererProps) {
+    const groupRef = React.useRef<any>(null);
+    const pickIdRef = React.useRef<number | null>(null);
+    const { register, unregister } = usePicking();
     const contactRadius = profile.contactDiameterMm / 2;
     const bodyRadius = profile.bodyDiameterMm / 2;
     const length = profile.lengthMm;
@@ -121,6 +127,54 @@ export function ContactConeRenderer({
         handleContactDiskClick(e, contactDiskId, isInteractable, isParentSelected, isContactDiskSelected);
     };
 
+    const handleConePointerMove = React.useCallback((e: any) => {
+        if (!contactDiskId || !isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            emitImmediateModelHover(frontModelId);
+            setHoveredId(null);
+            setHoveredCategory('none');
+            return;
+        }
+
+        emitImmediateModelHover(null);
+        setHoveredId(contactDiskId);
+        setHoveredCategory('contactDisk');
+    }, [contactDiskId, isInteractable, isParentSelected, isContactDiskSelected]);
+
+    const handleConePointerOut = React.useCallback(() => {
+        if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        emitImmediateModelHover(null);
+        setHoveredId(null);
+        setHoveredCategory('none');
+    }, [isInteractable, isParentSelected, isContactDiskSelected]);
+
+    React.useEffect(() => {
+        const canPick = !!groupRef.current && !!contactDiskId && isInteractable && (isParentSelected || isContactDiskSelected);
+        if (!canPick) {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+            return;
+        }
+
+        pickIdRef.current = register({
+            category: 'contactDisk',
+            objectId: contactDiskId,
+            object: groupRef.current,
+        });
+
+        return () => {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+        };
+    }, [register, unregister, contactDiskId, isInteractable, isParentSelected, isContactDiskSelected]);
+
     // Socket joint position (at the large end of the cone)
     // const socketPos = getSocketPosition(coneStartPos, normal, profile);
 
@@ -128,7 +182,7 @@ export function ContactConeRenderer({
     // const jointRadius = getJointRadius(profile.bodyDiameterMm);
 
     return (
-        <group>
+        <group ref={groupRef}>
             {/* --- Contact Primitive (Disk) --- */}
             {profile.type === 'disk' && (
                 <ContactDiskRenderer
@@ -160,7 +214,7 @@ export function ContactConeRenderer({
                 position={[center.x, center.y, center.z]}
                 quaternion={quaternion}
             >
-                <mesh raycast={raycast} onClick={handleConeClick}>
+                <mesh raycast={raycast} onClick={handleConeClick} onPointerMove={handleConePointerMove} onPointerOut={handleConePointerOut}>
                     {/* CylinderGeometry: radiusTop, radiusBottom, height, radialSegments */}
                     {/* Top = contact (small), Bottom = socket (large) in Y-up space */}
                     {/* After rotation, "top" faces the model */}
@@ -179,7 +233,7 @@ export function ContactConeRenderer({
             {/* --- Cone Tip Sphere (The Ball Joint at the Disk) --- */}
             {/* Renders at coneStartPos, size = contactRadius */}
             <group position={[coneStartPos.x, coneStartPos.y, coneStartPos.z]}>
-                <mesh raycast={raycast} onClick={handleConeClick}>
+                <mesh raycast={raycast} onClick={handleConeClick} onPointerMove={handleConePointerMove} onPointerOut={handleConePointerOut}>
                     <sphereGeometry args={[contactRadius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                     <meshStandardMaterial
                         color={finalBodyColor}

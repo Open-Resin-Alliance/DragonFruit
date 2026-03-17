@@ -32,19 +32,18 @@ import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
-import { shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSelection } from '../../interaction/SupportSelection';
-import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const immediateModelHoverId = useImmediateModelHoverId();
     const rawHoveringSupportTarget = supportState.hoveredCategory === 'support'
         || supportState.hoveredCategory === 'segment'
         || supportState.hoveredCategory === 'joint'
-        || supportState.hoveredCategory === 'knot';
-    const isHoveringSupportTarget = rawHoveringSupportTarget && immediateModelHoverId === null;
+        || supportState.hoveredCategory === 'knot'
+        || supportState.hoveredCategory === 'contactDisk';
+    const isHoveringSupportTarget = rawHoveringSupportTarget;
 
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);
     const meshKindRef = useRef<'twig' | 'stick' | null>(null);
@@ -295,6 +294,15 @@ export function BranchPlacementController() {
 
     // Continuous update loop - show preview when mouse is over something valid
     useFrame(() => {
+        if (isContactDiskHudInteractionActive() || shouldSuppressContactDiskHudPlacementCommit()) {
+            branchPlacementStore.setHoverPosition(null);
+            branchPlacementStore.setPreviewData(null);
+            branchPlacementStore.setSnapTarget(null);
+            meshHoverRef.current = null;
+            meshKindRef.current = null;
+            return;
+        }
+
         if (altActive && stage === 'idle') {
             if (isHoveringSupportTarget) {
                 branchPlacementStore.setHoverPosition(null);

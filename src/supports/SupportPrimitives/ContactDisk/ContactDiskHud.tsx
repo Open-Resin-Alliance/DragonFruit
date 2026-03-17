@@ -48,6 +48,16 @@ export function ContactDiskHud({
         if (onDragStateChange) onDragStateChange(dragging);
     }, [onDragStateChange]);
 
+    const stopPointerEvent = React.useCallback((e: any) => {
+        if (e?.stopPropagation) e.stopPropagation();
+        if (e?.preventDefault) e.preventDefault();
+        if (e?.nativeEvent) {
+            e.nativeEvent.stopPropagation?.();
+            e.nativeEvent.stopImmediatePropagation?.();
+            e.nativeEvent.preventDefault?.();
+        }
+    }, []);
+
     React.useEffect(() => {
         if (!isDragging) return;
 
@@ -77,13 +87,9 @@ export function ContactDiskHud({
         }
         setDragging(true);
         document.body.style.cursor = 'grabbing';
-        if (e?.stopPropagation) e.stopPropagation();
-        if (e?.nativeEvent?.stopPropagation) {
-            e.nativeEvent.stopPropagation();
-            e.nativeEvent.stopImmediatePropagation?.();
-        }
+        stopPointerEvent(e);
         if (onPointerDown) onPointerDown(e);
-    }, [isInteractable, onPointerDown, setDragging]);
+    }, [isInteractable, onPointerDown, setDragging, stopPointerEvent]);
 
     const handlePointerUpInternal = React.useCallback((e: any) => {
         const pointerId = typeof e?.pointerId === 'number' ? e.pointerId : activePointerIdRef.current;
@@ -98,23 +104,45 @@ export function ContactDiskHud({
         activePointerIdRef.current = null;
         setDragging(false);
         document.body.style.cursor = isHovered ? 'grab' : '';
+        stopPointerEvent(e);
         if (onPointerUp) onPointerUp(e);
-    }, [isHovered, onPointerUp, setDragging]);
+    }, [isHovered, onPointerUp, setDragging, stopPointerEvent]);
+
+    const handleClickInternal = React.useCallback((e: any) => {
+        stopPointerEvent(e);
+    }, [stopPointerEvent]);
+
+    const handlePointerEnterInternal = React.useCallback((e: any) => {
+        if (!isInteractable) return;
+        setHovered(true);
+        document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
+        stopPointerEvent(e);
+    }, [isDragging, isInteractable, setHovered, stopPointerEvent]);
+
+    const handlePointerMoveInternal = React.useCallback((e: any) => {
+        if (!isInteractable) return;
+        if (!isHovered) {
+            setHovered(true);
+        }
+        document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
+        stopPointerEvent(e);
+    }, [isDragging, isHovered, isInteractable, setHovered, stopPointerEvent]);
+
+    const handlePointerLeaveInternal = React.useCallback((e: any) => {
+        setHovered(false);
+        if (!isDragging) document.body.style.cursor = '';
+        stopPointerEvent(e);
+    }, [isDragging, setHovered, stopPointerEvent]);
 
     return (
         <group rotation={[Math.PI / 2, 0, 0]} renderOrder={999}>
             <mesh
-                onPointerEnter={() => {
-                    if (!isInteractable) return;
-                    setHovered(true);
-                    document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
-                }}
-                onPointerLeave={() => {
-                    setHovered(false);
-                    if (!isDragging) document.body.style.cursor = '';
-                }}
+                onPointerEnter={handlePointerEnterInternal}
+                onPointerMove={handlePointerMoveInternal}
+                onPointerLeave={handlePointerLeaveInternal}
                 onPointerDown={handlePointerDownInternal}
                 onPointerUp={handlePointerUpInternal}
+                onClick={handleClickInternal}
             >
                 <circleGeometry args={[hitRadius, 64]} />
                 <meshBasicMaterial
@@ -127,17 +155,12 @@ export function ContactDiskHud({
                 />
             </mesh>
             <mesh
-                onPointerEnter={() => {
-                    if (!isInteractable) return;
-                    setHovered(true);
-                    document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
-                }}
-                onPointerLeave={() => {
-                    setHovered(false);
-                    if (!isDragging) document.body.style.cursor = '';
-                }}
+                onPointerEnter={handlePointerEnterInternal}
+                onPointerMove={handlePointerMoveInternal}
+                onPointerLeave={handlePointerLeaveInternal}
                 onPointerDown={handlePointerDownInternal}
                 onPointerUp={handlePointerUpInternal}
+                onClick={handleClickInternal}
             >
                 <ringGeometry args={[innerRadius, outerRadius, 64]} />
                 <meshBasicMaterial
