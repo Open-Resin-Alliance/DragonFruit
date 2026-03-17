@@ -4,7 +4,7 @@ import type { ThreeEvent } from '@react-three/fiber';
 import type { Knot, Roots } from '../../types';
 import { setSelectedId } from '../../state';
 import { useHighlight } from '../../interaction/useHighlight';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
@@ -57,7 +57,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
     const { pickRef, visuals } = useHighlight({
         id: kickstand.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -69,14 +69,6 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
     const handleClick = (e: ThreeEvent<MouseEvent>) => {
         handleSupportClick(e, kickstand.id, !!isInteractable);
     };
-
-    const handlePointerMove = React.useCallback(() => {
-        emitSupportModelPointerHover(kickstand.modelId ?? null);
-    }, [kickstand.modelId]);
-
-    const handlePointerOut = React.useCallback(() => {
-        emitSupportModelPointerHover(null);
-    }, []);
 
     const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
     const startZ = root.diskHeight + root.coneHeight;
@@ -179,8 +171,6 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
     return (
         <group
             onClick={handleClick}
-            onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-            onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
         >
             {!hidePlateContactPrimitives && (
                 <RootsRenderer

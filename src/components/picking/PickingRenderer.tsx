@@ -30,6 +30,10 @@ interface PickingRendererProps {
   mouseNDC: React.MutableRefObject<{ x: number; y: number } | null>;
 }
 
+function shouldExcludeFromPickClone(object: THREE.Object3D): boolean {
+  return object.userData?.excludeFromPickingClone === true;
+}
+
 /**
  * PickingRenderer - Handles the offscreen render pass for GPU picking.
  * 
@@ -125,7 +129,7 @@ export function PickingRenderer({
         depthTest: !noDepthTest,
         depthWrite: !noDepthTest,
         transparent: false,
-        side: THREE.DoubleSide, // Render both sides for reliable picking
+        side: THREE.FrontSide,
       });
       materialCacheRef.current.set(cacheKey, material);
     }
@@ -143,6 +147,10 @@ export function PickingRenderer({
     const pickObject = sourceObject.clone(true);
     pickObject.traverse((child) => {
       child.matrixAutoUpdate = false;
+      if (shouldExcludeFromPickClone(child)) {
+        child.visible = false;
+        return;
+      }
       if (child instanceof THREE.Mesh) {
         child.material = pickMaterial;
       }
@@ -160,7 +168,7 @@ export function PickingRenderer({
 
       const { source, pick } = next;
 
-      pick.visible = source.visible;
+      pick.visible = source.visible && !shouldExcludeFromPickClone(source);
       pick.matrixAutoUpdate = false;
       pick.matrix.copy(source.matrix);
       pick.matrixWorld.copy(source.matrixWorld);

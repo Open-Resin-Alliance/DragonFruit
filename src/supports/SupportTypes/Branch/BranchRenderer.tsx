@@ -9,7 +9,7 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { getSnapshot, setSelectedId, subscribe, updateBranch } from '../../state';
@@ -61,10 +61,10 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const [, setDragTick] = React.useState(0);
 
   // Use universal highlight hook (matches TrunkRenderer pattern)
-  const { pickRef, visuals } = useHighlight({
+  const { pickRef, visuals, isPickingHovered } = useHighlight({
     id: branch.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -75,16 +75,9 @@ export const BranchRenderer = React.memo(function BranchRenderer({
 
   // Handle Click
   const handleClick = (e: any) => {
+    if (!isPickingHovered) return;
     handleSupportClick(e, branch.id, !!isInteractable);
   };
-
-  const handlePointerMove = React.useCallback(() => {
-    emitSupportModelPointerHover(branch.modelId ?? null);
-  }, [branch.modelId]);
-
-  const handlePointerOut = React.useCallback(() => {
-    emitSupportModelPointerHover(null);
-  }, []);
 
   const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
     if (!isSelected || !branch.contactCone) return;
@@ -120,7 +113,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     dragSessionRef.current?.stop();
     dragSessionRef.current = null;
   }, []);
-
+  
   // Start point is the Knot position
   const startPos = parentKnot.pos 
     ? new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z)
@@ -255,8 +248,6 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   return (
     <group
       onClick={handleClick}
-      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
     >
       {/* Branch Picking Group - Contains Shafts, Cone */}
       <group ref={pickRef as any}>

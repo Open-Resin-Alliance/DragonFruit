@@ -1,8 +1,10 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { usePicking } from '@/components/picking';
 import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementState';
+import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
+import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface ShaftRendererProps {
     id: string;
@@ -59,6 +61,8 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
+    const immediateModelHoverId = useImmediateModelHoverId();
+    const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
     
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
@@ -93,7 +97,12 @@ export function ShaftRenderer({
     }, [register, unregister, id, enablePicking, enableSegmentInteraction]);
 
     // Determine Hover State
-    const isPickingHovered = enableSegmentInteraction && hit.category === 'segment' && hit.objectId === id;
+    const isTopPickedSegment = enableSegmentInteraction
+        && immediateModelHoverId === null
+        && frontBlockingModelId === null
+        && hit.category === 'segment'
+        && hit.objectId === id;
+    const isPickingHovered = isTopPickedSegment;
     const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
 
     // Vector math
@@ -110,6 +119,21 @@ export function ShaftRenderer({
     const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
     
     const handleClick = (e: any) => {
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            window.dispatchEvent(new CustomEvent('shaft-leave', {
+                detail: { segmentId: id }
+            }));
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
 
@@ -123,7 +147,7 @@ export function ShaftRenderer({
             }
         }
 
-        if (altDown || ctrlDown || isParentSelected) {
+        if ((altDown || ctrlDown || isParentSelected) && isTopPickedSegment) {
             // Emit global event for branch placement and editable-segment clicks only.
             window.dispatchEvent(new CustomEvent('shaft-click', {
                 detail: {
@@ -159,7 +183,26 @@ export function ShaftRenderer({
     
     // Handle pointer move for branch placement preview
     const handlePointerMove = (e: any) => {
-        if (!enableSegmentInteraction) return;
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            window.dispatchEvent(new CustomEvent('shaft-leave', {
+                detail: { segmentId: id }
+            }));
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
+        const isTopPickedSegmentNow = enableSegmentInteraction
+            && immediateModelHoverId === null
+            && hit.category === 'segment'
+            && hit.objectId === id;
+        if (!isTopPickedSegmentNow) return;
 
         // Emit global event for branch placement preview
         window.dispatchEvent(new CustomEvent('shaft-hover', {
@@ -177,7 +220,12 @@ export function ShaftRenderer({
 
     // Handle pointer leaving shaft - clear branch preview
     const handlePointerOut = () => {
-        if (!enableSegmentInteraction) return;
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
+        if (!enableSegmentInteraction || !isTopPickedSegment) return;
 
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
@@ -195,7 +243,7 @@ export function ShaftRenderer({
             onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
         >
             {enableSegmentInteraction && (
-                <mesh raycast={raycast}>
+                <mesh raycast={raycast} userData={{ excludeFromPickingClone: true }}>
                     <cylinderGeometry args={[pickRadiusEnd, pickRadiusStart, 1, Math.max(8, radialSegments)]} />
                     <meshBasicMaterial transparent opacity={0} depthWrite={false} />
                 </mesh>

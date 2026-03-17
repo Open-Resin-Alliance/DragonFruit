@@ -1,9 +1,11 @@
-import React, { useMemo, useRef, useEffect } from 'react';
+import React, { useMemo, useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { toVector3 } from '../Curves/BezierUtils';
 import { usePicking } from '@/components/picking';
 import { useBracePlacementState } from '../SupportTypes/Brace/bracePlacementState';
+import { useImmediateModelHoverId } from '../interaction/useInteractionStatus';
+import { emitImmediateModelHover, getFrontBlockingModelId } from '../interaction/pointerOcclusion';
 
 interface BezierRendererProps {
     id: string;
@@ -71,6 +73,8 @@ export function BezierRenderer({
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const { altActive: braceAltActive } = useBracePlacementState();
     const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
+    const immediateModelHoverId = useImmediateModelHoverId();
+    const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     const geometry = useMemo(() => {
         const tubularSegments = Math.max(2, resolution);
@@ -163,10 +167,30 @@ export function BezierRenderer({
     }, [register, unregister, id, enableSegmentInteraction]);
 
     // Determine Hover State
-    const isPickingHovered = enableSegmentInteraction && hit.category === 'segment' && hit.objectId === id;
+    const isTopPickedSegment = enableSegmentInteraction
+        && immediateModelHoverId === null
+        && frontBlockingModelId === null
+        && hit.category === 'segment'
+        && hit.objectId === id;
+    const isPickingHovered = isTopPickedSegment;
     const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
 
     const handleClick = (e: any) => {
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            window.dispatchEvent(new CustomEvent('shaft-leave', {
+                detail: { segmentId: id }
+            }));
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
 
@@ -179,6 +203,8 @@ export function BezierRenderer({
                 e.nativeEvent.stopImmediatePropagation();
             }
         }
+
+        if ((altDown || ctrlDown || isParentSelected) && !isTopPickedSegment) return;
 
         if (altDown || ctrlDown || isParentSelected) {
             window.dispatchEvent(new CustomEvent('shaft-click', {
@@ -222,7 +248,26 @@ export function BezierRenderer({
     };
 
     const handlePointerMove = (e: any) => {
-        if (!enableSegmentInteraction) return;
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            window.dispatchEvent(new CustomEvent('shaft-leave', {
+                detail: { segmentId: id }
+            }));
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
+        const isTopPickedSegmentNow = enableSegmentInteraction
+            && immediateModelHoverId === null
+            && hit.category === 'segment'
+            && hit.objectId === id;
+        if (!isTopPickedSegmentNow) return;
 
         window.dispatchEvent(new CustomEvent('shaft-hover', {
             detail: {
@@ -234,7 +279,12 @@ export function BezierRenderer({
     };
 
     const handlePointerOut = () => {
-        if (!enableSegmentInteraction) return;
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
+        if (!enableSegmentInteraction || !isTopPickedSegment) return;
 
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
@@ -250,6 +300,7 @@ export function BezierRenderer({
             {pickGeometry && (
                 <mesh
                     raycast={raycast}
+                    userData={{ excludeFromPickingClone: true }}
                     onClick={handleClick}
                     onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
                     onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}

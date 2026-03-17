@@ -10,7 +10,7 @@ import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimit
 import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { getSnapshot, setSelectedId, subscribe, updateStick } from '../../state';
 
@@ -60,7 +60,7 @@ export const StickRenderer = React.memo(function StickRenderer({
   const { pickRef, visuals } = useHighlight({
     id: stick.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -72,14 +72,6 @@ export const StickRenderer = React.memo(function StickRenderer({
   const handleClick = (e: any) => {
     handleSupportClick(e, stick.id, !!isInteractable);
   };
-
-  const handlePointerMove = React.useCallback(() => {
-    emitSupportModelPointerHover(stick.modelId ?? null);
-  }, [stick.modelId]);
-
-  const handlePointerOut = React.useCallback(() => {
-    emitSupportModelPointerHover(null);
-  }, []);
 
   const startConeDrag = React.useCallback((coneKey: 'contactConeA' | 'contactConeB', initialEvent?: any) => {
     const cone = stick[coneKey];
@@ -138,7 +130,6 @@ export const StickRenderer = React.memo(function StickRenderer({
     dragSessionRef.current?.stop();
     dragSessionRef.current = null;
   }, []);
-
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
 
@@ -278,8 +269,6 @@ export const StickRenderer = React.memo(function StickRenderer({
   return (
     <group
       onClick={handleClick}
-      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
     >
       <group ref={pickRef as any}>
         <InstancedShaftGroup
