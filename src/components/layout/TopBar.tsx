@@ -523,8 +523,11 @@ export function TopBar({
     openProfileSettings(tab);
   }, [openProfileSettings, topbarActionsDisabled, warnBeforeProfileSettingsOpen]);
 
-  const topbarFleetUnits = React.useMemo(() => activePrinterProfile?.networkFleet ?? [], [activePrinterProfile?.networkFleet]);
-  const hasTopbarFleetUnits = topbarFleetUnits.length > 0;
+  const topbarFleetUnits = React.useMemo(() => {
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.filter((device) => (device.ipAddress || '').trim().length > 0);
+  }, [activePrinterProfile?.networkFleet]);
+  const hasTopbarFleetUnits = topbarFleetUnits.length > 1;
 
   const handleOpenPrinterManagerFromQuickMenu = React.useCallback(() => {
     closePrinterQuickMenu();
