@@ -36,6 +36,25 @@ const CORE_FALLBACK_BY_OUTPUT_FORMAT: Partial<Record<PrinterOutputFormat, Slicin
   '.lumen': CORE_LUMEN_FORMAT_DEFINITION,
 };
 
+export function getAvailableOutputFormatOptions(): Array<{ value: PrinterOutputFormat; label: string }> {
+  const formats = new Set<PrinterOutputFormat>();
+
+  formats.add('.lumen');
+
+  for (const definition of getBuiltinComplexPluginDefinitions()) {
+    const pluginFormats = definition.slicingFormatsByOutput ?? {};
+    for (const outputFormat of Object.keys(pluginFormats)) {
+      if (typeof outputFormat === 'string' && outputFormat.trim().length > 0) {
+        formats.add(outputFormat as PrinterOutputFormat);
+      }
+    }
+  }
+
+  return Array.from(formats)
+    .sort((a, b) => a.localeCompare(b))
+    .map((format) => ({ value: format, label: format }));
+}
+
 export function resolveSlicingFormatDefinition(context: ResolveSlicingFormatContext): SlicingFormatDefinition {
   const format = context.printerProfile.display.outputFormat;
   const preferredPluginId = getProfileNetworkUiAdapter(context.printerProfile.networkSupport)?.pluginId;

@@ -10,6 +10,7 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import {
   runSliceExportOrchestrator,
   type SliceExportArtifact,
@@ -59,7 +60,7 @@ type LifetimeTelemetry = {
 };
 
 type SliceBenchmarkSnapshot = SliceExportResult['benchmark'];
-type NanoDlpMaterial = {
+type RemoteMaterialProfile = {
   id: string;
   name: string;
   locked?: boolean;
@@ -216,8 +217,8 @@ export function SlicingPanel({
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
   const [aaOnSupports, setAaOnSupports] = useState(resolveInitialAaOnSupports);
   const [isLiveStatusExpanded, setIsLiveStatusExpanded] = useState(false);
-  const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
-  const [isLoadingNanodlpMaterial, setIsLoadingNanodlpMaterial] = useState(false);
+  const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
+  const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
   const [previewTotalLayers, setPreviewTotalLayers] = useState(0);
   const [previewSelectedLayer, setPreviewSelectedLayer] = useState(1);
@@ -238,10 +239,15 @@ export function SlicingPanel({
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const networkUiAdapter = useMemo(
+    () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
+    [activePrinterProfile?.networkSupport],
+  );
   const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const effectiveMaterialProfile = useMemo(() => {
     if (!activeMaterialProfile) return null;
-    if (activePrinterProfile?.networkSupport !== 'nanodlp') return activeMaterialProfile;
+    if (!activePrinterProfile) return activeMaterialProfile;
+    if (!networkUiAdapter) return activeMaterialProfile;
     if (activePrinterProfile.networkConnection?.connected !== true) return activeMaterialProfile;
 
     const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
@@ -269,7 +275,7 @@ export function SlicingPanel({
         ? selectedBottomLayerCount
         : activeMaterialProfile.bottomLayerCount,
     };
-  }, [activeMaterialProfile, activePrinterProfile]);
+  }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter]);
 
   const selectedFormat = useMemo(() => {
     if (!activePrinterProfile || !effectiveMaterialProfile) return null;
@@ -279,16 +285,15 @@ export function SlicingPanel({
     });
   }, [activePrinterProfile, effectiveMaterialProfile]);
 
-  const selectedNanodlpMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
+  const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
   // V3 supports grayscale anti-aliasing in the native raster pipeline,
   // so this should not be gated by legacy profile capability flags.
   const antiAliasingAvailable = true;
-  const isNanodlpConnected = activePrinterProfile?.networkSupport === 'nanodlp'
-    && activePrinterProfile.networkConnection?.connected === true;
-  const nanodlpHost = (activePrinterProfile?.networkConnection?.ipAddress
+  const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter)
+    && activePrinterProfile?.networkConnection?.connected === true;
+  const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
-  const nanodlpPort = activePrinterProfile?.networkConnection?.port || 80;
 
   const pipelineContainerBackendLabel = useMemo(() => (
     selectedFormat ? 'Native Rust container encoder (Tauri)' : '—'
@@ -414,22 +419,23 @@ export function SlicingPanel({
   }, [aaOnSupports]);
 
   const resolvedMaterialLabel = useMemo(() => {
-    if (isNanodlpConnected && selectedNanodlpMaterialId) {
-      if (isLoadingNanodlpMaterial) return 'Loading NanoDLP material…';
-      if (nanodlpSelectedMaterialName) return `${nanodlpSelectedMaterialName} (NanoDLP)`;
+    if (isRemoteMaterialSyncConnected && selectedRemoteMaterialId) {
+      if (isLoadingRemoteMaterial) return 'Loading remote material…';
+      if (selectedRemoteMaterialName) return `${selectedRemoteMaterialName} (${networkUiAdapter?.displayName ?? 'Remote'})`;
       const fromConnection = activePrinterProfile?.networkConnection?.selectedMaterialName?.trim();
-      if (fromConnection) return `${fromConnection} (NanoDLP)`;
-      return `${selectedNanodlpMaterialId} (NanoDLP ID)`;
+      if (fromConnection) return `${fromConnection} (${networkUiAdapter?.displayName ?? 'Remote'})`;
+      return `${selectedRemoteMaterialId} (Remote ID)`;
     }
 
     return effectiveMaterialProfile?.name ?? 'No material selected';
   }, [
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     effectiveMaterialProfile?.name,
-    isLoadingNanodlpMaterial,
-    isNanodlpConnected,
-    nanodlpSelectedMaterialName,
-    selectedNanodlpMaterialId,
+    isLoadingRemoteMaterial,
+    isRemoteMaterialSyncConnected,
+    networkUiAdapter?.displayName,
+    selectedRemoteMaterialName,
+    selectedRemoteMaterialId,
   ]);
 
   useEffect(() => {
@@ -492,22 +498,21 @@ export function SlicingPanel({
   }, [isSlicingZip]);
 
   useEffect(() => {
-    if (!isNanodlpConnected || !nanodlpHost || !selectedNanodlpMaterialId) {
-      setNanodlpSelectedMaterialName(null);
-      setIsLoadingNanodlpMaterial(false);
+    if (!networkUiAdapter || !isRemoteMaterialSyncConnected || !remoteMaterialHost || !selectedRemoteMaterialId) {
+      setSelectedRemoteMaterialName(null);
+      setIsLoadingRemoteMaterial(false);
       return;
     }
 
     let cancelled = false;
-    setIsLoadingNanodlpMaterial(true);
+    setIsLoadingRemoteMaterial(true);
 
     void (async () => {
       try {
         const response = await pluginNetworkFetch({
-          pluginId: 'athena',
-          operation: 'nanodlp/materials',
-          ipAddress: nanodlpHost,
-          port: nanodlpPort,
+          pluginId: networkUiAdapter.pluginId,
+          operation: networkUiAdapter.operations.materials,
+          host: remoteMaterialHost,
         });
 
         const payload = await response.json().catch(() => ({} as Record<string, unknown>));
@@ -515,9 +520,9 @@ export function SlicingPanel({
           ? (payload as { materials: unknown[] }).materials
           : [];
 
-        const materials: NanoDlpMaterial[] = listRaw
-          .map<NanoDlpMaterial | null>((item) => {
-            const value = item as Partial<NanoDlpMaterial>;
+        const materials: RemoteMaterialProfile[] = listRaw
+          .map<RemoteMaterialProfile | null>((item) => {
+            const value = item as Partial<RemoteMaterialProfile>;
             if (typeof value?.id !== 'string' || typeof value?.name !== 'string') return null;
             return {
               id: value.id,
@@ -525,19 +530,19 @@ export function SlicingPanel({
               locked: value.locked === true ? true : undefined,
             };
           })
-          .filter((item): item is NanoDlpMaterial => item !== null);
+          .filter((item): item is RemoteMaterialProfile => item !== null);
 
-        const selected = materials.find((material) => material.id === selectedNanodlpMaterialId) ?? null;
+        const selected = materials.find((material) => material.id === selectedRemoteMaterialId) ?? null;
         if (!cancelled) {
-          setNanodlpSelectedMaterialName(selected?.name ?? null);
+          setSelectedRemoteMaterialName(selected?.name ?? null);
         }
       } catch {
         if (!cancelled) {
-          setNanodlpSelectedMaterialName(null);
+          setSelectedRemoteMaterialName(null);
         }
       } finally {
         if (!cancelled) {
-          setIsLoadingNanodlpMaterial(false);
+          setIsLoadingRemoteMaterial(false);
         }
       }
     })();
@@ -545,7 +550,12 @@ export function SlicingPanel({
     return () => {
       cancelled = true;
     };
-  }, [isNanodlpConnected, nanodlpHost, nanodlpPort, selectedNanodlpMaterialId]);
+  }, [
+    isRemoteMaterialSyncConnected,
+    networkUiAdapter,
+    remoteMaterialHost,
+    selectedRemoteMaterialId,
+  ]);
 
   const handleSliceZipExport = async () => {
     if (!activePrinterProfile) {

@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "generate:plugin-registry": "node scripts/generate-plugin-registry.mjs",
+    "predev": "npm run generate:plugin-registry",
+    "prebuild": "npm run generate:plugin-registry",
+    "prebuild:tauri": "npm run generate:plugin-registry",
+    "pretauri:dev": "npm run generate:plugin-registry",
+    "pretauri:build": "npm run generate:plugin-registry",
     "dev": "next dev -p 3005",
     "nas": "next dev -p 3005 --webpack",
     "build": "next build",

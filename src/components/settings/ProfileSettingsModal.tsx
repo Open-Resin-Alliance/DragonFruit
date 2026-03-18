@@ -38,6 +38,7 @@ import {
   getDefaultProfileNetworkUiAdapter,
   getProfileNetworkUiAdapter,
 } from '@/features/plugins/pluginRegistry';
+import { getAvailableOutputFormatOptions } from '@/features/slicing/formats/registry';
 import {
   getPrinterReachabilityServerSnapshot,
   getPrinterReachabilitySnapshot,
@@ -69,10 +70,7 @@ type DeleteConfirmTarget =
 
 type MaterialDraft = Omit<MaterialProfile, 'id' | 'printerProfileId'>;
 
-const OUTPUT_FORMAT_OPTIONS: Array<{ value: PrinterOutputFormat; label: string }> = [
-  { value: '.nanodlp', label: '.nanodlp' },
-  { value: '.lumen', label: '.lumen' },
-];
+const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 
 const RESIN_FAMILY_OPTIONS: Array<{ value: MaterialProfile['resinFamily']; label: string }> = [
   { value: 'standard', label: 'Standard' },

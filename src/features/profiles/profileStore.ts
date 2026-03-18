@@ -13,7 +13,7 @@ import {
 import { normalizeOutputFormat, DEFAULT_OUTPUT_FORMAT } from '@/features/profiles/outputFormatUtils';
 
 export type PrinterOutputFormat = string;
-export type PrinterNetworkSupport = 'nanodlp';
+export type PrinterNetworkSupport = string;
 
 export type PrinterNetworkSettings = {
   discoveryEnabled: boolean;
@@ -118,8 +118,12 @@ export type PrinterProfile = {
 };
 
 function normalizeNetworkSupport(value: unknown): PrinterNetworkSupport | undefined {
-  if (value === 'nanodlp') return 'nanodlp';
-  return undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  // Keep this permissive so plugin-defined modes remain forward-compatible.
+  // Legacy persisted values such as "nanodlp" are preserved.
+  return normalized;
 }
 
 function sanitizePlatformBadge(input: unknown): PrinterPlatformBadge | undefined {

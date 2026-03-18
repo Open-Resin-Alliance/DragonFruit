@@ -1,10 +1,13 @@
 import type { ComplexPluginDefinition } from '@/features/plugins/complexPluginContracts';
-import { ATHENA_COMPLEX_PLUGIN_DEFINITION } from '../../../plugins/athena/pluginDefinition';
+import {
+  GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS,
+  GENERATED_BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST,
+} from '@/features/plugins/generatedBuiltinComplexPlugins';
 
 let cachedDefinitions: ComplexPluginDefinition[] | null = null;
 
 export const BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST = Object.freeze([
-  'athena',
+  ...GENERATED_BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST,
 ]) as readonly string[];
 
 function assertBuiltinComplexPluginIntegrity(definitions: ComplexPluginDefinition[]): void {
@@ -29,7 +32,7 @@ function assertBuiltinComplexPluginIntegrity(definitions: ComplexPluginDefinitio
 export function getBuiltinComplexPluginDefinitions(): ComplexPluginDefinition[] {
   if (cachedDefinitions) return cachedDefinitions;
 
-  const definitions = [ATHENA_COMPLEX_PLUGIN_DEFINITION];
+  const definitions = [...GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS];
   assertBuiltinComplexPluginIntegrity(definitions);
   cachedDefinitions = definitions;
   return cachedDefinitions;
