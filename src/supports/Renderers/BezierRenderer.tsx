@@ -296,6 +296,7 @@ export function BezierRenderer({
             {pickGeometry && (
                 <mesh
                     raycast={raycast}
+                    userData={{ excludeFromPickingClone: true }}
                     onClick={handleClick}
                     onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
                     onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
