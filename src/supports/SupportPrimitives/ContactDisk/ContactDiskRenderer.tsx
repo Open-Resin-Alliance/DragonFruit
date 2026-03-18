@@ -1,10 +1,17 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
+import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
 import { ContactDiskProfile } from '../ContactCone/types';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from './contactDiskUtils';
+import { ContactDiskHud } from './ContactDiskHud';
+import { handleContactDiskClick } from '../../interaction/clickHandlers';
+import { setContactDiskHudDraggingActive, setContactDiskHudHoverActive, setContactDiskHudInteractionTarget, setContactDiskHudPointerCaptureActive } from './contactDiskHudInteraction';
+import { setHoveredCategory, setHoveredId } from '../../state';
+import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface ContactDiskRendererProps {
+    id?: string;
     pos: Vec3;
     normal: Vec3;           // Surface Normal
     coneAxis: Vec3;         // Cone Axis (Direction of support)
@@ -18,9 +25,16 @@ interface ContactDiskRendererProps {
     radialSegments?: number;
     sphereSegments?: number;
     raycast?: any;
+    isInteractable?: boolean;
+    isParentSelected?: boolean;
+    isContactDiskSelected?: boolean;
+    onHudHoverChange?: (hovered: boolean) => void;
+    onHudPointerDown?: (e: any) => void;
+    onHudPointerUp?: (e: any) => void;
 }
 
 export function ContactDiskRenderer({
+    id,
     pos,
     normal,
     coneAxis,
@@ -33,8 +47,17 @@ export function ContactDiskRenderer({
     opacity = 1,
     radialSegments = 24,
     sphereSegments = 24,
-    raycast
+    raycast,
+    isInteractable = true,
+    isParentSelected = false,
+    isContactDiskSelected = false,
+    onHudHoverChange,
+    onHudPointerDown,
+    onHudPointerUp,
 }: ContactDiskRendererProps) {
+    const groupRef = React.useRef<any>(null);
+    const pickIdRef = React.useRef<number | null>(null);
+    const { register, unregister } = usePicking();
     
     // Calculate geometry based on angle between Surface Normal and Cone Axis
     // Use overrideThickness if provided (from collision logic)
@@ -59,10 +82,120 @@ export function ContactDiskRenderer({
     // Tip Center is at Local Y = +thickness / 2.
 
     const effectivePenetration = Math.max(0, penetrationMm);
+    const displayColor = isContactDiskSelected ? '#c11f61' : color;
+
+    const handleClick = (e: any) => {
+        if (!id) return;
+        handleContactDiskClick(e, id, isInteractable, isParentSelected, isContactDiskSelected);
+    };
+
+    const handlePointerMove = React.useCallback((e: any) => {
+        if (!id || !isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            emitImmediateModelHover(frontModelId);
+            setHoveredId(null);
+            setHoveredCategory('none');
+            return;
+        }
+
+        emitImmediateModelHover(null);
+        setHoveredId(id);
+        setHoveredCategory('contactDisk');
+    }, [id, isInteractable, isParentSelected, isContactDiskSelected]);
+
+    const handlePointerOut = React.useCallback(() => {
+        if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+
+        emitImmediateModelHover(null);
+        setHoveredId(null);
+        setHoveredCategory('none');
+    }, [isInteractable, isParentSelected, isContactDiskSelected]);
+
+    const handleHudHoverChange = React.useCallback((hovered: boolean) => {
+        setContactDiskHudHoverActive(hovered);
+        if (onHudHoverChange) onHudHoverChange(hovered);
+    }, [onHudHoverChange]);
+
+    const handleHudDragStateChange = React.useCallback((dragging: boolean) => {
+        setContactDiskHudDraggingActive(dragging);
+    }, []);
+
+    const handleHudPointerDown = React.useCallback((e: any) => {
+        setContactDiskHudPointerCaptureActive(true);
+        if (onHudPointerDown) onHudPointerDown(e);
+    }, [onHudPointerDown]);
+
+    const handleHudPointerUp = React.useCallback((e: any) => {
+        setContactDiskHudPointerCaptureActive(false);
+        if (onHudPointerUp) onHudPointerUp(e);
+    }, [onHudPointerUp]);
+
+    React.useEffect(() => {
+        if (!isContactDiskSelected || !id) return;
+        setContactDiskHudInteractionTarget(id);
+        return () => {
+            setContactDiskHudPointerCaptureActive(false);
+            setContactDiskHudDraggingActive(false);
+            setContactDiskHudHoverActive(false);
+            setContactDiskHudInteractionTarget(null);
+        };
+    }, [id, isContactDiskSelected]);
+
+    React.useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const clearPointerCapture = () => {
+            setContactDiskHudPointerCaptureActive(false);
+        };
+        window.addEventListener('pointerup', clearPointerCapture, true);
+        window.addEventListener('pointercancel', clearPointerCapture, true);
+        window.addEventListener('blur', clearPointerCapture);
+        return () => {
+            window.removeEventListener('pointerup', clearPointerCapture, true);
+            window.removeEventListener('pointercancel', clearPointerCapture, true);
+            window.removeEventListener('blur', clearPointerCapture);
+        };
+    }, []);
+
+    React.useEffect(() => {
+        const canPick = !!groupRef.current && !!id && isInteractable && (isParentSelected || isContactDiskSelected);
+        if (!canPick) {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+            return;
+        }
+
+        pickIdRef.current = register({
+            category: 'contactDisk',
+            objectId: id,
+            object: groupRef.current,
+        });
+
+        return () => {
+            if (pickIdRef.current !== null) {
+                unregister(pickIdRef.current);
+                pickIdRef.current = null;
+            }
+        };
+    }, [register, unregister, id, isInteractable, isParentSelected, isContactDiskSelected]);
 
     return (
-        <group position={[center.x, center.y, center.z]} quaternion={rotation}>
-            <mesh position={[0, -effectivePenetration / 2, 0]} raycast={raycast}>
+        <group ref={groupRef} position={[center.x, center.y, center.z]} quaternion={rotation}>
+            {isContactDiskSelected ? (
+                <ContactDiskHud
+                    radius={radius}
+                    color="#ffffff"
+                    isInteractable={true}
+                    onHoverChange={handleHudHoverChange}
+                    onDragStateChange={handleHudDragStateChange}
+                    onPointerDown={handleHudPointerDown}
+                    onPointerUp={handleHudPointerUp}
+                />
+            ) : null}
+            <mesh position={[0, -effectivePenetration / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
                 {/*
                   Extend the disk into the model without moving the cone-side connection.
                   We keep the cone-side "top" aligned by:
@@ -71,7 +204,7 @@ export function ContactDiskRenderer({
                 */}
                 <cylinderGeometry args={[radius, radius, thickness + effectivePenetration, radialSegments]} />
                 <meshStandardMaterial
-                    color={color}
+                    color={displayColor}
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}
@@ -82,10 +215,10 @@ export function ContactDiskRenderer({
             </mesh>
 
             {/* Round Tip: stays exactly where it was (cone side alignment) */}
-            <mesh position={[0, thickness / 2, 0]} raycast={raycast}>
+            <mesh position={[0, thickness / 2, 0]} raycast={raycast} onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
                 <sphereGeometry args={[radius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                 <meshStandardMaterial
-                    color={color}
+                    color={displayColor}
                     transparent={transparent}
                     opacity={opacity}
                     depthWrite={!transparent}

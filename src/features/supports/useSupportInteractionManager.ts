@@ -6,6 +6,7 @@ import { useBranchPlacement } from '@/supports/SupportTypes/Branch/useBranchPlac
 import { useLeafPlacement } from '@/supports/SupportTypes/Leaf/useLeafPlacement';
 import { useBracePlacement } from '@/supports/SupportTypes/Brace/useBracePlacement';
 import { useKickstandPlacement } from '@/supports/SupportTypes/Kickstand/useKickstandPlacement';
+import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { useInteractionStatus } from '@/supports/interaction/useInteractionStatus';
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
@@ -171,6 +172,13 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
+    if (isContactDiskHudInteractionActive()) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(null);
+      return;
+    }
+
     if (isPlacementHardDisabled) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);

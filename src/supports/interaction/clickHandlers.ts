@@ -1,10 +1,11 @@
-import { selectSupport, selectSupportWithToggle, selectJoint } from './SupportSelection';
+import { selectSupport, selectSupportWithToggle, selectJoint, selectContactDisk } from './SupportSelection';
 import { setSelectedId } from '../state';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
 let shiftModifierActive = false;
 let lastDispatchedHoverModelId: string | null = null;
+import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 function initializeHoverGuards() {
     if (hoverGuardInitialized || typeof window === 'undefined') return;
@@ -63,7 +64,7 @@ export function emitSupportModelPointerHover(modelId: string | null) {
 
     initializeHoverGuards();
 
-    if (orbitInteractionActive) return;
+    if (orbitInteractionActive || isContactDiskHudInteractionActive()) return;
 
     if (modelId === lastDispatchedHoverModelId) return;
     lastDispatchedHoverModelId = modelId;
@@ -172,5 +173,30 @@ export function handleKnotClick(
     }
 
     setSelectedId(id);
+    if (onSelect) onSelect(id);
+}
+
+export function handleContactDiskClick(
+    e: any,
+    id: string,
+    isInteractable: boolean,
+    isParentSelected: boolean,
+    isContactDiskSelected: boolean,
+    onSelect?: (id: string) => void
+) {
+    if (!isInteractable) return;
+
+    if (!isParentSelected && !isContactDiskSelected) {
+        return;
+    }
+
+    e.stopPropagation();
+
+    if (e.nativeEvent) {
+        e.nativeEvent.stopPropagation();
+        e.nativeEvent.stopImmediatePropagation();
+    }
+
+    selectContactDisk(id);
     if (onSelect) onSelect(id);
 }

@@ -14,6 +14,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
+import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSelection } from '../../interaction/SupportSelection';
 
 export function LeafPlacementController() {
@@ -180,6 +181,13 @@ export function LeafPlacementController() {
     const { updateSnapping, resetSnapping } = useSnapping(getTarget, getPotentialTargets);
 
     useFrame(() => {
+        if (isContactDiskHudInteractionActive() || shouldSuppressContactDiskHudPlacementCommit()) {
+            leafPlacementStore.setHoverPosition(null);
+            leafPlacementStore.setPreviewData(null);
+            leafPlacementStore.setSnapTarget(null);
+            return;
+        }
+
         if (isActive && stage === 'idle') {
             raycaster.setFromCamera(pointer, camera);
             const modelMeshes = modelMeshesRef.current;
@@ -325,6 +333,11 @@ export function LeafPlacementController() {
         if (!isActive || stage !== 'awaitingBase') return;
 
         const handleClick = (e: MouseEvent) => {
+            if (shouldSuppressContactDiskHudPlacementCommit()) {
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
             const snapTarget = leafPlacementStore.getSnapTarget();
             if (!snapTarget || !tipPosition || !surfaceNormal) return;
 

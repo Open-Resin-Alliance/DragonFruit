@@ -194,9 +194,9 @@ export interface SupportState {
     knots: Record<string, Knot>;
     // Interaction State
     selectedId: string | null;
-    selectedCategory?: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | null;
+    selectedCategory?: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
     hoveredId: string | null;
-    hoveredCategory?: 'model' | 'support' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none';
+    hoveredCategory?: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none';
     interactionWarning?: WarningCode | null;
 }
 

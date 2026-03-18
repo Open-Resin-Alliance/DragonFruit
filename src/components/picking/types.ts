@@ -14,6 +14,7 @@ import * as THREE from 'three';
 export type PickableCategory = 
   | 'model'      // The main STL mesh
   | 'support'    // Support structures (trunks, branches, leaves)
+  | 'contactDisk' // Contact disk / cone-tip selection target
   | 'joint'      // Ball joints on supports
   | 'knot'       // Anchors on shafts
   | 'segment'    // Individual support segments

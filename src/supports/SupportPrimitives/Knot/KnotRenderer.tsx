@@ -164,15 +164,15 @@ export function KnotRenderer({
 
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
     };
 
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };
 
