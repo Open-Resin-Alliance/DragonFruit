@@ -997,6 +997,14 @@ export function ProfileSettingsModal({
     setIsNanodlpEditDialogOpen(true);
   }, [effectiveNetworkUiAdapter, selectedNanodlpMaterial]);
 
+  const openNanodlpEditDialogForMaterial = React.useCallback((material: NanoDlpMaterial) => {
+    if (material.locked) return;
+    handleSelectNanodlpMaterial(material);
+    setNanodlpEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(material.meta ?? {}));
+    setNanodlpEditTab('basic');
+    setIsNanodlpEditDialogOpen(true);
+  }, [effectiveNetworkUiAdapter, handleSelectNanodlpMaterial]);
+
   const handleSaveNanodlpEdits = React.useCallback(async () => {
     if (!selectedPrinter) return;
     if (!selectedNanodlpMaterial) return;
@@ -2347,7 +2355,7 @@ export function ProfileSettingsModal({
                               setIsNetworkSettingsOpen(true);
                             }}
                             aria-label={fleetCount > 1 ? `Open fleet view (${fleetCount})` : 'Add another networked device'}
-                            className="ui-button ui-button-secondary !h-7 !w-7 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
+                            className="ui-button ui-button-secondary !h-7 !w-8 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
                             style={fleetCount > 1
                               ? {
                                   color: 'var(--text-strong)',
@@ -2362,7 +2370,7 @@ export function ProfileSettingsModal({
                             title={fleetCount > 1 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
                           >
                             {fleetCount > 1 ? (
-                              <LayoutGrid className="w-3.5 h-3.5" />
+                              <span className="inline-flex h-full w-full items-center justify-center text-[13px] font-bold leading-none tabular-nums">{fleetCount}</span>
                             ) : (
                               <Plus className="w-3.5 h-3.5" />
                             )}
@@ -2733,22 +2741,63 @@ export function ProfileSettingsModal({
                     </p>
                   )}
                 </div>
-                {selectedMaterialUpdate && (
-                  <button
-                    type="button"
-                    onClick={handleApplySelectedMaterialOfficialUpdate}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
-                    style={{
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                    }}
-                    title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Update Material
-                  </button>
-                )}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {shouldUseNanodlpOnDeviceMaterials && (
+                    <button
+                      type="button"
+                      onClick={() => { void loadNanodlpMaterials(); }}
+                      disabled={isLoadingNanodlpMaterials || !selectedNanodlpHost}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                      style={{ color: 'var(--text-strong)' }}
+                    >
+                      {isLoadingNanodlpMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                      {isLoadingNanodlpMaterials ? 'Loading…' : 'Refresh'}
+                    </button>
+                  )}
+                  {!shouldUseNanodlpOnDeviceMaterials && !shouldShowNanodlpSelectedPrinterOfflineState && !shouldShowNanodlpConnectInfo && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleAddMaterial}
+                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                        style={{
+                          color: 'var(--accent-secondary)',
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                        }}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Resin
+                      </button>
+                      <button
+                        type="button"
+                        onClick={requestDeleteSelectedMaterial}
+                        disabled={!selectedMaterial || printerMaterials.length <= 1}
+                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Delete
+                      </button>
+                    </>
+                  )}
+                  {selectedMaterialUpdate && (
+                    <button
+                      type="button"
+                      onClick={handleApplySelectedMaterialOfficialUpdate}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                      style={{
+                        color: 'var(--accent-secondary)',
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                      }}
+                      title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Update Material
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -2756,22 +2805,6 @@ export function ProfileSettingsModal({
               {shouldUseNanodlpOnDeviceMaterials ? (
                 <>
                   <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                    <div className="px-3 py-2 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                        NanoDLP On-Device Materials
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => { void loadNanodlpMaterials(); }}
-                        disabled={isLoadingNanodlpMaterials || !selectedNanodlpHost}
-                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: 'var(--text-strong)' }}
-                      >
-                        {isLoadingNanodlpMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                        {isLoadingNanodlpMaterials ? 'Loading…' : 'Refresh'}
-                      </button>
-                    </div>
-
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
                       {isLoadingNanodlpMaterials ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -2790,6 +2823,7 @@ export function ProfileSettingsModal({
                               key={material.id}
                               type="button"
                               onClick={() => handleSelectNanodlpMaterial(material)}
+                              onDoubleClick={() => openNanodlpEditDialogForMaterial(material)}
                               className="w-full rounded-md border px-2.5 py-2 text-left"
                               style={active
                                 ? {
@@ -2841,11 +2875,11 @@ export function ProfileSettingsModal({
                           </span>
                           {selectedNanodlpMaterial.locked && (
                             <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)', color: '#fbbf24', background: 'var(--surface-2)' }}>
-                              Locked on printer
+                              Locked Profile
                             </span>
                           )}
                           <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-                            Synced with NanoDLP
+                            Synced with Machine
                           </span>
                           {!selectedNanodlpMaterial.locked && (
                             <button
@@ -2854,7 +2888,7 @@ export function ProfileSettingsModal({
                               className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
                               style={{ color: 'var(--accent-secondary)' }}
                             >
-                              Edit all fields
+                              Edit Profile
                             </button>
                           )}
                         </div>
@@ -2932,37 +2966,6 @@ export function ProfileSettingsModal({
               ) : (
                 <>
               <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                <div className="px-3 py-2 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Material Profiles
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleAddMaterial}
-                      className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                      style={{
-                        color: 'var(--accent-secondary)',
-                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                      }}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Add Resin
-                    </button>
-                    <button
-                      type="button"
-                      onClick={requestDeleteSelectedMaterial}
-                      disabled={!selectedMaterial || printerMaterials.length <= 1}
-                      className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                      style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-[1fr_1fr_1.25fr] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Manufacturer</div>
@@ -3044,6 +3047,11 @@ export function ProfileSettingsModal({
                             onClick={() => {
                               setSelectedMaterialId(material.id);
                               setActiveMaterialProfile(material.id);
+                            }}
+                            onDoubleClick={() => {
+                              setSelectedMaterialId(material.id);
+                              setActiveMaterialProfile(material.id);
+                              setIsMaterialEditorOpen(true);
                             }}
                             className="w-full rounded-md border px-2.5 py-2 text-left text-sm"
                             style={active
