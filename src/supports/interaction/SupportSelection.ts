@@ -78,6 +78,9 @@ export function selectJoint(id: string) {
 export function clearSelection() {
     clearSelectedSupportIds();
     setSelectedId(null);
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('support-selection-cleared'));
+    }
 }
 
 /**

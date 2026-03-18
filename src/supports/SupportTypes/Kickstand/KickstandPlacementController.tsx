@@ -17,6 +17,7 @@ import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
 import type { KickstandHostKind } from './types';
 import type { Vec3 } from '../../types';
+import { clearSelection } from '../../interaction/SupportSelection';
 
 type DesiredBand = 'left' | 'right' | 'front';
 
@@ -641,21 +642,25 @@ export function KickstandPlacementController() {
             addKickstand(build);
             addRoot(build.root);
             addKnot(build.hostKnot);
+
             pushHistory({
                 type: SUPPORT_ADD_KICKSTAND,
                 payload: { build },
             });
-            setSelectedId(build.kickstand.id);
+
+            clearSelection();
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
+            resetSnapping();
         };
 
         window.addEventListener('shaft-click', handleShaftClick);
+
         return () => {
             window.removeEventListener('shaft-click', handleShaftClick);
         };
-    }, [buildPlacementFromSnap, camera, camera.position, pointer, raycaster, targetMetaById]);
+    }, [buildPlacementFromSnap, hotkeyActive, resetSnapping, camera, pointer, raycaster, targetMetaById]);
 
     return null;
 }

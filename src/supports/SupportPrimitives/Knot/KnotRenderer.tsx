@@ -1,10 +1,12 @@
-import React, { useEffect, useRef, useSyncExternalStore } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { Knot } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getSnapshot, subscribe } from '../../state';
 import { handleKnotClick } from '../../interaction/clickHandlers';
+import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
+import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface KnotRendererProps {
     knot: Knot;
@@ -42,6 +44,8 @@ export function KnotRenderer({
     const displayDiameter = isParentSelected ? resolvedDiameter : blendedDiameter;
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
+    const immediateModelHoverId = useImmediateModelHoverId();
+    const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const isSelected = state.selectedId === knot.id;
@@ -75,8 +79,12 @@ export function KnotRenderer({
         };
     }, [register, unregister, knot.id, enablePicking, isParentSelected]);
 
-    const isHovered =
-        hit.category === 'knot' && hit.objectId === knot.id && !isSelected && isParentSelected;
+    const isTopPickedKnot = immediateModelHoverId === null
+        && frontBlockingModelId === null
+        && hit.category === 'knot'
+        && hit.objectId === knot.id
+        && isParentSelected;
+    const isHovered = isTopPickedKnot && !isSelected;
 
     const displayColor = isSelected ? '#1a75ff' : (isParentSelected ? '#00ff00' : propColor);
     const displayEmissive = isHovered ? '#ffffff' : propEmissive;
@@ -86,6 +94,19 @@ export function KnotRenderer({
     const { onDragStart, onDragEnd } = usePicking();
 
     const handleClick = (e: any) => {
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
+        if (!isTopPickedKnot) return;
         handleKnotClick(e, knot.id, !!isInteractable, isParentSelected, isSelected, (id) => {
             if (onSelect) onSelect(id);
             if (onClick) onClick(e);
@@ -94,9 +115,21 @@ export function KnotRenderer({
 
     // Handle pointer down for direct dragging (left-click only)
     const handlePointerDown = (e: any) => {
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
         // Only allow left-click (button 0) for dragging
         if (e.button !== 0) return;
-        if (!isParentSelected || !isInteractable) return;
+        if (!isParentSelected || !isInteractable || !isTopPickedKnot) return;
 
         e.stopPropagation();
 
@@ -121,7 +154,25 @@ export function KnotRenderer({
         }
     }, [isHovered, isInteractable]);
 
+    const handlePointerMove = (e: any) => {
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+    };
+
     const handlePointerLeave = () => {
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
         document.body.style.cursor = '';
     };
 
@@ -133,9 +184,10 @@ export function KnotRenderer({
             position={[knot.pos.x, knot.pos.y, knot.pos.z]}
             onClick={handleClick}
             onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
             onPointerLeave={handlePointerLeave}
         >
-            <mesh raycast={raycast}>
+            <mesh raycast={raycast} userData={{ excludeFromPickingClone: true }}>
                 <sphereGeometry args={[hitboxRadius, 8, 8]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>

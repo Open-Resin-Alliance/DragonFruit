@@ -6,7 +6,7 @@ import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { setSelectedId } from '../../state';
@@ -51,10 +51,10 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const useLowDetailPrimitives = !isSelected && !propHovered;
 
   // Use universal highlight hook (matches TrunkRenderer pattern)
-  const { pickRef, visuals } = useHighlight({
+  const { pickRef, visuals, isPickingHovered } = useHighlight({
     id: branch.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -65,16 +65,9 @@ export const BranchRenderer = React.memo(function BranchRenderer({
 
   // Handle Click
   const handleClick = (e: any) => {
+    if (!isPickingHovered) return;
     handleSupportClick(e, branch.id, !!isInteractable);
   };
-
-  const handlePointerMove = React.useCallback(() => {
-    emitSupportModelPointerHover(branch.modelId ?? null);
-  }, [branch.modelId]);
-
-  const handlePointerOut = React.useCallback(() => {
-    emitSupportModelPointerHover(null);
-  }, []);
 
   // Start point is the Knot position
   const startPos = parentKnot.pos 
@@ -203,8 +196,6 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   return (
     <group
       onClick={handleClick}
-      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
     >
       {/* Branch Picking Group - Contains Shafts, Cone */}
       <group ref={pickRef as any}>

@@ -201,6 +201,26 @@ export function StlMesh({
   const internalMeshRef = React.useRef<THREE.Mesh>(null);
   const groupRef = React.useRef<THREE.Group | null>(null);
 
+  const { register, unregister } = usePicking();
+  const pickIdRef = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    if (!internalMeshRef.current) return;
+    
+    pickIdRef.current = register({
+      category: 'model',
+      objectId: modelId,
+      object: internalMeshRef.current,
+    });
+
+    return () => {
+      if (pickIdRef.current !== null) {
+        unregister(pickIdRef.current);
+        pickIdRef.current = null;
+      }
+    };
+  }, [modelId, register, unregister]);
+
   const defaultPosition = React.useMemo(() => new THREE.Vector3(0, 0, 0), []);
   const defaultQuaternion = React.useMemo(() => new THREE.Quaternion(), []);
   const defaultScale = React.useMemo(() => new THREE.Vector3(1, 1, 1), []);
@@ -414,7 +434,7 @@ export function StlMesh({
         userData={{ modelId }}
         geometry={geometry}
         position={meshLocalOffset}
-        renderOrder={isSupportDimmed ? 2 : 0}
+        renderOrder={baseShaderType === 'xray' || isSupportDimmed ? 2 : 0}
         onClick={(e) => {
           if (isSupportShiftGesture(e)) {
             e.stopPropagation();
@@ -488,6 +508,8 @@ export function StlMesh({
             return;
           }
 
+          e.stopPropagation();
+
           schedulePointerHover(true);
           onModelHoverPointChange?.(e.point.clone());
           onModelHoverModelChange?.(modelId);
@@ -529,7 +551,7 @@ export function StlMesh({
             }
 
             // Mute hover if hovering a gizmo OR support (using GPU picking for accuracy)
-            if (isGizmoHoverCategory || isSupportLikeHoverCategory) {
+            if (isGizmoHoverCategory) {
               onSupportHover(null);
               return;
             }

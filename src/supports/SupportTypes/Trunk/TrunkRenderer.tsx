@@ -9,7 +9,7 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { validateBezierConstraints } from '../../Curves/BezierUtils';
 import { RootsRenderer } from '../../SupportPrimitives/Roots/RootsRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
@@ -39,10 +39,10 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     const useLowDetailPrimitives = !isSelected && !propHovered;
 
     // Use universal highlight hook
-    const { pickRef, visuals } = useHighlight({
+    const { pickRef, visuals, isPickingHovered } = useHighlight({
         id: trunk.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -59,16 +59,9 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
 
     // Handle Click
     const handleClick = (e: any) => {
+        if (!isPickingHovered) return;
         handleSupportClick(e, trunk.id, !!isInteractable);
     };
-
-    const handlePointerMove = React.useCallback(() => {
-        emitSupportModelPointerHover(trunk.modelId ?? null);
-    }, [trunk.modelId]);
-
-    const handlePointerOut = React.useCallback(() => {
-        emitSupportModelPointerHover(null);
-    }, []);
 
     // --- Roots parameters for segment start calculation ---
     const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
@@ -223,8 +216,6 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     return (
         <group
             onClick={handleClick}
-            onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-            onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
         >
             {/* Trunk Picking Group - Contains Roots, Shafts, Cones */}
             <group ref={pickRef as any}>
