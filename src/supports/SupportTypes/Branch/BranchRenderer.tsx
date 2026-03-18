@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Branch, Knot } from '../../types';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
@@ -6,10 +7,12 @@ import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
-import { setSelectedId } from '../../state';
+import { getSnapshot, setSelectedId, subscribe, updateBranch } from '../../state';
 
 interface BranchRendererProps {
   branch: Branch;
@@ -27,6 +30,7 @@ interface BranchRendererProps {
   baseColor?: string;
   hoverColor?: string;
   selectedColor?: string;
+  onContactDiskHudHoverChange?: (hovered: boolean) => void;
 }
 
 export const BranchRenderer = React.memo(function BranchRenderer({ 
@@ -45,10 +49,16 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   baseColor = '#ff8800',
   hoverColor,
   selectedColor = '#80fffd',
+  onContactDiskHudHoverChange,
 }: BranchRendererProps) {
+  const { camera, scene, gl } = useThree();
+  const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
+  const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
+  const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+  const [, setDragTick] = React.useState(0);
 
   // Use universal highlight hook (matches TrunkRenderer pattern)
   const { pickRef, visuals, isPickingHovered } = useHighlight({
@@ -69,6 +79,41 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     handleSupportClick(e, branch.id, !!isInteractable);
   };
 
+  const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
+    if (!isSelected || !branch.contactCone) return;
+    if (!isPrimaryPointerPress(e)) return;
+
+    const socketAnchor = getFinalSocketPosition(branch.contactCone);
+
+    dragSessionRef.current?.stop();
+    dragSessionRef.current = startContactDiskDragSession({
+      camera,
+      domElement: gl.domElement,
+      scene,
+      initialEvent: e,
+      modelId: branch.modelId,
+      onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+        const latest = getSnapshot().branches[branch.id];
+        if (!latest?.contactCone) return;
+        liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor);
+        setDragTick(t => t + 1);
+      },
+      onEnd: () => {
+        if (liveDragConeRef.current) {
+          const latest = getSnapshot().branches[branch.id];
+          if (latest) updateBranch({ ...latest, contactCone: liveDragConeRef.current });
+        }
+        liveDragConeRef.current = null;
+        dragSessionRef.current = null;
+      },
+    });
+  }, [branch.id, branch.contactCone, branch.modelId, camera, gl.domElement, isSelected, scene]);
+
+  const handleContactDiskHudPointerUp = React.useCallback(() => {
+    dragSessionRef.current?.stop();
+    dragSessionRef.current = null;
+  }, []);
+  
   // Start point is the Knot position
   const startPos = parentKnot.pos 
     ? new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z)
@@ -172,23 +217,30 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   });
 
   // --- Render Contact Cone (if present) ---
+  const effectiveCone = liveDragConeRef.current ?? branch.contactCone;
   let coneRender = null;
-  if (branch.contactCone && !deferContactConesToSceneBatch) {
+  if (effectiveCone && !deferContactConesToSceneBatch) {
+    const isConeSelected = !!effectiveCone.id && supportState.selectedId === effectiveCone.id;
     coneRender = (
       <ContactConeRenderer
-        pos={branch.contactCone.pos}
-        normal={branch.contactCone.normal}
-        surfaceNormal={branch.contactCone.surfaceNormal}
-        diskLengthOverride={branch.contactCone.diskLengthOverride}
-        profile={branch.contactCone.profile}
+        contactDiskId={effectiveCone.id}
+        pos={effectiveCone.pos}
+        normal={effectiveCone.normal}
+        surfaceNormal={effectiveCone.surfaceNormal}
+        diskLengthOverride={effectiveCone.diskLengthOverride}
+        profile={effectiveCone.profile}
         color={visuals.color}
         emissive={visuals.emissive}
         emissiveIntensity={visuals.emissiveIntensity}
         radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
         sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
-        socketJointId={branch.contactCone.socketJointId}
+        socketJointId={effectiveCone.socketJointId}
         isInteractable={isInteractable}
         isParentSelected={isSelected}
+        isContactDiskSelected={isConeSelected}
+        onDiskHudHoverChange={onContactDiskHudHoverChange}
+        onDiskHudPointerDown={handleContactDiskHudPointerDown}
+        onDiskHudPointerUp={handleContactDiskHudPointerUp}
       />
     );
   }

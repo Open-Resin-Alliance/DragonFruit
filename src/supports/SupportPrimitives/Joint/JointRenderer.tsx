@@ -5,7 +5,6 @@ import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { subscribe, getSnapshot, setSelectedId } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
-import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface JointRendererProps {
@@ -45,7 +44,6 @@ export function JointRenderer({
     const displayDiameter = isParentSelected ? resolvedDiameter : blendedDiameter;
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
-    const immediateModelHoverId = useImmediateModelHoverId();
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     // State Subscription
@@ -84,8 +82,7 @@ export function JointRenderer({
 
     // Determine Hover State
     // Only show hover if parent is selected (editable mode) AND joint is not already selected
-    const isTopPickedJoint = immediateModelHoverId === null
-        && frontBlockingModelId === null
+    const isTopPickedJoint = frontBlockingModelId === null
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
@@ -173,15 +170,15 @@ export function JointRenderer({
 
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
     };
 
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };
     

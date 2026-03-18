@@ -2150,7 +2150,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
 export function setSelectedId(id: string | null) {
     if (state.selectedId === id) return;
 
-    let category: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | null = null;
+    let category: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null = null;
 
     if (id) {
         const kickstands = Object.values(getKickstandSnapshot().kickstands);
@@ -2284,6 +2284,51 @@ export function setSelectedId(id: string | null) {
                     }
                 }
             }
+
+            if (!category) {
+                for (const trunk of Object.values(state.trunks)) {
+                    if (trunk.contactCone?.id === id) {
+                        category = 'contactDisk';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                for (const branch of Object.values(state.branches)) {
+                    if (branch.contactCone?.id === id) {
+                        category = 'contactDisk';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                for (const leaf of Object.values(state.leaves)) {
+                    if (leaf.contactCone?.id === id) {
+                        category = 'contactDisk';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                for (const twig of Object.values(state.twigs)) {
+                    if (twig.contactDiskA.id === id || twig.contactDiskB.id === id) {
+                        category = 'contactDisk';
+                        break;
+                    }
+                }
+            }
+
+            if (!category) {
+                for (const stick of Object.values(state.sticks)) {
+                    if (stick.contactConeA.id === id || stick.contactConeB.id === id) {
+                        category = 'contactDisk';
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -2297,7 +2342,7 @@ export function setHoveredId(id: string | null) {
     notify();
 }
 
-export function setHoveredCategory(category: 'model' | 'support' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none') {
+export function setHoveredCategory(category: 'model' | 'support' | 'contactDisk' | 'segment' | 'joint' | 'knot' | 'raft' | 'gizmo' | 'none') {
     if (state.hoveredCategory === category) return;
     state = { ...state, hoveredCategory: category };
     notify();
@@ -2398,6 +2443,21 @@ export function addLeaf(leaf: Leaf) {
     state = {
         ...state,
         leaves: { ...state.leaves, [leaf.id]: leaf }
+    };
+    notify();
+}
+
+export function updateLeaf(leaf: Leaf) {
+    if (!state.leaves[leaf.id]) return;
+
+    const nextLeaves = { ...state.leaves, [leaf.id]: leaf };
+    const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, state.knots);
+    const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+
+    state = {
+        ...state,
+        leaves: nextLeaves,
+        knots: braceSeg.knots,
     };
     notify();
 }

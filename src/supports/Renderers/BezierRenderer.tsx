@@ -4,7 +4,6 @@ import { Vec3 } from '../types';
 import { toVector3 } from '../Curves/BezierUtils';
 import { usePicking } from '@/components/picking';
 import { useBracePlacementState } from '../SupportTypes/Brace/bracePlacementState';
-import { useImmediateModelHoverId } from '../interaction/useInteractionStatus';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../interaction/pointerOcclusion';
 
 interface BezierRendererProps {
@@ -73,7 +72,6 @@ export function BezierRenderer({
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const { altActive: braceAltActive } = useBracePlacementState();
     const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
-    const immediateModelHoverId = useImmediateModelHoverId();
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     const geometry = useMemo(() => {
@@ -168,7 +166,6 @@ export function BezierRenderer({
 
     // Determine Hover State
     const isTopPickedSegment = enableSegmentInteraction
-        && immediateModelHoverId === null
         && frontBlockingModelId === null
         && hit.category === 'segment'
         && hit.objectId === id;
@@ -260,11 +257,10 @@ export function BezierRenderer({
 
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
 
         const isTopPickedSegmentNow = enableSegmentInteraction
-            && immediateModelHoverId === null
             && hit.category === 'segment'
             && hit.objectId === id;
         if (!isTopPickedSegmentNow) return;
@@ -281,8 +277,8 @@ export function BezierRenderer({
     const handlePointerOut = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
 
         if (!enableSegmentInteraction || !isTopPickedSegment) return;
 

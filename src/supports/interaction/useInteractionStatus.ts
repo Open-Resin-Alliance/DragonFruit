@@ -82,6 +82,7 @@ export function useInteractionStatus() {
         || hoveredCategory === 'segment'
         || hoveredCategory === 'joint'
         || hoveredCategory === 'knot'
+        || hoveredCategory === 'contactDisk'
         || hoveredCategory === 'raft';
 
     const allowPlacementFromModelHoverOverride = isSupportLikeHover && rawHoveredModelId !== null;
