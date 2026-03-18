@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "generate:plugin-registry": "node scripts/generate-plugin-registry.mjs",
+    "check:plugin-allowlist": "node scripts/check-complex-plugin-allowlist.mjs",
+    "check:generated-plugin-registry": "node scripts/verify-generated-plugin-registry.mjs",
     "predev": "npm run generate:plugin-registry",
     "prebuild": "npm run generate:plugin-registry",
     "prebuild:tauri": "npm run generate:plugin-registry",

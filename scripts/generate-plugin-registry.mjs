@@ -17,6 +17,80 @@ function toImportAlias(pluginId) {
       return `${pluginId.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^([0-9])/, '_$1')}Definition`;
 }
 
+function parseCapabilitiesFromPluginDefinitionSource(sourceText) {
+      const hasCapabilityBlock = /capabilities\s*:\s*\{[\s\S]*?\}/m.test(sourceText);
+      const hasTrueFlag = (flag) => new RegExp(`${flag}\\s*:\\s*true`, 'm').test(sourceText);
+
+      return {
+            hasCapabilityBlock,
+            networkOperations: hasTrueFlag('networkOperations'),
+            uploadWithProgress: hasTrueFlag('uploadWithProgress'),
+            slicerEncoder: hasTrueFlag('slicerEncoder'),
+            tauriRuntimePlugin: hasTrueFlag('tauriRuntimePlugin'),
+      };
+}
+
+function enforceCapabilityConsistency(discovered) {
+      for (const plugin of discovered) {
+            const { id, capabilities } = plugin;
+
+            if (!capabilities.hasCapabilityBlock) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" must declare a capabilities block in pluginDefinition.ts`,
+                  );
+            }
+
+            if (capabilities.networkOperations && !plugin.hasTsNetworkHandler) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" declares networkOperations=true but is missing network/nanodlpHandlers.ts`,
+                  );
+            }
+
+            if (!capabilities.networkOperations && plugin.hasTsNetworkHandler) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" has network/nanodlpHandlers.ts but capabilities.networkOperations is not true`,
+                  );
+            }
+
+            if (capabilities.uploadWithProgress && !plugin.hasTsUploadHandler) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" declares uploadWithProgress=true but is missing network/index.ts`,
+                  );
+            }
+
+            if (!capabilities.uploadWithProgress && plugin.hasTsUploadHandler) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" has network/index.ts but capabilities.uploadWithProgress is not true`,
+                  );
+            }
+
+            if (capabilities.slicerEncoder && !plugin.hasRustSlicingEncoder) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" declares slicerEncoder=true but is missing slicing/rust/encoder_impl.rs`,
+                  );
+            }
+
+            if (!capabilities.slicerEncoder && plugin.hasRustSlicingEncoder) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" has slicing/rust/encoder_impl.rs but capabilities.slicerEncoder is not true`,
+                  );
+            }
+
+            const hasAnyTauriFile = plugin.hasRustPlugin || plugin.hasRustNetwork;
+            if (capabilities.tauriRuntimePlugin && (!plugin.hasRustPlugin || !plugin.hasRustNetwork)) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" declares tauriRuntimePlugin=true but is missing rust/plugin.rs or rust/network.rs`,
+                  );
+            }
+
+            if (!capabilities.tauriRuntimePlugin && hasAnyTauriFile) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${id}" has rust/plugin.rs or rust/network.rs but capabilities.tauriRuntimePlugin is not true`,
+                  );
+            }
+      }
+}
+
 async function discoverPlugins() {
       const entries = await fs.readdir(pluginsRoot, { withFileTypes: true });
       const pluginIds = entries
@@ -39,6 +113,9 @@ async function discoverPlugins() {
             const hasPluginDefinition = await fs.access(pluginDefinitionPath).then(() => true).catch(() => false);
             if (!hasPluginDefinition) continue;
 
+            const pluginDefinitionSource = await fs.readFile(pluginDefinitionPath, 'utf8');
+            const capabilities = parseCapabilitiesFromPluginDefinitionSource(pluginDefinitionSource);
+
             const hasRustPlugin = await fs.access(rustPluginPath).then(() => true).catch(() => false);
             const hasRustNetwork = await fs.access(rustNetworkPath).then(() => true).catch(() => false);
             const hasTsNetworkHandler = await fs.access(tsNetworkHandlerPath).then(() => true).catch(() => false);
@@ -52,6 +129,7 @@ async function discoverPlugins() {
                   hasTsNetworkHandler,
                   hasTsUploadHandler,
                   hasRustSlicingEncoder,
+                  capabilities,
             });
       }
 
@@ -138,7 +216,7 @@ export const GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS: ComplexPluginDefiniti
 }
 
 function buildTsGeneratedNetworkHandlersFile(discovered) {
-      const networkCapable = discovered.filter((plugin) => plugin.hasTsNetworkHandler);
+      const networkCapable = discovered.filter((plugin) => plugin.capabilities.networkOperations && plugin.hasTsNetworkHandler);
 
       const imports = networkCapable
             .map((plugin) => {
@@ -171,7 +249,7 @@ ${entries}
 }
 
 function buildTsGeneratedUploadHandlersFile(discovered) {
-      const uploadCapable = discovered.filter((plugin) => plugin.hasTsUploadHandler);
+      const uploadCapable = discovered.filter((plugin) => plugin.capabilities.uploadWithProgress && plugin.hasTsUploadHandler);
 
       const imports = uploadCapable
             .map((plugin) => {
@@ -204,7 +282,7 @@ ${entries}
 }
 
 function buildRustGeneratedFile(discovered, allowlistHash) {
-      const rustCapable = discovered.filter((plugin) => plugin.hasRustPlugin && plugin.hasRustNetwork);
+      const rustCapable = discovered.filter((plugin) => plugin.capabilities.tauriRuntimePlugin && plugin.hasRustPlugin && plugin.hasRustNetwork);
 
       const pathModules = rustCapable
             .flatMap((plugin) => {
@@ -269,7 +347,7 @@ ${dispatchArms}
 }
 
 function buildRustSlicerGeneratedEncodersFile(discovered) {
-      const encoderCapable = discovered.filter((plugin) => plugin.hasRustSlicingEncoder);
+      const encoderCapable = discovered.filter((plugin) => plugin.capabilities.slicerEncoder && plugin.hasRustSlicingEncoder);
 
       const moduleImports = encoderCapable
             .map((plugin) => {
@@ -308,6 +386,7 @@ async function main() {
       const discovered = await discoverPlugins();
       const allowlist = await readAllowlist();
       enforceAllowlist(discovered, allowlist.ids);
+      enforceCapabilityConsistency(discovered);
 
       const filteredDiscovered = discovered
             .filter((entry) => allowlist.ids.includes(entry.id))

@@ -14,7 +14,7 @@ import {
   resolveNanodlpEditDraftFromMeta,
   resolveNanoDlpAdvancedSectionId,
   resolveNanodlpMaterialProcessValues,
-} from './nanodlpProfilePlugin';
+} from './nanodlp';
 import {
   resolveNanodlpMonitoringSnapshot,
   resolveNanodlpWebcamFeedInfo,
@@ -67,6 +67,12 @@ const ATHENA_NANODLP_MONITORING_ADAPTER: PluginMonitoringUiAdapterContract = {
 export const ATHENA_COMPLEX_PLUGIN_DEFINITION: ComplexPluginDefinition = {
   id: 'athena',
   manifest: ATHENA_PLUGIN_MANIFEST,
+  capabilities: {
+    networkOperations: true,
+    uploadWithProgress: true,
+    slicerEncoder: true,
+    tauriRuntimePlugin: true,
+  },
   networkAdaptersByMode: {
     [ATHENA_NANODLP_NETWORK_ADAPTER.mode]: ATHENA_NANODLP_NETWORK_ADAPTER,
   },

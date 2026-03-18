@@ -140,6 +140,13 @@ export type ComplexPluginManifestReference = {
   homepage?: string;
 };
 
+export type ComplexPluginCapabilities = {
+  networkOperations?: boolean;
+  uploadWithProgress?: boolean;
+  slicerEncoder?: boolean;
+  tauriRuntimePlugin?: boolean;
+};
+
 /**
  * PR-1 foundation contract: single plugin definition shape that will become
  * the source of truth for complex plugin registration in later phases.
@@ -147,6 +154,7 @@ export type ComplexPluginManifestReference = {
 export type ComplexPluginDefinition = {
   id: string;
   manifest: ComplexPluginManifestReference;
+  capabilities?: ComplexPluginCapabilities;
   networkAdaptersByMode?: Record<string, PluginNetworkUiAdapterContract>;
   monitoringAdaptersByMode?: Record<string, PluginMonitoringUiAdapterContract>;
   networkOperationHandler?: PluginNetworkOperationHandlerContract;
