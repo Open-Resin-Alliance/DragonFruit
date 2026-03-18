@@ -1451,6 +1451,9 @@ export async function handleAthenaNetworkOperation(operationPath: string[], payl
   return { status: 404, body: { error: 'Unknown Athena NanoDLP operation' } };
 }
 
+// Generic compile-time registration alias used by generated plugin registries.
+export const handlePluginNetworkOperation = handleAthenaNetworkOperation;
+
 async function handleNanoDlpPlatesListJson(payload: unknown): Promise<HandlerResult> {
   const rawHost = resolveNanoDlpRawHost(payload);
   const parsedHost = parseNanoDlpHostAndPort(rawHost);

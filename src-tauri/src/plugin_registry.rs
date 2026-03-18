@@ -43,7 +43,8 @@ pub struct PluginRegistration {
 
 /// Global plugin registry
 static PLUGIN_REGISTRY: OnceLock<Mutex<PluginRegistry>> = OnceLock::new();
-const COMPLEX_PLUGIN_ALLOWLIST_JSON: &str = include_str!("../../src/config/complex-plugin-allowlist.json");
+const COMPLEX_PLUGIN_ALLOWLIST_JSON: &str =
+    include_str!("../../src/config/complex-plugin-allowlist.json");
 
 pub struct PluginRegistry {
     plugins: HashMap<String, PluginRegistration>,

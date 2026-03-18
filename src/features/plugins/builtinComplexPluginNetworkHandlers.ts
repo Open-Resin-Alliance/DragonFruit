@@ -1,6 +1,6 @@
 import type { PluginNetworkOperationHandler } from '@/features/plugins/networkPluginRegistry';
 import { BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST } from '@/features/plugins/builtinComplexPlugins';
-import { handleAthenaNetworkOperation } from '../../../plugins/athena/network/nanodlpHandlers';
+import { GENERATED_BUILTIN_COMPLEX_PLUGIN_NETWORK_HANDLERS } from '@/features/plugins/generatedBuiltinComplexPluginNetworkHandlers';
 
 export type BuiltinComplexPluginNetworkHandler = {
   pluginId: string;
@@ -12,12 +12,7 @@ let cachedHandlers: BuiltinComplexPluginNetworkHandler[] | null = null;
 export function getBuiltinComplexPluginNetworkHandlers(): BuiltinComplexPluginNetworkHandler[] {
   if (cachedHandlers) return cachedHandlers;
 
-  cachedHandlers = [
-    {
-      pluginId: 'athena',
-      handler: handleAthenaNetworkOperation,
-    },
-  ];
+  cachedHandlers = [...GENERATED_BUILTIN_COMPLEX_PLUGIN_NETWORK_HANDLERS];
 
   const allowSet = new Set(BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST);
   cachedHandlers.forEach((entry) => {

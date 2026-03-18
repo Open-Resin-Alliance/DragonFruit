@@ -1,5 +1,5 @@
-import { uploadToNanoDlpWithProgress } from '../../../plugins/athena/network';
 import { BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST } from '@/features/plugins/builtinComplexPlugins';
+import { GENERATED_BUILTIN_COMPLEX_PLUGIN_UPLOAD_HANDLERS } from '@/features/plugins/generatedBuiltinComplexPluginUploadHandlers';
 import type { PluginUploadHandler } from '@/features/plugins/pluginUploadBridge';
 
 export type BuiltinComplexPluginUploadHandler = {
@@ -12,14 +12,7 @@ let cachedHandlers: BuiltinComplexPluginUploadHandler[] | null = null;
 export function getBuiltinComplexPluginUploadHandlers(): BuiltinComplexPluginUploadHandler[] {
   if (cachedHandlers) return cachedHandlers;
 
-  cachedHandlers = [
-    {
-      pluginId: 'athena',
-      handler: async ({ hostUrl, zipBlob, path, profileId, callbacks }) => {
-        return uploadToNanoDlpWithProgress(hostUrl, zipBlob, path, profileId, callbacks);
-      },
-    },
-  ];
+  cachedHandlers = [...GENERATED_BUILTIN_COMPLEX_PLUGIN_UPLOAD_HANDLERS];
 
   const allowSet = new Set(BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST);
   cachedHandlers.forEach((entry) => {
