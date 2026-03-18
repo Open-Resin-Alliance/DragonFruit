@@ -28,6 +28,39 @@ External GitHub plugins are intentionally restricted to manifest data.
 
 This keeps external plugin installation safe while allowing advanced integrations through built-in plugins.
 
+Complex plugins are **never installed from GitHub at runtime**. They are only compiled into the application binary.
+
+To reduce accidental or unauthorized complex-plugin registration drift, built-in complex plugins are validated against a
+compile-time allowlist in the registry integration layer before handlers/adapters are exposed.
+
+Additional hardening in the GitHub manifest pipeline:
+
+- **Repository allowlist enforcement** (server-side) before manifest fetch/install.
+- **Explicit user liability acknowledgement flow** for unallowlisted simple plugins.
+- **Manifest SHA-256 verification** support (`expectedManifestSha256`) during install.
+- **Verified manifest hash persistence** (`manifestSha256`) with installed plugin metadata.
+
+### GitHub allowlist configuration
+
+Server route: `src/app/api/plugins/github-manifest/route.ts`
+
+- Env var: `DRAGONFRUIT_PLUGIN_GITHUB_ALLOWLIST`
+- Format: comma-separated `owner/repo` entries; wildcards supported via `*`
+  - Examples:
+    - `open-resin-alliance/*`
+    - `open-resin-alliance/dragonfruit,my-org/my-plugin-pack`
+    - `*` (allow all; not recommended)
+- Default when unset: `open-resin-alliance/*`
+
+If a repository is not on the allowlist, install can still proceed for **simple/data-only** plugins
+only after the user explicitly accepts a liability warning in the UI.
+
+### Manifest hash verification
+
+- Client may pass `expectedManifestSha256` (64-char hex) to `POST /api/plugins/github-manifest`.
+- Route computes SHA-256 of fetched raw manifest text and rejects mismatches.
+- Response returns `manifestSha256` for audit and persistence.
+
 ---
 
 ## Built-in plugins

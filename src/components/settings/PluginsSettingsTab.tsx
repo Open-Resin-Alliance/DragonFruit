@@ -45,6 +45,14 @@ type GithubManifestResponse = {
   ok: boolean;
   error?: string;
   rawManifestUrl?: string;
+  manifestSha256?: string;
+  repoAllowlisted?: boolean;
+  requiresLiabilityWarning?: boolean;
+  unverifiedRepo?: {
+    owner: string;
+    name: string;
+  };
+  allowlistRules?: string[];
   manifest?: {
     schemaVersion: number;
     id: string;
@@ -83,9 +91,45 @@ export function PluginsSettingsTab() {
 
   const [repoUrl, setRepoUrl] = React.useState('');
   const [isInstalling, setIsInstalling] = React.useState(false);
+  const [pendingLiabilityInstall, setPendingLiabilityInstall] = React.useState<{
+    repoUrl: string;
+    unverifiedRepo?: { owner: string; name: string };
+    allowlistRules?: string[];
+  } | null>(null);
   const [status, setStatus] = React.useState<{ kind: 'idle' | 'success' | 'error'; message: string }>({ kind: 'idle', message: '' });
 
   const installedPlugins = React.useMemo(() => getInstalledPlugins(), [profileSnapshot]);
+
+  const runInstallRequest = React.useCallback(async (
+    repoUrlInput: string,
+    options?: {
+      allowUnverifiedInstall?: boolean;
+      acknowledgeLiabilityWarning?: boolean;
+    },
+  ) => {
+    const response = await fetch('/api/plugins/github-manifest', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        repoUrl: repoUrlInput,
+        allowUnverifiedInstall: options?.allowUnverifiedInstall === true,
+        acknowledgeLiabilityWarning: options?.acknowledgeLiabilityWarning === true,
+      }),
+    });
+
+    const payload = await response.json().catch(() => null) as GithubManifestResponse | null;
+    if (!response.ok || !payload?.ok || !payload.manifest) {
+      const err = new Error(payload?.error || 'Unable to install plugin from GitHub repository.') as Error & {
+        payload?: GithubManifestResponse | null;
+      };
+      err.payload = payload;
+      throw err;
+    }
+
+    return payload;
+  }, []);
 
   const handleInstall = React.useCallback(async () => {
     const trimmed = repoUrl.trim();
@@ -96,29 +140,73 @@ export function PluginsSettingsTab() {
 
     setIsInstalling(true);
     setStatus({ kind: 'idle', message: '' });
+    setPendingLiabilityInstall(null);
 
     try {
-      const response = await fetch('/api/plugins/github-manifest', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ repoUrl: trimmed }),
-      });
-
-      const payload = await response.json().catch(() => null) as GithubManifestResponse | null;
-      if (!response.ok || !payload?.ok || !payload.manifest) {
-        throw new Error(payload?.error || 'Unable to install plugin from GitHub repository.');
-      }
+      const payload = await runInstallRequest(trimmed);
 
       const manifest = normalizePluginManifest(payload.manifest);
       if (!manifest) {
         throw new Error('Plugin manifest is missing required fields.');
       }
 
-      installPluginFromManifest(manifest, trimmed);
+      installPluginFromManifest(manifest, trimmed, {
+        manifestSha256: typeof payload.manifestSha256 === 'string' ? payload.manifestSha256 : undefined,
+        installTrust: payload.repoAllowlisted === false ? 'unverified-user-approved' : 'allowlisted',
+        liabilityAcceptedAt: payload.repoAllowlisted === false ? new Date().toISOString() : undefined,
+      });
       setStatus({ kind: 'success', message: `Installed plugin: ${manifest.name}` });
       setRepoUrl('');
+    } catch (error) {
+      const installError = error as Error & { payload?: GithubManifestResponse | null };
+      const payload = installError?.payload;
+      if (payload?.requiresLiabilityWarning) {
+        setPendingLiabilityInstall({
+          repoUrl: trimmed,
+          unverifiedRepo: payload.unverifiedRepo,
+          allowlistRules: payload.allowlistRules,
+        });
+        setStatus({
+          kind: 'error',
+          message: 'This repository is not on the allowlist. Review and acknowledge the warning to proceed.',
+        });
+        return;
+      }
+      setStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Plugin installation failed.',
+      });
+    } finally {
+      setIsInstalling(false);
+    }
+  }, [repoUrl, runInstallRequest]);
+
+  const handleConfirmLiabilityInstall = React.useCallback(async () => {
+    if (!pendingLiabilityInstall) return;
+
+    setIsInstalling(true);
+    setStatus({ kind: 'idle', message: '' });
+
+    try {
+      const payload = await runInstallRequest(pendingLiabilityInstall.repoUrl, {
+        allowUnverifiedInstall: true,
+        acknowledgeLiabilityWarning: true,
+      });
+
+      const manifest = normalizePluginManifest(payload.manifest);
+      if (!manifest) {
+        throw new Error('Plugin manifest is missing required fields.');
+      }
+
+      installPluginFromManifest(manifest, pendingLiabilityInstall.repoUrl, {
+        manifestSha256: typeof payload.manifestSha256 === 'string' ? payload.manifestSha256 : undefined,
+        installTrust: 'unverified-user-approved',
+        liabilityAcceptedAt: new Date().toISOString(),
+      });
+
+      setStatus({ kind: 'success', message: `Installed unverified plugin: ${manifest.name}` });
+      setRepoUrl('');
+      setPendingLiabilityInstall(null);
     } catch (error) {
       setStatus({
         kind: 'error',
@@ -127,7 +215,7 @@ export function PluginsSettingsTab() {
     } finally {
       setIsInstalling(false);
     }
-  }, [repoUrl]);
+  }, [pendingLiabilityInstall, runInstallRequest]);
 
   const handleUninstall = React.useCallback((pluginId: string) => {
     const removed = uninstallPlugin(pluginId);
@@ -146,13 +234,16 @@ export function PluginsSettingsTab() {
         <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
           Install plugin manifests from GitHub repositories (profile packs only). Remote code execution is not supported.
         </p>
+        <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          Debug URLs: <code>df://debug_plugin_official</code> and <code>df://debug_plugin_3rd</code>
+        </p>
 
         <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-2">
           <input
             type="text"
             value={repoUrl}
             onChange={(event) => setRepoUrl(event.target.value)}
-            placeholder="https://github.com/<owner>/<repo>"
+            placeholder="https://github.com/<owner>/<repo> or df://debug_plugin_official"
             className="ui-input h-[34px] px-2.5 py-1.5 text-sm"
           />
           <button
@@ -174,6 +265,50 @@ export function PluginsSettingsTab() {
         )}
       </div>
 
+      {pendingLiabilityInstall && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 px-4" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !isInstalling) setPendingLiabilityInstall(null);
+        }}>
+          <div className="w-full max-w-xl rounded-xl border p-4" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+              Unverified Plugin Liability Warning
+            </div>
+            <div className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              This repository is not on the trusted allowlist. You can still install this <strong>simple/data-only</strong> plugin,
+              but you accept responsibility for validating the source and manifest contents.
+            </div>
+            <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              Repo: <span style={{ color: 'var(--text-strong)' }}>{pendingLiabilityInstall.unverifiedRepo?.owner}/{pendingLiabilityInstall.unverifiedRepo?.name}</span>
+            </div>
+            {Array.isArray(pendingLiabilityInstall.allowlistRules) && pendingLiabilityInstall.allowlistRules.length > 0 && (
+              <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Allowlist: {pendingLiabilityInstall.allowlistRules.join(', ')}
+              </div>
+            )}
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                disabled={isInstalling}
+                onClick={() => setPendingLiabilityInstall(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs"
+                style={{ color: '#fbbf24' }}
+                disabled={isInstalling}
+                onClick={() => { void handleConfirmLiabilityInstall(); }}
+              >
+                {isInstalling ? 'Installing…' : 'I Understand, Install Anyway'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="rounded-lg border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
         <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Installed Plugins</h4>
 
@@ -184,6 +319,7 @@ export function PluginsSettingsTab() {
             const repositoryUrl = manifest.homepage || (isBuiltin ? BUILTIN_ATHENA_REPOSITORY_URL : plugin.sourceUrl);
             const hasRepositoryLink = typeof repositoryUrl === 'string' && repositoryUrl.trim().length > 0;
             const isOraVerifiedBuiltin = isBuiltin && isOraHostedRepository(repositoryUrl);
+            const isUnverifiedGithubPlugin = !isBuiltin && plugin.installTrust === 'unverified-user-approved';
 
             return (
               <div
@@ -207,6 +343,18 @@ export function PluginsSettingsTab() {
                     <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                       {manifest.id} • {isBuiltin ? 'Built-in' : 'GitHub'}
                     </div>
+                    {isUnverifiedGithubPlugin && (
+                      <div className="text-[11px] mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5"
+                        style={{
+                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)',
+                          color: '#fbbf24',
+                          background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 90%)',
+                        }}
+                        title={plugin.liabilityAcceptedAt ? `Liability accepted at ${plugin.liabilityAcceptedAt}` : 'Installed with liability acknowledgement'}
+                      >
+                        Unverified Source (User Approved)
+                      </div>
+                    )}
                     {manifest.description && (
                       <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                         {manifest.description}
