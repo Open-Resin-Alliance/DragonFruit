@@ -863,7 +863,7 @@ export function SettingsModal({
                               TableFlip Foundry, Open Resin Alliance
                             </div>
                             <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              Core framework
+                              Core Framework, Supports, Bugfixes, and General Mayhem
                             </div>
                           </div>
                           <div
@@ -882,31 +882,31 @@ export function SettingsModal({
                       <div
                         className="rounded-lg border px-3 py-2.5"
                         style={{
-                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)',
-                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-0) 93%)',
+                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-0) 90%)',
                         }}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                              PaulGD03
+                              Paul Skapczyk
                             </div>
                             <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                               Open Resin Alliance
                             </div>
                             <div className="mt-0.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              UI, Backend
+                              Core Framework, UI & UX, Backend, Plugins and Chaos Engineering
                             </div>
                           </div>
                           <div
                             className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
                             style={{
-                              color: 'var(--accent-secondary-contrast)',
-                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 38%)',
-                              background: 'color-mix(in srgb, var(--accent-secondary), transparent 18%)',
+                              color: 'var(--accent-contrast)',
+                              borderColor: 'color-mix(in srgb, var(--accent), white 18%)',
+                              background: 'color-mix(in srgb, var(--accent), transparent 18%)',
                             }}
                           >
-                            Contributor
+                            Main Developer & Maintainer
                           </div>
                         </div>
                       </div>
