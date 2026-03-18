@@ -190,6 +190,7 @@ export function ProfileSettingsModal({
   const [showManualNetworkEntry, setShowManualNetworkEntry] = React.useState(false);
   const [hasAutoScannedOnOpen, setHasAutoScannedOnOpen] = React.useState(false);
   const [discoveredPrinters, setDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
+    const [cachedDiscoveredPrinters, setCachedDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
   const [nanodlpMaterials, setNanodlpMaterials] = React.useState<NanoDlpMaterial[]>([]);
   const [isLoadingNanodlpMaterials, setIsLoadingNanodlpMaterials] = React.useState(false);
   const [nanodlpMaterialsError, setNanodlpMaterialsError] = React.useState<string | null>(null);
@@ -235,7 +236,7 @@ export function ProfileSettingsModal({
   const [uploadTargetPrinterId, setUploadTargetPrinterId] = React.useState<string | null>(null);
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
   const [presetSearch, setPresetSearch] = React.useState('');
-  const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('All');
+  const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('');
   const [buildDimensionModeByPrinterId, setBuildDimensionModeByPrinterId] = React.useState<Record<string, BuildDimensionEditMode>>({});
   const [printerRailViewMode, setPrinterRailViewMode] = React.useState<PrinterRailViewMode>('profiles');
   const [isEditFleetUnitModalOpen, setIsEditFleetUnitModalOpen] = React.useState(false);
@@ -257,13 +258,17 @@ export function ProfileSettingsModal({
 
   const presetManufacturers = React.useMemo(() => {
     const uniq = new Set(availablePrinterPresets.map((preset) => preset.manufacturer));
-    return ['All', ...Array.from(uniq).sort((a, b) => a.localeCompare(b))];
+    const sorted = Array.from(uniq)
+      .filter(m => m.toLowerCase() !== 'generic')
+      .sort((a, b) => a.localeCompare(b));
+    const generic = Array.from(uniq).filter(m => m.toLowerCase() === 'generic');
+    return [...sorted, ...generic];
   }, [availablePrinterPresets]);
 
   const filteredPrinterPresets = React.useMemo(() => {
     const search = presetSearch.trim().toLowerCase();
     return availablePrinterPresets.filter((preset) => {
-      const manufacturerMatch = selectedPresetManufacturer === 'All' || preset.manufacturer === selectedPresetManufacturer;
+      const manufacturerMatch = search.length > 0 || preset.manufacturer === selectedPresetManufacturer;
       const searchMatch =
         search.length === 0
         || preset.name.toLowerCase().includes(search)
@@ -273,9 +278,9 @@ export function ProfileSettingsModal({
     });
   }, [availablePrinterPresets, presetSearch, selectedPresetManufacturer]);
 
-  const groupedFilteredPrinterPresets = React.useMemo(() => {
-    if (selectedPresetManufacturer === 'All') return [] as Array<{ family: string; presets: typeof filteredPrinterPresets }>;
+  const isSearching = presetSearch.trim().length > 0;
 
+  const groupedFilteredPrinterPresets = React.useMemo(() => {
     const grouped = new Map<string, typeof filteredPrinterPresets>();
     filteredPrinterPresets.forEach((preset) => {
       const family = (preset.family ?? '').trim() || 'Other';
@@ -301,6 +306,13 @@ export function ProfileSettingsModal({
     });
     return set;
   }, [profileState.printerProfiles]);
+
+  // Initialize first manufacturer selection when presetManufacturers becomes available
+  React.useLayoutEffect(() => {
+    if (selectedPresetManufacturer === '' && presetManufacturers.length > 0) {
+      setSelectedPresetManufacturer(presetManufacturers[0]);
+    }
+  }, [presetManufacturers, selectedPresetManufacturer]);
 
   const selectedPrinter = React.useMemo(() => {
     if (profileState.printerProfiles.length === 0) return null;
@@ -481,6 +493,7 @@ export function ProfileSettingsModal({
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
   const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
+  const lastInitializedNetworkPrinterIdRef = React.useRef<string | null>(null);
   const discoveryInFlightRef = React.useRef(false);
   const discoveryRunIdRef = React.useRef(0);
 
@@ -795,10 +808,10 @@ export function ProfileSettingsModal({
     setIsNetworkSettingsOpen(shouldOpenNetworkSettings);
     setShowPresetPicker(shouldOpenPrinterLibrary && !shouldOpenNetworkSettings);
     setPresetSearch('');
-    setSelectedPresetManufacturer('All');
+    if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
     const materials = getMaterialProfilesForPrinter(profileState.activePrinterProfileId, profileState);
     setSelectedMaterialId(materials[0]?.id ?? null);
-  }, [initialTab, isOpen, openNetworkSettingsToken, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState]);
+  }, [initialTab, isOpen, openNetworkSettingsToken, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState, presetManufacturers]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -885,16 +898,23 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) {
       setIsNetworkSettingsOpen(false);
       setIsAddingNetworkPrinter(false);
+      lastInitializedNetworkPrinterIdRef.current = null;
       return;
     }
 
+    if (lastInitializedNetworkPrinterIdRef.current === selectedPrinter.id) {
+      return;
+    }
+    lastInitializedNetworkPrinterIdRef.current = selectedPrinter.id;
+
     setNetworkDiscoveryEnabled(selectedPrinter.network?.discoveryEnabled ?? true);
     setNetworkIpAddress(selectedPrinter.network?.ipAddress ?? '');
+    setCachedDiscoveredPrinters(discoveredPrinters);
     setDiscoveredPrinters([]);
     setNetworkConnectionMessage(selectedPrinter.networkConnection?.statusText ?? '');
     setShowManualNetworkEntry(false);
     setIsAddingNetworkPrinter((selectedPrinter.networkFleet?.length ?? 0) === 0);
-  }, [selectedPrinter]);
+  }, [discoveredPrinters, selectedPrinter]);
 
   React.useEffect(() => {
     if (!selectedPrinterSupportsNetworkSettings) {
@@ -1074,6 +1094,13 @@ export function ProfileSettingsModal({
     try {
       const configuredHost = networkIpAddress.trim();
       const seedDevices: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
+      const carryForwardDiscovered = [...discoveredPrinters, ...cachedDiscoveredPrinters].filter((item, index, array) => (
+        array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
+      ));
+
+      if (isCurrentRun() && carryForwardDiscovered.length > 0) {
+        setDiscoveredPrinters(carryForwardDiscovered);
+      }
 
       logNetworkScanDebug('discover/request', {
         printerId: selectedPrinter.id,
@@ -1182,11 +1209,57 @@ export function ProfileSettingsModal({
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
-      if (isCurrentRun()) setDiscoveredPrinters(baseDiscovered);
-
       setNetworkScanProgressPct(44);
       setNetworkScanPhaseLabel('Scanning local subnet…');
       setNetworkConnectionMessage('Scanning local subnet for NanoDLP devices…');
+            setNetworkScanProgressPct(42);
+            setNetworkScanPhaseLabel('Verifying previously discovered printers…');
+            setNetworkConnectionMessage('Checking if previously discovered printers are still available…');
+
+            const verifiedCachedPrinters: typeof baseDiscovered = [];
+            if (carryForwardDiscovered.length > 0) {
+              for (const cachedPrinter of carryForwardDiscovered) {
+                try {
+                  const reachResponse = await pluginNetworkFetch({
+                    pluginId: networkUiAdapter.pluginId,
+                    operation: networkUiAdapter.operations.connect,
+                    host: cachedPrinter.ipAddress,
+                    networkFilter: selectedPrinterNetworkFilterHint || undefined,
+                    modelHint: selectedPrinterModelHint,
+                  });
+
+                  const reachPayload = await reachResponse.json().catch(() => null) as any;
+                  if (reachPayload?.connected === true) {
+                    verifiedCachedPrinters.push({
+                      ...cachedPrinter,
+                      status: 'online',
+                    });
+                    logNetworkScanDebug('discover/cached-printer-verified', {
+                      ipAddress: cachedPrinter.ipAddress,
+                      name: cachedPrinter.name,
+                    });
+                  } else {
+                    logNetworkScanDebug('discover/cached-printer-unreachable', {
+                      ipAddress: cachedPrinter.ipAddress,
+                      name: cachedPrinter.name,
+                      reachable: false,
+                    });
+                  }
+                } catch (err) {
+                  logNetworkScanDebug('discover/cached-printer-check-error', {
+                    ipAddress: cachedPrinter.ipAddress,
+                    name: cachedPrinter.name,
+                    error: err instanceof Error ? err.message : 'Unknown error',
+                  });
+                }
+              }
+            }
+
+            const baseWithVerifiedCache = [...verifiedCachedPrinters, ...baseDiscovered].filter((item, index, array) => (
+              array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
+            ));
+            if (isCurrentRun() && baseWithVerifiedCache.length > 0) setDiscoveredPrinters(baseWithVerifiedCache);
+
       setNetworkScanProgressPct(56);
 
       const subnetDiscovered: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
@@ -1255,7 +1328,7 @@ export function ProfileSettingsModal({
 
         subnetDiscovered.push(...discoveredBatch);
 
-        const liveMerged = [...baseDiscovered, ...subnetDiscovered].filter((item, index, array) => (
+        const liveMerged = [...baseWithVerifiedCache, ...subnetDiscovered].filter((item, index, array) => (
           array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
         ));
         if (isCurrentRun()) setDiscoveredPrinters(liveMerged);
@@ -1285,7 +1358,7 @@ export function ProfileSettingsModal({
       const scannedLocalHostnames = Number.isFinite(Number(localPayload?.scannedLocalHostnames)) ? Number(localPayload.scannedLocalHostnames) : localHostnameCandidates.length;
       const scannedSubnetHosts = Number.isFinite(Number(subnetPayloadLast?.scannedSubnetHosts)) ? Number(subnetPayloadLast.scannedSubnetHosts) : scannedHosts;
 
-      const merged = [...baseDiscovered, ...subnetDiscovered].filter((item, index, array) => (
+      const merged = [...baseWithVerifiedCache, ...subnetDiscovered].filter((item, index, array) => (
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
@@ -1293,6 +1366,7 @@ export function ProfileSettingsModal({
         setDiscoveredPrinters(merged);
         setNetworkScanProgressPct(100);
         setNetworkScanPhaseLabel('Scan complete');
+        setCachedDiscoveredPrinters(merged);
       }
 
       logNetworkScanDebug('discover/summary', {
@@ -1326,7 +1400,6 @@ export function ProfileSettingsModal({
         requestedModelHint: selectedPrinterModelHint ?? null,
       });
       if (isCurrentRun()) {
-        setDiscoveredPrinters([]);
         setNetworkConnectionMessage(message);
         setNetworkScanPhaseLabel('Scan failed');
         setNetworkScanProgressPct(100);
@@ -1343,6 +1416,8 @@ export function ProfileSettingsModal({
       discoveryInFlightRef.current = false;
     }
   }, [
+    cachedDiscoveredPrinters,
+    discoveredPrinters,
     discoveryInFlightRef,
     discoveryRunIdRef,
     effectiveNetworkUiAdapter,
@@ -1675,8 +1750,8 @@ export function ProfileSettingsModal({
     handlePickPrinter(newId);
     setShowPresetPicker(false);
     setPresetSearch('');
-    setSelectedPresetManufacturer('All');
-  }, [handlePickPrinter]);
+    if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
+  }, [handlePickPrinter, presetManufacturers]);
 
   const requestDeleteSelectedPrinter = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -1865,8 +1940,8 @@ export function ProfileSettingsModal({
     const bitDepthBits = Number.isFinite(Number(preset.bitDepth?.bits))
       ? Math.round(Number(preset.bitDepth?.bits))
       : null;
-    const bitDepthLabel = Number.isFinite(Number(preset.bitDepth?.bits))
-      ? `${Math.round(Number(preset.bitDepth?.bits))} Bit`
+    const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
+      ? `${bitDepthBits} Bit`
       : null;
 
     return (
@@ -2121,6 +2196,12 @@ export function ProfileSettingsModal({
                     const online = device.connected === true && reachable;
                     const cardTitle = device.displayName || device.hostName || device.ipAddress;
                     const statusLabel = online ? 'Online' : device.connected ? 'Limited' : 'Offline';
+                    const selectedPrinterBitDepthBits = Number.isFinite(Number(selectedPrinter?.bitDepth?.bits))
+                      ? Math.round(Number(selectedPrinter?.bitDepth?.bits))
+                      : null;
+                    const selectedPrinterBitDepthLabel = selectedPrinterBitDepthBits != null && selectedPrinterBitDepthBits !== 8
+                      ? `${selectedPrinterBitDepthBits} Bit`
+                      : null;
 
                     return (
                       <button
@@ -2190,17 +2271,23 @@ export function ProfileSettingsModal({
                         <div className="mt-2.5 text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
                           <div className="flex items-center gap-1.5">
                             <span className="truncate min-w-0">{selectedPrinter?.name}</span>
-                            <span
-                              aria-hidden="true"
-                              className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none opacity-0"
-                              style={{
-                                borderColor: 'color-mix(in srgb, var(--accent-secondary), white 20%)',
-                                color: '#f8fafc',
-                                background: 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
-                              }}
-                            >
-                              {selectedPrinter?.bitDepth?.bits != null ? `${Math.round(Number(selectedPrinter.bitDepth.bits))} Bit` : '8 Bit'}
-                            </span>
+                            {selectedPrinterBitDepthLabel && (
+                              <span
+                                className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
+                                style={{
+                                  borderColor: selectedPrinterBitDepthBits === 3
+                                    ? 'color-mix(in srgb, #ef4444, white 18%)'
+                                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                                  color: '#f8fafc',
+                                  background: selectedPrinterBitDepthBits === 3
+                                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+                                }}
+                                title={selectedPrinter?.bitDepth?.description || `${selectedPrinterBitDepthLabel} display`}
+                              >
+                                <span className="relative top-[0.5px]">{selectedPrinterBitDepthLabel}</span>
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
@@ -2225,8 +2312,8 @@ export function ProfileSettingsModal({
                   const bitDepthBits = Number.isFinite(Number(printer.bitDepth?.bits))
                     ? Math.round(Number(printer.bitDepth?.bits))
                     : null;
-                  const bitDepthLabel = Number.isFinite(Number(printer.bitDepth?.bits))
-                    ? `${Math.round(Number(printer.bitDepth?.bits))} Bit`
+                  const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
+                    ? `${bitDepthBits} Bit`
                     : null;
                   const cardWidth = isEditingPrinter ? 'w-[198px]' : 'w-[236px]';
                   const imageHeight = isEditingPrinter ? 'h-[124px]' : 'h-[148px]';
@@ -2316,17 +2403,13 @@ export function ProfileSettingsModal({
                               <span
                                 className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
                                 style={{
-                                  borderColor: bitDepthBits === 8
-                                    ? 'color-mix(in srgb, #22c55e, white 22%)'
-                                    : bitDepthBits === 3
-                                      ? 'color-mix(in srgb, #ef4444, white 18%)'
-                                      : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                                  borderColor: bitDepthBits === 3
+                                    ? 'color-mix(in srgb, #ef4444, white 18%)'
+                                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
                                   color: '#f8fafc',
-                                  background: bitDepthBits === 8
-                                    ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
-                                    : bitDepthBits === 3
-                                      ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
-                                      : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+                                  background: bitDepthBits === 3
+                                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
                                 }}
                                 title={printer.bitDepth?.description || `${bitDepthLabel} display`}
                               >
@@ -3313,7 +3396,7 @@ export function ProfileSettingsModal({
                 </div>
 
                 <div className="p-3 overflow-y-auto custom-scrollbar">
-                  {selectedPresetManufacturer === 'All' ? (
+                  {isSearching ? (
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
                       {filteredPrinterPresets.map(renderPresetLibraryCard)}
                     </div>
