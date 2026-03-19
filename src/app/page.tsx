@@ -1166,9 +1166,23 @@ export default function Home() {
   React.useEffect(() => {
     const handleShaftHover = (evt: Event) => {
       const detail = (evt as CustomEvent<{ segmentId?: string | null; point?: { x: number; y: number; z: number } | null }>).detail;
-      setSupportShaftHoverDebug({
-        segmentId: detail?.segmentId ?? null,
-        point: detail?.point ?? null,
+      const nextSegmentId = detail?.segmentId ?? null;
+      const nextPoint = detail?.point ?? null;
+
+      setSupportShaftHoverDebug((prev) => {
+        if (
+          prev.segmentId === nextSegmentId &&
+          prev.point?.x === nextPoint?.x &&
+          prev.point?.y === nextPoint?.y &&
+          prev.point?.z === nextPoint?.z
+        ) {
+          return prev;
+        }
+
+        return {
+          segmentId: nextSegmentId,
+          point: nextPoint,
+        };
       });
     };
 
@@ -1176,6 +1190,9 @@ export default function Home() {
       const detail = (evt as CustomEvent<{ segmentId?: string | null }>).detail;
       setSupportShaftHoverDebug((prev) => {
         if (!detail?.segmentId || prev.segmentId === detail.segmentId) {
+          if (prev.segmentId === null && prev.point === null) {
+            return prev;
+          }
           return { segmentId: null, point: null };
         }
         return prev;
@@ -9841,7 +9858,7 @@ export default function Home() {
             leafPlacementPreview={supports.leafPlacement.previewData}
             bracePlacementPreview={supports.bracePreview}
             kickstandPlacementPreview={supports.kickstandPreview}
-            blockSupportPlacement={supports.isPlacementDisabled}
+            blockSupportPlacement={supports.isPlacementHardDisabled}
             isBranchPlacementActive={supports.branchPlacement.isActive}
             isLeafPlacementActive={supports.leafPlacement.isActive}
             isBracePlacementActive={supports.bracePlacement.isActive}

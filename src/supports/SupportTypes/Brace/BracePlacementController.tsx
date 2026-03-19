@@ -17,6 +17,7 @@ import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { generateUuid } from '@/utils/uuid';
+import { clearSelection } from '../../interaction/SupportSelection';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -951,6 +952,7 @@ export function BracePlacementController() {
 
                 bracePlacementStore.finalize();
                 bracePlacementStore.reset();
+                clearSelection();
                 return;
             }
 
@@ -1018,6 +1020,7 @@ export function BracePlacementController() {
 
             bracePlacementStore.finalize();
             bracePlacementStore.reset();
+            clearSelection();
         };
 
         window.addEventListener('shaft-click', handleShaftClick as any, true);

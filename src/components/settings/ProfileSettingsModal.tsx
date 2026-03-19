@@ -668,6 +668,21 @@ export function ProfileSettingsModal({
     }
   }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
 
+  React.useEffect(() => {
+    if (!selectedPrinterSupportsNetworkSettings) {
+      setPrinterRailViewMode('profiles');
+      return;
+    }
+
+    if (selectedPrinterFleetCount > 1) {
+      return;
+    }
+
+    if (printerRailViewMode === 'fleet') {
+      setPrinterRailViewMode('profiles');
+    }
+  }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
+
   React.useLayoutEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;

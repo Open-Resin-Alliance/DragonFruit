@@ -32,14 +32,18 @@ import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
+import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { clearSelection } from '../../interaction/SupportSelection';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
-    const isHoveringSupportTarget = supportState.hoveredCategory === 'support'
+    const rawHoveringSupportTarget = supportState.hoveredCategory === 'support'
         || supportState.hoveredCategory === 'segment'
         || supportState.hoveredCategory === 'joint'
-        || supportState.hoveredCategory === 'knot';
+        || supportState.hoveredCategory === 'knot'
+        || supportState.hoveredCategory === 'contactDisk';
+    const isHoveringSupportTarget = rawHoveringSupportTarget;
 
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);
     const meshKindRef = useRef<'twig' | 'stick' | null>(null);
@@ -290,6 +294,15 @@ export function BranchPlacementController() {
 
     // Continuous update loop - show preview when mouse is over something valid
     useFrame(() => {
+        if (isContactDiskHudInteractionActive() || shouldSuppressContactDiskHudPlacementCommit()) {
+            branchPlacementStore.setHoverPosition(null);
+            branchPlacementStore.setPreviewData(null);
+            branchPlacementStore.setSnapTarget(null);
+            meshHoverRef.current = null;
+            meshKindRef.current = null;
+            return;
+        }
+
         if (altActive && stage === 'idle') {
             if (isHoveringSupportTarget) {
                 branchPlacementStore.setHoverPosition(null);
@@ -459,6 +472,11 @@ export function BranchPlacementController() {
         if (!isActive || stage !== 'awaitingBase') return;
 
         const handleClick = (e: MouseEvent) => {
+            if (shouldSuppressContactDiskHudPlacementCommit()) {
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
             const snapTarget = branchPlacementStore.getSnapTarget();
             if (!tipPosition || !tipNormal) return;
 
@@ -505,6 +523,7 @@ export function BranchPlacementController() {
                 meshHoverRef.current = null;
                 meshKindRef.current = null;
                 resetSnapping();
+                clearSelection();
                 return;
             }
 
@@ -548,6 +567,7 @@ export function BranchPlacementController() {
             // This prevents useFrame from re-setting preview before React re-renders
             branchPlacementStore.finalize();
             branchPlacementStore.reset();
+            clearSelection();
         };
 
         window.addEventListener('click', handleClick, true);

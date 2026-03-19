@@ -22,7 +22,7 @@ export function useBranchPlacement() {
     const binding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
     const BRANCH_KEY = binding.key;
 
-    const { isPlacementDisabled } = useInteractionStatus();
+    const { isPlacementHardDisabled } = useInteractionStatus();
     const state = useBranchPlacementState();
 
     // Track branch placement hotkey globally
@@ -101,7 +101,7 @@ export function useBranchPlacement() {
 
     // Click on model to set tip
     const onModelClick = useCallback((hit: THREE.Intersection | null) => {
-        if (isPlacementDisabled || !hit) return;
+        if (isPlacementHardDisabled || !hit) return;
 
         const nativeEvent = (hit as any)?.nativeEvent;
         const altDown = !!(nativeEvent?.altKey ?? (hit as any)?.altKey);
@@ -123,7 +123,7 @@ export function useBranchPlacement() {
         branchPlacementStore.setTip(pos, normal, modelId);
 
         console.log('[BranchPlacement] Tip set at', pos, 'awaiting base click on support');
-    }, [isPlacementDisabled]);
+    }, [isPlacementHardDisabled]);
 
     // These are no-ops - snapping is handled by BranchPlacementController
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => { }, []);
@@ -131,10 +131,10 @@ export function useBranchPlacement() {
 
     // Clear if placement disabled and idle
     useEffect(() => {
-        if (isPlacementDisabled && state.stage === 'idle') {
+        if (isPlacementHardDisabled && state.stage === 'idle') {
             branchPlacementStore.reset();
         }
-    }, [isPlacementDisabled, state.stage]);
+    }, [isPlacementHardDisabled, state.stage]);
 
     return {
         altActive: state.altActive,

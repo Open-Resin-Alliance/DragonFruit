@@ -7,7 +7,7 @@ import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitive
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk/ContactDiskRenderer';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { setSelectedId } from '../../state';
 
@@ -44,10 +44,10 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
 
-  const { pickRef, visuals } = useHighlight({
+  const { pickRef, visuals, isPickingHovered } = useHighlight({
     id: twig.id,
     category: 'support',
-    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+    enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
     isSelected,
     suppressHover,
     externalHover: propHovered,
@@ -57,16 +57,9 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   });
 
   const handleClick = (e: unknown) => {
+    if (!isPickingHovered) return;
     handleSupportClick(e, twig.id, !!isInteractable);
   };
-
-  const handlePointerMove = React.useCallback(() => {
-    emitSupportModelPointerHover(twig.modelId ?? null);
-  }, [twig.modelId]);
-
-  const handlePointerOut = React.useCallback(() => {
-    emitSupportModelPointerHover(null);
-  }, []);
 
   const shafts: React.ReactNode[] = [];
   const batchedStraightShafts: InstancedShaft[] = [];
@@ -199,8 +192,6 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   return (
     <group
       onClick={handleClick}
-      onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-      onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
     >
       <group ref={pickRef as React.Ref<THREE.Group>}>
         <InstancedShaftGroup

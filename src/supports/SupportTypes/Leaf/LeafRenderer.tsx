@@ -1,7 +1,11 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
+import { useThree } from '@react-three/fiber';
+import { getSnapshot, subscribe, updateLeaf } from '../../state';
 import { Leaf, Knot } from '../../types';
-import { ContactConeRenderer } from '../../SupportPrimitives/ContactCone';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
+import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
+import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 
@@ -18,6 +22,7 @@ interface LeafRendererProps {
     baseColor?: string;
     hoverColor?: string;
     selectedColor?: string;
+    onContactDiskHudHoverChange?: (hovered: boolean) => void;
 }
 
 export const LeafRenderer = React.memo(function LeafRenderer({
@@ -33,15 +38,21 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     baseColor = '#ff8800',
     hoverColor,
     selectedColor = '#80fffd',
+    onContactDiskHudHoverChange,
 }: LeafRendererProps) {
+    const { camera, scene, gl } = useThree();
+    const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
+    const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
+    const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+    const [, setDragTick] = React.useState(0);
 
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover,
+        enabled: !!isInteractable && !suppressHover && !isSelected,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -71,33 +82,69 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         handleSupportClick(e, leaf.id, !!isInteractable);
     };
 
-    const handlePointerMove = React.useCallback(() => {
-        emitSupportModelPointerHover(leaf.modelId ?? null);
-    }, [leaf.modelId]);
+    const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
+        if (!isSelected || !leaf.contactCone) return;
+        if (!isPrimaryPointerPress(e)) return;
 
-    const handlePointerOut = React.useCallback(() => {
-        emitSupportModelPointerHover(null);
+        const socketAnchor = getFinalSocketPosition(leaf.contactCone);
+
+        dragSessionRef.current?.stop();
+        dragSessionRef.current = startContactDiskDragSession({
+            camera,
+            domElement: gl.domElement,
+            scene,
+            initialEvent: e,
+            modelId: leaf.modelId,
+            onHit: ({ point, surfaceNormal }: ContactDiskDragHit) => {
+                const latest = getSnapshot().leaves[leaf.id];
+                if (!latest?.contactCone) return;
+                liveDragConeRef.current = recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor);
+                setDragTick(t => t + 1);
+            },
+            onEnd: () => {
+                if (liveDragConeRef.current) {
+                    const latest = getSnapshot().leaves[leaf.id];
+                    if (latest) updateLeaf({ ...latest, contactCone: liveDragConeRef.current });
+                }
+                liveDragConeRef.current = null;
+                dragSessionRef.current = null;
+            },
+        });
+    }, [camera, gl.domElement, isSelected, leaf.id, leaf.contactCone, leaf.modelId, scene]);
+
+    const handleContactDiskHudPointerUp = React.useCallback(() => {
+        dragSessionRef.current?.stop();
+        dragSessionRef.current = null;
     }, []);
-
     return (
-        <group onClick={handleClick} onPointerMove={handlePointerMove} onPointerOut={handlePointerOut}>
+        <group onClick={handleClick}>
             <group ref={pickRef as any}>
-                {leaf.contactCone && !deferContactConesToSceneBatch && (
-                    <ContactConeRenderer
-                        pos={leaf.contactCone.pos}
-                        normal={leaf.contactCone.normal}
-                        surfaceNormal={leaf.contactCone.surfaceNormal}
-                        diskLengthOverride={leaf.contactCone.diskLengthOverride}
-                        profile={leaf.contactCone.profile}
-                        color={visuals.color}
-                        emissive={visuals.emissive}
-                        emissiveIntensity={visuals.emissiveIntensity}
-                        radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
-                        sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
-                        isInteractable={isInteractable}
-                        isParentSelected={!!isSelected}
-                    />
-                )}
+                {(() => {
+                    const effectiveCone = liveDragConeRef.current ?? leaf.contactCone;
+                    if (!effectiveCone || deferContactConesToSceneBatch) return null;
+                    const isConeSelected = !!effectiveCone.id && supportState.selectedId === effectiveCone.id;
+                    return (
+                        <ContactConeRenderer
+                            contactDiskId={effectiveCone.id}
+                            pos={effectiveCone.pos}
+                            normal={effectiveCone.normal}
+                            surfaceNormal={effectiveCone.surfaceNormal}
+                            diskLengthOverride={effectiveCone.diskLengthOverride}
+                            profile={effectiveCone.profile}
+                            color={visuals.color}
+                            emissive={visuals.emissive}
+                            emissiveIntensity={visuals.emissiveIntensity}
+                            radialSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                            sphereSegments={useLowDetailPrimitives ? lowDetailPrimitiveSegments : highDetailPrimitiveSegments}
+                            isInteractable={isInteractable}
+                            isParentSelected={!!isSelected}
+                            isContactDiskSelected={isConeSelected}
+                            onDiskHudHoverChange={onContactDiskHudHoverChange}
+                            onDiskHudPointerDown={handleContactDiskHudPointerDown}
+                            onDiskHudPointerUp={handleContactDiskHudPointerUp}
+                        />
+                    );
+                })()}
             </group>
 
             {showKnots !== false && (

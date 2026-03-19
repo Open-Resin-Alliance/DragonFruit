@@ -72,12 +72,19 @@ export function selectJoint(id: string) {
     setSelectedId(id);
 }
 
+export function selectContactDisk(id: string) {
+    setSelectedId(id);
+}
+
 /**
  * Clear any current selection (support or joint).
  */
 export function clearSelection() {
     clearSelectedSupportIds();
     setSelectedId(null);
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('support-selection-cleared'));
+    }
 }
 
 /**

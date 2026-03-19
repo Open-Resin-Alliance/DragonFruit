@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import * as THREE from 'three';
 import type { Brace, Knot } from '../../types';
 import { useHighlight } from '../../interaction/useHighlight';
-import { handleSupportClick, emitSupportModelPointerHover } from '../../interaction/clickHandlers';
+import { handleSupportClick } from '../../interaction/clickHandlers';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
@@ -58,7 +58,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const { pickRef, visuals } = useHighlight({
         id: brace.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch,
+        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -120,14 +120,6 @@ export const BraceRenderer = React.memo(function BraceRenderer({
         handleSupportClick(e, brace.id, !!isInteractable);
     };
 
-    const handlePointerMove = React.useCallback(() => {
-        emitSupportModelPointerHover(brace.modelId ?? null);
-    }, [brace.modelId]);
-
-    const handlePointerOut = React.useCallback(() => {
-        emitSupportModelPointerHover(null);
-    }, []);
-
     const straight = useMemo(() => {
         const dir = endVec.clone().sub(startVec);
         const len = dir.length();
@@ -139,8 +131,6 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     return (
         <group
             onClick={handleClick}
-            onPointerMove={deferInteractionToSceneBatch ? undefined : handlePointerMove}
-            onPointerOut={deferInteractionToSceneBatch ? undefined : handlePointerOut}
         >
             <group ref={pickRef as any}>
                 <group>

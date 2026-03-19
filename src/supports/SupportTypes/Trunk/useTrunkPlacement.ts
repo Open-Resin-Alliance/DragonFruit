@@ -11,6 +11,8 @@ import type { LimitationCode, WarningCode } from '../../types';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
+import { clearSelection } from '../../interaction/SupportSelection';
+import { isContactDiskHudInteractionActive } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 9;
@@ -20,7 +22,7 @@ export function useTrunkPlacementV2() {
     const [previewData, setPreviewData] = useState<SupportData | null>(null);
     const [previewError, setPreviewError] = useState<LimitationCode | null>(null);
     const [previewWarning, setPreviewWarning] = useState<WarningCode | null>(null);
-    const { isPlacementDisabled } = useInteractionStatus();
+    const { isPlacementHardDisabled } = useInteractionStatus();
     const hoverFrameRef = useRef<number | null>(null);
     const latestHoverRef = useRef<THREE.Intersection | null>(null);
     const normalMatrixRef = useRef(new THREE.Matrix3());
@@ -42,10 +44,10 @@ export function useTrunkPlacementV2() {
 
     // Auto-clear preview when placement is disabled (e.g. hovering another object)
     useEffect(() => {
-        if (isPlacementDisabled) {
+        if (isPlacementHardDisabled) {
             clearPreview();
         }
-    }, [clearPreview, isPlacementDisabled]);
+    }, [clearPreview, isPlacementHardDisabled]);
 
     useEffect(() => {
         return () => {
@@ -57,7 +59,13 @@ export function useTrunkPlacementV2() {
     }, []);
 
     const processSupportHover = useCallback((hit: THREE.Intersection | null) => {
-        if (isPlacementDisabled) {
+        if (isContactDiskHudInteractionActive()) {
+            clearPreview();
+            lastProcessedHoverRef.current = null;
+            return;
+        }
+
+        if (isPlacementHardDisabled) {
             clearPreview();
             lastProcessedHoverRef.current = null;
             return;
@@ -174,7 +182,7 @@ export function useTrunkPlacementV2() {
                     : null
         );
         setPreviewWarning((prev) => (prev === null ? prev : null));
-    }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementDisabled]);
+    }, [HOVER_MIN_INTERVAL_MS, HOVER_NORMAL_DOT_MIN, HOVER_POS_EPSILON_MM, clearPreview, isPlacementHardDisabled]);
 
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
         latestHoverRef.current = hit;
@@ -188,7 +196,7 @@ export function useTrunkPlacementV2() {
     }, [processSupportHover]);
 
     const onSupportClick = useCallback((hit: THREE.Intersection) => {
-        if (isPlacementDisabled || !hit) return;
+        if (isPlacementHardDisabled || !hit) return;
 
         // Re-calculate smoothed normal for click
         const tipNormal = calculateSmoothedNormal(hit);
@@ -242,6 +250,7 @@ export function useTrunkPlacementV2() {
                     knotUpdates: trunkUpdate?.knotUpdates ?? undefined,
                 },
             });
+            clearSelection();
             return;
         }
 
@@ -275,6 +284,8 @@ export function useTrunkPlacementV2() {
             const ok = applyTrunkReplacement(planWithBuild, before);
             if (!ok) {
                 setSnapshot(before);
+            } else {
+                clearSelection();
             }
 
             return;
@@ -298,8 +309,9 @@ export function useTrunkPlacementV2() {
             },
         });
         
+        clearSelection();
         console.log('[V2] Added trunk:', trunkBuild.trunk.id, 'to model:', modelId);
-    }, [isPlacementDisabled]);
+    }, [isPlacementHardDisabled]);
 
     return {
         onSupportHover,

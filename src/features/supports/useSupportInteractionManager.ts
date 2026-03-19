@@ -6,6 +6,7 @@ import { useBranchPlacement } from '@/supports/SupportTypes/Branch/useBranchPlac
 import { useLeafPlacement } from '@/supports/SupportTypes/Leaf/useLeafPlacement';
 import { useBracePlacement } from '@/supports/SupportTypes/Brace/useBracePlacement';
 import { useKickstandPlacement } from '@/supports/SupportTypes/Kickstand/useKickstandPlacement';
+import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { useInteractionStatus } from '@/supports/interaction/useInteractionStatus';
 import { useJointCreationHotkey } from '@/supports/SupportPrimitives/Joint/useJointCreationHotkey';
 import { useCurveHotkey } from '@/supports/Curves/useCurveHotkey';
@@ -161,7 +162,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const jointCreationState = useJointCreationState();
 
   // Centralized interaction status
-  const { isPlacementDisabled } = useInteractionStatus();
+  const { isPlacementDisabled, isPlacementHardDisabled } = useInteractionStatus();
 
   // Joint selection state for gizmo transformation
   const globalSelectedId = useSyncExternalStore(subscribe, getSelectedId, getSelectedId);
@@ -171,7 +172,14 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
-    if (isPlacementDisabled) {
+    if (isContactDiskHudInteractionActive()) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(null);
+      return;
+    }
+
+    if (isPlacementHardDisabled) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
       leafPlacement.onModelHover(null);
@@ -211,7 +219,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       // Normal trunk placement preview
       trunkPlacementV2.onSupportHover(hit);
     }
-  }, [isPlacementDisabled, trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, kickstandPlacement.isActive, jointCreationState.isActive]);
+  }, [isPlacementHardDisabled, trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, kickstandPlacement.isActive, jointCreationState.isActive]);
 
   // Handler for MODEL click (trunk placement, or branch tip placement)
   const onModelClick = useCallback((hit: THREE.Intersection) => {
@@ -680,6 +688,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     kickstandPlacement,
     jointCreationState,
     isPlacementDisabled,
+    isPlacementHardDisabled,
     globalSelectedId,
     globalSelectedCategory,
     selectedJointId,
