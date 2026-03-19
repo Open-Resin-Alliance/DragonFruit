@@ -326,6 +326,7 @@ use super::{PluginNetworkResponse, register_plugin};
 
 ${pathModules}
 
+#[allow(dead_code)]
 pub const GENERATED_BUILTIN_PLUGIN_IDS: &[&str] = &[${ids}];
 pub const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256: &str = "${allowlistHash}";
 

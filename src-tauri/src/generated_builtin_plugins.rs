@@ -9,6 +9,7 @@ pub mod athena_plugin;
 #[path = "../../plugins/athena/rust/network.rs"]
 pub mod athena_network;
 
+#[allow(dead_code)]
 pub const GENERATED_BUILTIN_PLUGIN_IDS: &[&str] = &["athena"];
 pub const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256: &str = "ce36f29e59f3e7776bd0e87b363c61874a07b74da1eeee186a213e07906acd8b";
 
