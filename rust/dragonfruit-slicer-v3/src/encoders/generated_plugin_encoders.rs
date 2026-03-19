@@ -7,7 +7,10 @@ use crate::encoders::FormatEncoder;
 pub mod athena_encoder;
 
 pub fn build_generated_plugin_encoders() -> Vec<Box<dyn FormatEncoder>> {
-    vec![
+    [
         athena_encoder::create_plugin_encoder(),
     ]
+    .into_iter()
+    .flat_map(|encoders| encoders)
+    .collect()
 }

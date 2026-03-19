@@ -81,6 +81,48 @@ Do not edit generated files manually.
 
 If capabilities and files disagree, generation fails intentionally.
 
+### 4.1) Multiple container formats per plugin (optional)
+
+If your plugin supports multiple container formats (e.g., Anycubic with both AFF and AZFF), provide:
+
+- `plugins/<vendor>/slicing/formats.json`
+  - Schema: object mapping format type names to metadata
+  - Each format lists supported file extensions
+  - Generator validates extensions match registered encoder outputs
+  - Optional: rich metadata (displayName, version, notes)
+
+**Example** (`plugins/anycubic/slicing/formats.json`):
+
+```json
+{
+  "AFF": {
+    "extensions": [".aff", ".pmwb"],
+    "displayName": "Anycubic AFF Format",
+    "version": "1.0",
+    "notes": "Standard AFF container format for Anycubic printers"
+  },
+  "AZFF": {
+    "extensions": [".azff"],
+    "displayName": "Anycubic AZFF (Enhanced)",
+    "version": "2.0",
+    "notes": "Enhanced AZFF format with improved compression"
+  }
+}
+```
+
+**Encoder function signature** (Rust):
+
+```rust
+pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
+    vec![
+        Box::new(AffPluginEncoder),
+        Box::new(AzffPluginEncoder),
+    ]
+}
+```
+
+The function returns multiple encoder instances, one per format. Each encoder's `output_format()` method must match at least one extension in `formats.json`.
+
 ---
 
 ## 5) Minimal template
@@ -138,6 +180,9 @@ Optional but recommended:
 | `declares uploadWithProgress=true but is missing network/index.ts`                  | Capability/file mismatch                                                      | Add file or set capability false                       |
 | `declares slicerEncoder=true but is missing slicing/rust/encoder_impl.rs`           | Capability/file mismatch                                                      | Add file or set capability false                       |
 | `declares tauriRuntimePlugin=true but is missing rust/plugin.rs or rust/network.rs` | Capability/file mismatch                                                      | Add both files or set capability false                 |
+| `formats.json exists but is not valid JSON`                                         | Malformed JSON in formats.json                                                | Fix JSON syntax                                        |
+| `formats.json declares extensions not matching any encoder output_format()`         | Extension in formats.json has no corresponding encoder                        | Add encoder or remove extension from formats.json      |
+| `create_plugin_encoder() declares slicerEncoder=true but returns no encoders`       | Encoder function returns empty vec                                            | Return at least one encoder instance                   |
 
 ---
 
@@ -159,6 +204,8 @@ Before requesting review:
 - [ ] Plugin logic is isolated under `plugins/<vendor>/...`
 - [ ] `pluginDefinition.ts` exists, default-exports, and declares capabilities
 - [ ] Plugin ID is allowlisted
+- [ ] If `slicerEncoder: true`: `encoder_impl.rs` exists and `create_plugin_encoder()` function is properly exported
+- [ ] If supporting multiple formats: `formats.json` exists and all extensions have matching encoders
 - [ ] Generated registries are up-to-date and committed
 - [ ] No vendor hardcoding leaked into generic app routes/registries
 - [ ] Docs updated (`plugins/README.md` + plugin-local README)

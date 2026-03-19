@@ -76,6 +76,10 @@ function enforceCapabilityConsistency(discovered) {
                   );
             }
 
+            if (capabilities.slicerEncoder && plugin.hasFormatsJson && plugin.formatsMetadata) {
+                  enforceFormatsJsonConsistency(id, plugin.formatsMetadata);
+            }
+
             const hasAnyTauriFile = plugin.hasRustPlugin || plugin.hasRustNetwork;
             if (capabilities.tauriRuntimePlugin && (!plugin.hasRustPlugin || !plugin.hasRustNetwork)) {
                   throw new Error(
@@ -87,6 +91,36 @@ function enforceCapabilityConsistency(discovered) {
                   throw new Error(
                         `[plugin-registry] Plugin "${id}" has rust/plugin.rs or rust/network.rs but capabilities.tauriRuntimePlugin is not true`,
                   );
+            }
+      }
+}
+
+function enforceFormatsJsonConsistency(pluginId, formatsMetadata) {
+      if (!formatsMetadata || typeof formatsMetadata !== 'object') {
+            return;
+      }
+
+      const allExtensions = new Set();
+      for (const [formatType, formatData] of Object.entries(formatsMetadata)) {
+            if (!Array.isArray(formatData?.extensions)) {
+                  throw new Error(
+                        `[plugin-registry] Plugin "${pluginId}" formats.json format "${formatType}" must declare extensions array`,
+                  );
+            }
+
+            for (const ext of formatData.extensions) {
+                  if (typeof ext !== 'string' || !ext.startsWith('.')) {
+                        throw new Error(
+                              `[plugin-registry] Plugin "${pluginId}" formats.json extension "${ext}" must be a string starting with "."`,
+                        );
+                  }
+
+                  if (allExtensions.has(ext)) {
+                        throw new Error(
+                              `[plugin-registry] Plugin "${pluginId}" formats.json declares duplicate extension "${ext}"`,
+                        );
+                  }
+                  allExtensions.add(ext);
             }
       }
 }
@@ -109,6 +143,7 @@ async function discoverPlugins() {
             const tsNetworkHandlerPath = path.join(pluginDir, 'network', 'networkHandlers.ts');
             const tsUploadHandlerPath = path.join(pluginDir, 'network', 'index.ts');
             const rustSlicerEncoderPath = path.join(pluginDir, 'slicing', 'rust', 'encoder_impl.rs');
+            const formatsJsonPath = path.join(pluginDir, 'slicing', 'formats.json');
 
             const hasPluginDefinition = await fs.access(pluginDefinitionPath).then(() => true).catch(() => false);
             if (!hasPluginDefinition) continue;
@@ -122,6 +157,17 @@ async function discoverPlugins() {
             const hasTsUploadHandler = await fs.access(tsUploadHandlerPath).then(() => true).catch(() => false);
             const hasRustSlicingEncoder = await fs.access(rustSlicerEncoderPath).then(() => true).catch(() => false);
 
+            let formatsMetadata = null;
+            const hasFormatsJson = await fs.access(formatsJsonPath).then(() => true).catch(() => false);
+            if (hasFormatsJson) {
+                  try {
+                        const formatsJsonContent = await fs.readFile(formatsJsonPath, 'utf8');
+                        formatsMetadata = JSON.parse(formatsJsonContent);
+                  } catch (err) {
+                        throw new Error(`[plugin-registry] Plugin "${pluginId}" formats.json is not valid JSON: ${err.message}`);
+                  }
+            }
+
             discovered.push({
                   id: pluginId,
                   hasRustPlugin,
@@ -130,6 +176,8 @@ async function discoverPlugins() {
                   hasTsUploadHandler,
                   hasRustSlicingEncoder,
                   capabilities,
+                  hasFormatsJson,
+                  formatsMetadata,
             });
       }
 
@@ -372,9 +420,12 @@ use crate::encoders::FormatEncoder;
 ${moduleImports}
 
 pub fn build_generated_plugin_encoders() -> Vec<Box<dyn FormatEncoder>> {
-    vec![
+    [
 ${encoderItems}
     ]
+    .into_iter()
+    .flat_map(|encoders| encoders)
+    .collect()
 }
 `;
 }

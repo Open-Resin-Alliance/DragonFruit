@@ -16,8 +16,8 @@ use zip::{CompressionMethod, ZipWriter};
 
 pub struct AthenaPluginEncoder;
 
-pub fn create_plugin_encoder() -> Box<dyn FormatEncoder> {
-    Box::new(AthenaPluginEncoder)
+pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
+    vec![Box::new(AthenaPluginEncoder)]
 }
 
 fn normalize_container_compression_level(raw: u8) -> i32 {
