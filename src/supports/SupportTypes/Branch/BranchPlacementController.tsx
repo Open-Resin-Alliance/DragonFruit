@@ -34,15 +34,13 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
 import { clearSelection } from '../../interaction/SupportSelection';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
+import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const immediateModelHoverId = useImmediateModelHoverId();
-    const rawHoveringSupportTarget = supportState.hoveredCategory === 'support'
-        || supportState.hoveredCategory === 'segment'
-        || supportState.hoveredCategory === 'joint'
-        || supportState.hoveredCategory === 'knot';
+    const rawHoveringSupportTarget = isSupportTargetHoverCategory(supportState.hoveredCategory);
     const isHoveringSupportTarget = rawHoveringSupportTarget && immediateModelHoverId === null;
 
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);

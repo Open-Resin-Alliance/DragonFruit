@@ -2,6 +2,8 @@ import { useState, useRef, useCallback } from 'react';
 import { useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
 import { SnappingManager, SnapResult, SnapTarget } from './SnappingManager';
+import { resolveSnapState } from './shared/placement/snapping/snappingResolver';
+import { snappingSessionStore } from './shared/placement/snapping/snappingSession';
 
 export function useSnapping(
     getTargetCallback: (id: string) => SnapTarget | null,
@@ -28,6 +30,7 @@ export function useSnapping(
         
         const potential = getPotentialTargets ? getPotentialTargets() : [];
         const result = manager.current.update(raycaster.ray, hit, getTargetCallback, potential);
+        snappingSessionStore.setState(resolveSnapState(result));
 
         // Do NOT publish snapping results to React state every frame.
         // Publishing every mouse move/frame can cause visible input lag.
@@ -53,6 +56,7 @@ export function useSnapping(
 
     const resetSnapping = useCallback(() => {
         manager.current.reset();
+        snappingSessionStore.reset();
         setSnapResult({
             state: 'idle',
             snappedPos: { x: 0, y: 0, z: 0 },

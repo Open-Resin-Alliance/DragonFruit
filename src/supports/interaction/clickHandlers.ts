@@ -1,4 +1,4 @@
-import { selectSupport, selectSupportWithToggle, selectJoint } from './SupportSelection';
+import { applySupportSelectionClick, selectJointById } from './shared/selection/selectionController';
 import { setSelectedId } from '../state';
 
 let hoverGuardInitialized = false;
@@ -92,11 +92,11 @@ export function emitSupportModelPointerSelect(modelId: string | null) {
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.
  */
 export function handleSupportClick(e: any, id: string, isInteractable: boolean) {
+    const shiftDown = isShiftActiveFromEvent(e);
+
     if (!isInteractable) {
         return;
     }
-
-    const shiftDown = isShiftActiveFromEvent(e);
     
     e.stopPropagation(); // Stop R3F propagation
     
@@ -106,11 +106,11 @@ export function handleSupportClick(e: any, id: string, isInteractable: boolean) 
         e.nativeEvent.stopImmediatePropagation();
     }
     
-    if (shiftDown) {
-        selectSupportWithToggle(id);
-    } else {
-        selectSupport(id);
-    }
+    applySupportSelectionClick({
+        id,
+        shiftKey: shiftDown,
+        isInteractable,
+    });
 }
 
 /**
@@ -142,7 +142,7 @@ export function handleJointClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    selectJoint(id);
+    selectJointById(id);
     if (onSelect) onSelect(id);
 }
 

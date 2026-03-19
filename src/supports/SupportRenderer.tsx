@@ -34,6 +34,7 @@ import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftSt
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './autoBracing/settings';
 import { VoronoiSeedDebugMarkers } from './autoBracing/VoronoiSeedDebugMarkers';
+import { isJointHoverCategory, isSupportHoverCategory } from './interaction/shared/hover/supportHoverResolver';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -128,12 +129,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
     const knotGizmoInteractionLockTimeoutRef = React.useRef<number | null>(null);
     const rawHoveredCategory = state.hoveredCategory as string | null | undefined;
-    const rawSupportLikeHover = rawHoveredCategory === 'support'
-        || rawHoveredCategory === 'segment'
-        || rawHoveredCategory === 'joint'
-        || rawHoveredCategory === 'knot'
-        || rawHoveredCategory === 'raft';
-    const jointCategoryHoverSuppressed = rawHoveredCategory === 'joint' || rawHoveredCategory === 'join';
+    const rawSupportLikeHover = isSupportHoverCategory(rawHoveredCategory);
+    const jointCategoryHoverSuppressed = isJointHoverCategory(rawHoveredCategory);
     const supportInteractionSuppressed = mode === 'support' && (disableSelectionAndHover || gizmoInteractionLockActive);
     const supportSelectionAndHoverSuppressed = supportInteractionSuppressed || (mode === 'support' && jointCategoryHoverSuppressed);
     const supportPointerInteractable = interactionHooksEnabled && mode === 'support' && !navigationLodActive;

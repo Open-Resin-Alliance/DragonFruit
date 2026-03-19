@@ -1,5 +1,12 @@
 import React from 'react';
 import { selectAllSupports } from '@/supports/interaction/SupportSelection';
+import {
+  beginSupportMarqueeSelection,
+  clearSupportMarqueeSelection,
+  commitSupportMarqueeSelection,
+  endSupportMarqueeSelection,
+  updateSupportMarqueeCandidates,
+} from '@/supports/interaction/shared/selection/marqueeSelectionController';
 
 type MarqueeSelection = {
   start: { x: number; y: number };
@@ -113,6 +120,10 @@ export function useMarqueeSelectionHandlers({
         current: { x: clamped.x, y: clamped.y },
       });
 
+      if (mode === 'support') {
+        beginSupportMarqueeSelection();
+      }
+
       e.preventDefault();
       e.stopPropagation();
       if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
@@ -132,10 +143,25 @@ export function useMarqueeSelectionHandlers({
       }
       : prev));
 
+    if (mode === 'support') {
+      const previewSelection = {
+        start,
+        current: { x: clamped.x, y: clamped.y },
+      };
+      const candidateIds = resolveMarqueeSelectedSupportIds(previewSelection);
+      updateSupportMarqueeCandidates(candidateIds);
+    }
+
     e.preventDefault();
     e.stopPropagation();
     if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-  }, [clampPointToContainer, marqueeSelection, suppressNextCanvasClickRef]);
+  }, [
+    clampPointToContainer,
+    marqueeSelection,
+    mode,
+    resolveMarqueeSelectedSupportIds,
+    suppressNextCanvasClickRef,
+  ]);
 
   const endMarqueeSelection = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (marqueePointerIdRef.current == null) return;
@@ -155,6 +181,9 @@ export function useMarqueeSelectionHandlers({
     }
 
     if (!currentSelection) {
+      if (mode === 'support') {
+        clearSupportMarqueeSelection();
+      }
       return;
     }
 
@@ -163,6 +192,9 @@ export function useMarqueeSelectionHandlers({
     const dragDistanceSq = (dragDx * dragDx) + (dragDy * dragDy);
 
     if (dragDistanceSq < 64) {
+      if (mode === 'support') {
+        clearSupportMarqueeSelection();
+      }
       return;
     }
 
@@ -187,7 +219,9 @@ export function useMarqueeSelectionHandlers({
       }, 0);
     } else if (mode === 'support') {
       const selectedSupportIds = resolveMarqueeSelectedSupportIds(currentSelection);
+      commitSupportMarqueeSelection(selectedSupportIds);
       selectAllSupports(selectedSupportIds);
+      endSupportMarqueeSelection();
     }
 
     e.preventDefault();

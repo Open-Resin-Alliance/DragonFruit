@@ -18,6 +18,7 @@ import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlac
 import type { KickstandHostKind } from './types';
 import type { Vec3 } from '../../types';
 import { clearSelection } from '../../interaction/SupportSelection';
+import { snappingSessionStore } from '../../interaction/shared/placement/snapping/snappingSession';
 
 type DesiredBand = 'left' | 'right' | 'front';
 
@@ -530,16 +531,17 @@ export function KickstandPlacementController() {
             return;
         }
 
-        const result = updateSnapping();
+        updateSnapping();
+        const resolvedSnap = snappingSessionStore.getSnapshot();
 
-        if (result.state !== 'locked' || !result.targetId || result.t === undefined) {
+        if (resolvedSnap.state !== 'locked' || !resolvedSnap.targetId || resolvedSnap.t === null || !resolvedSnap.snappedPos) {
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
             return;
         }
 
-        const meta = targetMetaById.get(result.targetId);
+        const meta = targetMetaById.get(resolvedSnap.targetId);
         const path = meta?.target.pathSegment;
         if (!meta || !path) {
             kickstandPlacementStore.clearPreview();
@@ -553,8 +555,8 @@ export function KickstandPlacementController() {
             lastPreviewSegmentIdRef.current = meta.segmentId;
         }
 
-        const clampedT = clampKickstandHostT(result.t, meta.minT);
-        const snappedPos = clampedT === result.t ? result.snappedPos : getPathPointAtT(path, clampedT);
+        const clampedT = clampKickstandHostT(resolvedSnap.t, meta.minT);
+        const snappedPos = clampedT === resolvedSnap.t ? resolvedSnap.snappedPos : getPathPointAtT(path, clampedT);
         const hoveredPoint = hoverPointBySegmentRef.current.get(meta.segmentId);
         const preferredPoint = hoveredPoint
             ?? getPreferredPointFromPointerRay(snappedPos, camera, pointer, raycaster);

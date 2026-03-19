@@ -15,6 +15,7 @@ import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
 import { clearSelection } from '../../interaction/SupportSelection';
+import { snappingSessionStore } from '../../interaction/shared/placement/snapping/snappingSession';
 
 export function LeafPlacementController() {
     const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
@@ -203,27 +204,28 @@ export function LeafPlacementController() {
 
         raycaster.setFromCamera(pointer, camera);
 
-        const result = updateSnapping();
+        updateSnapping();
+        const resolvedSnap = snappingSessionStore.getSnapshot();
 
         let knotPos: Vec3 | null = null;
         let segmentId = 'free';
         let hostDiameterMm: number | undefined = undefined;
         let t: number | undefined = undefined;
 
-        if (result.state === 'locked' && result.targetId && result.snappedPos && result.t !== undefined) {
-            knotPos = result.snappedPos;
-            t = result.t;
+        if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
+            knotPos = resolvedSnap.snappedPos;
+            t = resolvedSnap.t;
 
-            segmentId = result.targetId;
+            segmentId = resolvedSnap.targetId;
 
-            const target = getTarget(result.targetId);
+            const target = getTarget(resolvedSnap.targetId);
             if (target?.pathSegment?.radius !== undefined) {
                 hostDiameterMm = target.pathSegment.radius * 2;
             }
 
             // If snapped to a brace, compute local tapered host diameter.
-            if (result.targetId.startsWith('braceSegment:') && result.t !== undefined) {
-                const braceId = result.targetId.slice('braceSegment:'.length);
+            if (resolvedSnap.targetId.startsWith('braceSegment:')) {
+                const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
                 const brace = supportState.braces[braceId];
                 const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                 const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -237,13 +239,13 @@ export function LeafPlacementController() {
                         0.001,
                         (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                     );
-                    hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, result.t);
+                    hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, resolvedSnap.t);
                 }
             }
 
             leafPlacementStore.setSnapTarget({
-                targetId: result.targetId,
-                snappedPos: result.snappedPos,
+                targetId: resolvedSnap.targetId,
+                snappedPos: resolvedSnap.snappedPos,
                 t,
                 hostDiameterMm,
                 hostSegmentId: segmentId,

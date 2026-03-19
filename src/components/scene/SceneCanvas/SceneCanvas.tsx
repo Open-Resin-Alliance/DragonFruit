@@ -40,6 +40,7 @@ import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePla
 import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/KickstandPlacementController';
 import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
 import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
@@ -1188,10 +1189,7 @@ export function SceneCanvas({
   );
   const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
-  const supportHoverTargetActive = supportStateForBounds.hoveredCategory === 'support'
-    || supportStateForBounds.hoveredCategory === 'segment'
-    || supportStateForBounds.hoveredCategory === 'joint'
-    || supportStateForBounds.hoveredCategory === 'knot';
+  const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
 
   const branchHoverDotVisible = Boolean(
     branchHoverPosition
