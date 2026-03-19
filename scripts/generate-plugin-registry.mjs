@@ -42,13 +42,13 @@ function enforceCapabilityConsistency(discovered) {
 
             if (capabilities.networkOperations && !plugin.hasTsNetworkHandler) {
                   throw new Error(
-                        `[plugin-registry] Plugin "${id}" declares networkOperations=true but is missing network/nanodlpHandlers.ts`,
+                        `[plugin-registry] Plugin "${id}" declares networkOperations=true but is missing network/networkHandlers.ts`,
                   );
             }
 
             if (!capabilities.networkOperations && plugin.hasTsNetworkHandler) {
                   throw new Error(
-                        `[plugin-registry] Plugin "${id}" has network/nanodlpHandlers.ts but capabilities.networkOperations is not true`,
+                        `[plugin-registry] Plugin "${id}" has network/networkHandlers.ts but capabilities.networkOperations is not true`,
                   );
             }
 
@@ -106,7 +106,7 @@ async function discoverPlugins() {
             const pluginDefinitionPath = path.join(pluginDir, 'pluginDefinition.ts');
             const rustPluginPath = path.join(pluginDir, 'rust', 'plugin.rs');
             const rustNetworkPath = path.join(pluginDir, 'rust', 'network.rs');
-            const tsNetworkHandlerPath = path.join(pluginDir, 'network', 'nanodlpHandlers.ts');
+            const tsNetworkHandlerPath = path.join(pluginDir, 'network', 'networkHandlers.ts');
             const tsUploadHandlerPath = path.join(pluginDir, 'network', 'index.ts');
             const rustSlicerEncoderPath = path.join(pluginDir, 'slicing', 'rust', 'encoder_impl.rs');
 
@@ -221,7 +221,7 @@ function buildTsGeneratedNetworkHandlersFile(discovered) {
       const imports = networkCapable
             .map((plugin) => {
                   const safe = plugin.id.replace(/[^a-zA-Z0-9]+/g, '_');
-                  return `import { handlePluginNetworkOperation as ${safe}_network_handler } from '../../../plugins/${plugin.id}/network/nanodlpHandlers';`;
+                  return `import { handlePluginNetworkOperation as ${safe}_network_handler } from '../../../plugins/${plugin.id}/network/networkHandlers';`;
             })
             .join('\n');
 

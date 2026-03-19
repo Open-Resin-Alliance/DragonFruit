@@ -106,7 +106,7 @@ Required entrypoint:
 Optional entrypoints (gated by capabilities):
 
 - Frontend network operations
-  - `plugins/<vendor>/network/nanodlpHandlers.ts`
+  - `plugins/<vendor>/network/networkHandlers.ts`
   - export alias: `handlePluginNetworkOperation`
 - Frontend upload bridge
   - `plugins/<vendor>/network/index.ts`

@@ -74,7 +74,7 @@ Do not edit generated files manually.
 
 | Capability flag            | Required file(s)                                                       | Required export                       |
 | -------------------------- | ---------------------------------------------------------------------- | ------------------------------------- |
-| `networkOperations: true`  | `plugins/<vendor>/network/nanodlpHandlers.ts`                          | `handlePluginNetworkOperation`        |
+| `networkOperations: true`  | `plugins/<vendor>/network/networkHandlers.ts`                          | `handlePluginNetworkOperation`        |
 | `uploadWithProgress: true` | `plugins/<vendor>/network/index.ts`                                    | `uploadPrintJobWithProgress`          |
 | `tauriRuntimePlugin: true` | `plugins/<vendor>/rust/plugin.rs` + `plugins/<vendor>/rust/network.rs` | runtime registration/dispatch symbols |
 | `slicerEncoder: true`      | `plugins/<vendor>/slicing/rust/encoder_impl.rs`                        | `create_plugin_encoder()`             |
@@ -133,8 +133,8 @@ Optional but recommended:
 | `Discovered plugin(s) not in allowlist`                                             | Plugin folder contains `pluginDefinition.ts` but ID is missing from allowlist | Add ID to `src/config/complex-plugin-allowlist.json`   |
 | `Allowlisted plugin(s) missing pluginDefinition.ts`                                 | Allowlist includes a plugin ID with no source definition                      | Add `pluginDefinition.ts` or remove stale allowlist ID |
 | `must declare a capabilities block`                                                 | Plugin definition omits `capabilities`                                        | Add `capabilities` object                              |
-| `declares networkOperations=true but is missing network/nanodlpHandlers.ts`         | Capability/file mismatch                                                      | Add file or set capability false                       |
-| `has network/nanodlpHandlers.ts but capabilities.networkOperations is not true`     | Extra file for disabled capability                                            | Set capability true or remove file                     |
+| `declares networkOperations=true but is missing network/networkHandlers.ts`         | Capability/file mismatch                                                      | Add file or set capability false                       |
+| `has network/networkHandlers.ts but capabilities.networkOperations is not true`     | Extra file for disabled capability                                            | Set capability true or remove file                     |
 | `declares uploadWithProgress=true but is missing network/index.ts`                  | Capability/file mismatch                                                      | Add file or set capability false                       |
 | `declares slicerEncoder=true but is missing slicing/rust/encoder_impl.rs`           | Capability/file mismatch                                                      | Add file or set capability false                       |
 | `declares tauriRuntimePlugin=true but is missing rust/plugin.rs or rust/network.rs` | Capability/file mismatch                                                      | Add both files or set capability false                 |

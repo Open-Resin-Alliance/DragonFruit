@@ -46,8 +46,10 @@ Out of scope:
   - profile/material UI semantics and transformation helpers
 - `network/nanodlp.ts`
   - shared NanoDLP utility layer
+- `network/networkHandlers.ts`
+  - canonical plugin network entrypoint (`handlePluginNetworkOperation`)
 - `network/nanodlpHandlers.ts`
-  - high-level operation router (plugin network entrypoint)
+  - Athena NanoDLP operation router implementation
 - `network/handlers/*`
   - operation-focused modules (`connect`, `discover`, `materials`, `jobs`, `printer`)
 - `network/index.ts`
