@@ -1,15 +1,19 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, FlaskConical, ImagePlus, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
 import {
+  applyOfficialMaterialProfileUpdate,
+  applyOfficialPrinterProfileUpdate,
   addMaterialProfile,
   addPrinterProfileFromPreset,
   disconnectPrinterNetworkDevice,
   duplicatePrinterProfileAsCustom,
   getActivePrinterProfile,
   getAvailablePrinterPresets,
+  getOfficialMaterialProfileUpdates,
+  getOfficialPrinterProfileUpdates,
   getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
@@ -34,6 +38,11 @@ import {
   getDefaultProfileNetworkUiAdapter,
   getProfileNetworkUiAdapter,
 } from '@/features/plugins/pluginRegistry';
+import {
+  getPrinterReachabilityServerSnapshot,
+  getPrinterReachabilitySnapshot,
+  subscribeToPrinterReachability,
+} from '@/features/network/printerReachabilityStore';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 type ProfileSettingsModalProps = {
@@ -41,6 +50,7 @@ type ProfileSettingsModalProps = {
   onClose: () => void;
   initialTab?: 'printer' | 'material';
   openPrinterLibraryToken?: number;
+  openNetworkSettingsToken?: number;
 };
 
 type DeleteConfirmTarget =
@@ -136,6 +146,7 @@ function resolveOfficialPresetIdFromProfile(profile: PrinterProfile): string | n
 }
 
 type BuildDimensionEditMode = 'manual' | 'auto';
+type PrinterRailViewMode = 'profiles' | 'fleet';
 
 function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): number {
   const safeResolution = Math.max(1, Math.round(resolutionPx));
@@ -148,6 +159,7 @@ export function ProfileSettingsModal({
   onClose,
   initialTab = 'printer',
   openPrinterLibraryToken = 0,
+  openNetworkSettingsToken = 0,
 }: ProfileSettingsModalProps) {
   const logNetworkScanDebug = React.useCallback((scope: string, details: Record<string, unknown>) => {
     try {
@@ -178,6 +190,7 @@ export function ProfileSettingsModal({
   const [showManualNetworkEntry, setShowManualNetworkEntry] = React.useState(false);
   const [hasAutoScannedOnOpen, setHasAutoScannedOnOpen] = React.useState(false);
   const [discoveredPrinters, setDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
+    const [cachedDiscoveredPrinters, setCachedDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
   const [nanodlpMaterials, setNanodlpMaterials] = React.useState<NanoDlpMaterial[]>([]);
   const [isLoadingNanodlpMaterials, setIsLoadingNanodlpMaterials] = React.useState(false);
   const [nanodlpMaterialsError, setNanodlpMaterialsError] = React.useState<string | null>(null);
@@ -223,21 +236,39 @@ export function ProfileSettingsModal({
   const [uploadTargetPrinterId, setUploadTargetPrinterId] = React.useState<string | null>(null);
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
   const [presetSearch, setPresetSearch] = React.useState('');
-  const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('All');
+  const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('');
   const [buildDimensionModeByPrinterId, setBuildDimensionModeByPrinterId] = React.useState<Record<string, BuildDimensionEditMode>>({});
+  const [printerRailViewMode, setPrinterRailViewMode] = React.useState<PrinterRailViewMode>('profiles');
+  const [isEditFleetUnitModalOpen, setIsEditFleetUnitModalOpen] = React.useState(false);
+  const [editingFleetUnitId, setEditingFleetUnitId] = React.useState<string | null>(null);
+  const [editingFleetUnitNickname, setEditingFleetUnitNickname] = React.useState('');
+  const [editingFleetUnitImageDataUrl, setEditingFleetUnitImageDataUrl] = React.useState<string | null>(null);
+  const [officialUpdateStatusMessage, setOfficialUpdateStatusMessage] = React.useState<string | null>(null);
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
+  const fleetUnitImageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
+  const printerReachabilityByDeviceId = React.useSyncExternalStore(
+    subscribeToPrinterReachability,
+    getPrinterReachabilitySnapshot,
+    getPrinterReachabilityServerSnapshot,
+  );
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
+  const officialPrinterUpdates = React.useMemo(() => getOfficialPrinterProfileUpdates(profileState), [profileState]);
+  const officialMaterialUpdates = React.useMemo(() => getOfficialMaterialProfileUpdates(profileState), [profileState]);
 
   const presetManufacturers = React.useMemo(() => {
     const uniq = new Set(availablePrinterPresets.map((preset) => preset.manufacturer));
-    return ['All', ...Array.from(uniq).sort((a, b) => a.localeCompare(b))];
+    const sorted = Array.from(uniq)
+      .filter(m => m.toLowerCase() !== 'generic')
+      .sort((a, b) => a.localeCompare(b));
+    const generic = Array.from(uniq).filter(m => m.toLowerCase() === 'generic');
+    return [...sorted, ...generic];
   }, [availablePrinterPresets]);
 
   const filteredPrinterPresets = React.useMemo(() => {
     const search = presetSearch.trim().toLowerCase();
     return availablePrinterPresets.filter((preset) => {
-      const manufacturerMatch = selectedPresetManufacturer === 'All' || preset.manufacturer === selectedPresetManufacturer;
+      const manufacturerMatch = search.length > 0 || preset.manufacturer === selectedPresetManufacturer;
       const searchMatch =
         search.length === 0
         || preset.name.toLowerCase().includes(search)
@@ -247,9 +278,9 @@ export function ProfileSettingsModal({
     });
   }, [availablePrinterPresets, presetSearch, selectedPresetManufacturer]);
 
-  const groupedFilteredPrinterPresets = React.useMemo(() => {
-    if (selectedPresetManufacturer === 'All') return [] as Array<{ family: string; presets: typeof filteredPrinterPresets }>;
+  const isSearching = presetSearch.trim().length > 0;
 
+  const groupedFilteredPrinterPresets = React.useMemo(() => {
     const grouped = new Map<string, typeof filteredPrinterPresets>();
     filteredPrinterPresets.forEach((preset) => {
       const family = (preset.family ?? '').trim() || 'Other';
@@ -275,6 +306,13 @@ export function ProfileSettingsModal({
     });
     return set;
   }, [profileState.printerProfiles]);
+
+  // Initialize first manufacturer selection when presetManufacturers becomes available
+  React.useLayoutEffect(() => {
+    if (selectedPresetManufacturer === '' && presetManufacturers.length > 0) {
+      setSelectedPresetManufacturer(presetManufacturers[0]);
+    }
+  }, [presetManufacturers, selectedPresetManufacturer]);
 
   const selectedPrinter = React.useMemo(() => {
     if (profileState.printerProfiles.length === 0) return null;
@@ -418,6 +456,16 @@ export function ProfileSettingsModal({
     return filteredMaterialProfiles.find((material) => material.id === selectedMaterialId) ?? filteredMaterialProfiles[0];
   }, [filteredMaterialProfiles, selectedMaterialId]);
 
+  const selectedPrinterUpdate = React.useMemo(() => {
+    if (!selectedPrinter) return null;
+    return officialPrinterUpdates.find((update) => update.printerProfileId === selectedPrinter.id) ?? null;
+  }, [officialPrinterUpdates, selectedPrinter]);
+
+  const selectedMaterialUpdate = React.useMemo(() => {
+    if (!selectedMaterial) return null;
+    return officialMaterialUpdates.find((update) => update.materialProfileId === selectedMaterial.id) ?? null;
+  }, [officialMaterialUpdates, selectedMaterial]);
+
   const selectedPrinterSupportsNetworkSettings = Boolean(selectedPrinter?.networkSupport);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(selectedPrinter?.networkSupport),
@@ -443,7 +491,9 @@ export function ProfileSettingsModal({
 
   const selectedNanodlpMaterialIdRef = React.useRef('');
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
+  const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
+  const lastInitializedNetworkPrinterIdRef = React.useRef<string | null>(null);
   const discoveryInFlightRef = React.useRef(false);
   const discoveryRunIdRef = React.useRef(0);
 
@@ -583,11 +633,40 @@ export function ProfileSettingsModal({
     () => managedNetworkPrinters.filter((device) => device.connected).length,
     [managedNetworkPrinters],
   );
+  const hasMultipleConnectedManagedPrinters = connectedManagedNetworkPrinterCount > 1;
+  const selectedPrinterFleetCount = managedNetworkPrinters.length;
+  const canShowFleetRailMode = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
+  const shouldRenderFleetRail = selectedPrinterSupportsNetworkSettings && printerRailViewMode === 'fleet';
   const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 1 ? 'Manage Fleet' : 'Network Settings';
+  const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
+  const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
   const activeManagedNetworkPrinter = React.useMemo(
     () => managedNetworkPrinters.find((device) => device.id === selectedPrinter?.activeNetworkDeviceId) ?? null,
     [managedNetworkPrinters, selectedPrinter?.activeNetworkDeviceId],
   );
+  const editingFleetUnit = React.useMemo(
+    () => managedNetworkPrinters.find((device) => device.id === editingFleetUnitId) ?? null,
+    [editingFleetUnitId, managedNetworkPrinters],
+  );
+  const isSelectedNanodlpPrinterOffline = React.useMemo(() => {
+    if (!isNanodlpPrinter) return false;
+    if (!selectedNanodlpHost) return false;
+
+    if (activeManagedNetworkPrinter) {
+      if (printerReachabilityByDeviceId[activeManagedNetworkPrinter.id] === false) return true;
+      return activeManagedNetworkPrinter.connected !== true;
+    }
+
+    return selectedPrinter?.networkConnection?.connected === false;
+  }, [
+    activeManagedNetworkPrinter,
+    isNanodlpPrinter,
+    printerReachabilityByDeviceId,
+    selectedNanodlpHost,
+    selectedPrinter?.networkConnection?.connected,
+  ]);
+  const shouldShowNanodlpSelectedPrinterOfflineState = isSelectedNanodlpPrinterOffline && hasMultipleConnectedManagedPrinters;
+  const shouldShowNanodlpMaterialsPanel = shouldUseNanodlpOnDeviceMaterials || shouldShowNanodlpSelectedPrinterOfflineState;
 
   const primaryEditFields = effectiveNetworkUiAdapter.primaryEditFields;
   const basicEditSections = effectiveNetworkUiAdapter.basicSections;
@@ -676,6 +755,21 @@ export function ProfileSettingsModal({
     return effectiveNetworkUiAdapter.isDynamicWaitEnabled(nanodlpEditDraft);
   }, [nanodlpEditDraft, effectiveNetworkUiAdapter]);
 
+  React.useEffect(() => {
+    if (!selectedPrinterSupportsNetworkSettings) {
+      setPrinterRailViewMode('profiles');
+      return;
+    }
+
+    if (selectedPrinterFleetCount > 1) {
+      return;
+    }
+
+    if (printerRailViewMode === 'fleet') {
+      setPrinterRailViewMode('profiles');
+    }
+  }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
+
   React.useLayoutEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;
@@ -693,8 +787,17 @@ export function ProfileSettingsModal({
       && openPrinterLibraryToken > 0
       && openPrinterLibraryToken > lastHandledOpenPrinterLibraryTokenRef.current;
 
+    const shouldOpenNetworkSettings =
+      initialTab === 'printer'
+      && openNetworkSettingsToken > 0
+      && openNetworkSettingsToken > lastHandledOpenNetworkSettingsTokenRef.current;
+
     if (shouldOpenPrinterLibrary) {
       lastHandledOpenPrinterLibraryTokenRef.current = openPrinterLibraryToken;
+    }
+
+    if (shouldOpenNetworkSettings) {
+      lastHandledOpenNetworkSettingsTokenRef.current = openNetworkSettingsToken;
     }
 
     setSelectedPrinterId(profileState.activePrinterProfileId);
@@ -702,13 +805,13 @@ export function ProfileSettingsModal({
     setSelectedResinFamily(null);
     setIsMaterialEditorOpen(false);
     setIsEditingPrinter(false);
-    setIsNetworkSettingsOpen(false);
-    setShowPresetPicker(shouldOpenPrinterLibrary);
+    setIsNetworkSettingsOpen(shouldOpenNetworkSettings);
+    setShowPresetPicker(shouldOpenPrinterLibrary && !shouldOpenNetworkSettings);
     setPresetSearch('');
-    setSelectedPresetManufacturer('All');
+    if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
     const materials = getMaterialProfilesForPrinter(profileState.activePrinterProfileId, profileState);
     setSelectedMaterialId(materials[0]?.id ?? null);
-  }, [initialTab, isOpen, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState]);
+  }, [initialTab, isOpen, openNetworkSettingsToken, openPrinterLibraryToken, profileState.activePrinterProfileId, profileState, presetManufacturers]);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -795,16 +898,23 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) {
       setIsNetworkSettingsOpen(false);
       setIsAddingNetworkPrinter(false);
+      lastInitializedNetworkPrinterIdRef.current = null;
       return;
     }
 
+    if (lastInitializedNetworkPrinterIdRef.current === selectedPrinter.id) {
+      return;
+    }
+    lastInitializedNetworkPrinterIdRef.current = selectedPrinter.id;
+
     setNetworkDiscoveryEnabled(selectedPrinter.network?.discoveryEnabled ?? true);
     setNetworkIpAddress(selectedPrinter.network?.ipAddress ?? '');
+    setCachedDiscoveredPrinters(discoveredPrinters);
     setDiscoveredPrinters([]);
     setNetworkConnectionMessage(selectedPrinter.networkConnection?.statusText ?? '');
     setShowManualNetworkEntry(false);
     setIsAddingNetworkPrinter((selectedPrinter.networkFleet?.length ?? 0) === 0);
-  }, [selectedPrinter]);
+  }, [discoveredPrinters, selectedPrinter]);
 
   React.useEffect(() => {
     if (!selectedPrinterSupportsNetworkSettings) {
@@ -907,6 +1017,14 @@ export function ProfileSettingsModal({
     setIsNanodlpEditDialogOpen(true);
   }, [effectiveNetworkUiAdapter, selectedNanodlpMaterial]);
 
+  const openNanodlpEditDialogForMaterial = React.useCallback((material: NanoDlpMaterial) => {
+    if (material.locked) return;
+    handleSelectNanodlpMaterial(material);
+    setNanodlpEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(material.meta ?? {}));
+    setNanodlpEditTab('basic');
+    setIsNanodlpEditDialogOpen(true);
+  }, [effectiveNetworkUiAdapter, handleSelectNanodlpMaterial]);
+
   const handleSaveNanodlpEdits = React.useCallback(async () => {
     if (!selectedPrinter) return;
     if (!selectedNanodlpMaterial) return;
@@ -976,6 +1094,13 @@ export function ProfileSettingsModal({
     try {
       const configuredHost = networkIpAddress.trim();
       const seedDevices: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
+      const carryForwardDiscovered = [...discoveredPrinters, ...cachedDiscoveredPrinters].filter((item, index, array) => (
+        array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
+      ));
+
+      if (isCurrentRun() && carryForwardDiscovered.length > 0) {
+        setDiscoveredPrinters(carryForwardDiscovered);
+      }
 
       logNetworkScanDebug('discover/request', {
         printerId: selectedPrinter.id,
@@ -1084,11 +1209,57 @@ export function ProfileSettingsModal({
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
-      if (isCurrentRun()) setDiscoveredPrinters(baseDiscovered);
-
       setNetworkScanProgressPct(44);
       setNetworkScanPhaseLabel('Scanning local subnet…');
       setNetworkConnectionMessage('Scanning local subnet for NanoDLP devices…');
+            setNetworkScanProgressPct(42);
+            setNetworkScanPhaseLabel('Verifying previously discovered printers…');
+            setNetworkConnectionMessage('Checking if previously discovered printers are still available…');
+
+            const verifiedCachedPrinters: typeof baseDiscovered = [];
+            if (carryForwardDiscovered.length > 0) {
+              for (const cachedPrinter of carryForwardDiscovered) {
+                try {
+                  const reachResponse = await pluginNetworkFetch({
+                    pluginId: networkUiAdapter.pluginId,
+                    operation: networkUiAdapter.operations.connect,
+                    host: cachedPrinter.ipAddress,
+                    networkFilter: selectedPrinterNetworkFilterHint || undefined,
+                    modelHint: selectedPrinterModelHint,
+                  });
+
+                  const reachPayload = await reachResponse.json().catch(() => null) as any;
+                  if (reachPayload?.connected === true) {
+                    verifiedCachedPrinters.push({
+                      ...cachedPrinter,
+                      status: 'online',
+                    });
+                    logNetworkScanDebug('discover/cached-printer-verified', {
+                      ipAddress: cachedPrinter.ipAddress,
+                      name: cachedPrinter.name,
+                    });
+                  } else {
+                    logNetworkScanDebug('discover/cached-printer-unreachable', {
+                      ipAddress: cachedPrinter.ipAddress,
+                      name: cachedPrinter.name,
+                      reachable: false,
+                    });
+                  }
+                } catch (err) {
+                  logNetworkScanDebug('discover/cached-printer-check-error', {
+                    ipAddress: cachedPrinter.ipAddress,
+                    name: cachedPrinter.name,
+                    error: err instanceof Error ? err.message : 'Unknown error',
+                  });
+                }
+              }
+            }
+
+            const baseWithVerifiedCache = [...verifiedCachedPrinters, ...baseDiscovered].filter((item, index, array) => (
+              array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
+            ));
+            if (isCurrentRun() && baseWithVerifiedCache.length > 0) setDiscoveredPrinters(baseWithVerifiedCache);
+
       setNetworkScanProgressPct(56);
 
       const subnetDiscovered: Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }> = [];
@@ -1157,7 +1328,7 @@ export function ProfileSettingsModal({
 
         subnetDiscovered.push(...discoveredBatch);
 
-        const liveMerged = [...baseDiscovered, ...subnetDiscovered].filter((item, index, array) => (
+        const liveMerged = [...baseWithVerifiedCache, ...subnetDiscovered].filter((item, index, array) => (
           array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
         ));
         if (isCurrentRun()) setDiscoveredPrinters(liveMerged);
@@ -1187,7 +1358,7 @@ export function ProfileSettingsModal({
       const scannedLocalHostnames = Number.isFinite(Number(localPayload?.scannedLocalHostnames)) ? Number(localPayload.scannedLocalHostnames) : localHostnameCandidates.length;
       const scannedSubnetHosts = Number.isFinite(Number(subnetPayloadLast?.scannedSubnetHosts)) ? Number(subnetPayloadLast.scannedSubnetHosts) : scannedHosts;
 
-      const merged = [...baseDiscovered, ...subnetDiscovered].filter((item, index, array) => (
+      const merged = [...baseWithVerifiedCache, ...subnetDiscovered].filter((item, index, array) => (
         array.findIndex((candidate) => candidate.ipAddress === item.ipAddress) === index
       ));
 
@@ -1195,6 +1366,7 @@ export function ProfileSettingsModal({
         setDiscoveredPrinters(merged);
         setNetworkScanProgressPct(100);
         setNetworkScanPhaseLabel('Scan complete');
+        setCachedDiscoveredPrinters(merged);
       }
 
       logNetworkScanDebug('discover/summary', {
@@ -1228,7 +1400,6 @@ export function ProfileSettingsModal({
         requestedModelHint: selectedPrinterModelHint ?? null,
       });
       if (isCurrentRun()) {
-        setDiscoveredPrinters([]);
         setNetworkConnectionMessage(message);
         setNetworkScanPhaseLabel('Scan failed');
         setNetworkScanProgressPct(100);
@@ -1245,6 +1416,8 @@ export function ProfileSettingsModal({
       discoveryInFlightRef.current = false;
     }
   }, [
+    cachedDiscoveredPrinters,
+    discoveredPrinters,
     discoveryInFlightRef,
     discoveryRunIdRef,
     effectiveNetworkUiAdapter,
@@ -1460,6 +1633,56 @@ export function ProfileSettingsModal({
     setIsNetworkSettingsOpen(true);
   }, [selectedPrinter]);
 
+  const handleOpenEditFleetUnitModal = React.useCallback(() => {
+    if (!selectedPrinter) return;
+    const target = activeManagedNetworkPrinter ?? managedNetworkPrinters[0] ?? null;
+    if (!target) return;
+    setEditingFleetUnitId(target.id);
+    setEditingFleetUnitNickname(target.displayName || target.hostName || target.ipAddress || '');
+    setEditingFleetUnitImageDataUrl(target.imageDataUrl ?? null);
+    setIsEditFleetUnitModalOpen(true);
+  }, [activeManagedNetworkPrinter, managedNetworkPrinters, selectedPrinter]);
+
+  const handleSaveFleetUnitEdits = React.useCallback(() => {
+    if (!selectedPrinter) return;
+    if (!editingFleetUnit) return;
+
+    const nextDisplayName = editingFleetUnitNickname.trim()
+      || editingFleetUnit.hostName
+      || editingFleetUnit.ipAddress
+      || 'Printer';
+
+    upsertPrinterNetworkDevice(selectedPrinter.id, {
+      id: editingFleetUnit.id,
+      ipAddress: editingFleetUnit.ipAddress,
+      displayName: nextDisplayName,
+      imageDataUrl: editingFleetUnitImageDataUrl?.trim() ?? '',
+    });
+
+    setIsEditFleetUnitModalOpen(false);
+  }, [editingFleetUnit, editingFleetUnitImageDataUrl, editingFleetUnitNickname, selectedPrinter]);
+
+  const handleResetFleetUnitDraft = React.useCallback(() => {
+    if (!editingFleetUnit) return;
+    setEditingFleetUnitNickname(editingFleetUnit.hostName || editingFleetUnit.ipAddress || 'Printer');
+    setEditingFleetUnitImageDataUrl(null);
+  }, [editingFleetUnit]);
+
+  const handleFleetUnitImageUploadChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') return;
+      setEditingFleetUnitImageDataUrl(result);
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
   React.useEffect(() => {
     if (!isNetworkSettingsOpen) return;
     if (!selectedPrinterSupportsNetworkSettings) return;
@@ -1527,8 +1750,8 @@ export function ProfileSettingsModal({
     handlePickPrinter(newId);
     setShowPresetPicker(false);
     setPresetSearch('');
-    setSelectedPresetManufacturer('All');
-  }, [handlePickPrinter]);
+    if (presetManufacturers.length > 0) setSelectedPresetManufacturer(presetManufacturers[0]);
+  }, [handlePickPrinter, presetManufacturers]);
 
   const requestDeleteSelectedPrinter = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -1602,6 +1825,50 @@ export function ProfileSettingsModal({
     setIsMaterialEditorOpen(false);
   }, [editMaterialDraft, selectedMaterial]);
 
+  const handleApplySelectedPrinterOfficialUpdate = React.useCallback(() => {
+    if (!selectedPrinterUpdate) return;
+    const result = applyOfficialPrinterProfileUpdate(selectedPrinterUpdate.printerProfileId);
+
+    if (result === 'updated') {
+      setOfficialUpdateStatusMessage(`Updated printer profile to v${selectedPrinterUpdate.latestVersion}.`);
+      return;
+    }
+
+    if (result === 'version-bumped-custom') {
+      setOfficialUpdateStatusMessage('Custom profile kept unchanged for safety. Baseline version marker was updated.');
+      return;
+    }
+
+    if (result === 'already-latest') {
+      setOfficialUpdateStatusMessage('Selected printer profile is already on the latest official version.');
+      return;
+    }
+
+    setOfficialUpdateStatusMessage('Unable to apply printer update (profile is no longer linked to an official preset).');
+  }, [selectedPrinterUpdate]);
+
+  const handleApplySelectedMaterialOfficialUpdate = React.useCallback(() => {
+    if (!selectedMaterialUpdate) return;
+    const result = applyOfficialMaterialProfileUpdate(selectedMaterialUpdate.materialProfileId);
+
+    if (result === 'updated') {
+      setOfficialUpdateStatusMessage(`Updated material profile to v${selectedMaterialUpdate.latestVersion}.`);
+      return;
+    }
+
+    if (result === 'version-bumped-custom') {
+      setOfficialUpdateStatusMessage('Custom material kept unchanged for safety. Baseline version marker was updated.');
+      return;
+    }
+
+    if (result === 'already-latest') {
+      setOfficialUpdateStatusMessage('Selected material profile is already on the latest official version.');
+      return;
+    }
+
+    setOfficialUpdateStatusMessage('Unable to apply material update (profile is no longer linked to an official template).');
+  }, [selectedMaterialUpdate]);
+
   const showOfficialProfileDialog = React.useCallback((profileId: string) => {
     setOfficialLockedProfileId(profileId);
     setShowOfficialLockDialog(true);
@@ -1673,8 +1940,8 @@ export function ProfileSettingsModal({
     const bitDepthBits = Number.isFinite(Number(preset.bitDepth?.bits))
       ? Math.round(Number(preset.bitDepth?.bits))
       : null;
-    const bitDepthLabel = Number.isFinite(Number(preset.bitDepth?.bits))
-      ? `${Math.round(Number(preset.bitDepth?.bits))} Bit`
+    const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
+      ? `${bitDepthBits} Bit`
       : null;
 
     return (
@@ -1814,6 +2081,35 @@ export function ProfileSettingsModal({
               </span>
             </div>
           )}
+          {(officialPrinterUpdates.length > 0 || officialMaterialUpdates.length > 0) && (
+            <div
+              className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 34%)',
+                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                color: 'var(--text-muted)',
+              }}
+            >
+              <Download className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
+              <span>
+                <strong style={{ color: 'var(--text-strong)' }}>Official profile updates found:</strong>{' '}
+                {officialPrinterUpdates.length} printer profile{officialPrinterUpdates.length === 1 ? '' : 's'} and{' '}
+                {officialMaterialUpdates.length} material profile{officialMaterialUpdates.length === 1 ? '' : 's'} have newer official versions available.
+              </span>
+            </div>
+          )}
+          {officialUpdateStatusMessage && (
+            <div
+              className="rounded-lg border px-3 py-2 text-xs"
+              style={{
+                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 34%)',
+                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 94%)',
+                color: 'var(--text-muted)',
+              }}
+            >
+              {officialUpdateStatusMessage}
+            </div>
+          )}
           {!hasPrinters && (
             <div
               className="rounded-xl border flex-1 h-full min-h-0 flex items-center justify-center px-4 py-10"
@@ -1846,7 +2142,7 @@ export function ProfileSettingsModal({
                   className="ui-button ui-button-primary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
                 >
                   <Plus className="w-4 h-4" />
-                  Add Printer
+                  Printer Library
                 </button>
               </div>
             </div>
@@ -1855,22 +2151,158 @@ export function ProfileSettingsModal({
           {hasPrinters && (
           <section className="rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'linear-gradient(180deg, color-mix(in srgb, var(--surface-1), transparent 8%), var(--surface-1))' }}>
             <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-              <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
-                <Box className="w-4 h-4" />
-                3D Printer
-              </h3>
-              <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Each printer can store its own image and has a dedicated set of compatible resin/material profiles.
-              </p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
+                    <Box className="w-4 h-4" />
+                    3D Printer
+                  </h3>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    {shouldRenderFleetRail
+                      ? `Showing connected devices for ${selectedPrinter?.name ?? 'selected profile'}.`
+                      : 'Each printer can store its own image and has a dedicated set of compatible resin/material profiles.'}
+                  </p>
+                  {selectedPrinterUpdate && (
+                    <p className="text-[11px] mt-1" style={{ color: 'var(--accent-secondary)' }}>
+                      Update available for this printer profile (v{selectedPrinterUpdate.currentVersion} → v{selectedPrinterUpdate.latestVersion}).
+                    </p>
+                  )}
+                </div>
+
+                {!shouldRenderFleetRail && (
+                  <button
+                    type="button"
+                    onClick={handleAddPrinter}
+                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
+                    style={{
+                      color: 'var(--accent-secondary)',
+                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                    }}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Printer Library
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="p-3">
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {profileState.printerProfiles.map((printer) => {
+                {shouldRenderFleetRail
+                  ? managedNetworkPrinters.map((device) => {
+                    const active = selectedPrinter?.activeNetworkDeviceId === device.id;
+                    const reachable = printerReachabilityByDeviceId[device.id] !== false;
+                    const online = device.connected === true && reachable;
+                    const cardTitle = device.displayName || device.hostName || device.ipAddress;
+                    const statusLabel = online ? 'Online' : device.connected ? 'Limited' : 'Offline';
+                    const selectedPrinterBitDepthBits = Number.isFinite(Number(selectedPrinter?.bitDepth?.bits))
+                      ? Math.round(Number(selectedPrinter?.bitDepth?.bits))
+                      : null;
+                    const selectedPrinterBitDepthLabel = selectedPrinterBitDepthBits != null && selectedPrinterBitDepthBits !== 8
+                      ? `${selectedPrinterBitDepthBits} Bit`
+                      : null;
+
+                    return (
+                      <button
+                        key={device.id}
+                        type="button"
+                        onClick={() => handleSelectManagedPrinter(device)}
+                        className="shrink-0 w-[236px] rounded-xl border p-2.5 text-left transition-all duration-150"
+                        style={active
+                          ? {
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                            }
+                          : {
+                              borderColor: 'var(--border-subtle)',
+                              background: 'var(--surface-2)',
+                            }}
+                      >
+                        <div
+                          className="h-[148px] rounded-lg border p-2.5 relative flex flex-col justify-between"
+                          style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}
+                        >
+                          {device.imageDataUrl && (
+                            <div className="absolute inset-0 z-0 rounded-lg overflow-hidden pointer-events-none">
+                              <AutoTrimmedImage src={device.imageDataUrl} alt={cardTitle} className="h-full w-full object-cover opacity-45" />
+                              <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(9,12,19,0.72) 0%, rgba(9,12,19,0.86) 72%, rgba(9,12,19,0.93) 100%)' }} />
+                            </div>
+                          )}
+                          <div className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
+                            style={{
+                              borderColor: online
+                                ? 'color-mix(in srgb, #22c55e, white 12%)'
+                                : 'color-mix(in srgb, var(--border-subtle), #ef4444 18%)',
+                              background: online
+                                ? 'color-mix(in srgb, #22c55e, #0f172a 40%)'
+                                : 'color-mix(in srgb, #ef4444, #0f172a 78%)',
+                            }}
+                          >
+                            <Wifi className="w-3.5 h-3.5" style={{ color: online ? '#dcfce7' : '#fecaca' }} />
+                          </div>
+
+                          <div className="relative z-10 mt-auto space-y-1">
+                            <div className="text-[13px] font-semibold leading-tight truncate" style={{ color: 'var(--text-strong)' }}>
+                              {cardTitle}
+                            </div>
+                            <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
+                              {device.ipAddress}
+                            </div>
+                            <span
+                              className="inline-flex rounded-full border px-2 py-0.5 text-[10px]"
+                              style={online
+                                ? {
+                                    borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 42%)',
+                                    color: '#bbf7d0',
+                                    background: 'color-mix(in srgb, #22c55e, var(--surface-2) 88%)',
+                                  }
+                                : {
+                                    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 42%)',
+                                    color: '#fecaca',
+                                    background: 'color-mix(in srgb, #ef4444, var(--surface-2) 92%)',
+                                  }}
+                            >
+                              {statusLabel}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="mt-2.5 text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate min-w-0">{selectedPrinter?.name}</span>
+                            {selectedPrinterBitDepthLabel && (
+                              <span
+                                className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
+                                style={{
+                                  borderColor: selectedPrinterBitDepthBits === 3
+                                    ? 'color-mix(in srgb, #ef4444, white 18%)'
+                                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                                  color: '#f8fafc',
+                                  background: selectedPrinterBitDepthBits === 3
+                                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+                                }}
+                                title={selectedPrinter?.bitDepth?.description || `${selectedPrinterBitDepthLabel} display`}
+                              >
+                                <span className="relative top-[0.5px]">{selectedPrinterBitDepthLabel}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
+                          {selectedPrinter?.manufacturer || 'Generic'}
+                        </div>
+                      </button>
+                    );
+                  })
+                  : profileState.printerProfiles.map((printer) => {
                   const active = printer.id === selectedPrinter?.id;
                   const isGenericPrinter = (printer.manufacturer ?? '').toLowerCase() === 'generic'
                     || printer.name.toLowerCase().includes('generic');
                   const isNetworkConnected = printer.networkConnection?.connected === true;
+                  const supportsNetworkFleet = Boolean(printer.networkSupport);
+                  const fleetCount = printer.networkFleet?.length ?? 0;
                   const platformBadge = printer.platformBadge?.text?.trim()
                     ? printer.platformBadge
                     : undefined;
@@ -1880,18 +2312,16 @@ export function ProfileSettingsModal({
                   const bitDepthBits = Number.isFinite(Number(printer.bitDepth?.bits))
                     ? Math.round(Number(printer.bitDepth?.bits))
                     : null;
-                  const bitDepthLabel = Number.isFinite(Number(printer.bitDepth?.bits))
-                    ? `${Math.round(Number(printer.bitDepth?.bits))} Bit`
+                  const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
+                    ? `${bitDepthBits} Bit`
                     : null;
                   const cardWidth = isEditingPrinter ? 'w-[198px]' : 'w-[236px]';
                   const imageHeight = isEditingPrinter ? 'h-[124px]' : 'h-[148px]';
 
                   return (
-                    <button
+                    <div
                       key={printer.id}
-                      type="button"
-                      onClick={() => handlePickPrinter(printer.id)}
-                      className={`shrink-0 ${cardWidth} rounded-xl border p-2.5 text-left transition-all duration-150`}
+                      className={`shrink-0 ${cardWidth} rounded-xl border p-2.5 transition-all duration-150`}
                       style={active
                         ? {
                             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
@@ -1902,89 +2332,168 @@ export function ProfileSettingsModal({
                             background: 'var(--surface-2)',
                           }}
                     >
-                      <div className={`${imageHeight} rounded-lg border overflow-hidden flex items-center justify-center p-2 relative`} style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
-                        {printer.imageDataUrl ? (
-                          <AutoTrimmedImage src={printer.imageDataUrl} alt={printer.name} className="h-full w-full object-contain" />
-                        ) : (
-                          <div className="text-[10px] text-center px-2" style={{ color: 'var(--text-muted)' }}>
-                            {isGenericPrinter ? (
-                              <>
-                                <Printer className="w-5 h-5 mx-auto mb-1" />
-                                Generic
-                              </>
-                            ) : (
-                              <>
-                                <ImagePlus className="w-5 h-5 mx-auto mb-1" />
-                                No image
-                              </>
+                      <button
+                        type="button"
+                        onClick={() => handlePickPrinter(printer.id)}
+                        className="w-full text-left"
+                      >
+                        <div className={`${imageHeight} rounded-lg border overflow-hidden flex items-center justify-center p-2 relative`} style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                          {printer.imageDataUrl ? (
+                            <AutoTrimmedImage src={printer.imageDataUrl} alt={printer.name} className="h-full w-full object-contain" />
+                          ) : (
+                            <div className="text-[10px] text-center px-2" style={{ color: 'var(--text-muted)' }}>
+                              {isGenericPrinter ? (
+                                <>
+                                  <Printer className="w-5 h-5 mx-auto mb-1" />
+                                  Generic
+                                </>
+                              ) : (
+                                <>
+                                  <ImagePlus className="w-5 h-5 mx-auto mb-1" />
+                                  No image
+                                </>
+                              )}
+                            </div>
+                          )}
+                          {isNetworkConnected && (
+                            <span
+                              className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
+                              title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
+                              style={{
+                                borderColor: 'color-mix(in srgb, #22c55e, white 12%)',
+                                background: 'color-mix(in srgb, #22c55e, #0f172a 40%)',
+                                color: '#dcfce7',
+                              }}
+                            >
+                              <Wifi className="w-3.5 h-3.5" />
+                            </span>
+                          )}
+                          {cardBadgeText && (
+                            <span
+                              className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
+                              style={printer.isCustom
+                                ? {
+                                    background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
+                                    color: '#ffffff',
+                                    letterSpacing: '0.04em',
+                                  }
+                                : {
+                                    background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, black 18%))`,
+                                    color: '#ffffff',
+                                    letterSpacing: '0.04em',
+                                  }}
+                            >
+                              <span className="relative top-[0.5px]">{cardBadgeText}</span>
+                            </span>
+                          )}
+                        </div>
+                      </button>
+
+                      <div className="mt-2.5 flex items-center justify-between gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handlePickPrinter(printer.id)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <div className="text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
+                              {printer.name}
+                            </div>
+                            {bitDepthLabel && (
+                              <span
+                                className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
+                                style={{
+                                  borderColor: bitDepthBits === 3
+                                    ? 'color-mix(in srgb, #ef4444, white 18%)'
+                                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                                  color: '#f8fafc',
+                                  background: bitDepthBits === 3
+                                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+                                }}
+                                title={printer.bitDepth?.description || `${bitDepthLabel} display`}
+                              >
+                                <span className="relative top-[0.5px]">{bitDepthLabel}</span>
+                              </span>
                             )}
                           </div>
-                        )}
-                        {isNetworkConnected && (
-                          <span
-                            className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border"
-                            title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
-                            style={{
-                              borderColor: 'color-mix(in srgb, #22c55e, white 10%)',
-                              background: 'color-mix(in srgb, #22c55e, #0f172a 38%)',
-                              color: '#dcfce7',
+                          <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
+                            {printer.manufacturer || 'Generic'}
+                          </div>
+                        </button>
+
+                        {supportsNetworkFleet && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handlePickPrinter(printer.id);
+                              if (fleetCount > 1) {
+                                setPrinterRailViewMode('fleet');
+                                return;
+                              }
+                              setPrinterRailViewMode('profiles');
+                              setIsAddingNetworkPrinter(true);
+                              setShowManualNetworkEntry(false);
+                              setIsNetworkSettingsOpen(true);
                             }}
-                          >
-                            <Wifi className="w-3 h-3" />
-                          </span>
-                        )}
-                        {cardBadgeText && (
-                          <span
-                            className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
-                            style={printer.isCustom
+                            aria-label={fleetCount > 1 ? `Open fleet view (${fleetCount})` : 'Add another networked device'}
+                            className="ui-button ui-button-secondary !h-7 !w-8 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
+                            style={fleetCount > 1
                               ? {
-                                  background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
-                                  color: '#ffffff',
-                                  letterSpacing: '0.04em',
+                                  color: 'var(--text-strong)',
+                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
                                 }
                               : {
-                                  background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, black 18%))`,
-                                  color: '#ffffff',
-                                  letterSpacing: '0.04em',
+                                  color: 'var(--accent-secondary)',
+                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                                  background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
                                 }}
+                            title={fleetCount > 1 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
                           >
-                            <span className="relative top-[0.5px]">{cardBadgeText}</span>
-                          </span>
+                            {fleetCount > 1 ? (
+                              <span className="inline-flex h-full w-full items-center justify-center text-[13px] font-bold leading-none tabular-nums">{fleetCount}</span>
+                            ) : (
+                              <Plus className="w-3.5 h-3.5" />
+                            )}
+                          </button>
                         )}
                       </div>
-                      <div className="mt-2.5 flex items-center gap-1.5">
-                        <div className="text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
-                          {printer.name}
-                        </div>
-                        {bitDepthLabel && (
-                          <span
-                            className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
-                            style={{
-                              borderColor: bitDepthBits === 8
-                                ? 'color-mix(in srgb, #22c55e, white 22%)'
-                                : bitDepthBits === 3
-                                  ? 'color-mix(in srgb, #ef4444, white 18%)'
-                                  : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
-                              color: '#f8fafc',
-                              background: bitDepthBits === 8
-                                ? 'linear-gradient(135deg, color-mix(in srgb, #22c55e, #111827 56%), color-mix(in srgb, #22c55e, #0b1220 72%))'
-                                : bitDepthBits === 3
-                                  ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
-                                  : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
-                            }}
-                            title={printer.bitDepth?.description || `${bitDepthLabel} display`}
-                          >
-                            <span className="relative top-[0.5px]">{bitDepthLabel}</span>
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                        {printer.manufacturer || 'Generic'}
-                      </div>
-                    </button>
+                    </div>
                   );
-                })}
+                  })}
               </div>
+
+              {shouldRenderFleetRail && managedNetworkPrinters.length === 0 && (
+                <div
+                  className="mt-2 rounded-lg border px-3 py-5 text-center"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+                    color: 'var(--text-muted)',
+                  }}
+                >
+                  <div className="text-xs">No fleet devices saved for this printer profile yet.</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingNetworkPrinter(true);
+                      setShowManualNetworkEntry(false);
+                      setIsNetworkSettingsOpen(true);
+                    }}
+                    className="ui-button ui-button-secondary mt-2 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                    style={{
+                      color: 'var(--accent-secondary)',
+                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                    }}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add First Device
+                  </button>
+                </div>
+              )}
 
               {isEditingPrinter && selectedPrinter ? (
                 <div className="mt-3 rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
@@ -2138,92 +2647,146 @@ export function ProfileSettingsModal({
               {hasPrinters && (
               <div className="mt-2.5 rounded-lg border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleAddPrinter}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                    style={{
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                    }}
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Add Printer
-                  </button>
-                  {selectedPrinterSupportsNetworkSettings && (
-                    <button
-                      type="button"
-                      onClick={handleOpenNetworkSettings}
-                      disabled={!hasPrinters || !selectedPrinter}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                      style={{ color: 'var(--text-strong)' }}
-                    >
-                      <Search className="w-3.5 h-3.5" />
-                      {networkSettingsActionLabel}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!selectedPrinter || !hasPrinters) return;
-                      if (selectedPrinter.isOfficial) {
-                        showOfficialProfileDialog(selectedPrinter.id);
-                        return;
-                      }
-                      setIsEditingPrinter((prev) => !prev);
-                    }}
-                    disabled={!hasPrinters}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                    style={{ color: 'var(--text-strong)' }}
-                  >
-                    {isEditingPrinter ? 'Done Editing' : 'Edit Printer'}
-                  </button>
-                  {isEditingPrinter && selectedPrinter && (
+                  {shouldRenderFleetRail ? (
                     <>
                       <button
                         type="button"
-                        onClick={() => triggerImageUpload(selectedPrinter.id)}
+                        onClick={() => setPrinterRailViewMode('profiles')}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{ color: 'var(--text-strong)' }}
+                        style={{
+                          color: 'var(--accent-secondary)',
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                        }}
                       >
-                        <Upload className="w-3.5 h-3.5" />
-                        Upload Image
+                        Return to Printers
                       </button>
                       <button
                         type="button"
+                        onClick={handleOpenNetworkSettings}
+                        disabled={!hasPrinters || !selectedPrinter}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        Manage Fleet
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleOpenEditFleetUnitModal}
+                        disabled={!activeManagedNetworkPrinter}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        Edit Unit
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {selectedPrinterSupportsNetworkSettings && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (shouldShowFleetSwitchAction) {
+                              setPrinterRailViewMode('fleet');
+                              return;
+                            }
+                            handleOpenNetworkSettings();
+                          }}
+                          disabled={!hasPrinters || !selectedPrinter}
+                          className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                          style={shouldShowFleetSwitchAction
+                            ? {
+                                color: 'var(--accent-secondary)',
+                                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                              }
+                            : { color: 'var(--text-strong)' }}
+                        >
+                          {shouldShowFleetSwitchAction ? <LayoutGrid className="w-3.5 h-3.5" /> : <Search className="w-3.5 h-3.5" />}
+                          {regularNetworkActionLabel}
+                        </button>
+                      )}
+                      {selectedPrinterUpdate && (
+                        <button
+                          type="button"
+                          onClick={handleApplySelectedPrinterOfficialUpdate}
+                          className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                          style={{
+                            color: 'var(--accent-secondary)',
+                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                          }}
+                          title={`Update v${selectedPrinterUpdate.currentVersion} to v${selectedPrinterUpdate.latestVersion}`}
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Update Printer
+                        </button>
+                      )}
+                      <button
+                        type="button"
                         onClick={() => {
-                          if (!selectedPrinter.imageDataUrl) return;
-                          updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
+                          if (!selectedPrinter || !hasPrinters) return;
+                          if (selectedPrinter.isOfficial) {
+                            showOfficialProfileDialog(selectedPrinter.id);
+                            return;
+                          }
+                          setIsEditingPrinter((prev) => !prev);
                         }}
+                        disabled={!hasPrinters}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                        style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        {isEditingPrinter ? 'Done Editing' : 'Edit Printer'}
+                      </button>
+                      {isEditingPrinter && selectedPrinter && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => triggerImageUpload(selectedPrinter.id)}
+                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                            style={{ color: 'var(--text-strong)' }}
+                          >
+                            <Upload className="w-3.5 h-3.5" />
+                            Upload Image
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!selectedPrinter.imageDataUrl) return;
+                              updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
+                            }}
+                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                            style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Clear Image
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleExportSelectedPrinterBundle}
+                        disabled={!hasPrinters}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Export Bundle
+                      </button>
+                      <button
+                        type="button"
+                        onClick={requestDeleteSelectedPrinter}
+                        disabled={!hasPrinters}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
+                        style={{ color: !hasPrinters ? 'var(--text-muted)' : '#fca5a5' }}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        Clear Image
+                        Delete Printer
                       </button>
                     </>
                   )}
-                  <button
-                    type="button"
-                    onClick={handleExportSelectedPrinterBundle}
-                    disabled={!hasPrinters}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                    style={{ color: 'var(--text-strong)' }}
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Export Bundle
-                  </button>
-                  <button
-                    type="button"
-                    onClick={requestDeleteSelectedPrinter}
-                    disabled={!hasPrinters}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45 ml-auto"
-                    style={{ color: !hasPrinters ? 'var(--text-muted)' : '#fca5a5' }}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Delete Printer
-                  </button>
                 </div>
               </div>
               )}
@@ -2240,39 +2803,91 @@ export function ProfileSettingsModal({
             }}
           >
             <div className="p-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
-              <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
-                <FlaskConical className="w-4 h-4" />
-                Material Settings
-              </h3>
-              <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                {shouldUseNanodlpOnDeviceMaterials
-                  ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
-                  : shouldShowNanodlpConnectInfo
-                    ? <>Connect to a machine to view on-device material profiles.</>
-                  : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
-              </p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
+                    <FlaskConical className="w-4 h-4" />
+                    Material Settings
+                  </h3>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    {shouldUseNanodlpOnDeviceMaterials
+                      ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
+                      : shouldShowNanodlpSelectedPrinterOfflineState
+                        ? <>The selected printer appears offline. Showing on-device materials view with offline status.</>
+                        : shouldShowNanodlpConnectInfo
+                          ? <>Connect to a machine to view on-device material profiles.</>
+                          : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
+                  </p>
+                  {selectedMaterialUpdate && (
+                    <p className="text-[11px] mt-1" style={{ color: 'var(--accent-secondary)' }}>
+                      Update available for selected material profile (v{selectedMaterialUpdate.currentVersion} → v{selectedMaterialUpdate.latestVersion}).
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {shouldUseNanodlpOnDeviceMaterials && (
+                    <button
+                      type="button"
+                      onClick={() => { void loadNanodlpMaterials(); }}
+                      disabled={isLoadingNanodlpMaterials || !selectedNanodlpHost}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                      style={{ color: 'var(--text-strong)' }}
+                    >
+                      {isLoadingNanodlpMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                      {isLoadingNanodlpMaterials ? 'Loading…' : 'Refresh'}
+                    </button>
+                  )}
+                  {!shouldUseNanodlpOnDeviceMaterials && !shouldShowNanodlpSelectedPrinterOfflineState && !shouldShowNanodlpConnectInfo && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleAddMaterial}
+                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                        style={{
+                          color: 'var(--accent-secondary)',
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                        }}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Resin
+                      </button>
+                      <button
+                        type="button"
+                        onClick={requestDeleteSelectedMaterial}
+                        disabled={!selectedMaterial || printerMaterials.length <= 1}
+                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Delete
+                      </button>
+                    </>
+                  )}
+                  {selectedMaterialUpdate && (
+                    <button
+                      type="button"
+                      onClick={handleApplySelectedMaterialOfficialUpdate}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                      style={{
+                        color: 'var(--accent-secondary)',
+                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                      }}
+                      title={`Update v${selectedMaterialUpdate.currentVersion} to v${selectedMaterialUpdate.latestVersion}`}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Update Material
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="p-3 flex flex-col gap-3 flex-1 min-h-0">
               {shouldUseNanodlpOnDeviceMaterials ? (
                 <>
                   <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                    <div className="px-3 py-2 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                        NanoDLP On-Device Materials
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => { void loadNanodlpMaterials(); }}
-                        disabled={isLoadingNanodlpMaterials}
-                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: 'var(--text-strong)' }}
-                      >
-                        {isLoadingNanodlpMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                        {isLoadingNanodlpMaterials ? 'Loading…' : 'Refresh'}
-                      </button>
-                    </div>
-
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
                       {isLoadingNanodlpMaterials ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -2291,6 +2906,7 @@ export function ProfileSettingsModal({
                               key={material.id}
                               type="button"
                               onClick={() => handleSelectNanodlpMaterial(material)}
+                              onDoubleClick={() => openNanodlpEditDialogForMaterial(material)}
                               className="w-full rounded-md border px-2.5 py-2 text-left"
                               style={active
                                 ? {
@@ -2342,11 +2958,11 @@ export function ProfileSettingsModal({
                           </span>
                           {selectedNanodlpMaterial.locked && (
                             <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)', color: '#fbbf24', background: 'var(--surface-2)' }}>
-                              Locked on printer
+                              Locked Profile
                             </span>
                           )}
                           <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-                            Synced with NanoDLP
+                            Synced with Machine
                           </span>
                           {!selectedNanodlpMaterial.locked && (
                             <button
@@ -2355,7 +2971,7 @@ export function ProfileSettingsModal({
                               className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
                               style={{ color: 'var(--accent-secondary)' }}
                             >
-                              Edit all fields
+                              Edit Profile
                             </button>
                           )}
                         </div>
@@ -2367,6 +2983,40 @@ export function ProfileSettingsModal({
                     )}
                   </div>
                 </>
+              ) : shouldShowNanodlpSelectedPrinterOfflineState ? (
+                <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="text-center max-w-[520px]">
+                    <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)' }}>
+                      <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
+                    </div>
+                    <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                      Selected Printer is Offline
+                    </h4>
+                    <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      Reconnect this printer in Fleet Management, then refresh to load on-device material profiles.
+                    </p>
+                    {selectedPrinterSupportsNetworkSettings && (
+                      <button
+                        type="button"
+                        onClick={handleOpenNetworkSettings}
+                        className="ui-button ui-button-secondary mt-3 !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                        style={{
+                          color: 'var(--accent-secondary)',
+                          borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                          background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                        }}
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        Open Fleet Management
+                      </button>
+                    )}
+                    {nanodlpMaterialsError && (
+                      <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                        {nanodlpMaterialsError}
+                      </div>
+                    )}
+                  </div>
+                </div>
               ) : shouldShowNanodlpConnectInfo ? (
                 <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-center max-w-[520px]">
@@ -2399,37 +3049,6 @@ export function ProfileSettingsModal({
               ) : (
                 <>
               <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                <div className="px-3 py-2 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                    Material Profiles
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleAddMaterial}
-                      className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                      style={{
-                        color: 'var(--accent-secondary)',
-                        borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                        background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                      }}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Add Resin
-                    </button>
-                    <button
-                      type="button"
-                      onClick={requestDeleteSelectedMaterial}
-                      disabled={!selectedMaterial || printerMaterials.length <= 1}
-                      className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                      style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-[1fr_1fr_1.25fr] flex-1 min-h-0 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                   <div className="border-r min-h-0 flex flex-col" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Manufacturer</div>
@@ -2512,6 +3131,11 @@ export function ProfileSettingsModal({
                               setSelectedMaterialId(material.id);
                               setActiveMaterialProfile(material.id);
                             }}
+                            onDoubleClick={() => {
+                              setSelectedMaterialId(material.id);
+                              setActiveMaterialProfile(material.id);
+                              setIsMaterialEditorOpen(true);
+                            }}
                             className="w-full rounded-md border px-2.5 py-2 text-left text-sm"
                             style={active
                               ? {
@@ -2583,6 +3207,133 @@ export function ProfileSettingsModal({
           onChange={handleImageUploadChange}
         />
 
+        <input
+          ref={fleetUnitImageUploadInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleFleetUnitImageUploadChange}
+        />
+
+        {isEditFleetUnitModalOpen && selectedPrinter && editingFleetUnit && (
+          <div className="fixed inset-0 z-[72] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsEditFleetUnitModalOpen(false);
+          }}>
+            <div className="w-full max-w-[760px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+              <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit Unit</h3>
+                  <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    Customize nickname and card thumbnail for this fleet unit in DragonFruit.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsEditFleetUnitModalOpen(false)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Close Edit Unit"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3">
+                <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_340px] gap-3">
+                  <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Unit Identity</div>
+                    <div className="grid grid-cols-1 gap-2">
+                      <LabeledInput
+                        label="Nickname"
+                        value={editingFleetUnitNickname}
+                        onChange={setEditingFleetUnitNickname}
+                      />
+                      <LabeledInput
+                        label="IP Address"
+                        value={editingFleetUnit.ipAddress}
+                        disabled
+                        onChange={() => {}}
+                      />
+                    </div>
+
+                    <div className="mt-2 rounded-md border px-2 py-1.5 text-[11px]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'color-mix(in srgb, var(--surface-2), transparent 6%)' }}>
+                      Reset will clear custom nickname + thumbnail and fall back to the device hostname/IP.
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Card Thumbnail</div>
+                    <div className="h-[220px] w-full rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                      {editingFleetUnitImageDataUrl ? (
+                        <AutoTrimmedImage src={editingFleetUnitImageDataUrl} alt={editingFleetUnitNickname || editingFleetUnit.displayName || 'Fleet unit'} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="text-[11px] text-center px-3" style={{ color: 'var(--text-muted)' }}>
+                          No custom image
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => fleetUnitImageUploadInputRef.current?.click()}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        Upload Image
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingFleetUnitImageDataUrl(null)}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                        style={{ color: editingFleetUnitImageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                        disabled={!editingFleetUnitImageDataUrl}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <button
+                  type="button"
+                  onClick={handleResetFleetUnitDraft}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                  style={{ color: '#fca5a5' }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Reset Unit
+                </button>
+                <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditFleetUnitModalOpen(false)}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveFleetUnitEdits}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                  style={{
+                    color: 'var(--accent-secondary)',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                  }}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Save Unit
+                </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {showPresetPicker && (
           <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setShowPresetPicker(false);
@@ -2645,7 +3396,7 @@ export function ProfileSettingsModal({
                 </div>
 
                 <div className="p-3 overflow-y-auto custom-scrollbar">
-                  {selectedPresetManufacturer === 'All' ? (
+                  {isSearching ? (
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
                       {filteredPrinterPresets.map(renderPresetLibraryCard)}
                     </div>
@@ -2775,6 +3526,7 @@ export function ProfileSettingsModal({
             <FleetManagement
               printerName={selectedPrinter.name}
               managedPrinters={managedNetworkPrinters}
+              printerReachabilityByDeviceId={printerReachabilityByDeviceId}
               activePrinterId={selectedPrinter.activeNetworkDeviceId ?? null}
               showAddPrinterFlow={isAddingNetworkPrinter || managedNetworkPrinters.length === 0}
               onEnterAddPrinterFlow={() => {

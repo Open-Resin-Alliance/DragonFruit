@@ -23,6 +23,7 @@ import {
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
   hydrateProfilesFromStorage,
+  selectPrinterNetworkDevice,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import type { View3DSettings } from '@/components/settings/view3dPreferences';
@@ -80,6 +81,8 @@ interface TopBarProps {
   showMonitorButton?: boolean;
   monitorButtonActive?: boolean;
   monitorButtonPaused?: boolean;
+  monitorButtonOffline?: boolean;
+  printerReachabilityByDeviceId?: Record<string, boolean | null>;
   onOpenMonitor?: () => void;
   warnBeforeProfileSettingsOpen?: boolean;
 }
@@ -136,6 +139,8 @@ export function TopBar({
   showMonitorButton = false,
   monitorButtonActive = false,
   monitorButtonPaused = false,
+  monitorButtonOffline = false,
+  printerReachabilityByDeviceId,
   onOpenMonitor,
   warnBeforeProfileSettingsOpen = false,
 }: TopBarProps) {
@@ -143,6 +148,7 @@ export function TopBar({
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState<'printer' | 'material'>('printer');
   const [profileModalOpenPrinterLibraryToken, setProfileModalOpenPrinterLibraryToken] = useState(0);
+  const [profileModalOpenNetworkSettingsToken, setProfileModalOpenNetworkSettingsToken] = useState(0);
   const [showProfileChangeWarning, setShowProfileChangeWarning] = useState(false);
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
@@ -164,7 +170,10 @@ export function TopBar({
   const topbarActionsDisabled = isSlicingBusy;
   const [isAppMenuOpen, setIsAppMenuOpen] = useState(false);
   const [appMenuPosition, setAppMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isPrinterQuickMenuOpen, setIsPrinterQuickMenuOpen] = useState(false);
+  const [printerQuickMenuPosition, setPrinterQuickMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const appMenuButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const printerQuickMenuButtonRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -291,6 +300,19 @@ export function TopBar({
     setIsAppMenuOpen(false);
   }, []);
 
+  const openPrinterQuickMenu = React.useCallback(() => {
+    const button = printerQuickMenuButtonRef.current;
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+    setPrinterQuickMenuPosition({ x: rect.left, y: rect.bottom + 6 });
+    setIsPrinterQuickMenuOpen(true);
+  }, []);
+
+  const closePrinterQuickMenu = React.useCallback(() => {
+    setIsPrinterQuickMenuOpen(false);
+  }, []);
+
   React.useEffect(() => {
     if (!isAppMenuOpen) return;
 
@@ -320,6 +342,35 @@ export function TopBar({
     };
   }, [closeAppMenu, isAppMenuOpen]);
 
+  React.useEffect(() => {
+    if (!isPrinterQuickMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+
+      const quickMenuNode = document.querySelector('[data-printer-quick-menu="true"]');
+      const quickMenuButtonNode = printerQuickMenuButtonRef.current;
+
+      if (quickMenuNode?.contains(target)) return;
+      if (quickMenuButtonNode?.contains(target)) return;
+      closePrinterQuickMenu();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closePrinterQuickMenu();
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [closePrinterQuickMenu, isPrinterQuickMenuOpen]);
+
   const handleTopBarPointerDown = React.useCallback(async (event: React.MouseEvent<HTMLDivElement>) => {
     if (!isDesktopWindow) return;
     if (event.button !== 0) return;
@@ -344,7 +395,6 @@ export function TopBar({
       'button',
       'a',
       'input',
-      'textarea',
       'select',
       '[role="button"]',
       '[data-no-window-drag="true"]',
@@ -372,9 +422,10 @@ export function TopBar({
     if (typeof window === 'undefined') return;
 
     const handleOpenProfileModal = (event: Event) => {
-      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean }>;
+      const customEvent = event as CustomEvent<{ tab?: ProfileSettingsTab; openPrinterLibrary?: boolean; openNetworkSettings?: boolean }>;
       const requestedTab = customEvent.detail?.tab;
       const shouldOpenPrinterLibrary = customEvent.detail?.openPrinterLibrary === true;
+      const shouldOpenNetworkSettings = customEvent.detail?.openNetworkSettings === true;
       if (requestedTab === 'printer' || requestedTab === 'material') {
         setProfileModalTab(requestedTab);
       } else {
@@ -383,6 +434,10 @@ export function TopBar({
 
       if (shouldOpenPrinterLibrary) {
         setProfileModalOpenPrinterLibraryToken((prev) => prev + 1);
+      }
+
+      if (shouldOpenNetworkSettings) {
+        setProfileModalOpenNetworkSettingsToken((prev) => prev + 1);
       }
 
       setIsProfileModalOpen(true);
@@ -448,6 +503,10 @@ export function TopBar({
   const monitorButtonAnimationClass = monitorButtonPaused
     ? 'ui-topbar-monitor-paused'
     : (monitorButtonActive ? 'ui-topbar-monitor-active' : '');
+  const monitorButtonLabel = monitorButtonOffline ? 'Offline' : 'Monitor';
+  const monitorButtonTone = monitorButtonOffline
+    ? '#f87171'
+    : 'var(--text-strong)';
 
   const openProfileSettings = React.useCallback((tab: 'printer' | 'material' = 'printer') => {
     setProfileModalTab(tab);
@@ -463,6 +522,23 @@ export function TopBar({
     }
     openProfileSettings(tab);
   }, [openProfileSettings, topbarActionsDisabled, warnBeforeProfileSettingsOpen]);
+
+  const topbarFleetUnits = React.useMemo(() => {
+    const fleet = activePrinterProfile?.networkFleet ?? [];
+    return fleet.filter((device) => (device.ipAddress || '').trim().length > 0);
+  }, [activePrinterProfile?.networkFleet]);
+  const hasTopbarFleetUnits = topbarFleetUnits.length > 1;
+
+  const handleOpenPrinterManagerFromQuickMenu = React.useCallback(() => {
+    closePrinterQuickMenu();
+    requestOpenProfileSettings('printer');
+  }, [closePrinterQuickMenu, requestOpenProfileSettings]);
+
+  const handleSelectFleetUnitFromQuickMenu = React.useCallback((deviceId: string) => {
+    if (!activePrinterProfile?.id) return;
+    selectPrinterNetworkDevice(activePrinterProfile.id, deviceId);
+    closePrinterQuickMenu();
+  }, [activePrinterProfile?.id, closePrinterQuickMenu]);
 
   const steps: Array<{
     mode: SupportMode;
@@ -554,9 +630,20 @@ export function TopBar({
         />
 
         <button
+          ref={printerQuickMenuButtonRef}
           type="button"
           disabled={topbarActionsDisabled}
-          onClick={() => requestOpenProfileSettings('printer')}
+          onClick={() => {
+            if (hasTopbarFleetUnits) {
+              if (isPrinterQuickMenuOpen) {
+                closePrinterQuickMenu();
+              } else {
+                openPrinterQuickMenu();
+              }
+              return;
+            }
+            requestOpenProfileSettings('printer');
+          }}
           className="group inline-flex h-10 max-w-[300px] items-center gap-2 rounded-md px-2 transition-colors"
           style={{
             background: 'transparent',
@@ -592,7 +679,7 @@ export function TopBar({
               {topbarPrinterLabelBottom}
             </span>
           </span>
-          <ChevronDown className="h-3.5 w-3.5 ml-auto shrink-0" style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
+          <ChevronDown className={`h-3.5 w-3.5 ml-auto shrink-0 transition-transform ${isPrinterQuickMenuOpen ? 'rotate-180' : ''}`} style={{ color: 'color-mix(in srgb, var(--text-muted), white 8%)' }} />
         </button>
 
         {showMonitorButton && (
@@ -603,19 +690,21 @@ export function TopBar({
             className="group inline-flex h-10 items-center gap-1.5 rounded-md px-2 transition-colors"
             style={{
               background: 'transparent',
-              color: 'var(--text-strong)',
+              color: monitorButtonTone,
             }}
-            title="Open printer monitor"
-            aria-label="Open printer monitor"
+            title={monitorButtonOffline ? 'Selected printer is offline' : 'Open printer monitor'}
+            aria-label={monitorButtonOffline ? 'Selected printer is offline' : 'Open printer monitor'}
             data-no-window-drag="true"
           >
             <Activity
               className={`h-3.5 w-3.5 ${monitorButtonAnimationClass}`}
+              style={{ color: monitorButtonTone }}
             />
             <span
               className={`text-[11px] font-semibold ${monitorButtonAnimationClass}`}
+              style={{ color: monitorButtonTone }}
             >
-              Monitor
+              {monitorButtonLabel}
             </span>
           </button>
         )}
@@ -692,6 +781,102 @@ export function TopBar({
                 <Power className="h-3.5 w-3.5" />
               </span>
               <span>Close Program</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isPrinterQuickMenuOpen && printerQuickMenuPosition && hasTopbarFleetUnits && activePrinterProfile && (
+        <div
+          data-printer-quick-menu="true"
+          className="fixed z-[121] w-[280px] rounded-lg border p-1.5 shadow-xl backdrop-blur-sm"
+          style={{
+            left: printerQuickMenuPosition.x,
+            top: printerQuickMenuPosition.y,
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
+          }}
+          role="menu"
+          aria-label="Fleet quick switch"
+        >
+          <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+            Fleet Units
+          </div>
+
+          <div className="max-h-[260px] overflow-y-auto custom-scrollbar space-y-0.5">
+            {topbarFleetUnits.map((device) => {
+              const active = device.id === activePrinterProfile.activeNetworkDeviceId;
+              const deviceName = device.displayName || device.hostName || device.ipAddress || `Printer ${device.id}`;
+              const isOffline = printerReachabilityByDeviceId?.[device.id] === false;
+              return (
+                <button
+                  key={device.id}
+                  type="button"
+                  onClick={() => {
+                    if (isOffline) return;
+                    handleSelectFleetUnitFromQuickMenu(device.id);
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-[12px] transition-colors"
+                  style={isOffline
+                    ? {
+                      borderColor: 'color-mix(in srgb, var(--border-subtle), black 18%)',
+                      background: 'color-mix(in srgb, var(--surface-1), black 8%)',
+                      opacity: 0.55,
+                    }
+                    : active
+                    ? {
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 89%)',
+                      color: 'var(--text-strong)',
+                    }
+                    : {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-muted)',
+                    }}
+                  disabled={isOffline}
+                  role="menuitem"
+                  title={device.ipAddress || undefined}
+                >
+                  <span className="inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                    {activePrinterThumbnailSrc ? (
+                      <img
+                        src={activePrinterThumbnailSrc}
+                        alt={activePrinterProfile?.name ?? deviceName}
+                        className="h-full w-full object-cover"
+                        draggable={false}
+                        onError={() => setPrinterThumbnailFailed(true)}
+                      />
+                    ) : (
+                      <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{deviceName}</span>
+                    <span className="block truncate text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      {device.ipAddress || 'No IP'} • {isOffline ? 'Offline' : 'Online'}
+                    </span>
+                  </span>
+                  {active && (
+                    <span className="text-[10px] rounded-full border px-1.5 py-0.5" style={{ borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 45%)', color: 'var(--accent-secondary)', background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)' }}>
+                      Active
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-1 border-t pt-1" style={{ borderColor: 'var(--border-subtle)' }}>
+            <button
+              type="button"
+              onClick={handleOpenPrinterManagerFromQuickMenu}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] font-semibold transition-colors"
+              style={{ color: 'var(--accent-secondary)' }}
+              role="menuitem"
+            >
+              <ChevronDown className="h-3.5 w-3.5 rotate-[-90deg]" />
+              Show Manager
             </button>
           </div>
         </div>
@@ -1032,6 +1217,7 @@ export function TopBar({
         onClose={() => setIsProfileModalOpen(false)}
         initialTab={profileModalTab}
         openPrinterLibraryToken={profileModalOpenPrinterLibraryToken}
+        openNetworkSettingsToken={profileModalOpenNetworkSettingsToken}
       />
     </div>
   );

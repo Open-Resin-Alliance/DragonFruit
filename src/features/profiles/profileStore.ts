@@ -38,6 +38,7 @@ export type PrinterNetworkConnectionState = {
 export type PrinterNetworkDevice = PrinterNetworkConnectionState & {
   id: string;
   displayName: string;
+  imageDataUrl?: string;
 };
 
 export type PrinterPlatformBadge = {
@@ -57,6 +58,7 @@ export type PrinterBitDepth = {
 
 export type PrinterPreset = {
   presetId: string;
+  profileVersion?: number;
   manufacturer: string;
   name: string;
   family?: string;
@@ -93,6 +95,7 @@ export type PrinterProfile = {
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
   officialPresetId?: string;
+  officialPresetVersion?: number;
   isOfficial?: boolean;
   isCustom?: boolean;
   buildVolumeMm: {
@@ -161,6 +164,8 @@ function sanitizeBitDepth(input: unknown): PrinterBitDepth | undefined {
 export type MaterialProfile = {
   id: string;
   printerProfileId: string;
+  officialTemplateId?: string;
+  officialTemplateVersion?: number;
   name: string;
   brand: string;
   currencyCode: string;
@@ -181,6 +186,34 @@ export type MaterialProfile = {
   retractSpeedMmMin: number;
 };
 
+export type MaterialTemplate = Omit<MaterialProfile, 'id' | 'printerProfileId'> & {
+  templateId?: string;
+  profileVersion?: number;
+};
+
+export type OfficialPrinterProfileUpdateInfo = {
+  printerProfileId: string;
+  printerName: string;
+  presetId: string;
+  currentVersion: number;
+  latestVersion: number;
+};
+
+export type OfficialMaterialProfileUpdateInfo = {
+  materialProfileId: string;
+  materialName: string;
+  templateId: string;
+  currentVersion: number;
+  latestVersion: number;
+};
+
+export type ApplyOfficialProfileUpdateResult =
+  | 'updated'
+  | 'version-bumped-custom'
+  | 'already-latest'
+  | 'not-linked'
+  | 'not-found';
+
 export type ProfileStoreState = {
   printerProfiles: PrinterProfile[];
   materialProfiles: MaterialProfile[];
@@ -196,7 +229,7 @@ type PersistedProfileStoreEnvelope = {
 const STORAGE_KEY = 'dragonfruit-profiles-v1';
 const STORAGE_BACKUP_KEY = 'dragonfruit-profiles-v1-backup';
 const LEGACY_STORAGE_KEYS = ['dragonfruit-profiles'];
-const PROFILE_STORE_SCHEMA_VERSION = 2;
+const PROFILE_STORE_SCHEMA_VERSION = 3;
 
 const DEFAULT_OUTPUT_FORMAT: PrinterOutputFormat = '.goo';
 
@@ -291,6 +324,9 @@ function sanitizePrinterNetworkDevice(
       ? source.id.trim()
       : createId('network-device'),
     displayName: displayNameRaw || connection.hostName || connection.ipAddress || 'Printer',
+    imageDataUrl: typeof source.imageDataUrl === 'string' && source.imageDataUrl.trim().length > 0
+      ? source.imageDataUrl
+      : undefined,
     ...connection,
   };
 }
@@ -419,13 +455,13 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
   },
 }));
 
-const BUILTIN_MATERIAL_TEMPLATES = materialTemplatesData as Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>>;
+const BUILTIN_MATERIAL_TEMPLATES = materialTemplatesData as MaterialTemplate[];
 
 function getAllPrinterPresets(): PrinterPreset[] {
   return getRuntimePrinterPresets(BUILTIN_PRINTER_PRESETS);
 }
 
-function getAllMaterialTemplates(): Array<Omit<MaterialProfile, 'id' | 'printerProfileId'>> {
+function getAllMaterialTemplates(): MaterialTemplate[] {
   return getRuntimeMaterialTemplates(BUILTIN_MATERIAL_TEMPLATES);
 }
 
@@ -441,6 +477,7 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   pixelSize: sanitizePixelSize((preset as any).pixelSize),
   bitDepth: sanitizeBitDepth((preset as any).bitDepth),
   officialPresetId: preset.presetId,
+  officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
   isOfficial: true,
   isCustom: false,
   buildVolumeMm: preset.buildVolumeMm,
@@ -493,6 +530,16 @@ function normalizeMirrorFlag(value: unknown, fallback = false): boolean {
   return fallback;
 }
 
+function normalizeProfileVersion(value: unknown, fallback = 1): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return Math.max(1, Math.round(fallback));
+  return Math.max(1, Math.round(numeric));
+}
+
+function createDefaultMaterialIdFromTemplateName(name: string): string {
+  return `material-default-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+}
+
 function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProfile[] {
   const primaryPrinterId = printerProfiles[0]?.id;
   if (!primaryPrinterId) return [];
@@ -500,8 +547,12 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
   return getAllMaterialTemplates().map((template) => ({
     ...template,
     currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
-    id: `material-default-${template.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    id: createDefaultMaterialIdFromTemplateName(template.name),
     printerProfileId: primaryPrinterId,
+    officialTemplateId: typeof (template as any).templateId === 'string' && (template as any).templateId.trim().length > 0
+      ? (template as any).templateId.trim()
+      : undefined,
+    officialTemplateVersion: normalizeProfileVersion((template as any).profileVersion, 1),
   }));
 }
 
@@ -554,6 +605,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
 
         const fallbackBuildVolume = matchedPreset?.buildVolumeMm;
         const fallbackDisplay = matchedPreset?.display;
+        const fallbackOfficialPresetVersion = normalizeProfileVersion((matchedPreset as any)?.profileVersion, 1);
         const networkSupport = resolveNetworkSupport(profile);
         const networkProfileState = networkSupport
           ? deriveNetworkProfileState(profile, networkSupport)
@@ -577,6 +629,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           pixelSize: sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize),
           bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
           officialPresetId,
+          officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
           isOfficial: isOfficialProfileByHeuristic(profile),
           isCustom: typeof profile.isCustom === 'boolean' ? profile.isCustom : !isOfficialProfileByHeuristic(profile),
           buildVolumeMm: {
@@ -611,6 +664,20 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           return null;
         }
 
+        const materialProfile = profile as any;
+        const availableTemplates = getAllMaterialTemplates();
+        const explicitTemplateId = typeof materialProfile.officialTemplateId === 'string'
+          ? materialProfile.officialTemplateId.trim()
+          : '';
+        const inferredTemplateId = explicitTemplateId || (
+          typeof materialProfile.id === 'string' && materialProfile.id.startsWith('material-default-')
+            ? availableTemplates.find((template) => createDefaultMaterialIdFromTemplateName(String((template as any).name ?? '')) === materialProfile.id)?.templateId ?? ''
+            : ''
+        );
+        const matchedTemplate = inferredTemplateId
+          ? availableTemplates.find((template) => (template.templateId ?? '').trim() === inferredTemplateId)
+          : undefined;
+
         const rawPrinterId = (profile as any).printerProfileId;
         const printerProfileId =
           typeof rawPrinterId === 'string' && printerProfiles.some((printer) => printer.id === rawPrinterId)
@@ -620,6 +687,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
         return {
           id: profile.id,
           printerProfileId,
+          officialTemplateId: inferredTemplateId || undefined,
+          officialTemplateVersion: normalizeProfileVersion(materialProfile.officialTemplateVersion, normalizeProfileVersion((matchedTemplate as any)?.profileVersion, 1)),
           name: profile.name,
           brand: typeof (profile as any).brand === 'string' ? (profile as any).brand : 'Default',
           currencyCode: typeof (profile as any).currencyCode === 'string' ? (profile as any).currencyCode.toUpperCase() : 'USD',
@@ -790,6 +859,8 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
     const createdMaterial: MaterialProfile = {
       id: createId('material'),
       printerProfileId: nextState.activePrinterProfileId,
+      officialTemplateId: undefined,
+      officialTemplateVersion: undefined,
       name: 'Standard 405nm',
       brand: 'Default',
       currencyCode: 'USD',
@@ -871,6 +942,9 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     pixelSize: sanitizePixelSize(partial?.pixelSize),
     bitDepth: sanitizeBitDepth(partial?.bitDepth),
     officialPresetId: partial?.officialPresetId?.trim(),
+    officialPresetVersion: Number.isFinite(Number((partial as any)?.officialPresetVersion))
+      ? normalizeProfileVersion((partial as any).officialPresetVersion, 1)
+      : undefined,
     isOfficial: partial?.isOfficial ?? false,
     isCustom: partial?.isCustom ?? true,
     buildVolumeMm: partial?.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
@@ -932,6 +1006,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
     officialPresetId: preset.presetId,
+    officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
     isOfficial: true,
     isCustom: false,
     buildVolumeMm: preset.buildVolumeMm,
@@ -957,6 +1032,12 @@ export function addMaterialProfile(
   const profile: MaterialProfile = {
     id: createId('material'),
     printerProfileId,
+    officialTemplateId: typeof (partial as any)?.officialTemplateId === 'string' && (partial as any).officialTemplateId.trim().length > 0
+      ? (partial as any).officialTemplateId.trim()
+      : undefined,
+    officialTemplateVersion: Number.isFinite(Number((partial as any)?.officialTemplateVersion))
+      ? normalizeProfileVersion((partial as any).officialTemplateVersion, 1)
+      : undefined,
     name: partial?.name?.trim() || `Material ${state.materialProfiles.length + 1}`,
     brand: partial?.brand?.trim() || 'Default',
     currencyCode: partial?.currencyCode?.trim().toUpperCase() || 'USD',
@@ -1242,11 +1323,15 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
       ...material,
       id: createId('material'),
       printerProfileId: duplicateId,
+      officialTemplateId: undefined,
+      officialTemplateVersion: undefined,
     }))
     : [
       {
         id: createId('material'),
         printerProfileId: duplicateId,
+        officialTemplateId: undefined,
+        officialTemplateVersion: undefined,
         name: 'Standard 405nm',
         brand: 'Default',
         currencyCode: 'USD',
@@ -1332,11 +1417,19 @@ export function upsertPrinterNetworkDevice(
     normalizedIp,
   );
 
+  const hasImageDataUrlOverride = Object.prototype.hasOwnProperty.call(deviceInput, 'imageDataUrl');
+  const nextImageDataUrl = hasImageDataUrlOverride
+    ? (typeof deviceInput.imageDataUrl === 'string' && deviceInput.imageDataUrl.trim().length > 0
+      ? deviceInput.imageDataUrl
+      : undefined)
+    : existing.imageDataUrl;
+
   const nextDevice: PrinterNetworkDevice = {
     id: existing.id,
     displayName: typeof deviceInput.displayName === 'string' && deviceInput.displayName.trim().length > 0
       ? deviceInput.displayName.trim()
       : existing.displayName || nextConnection.hostName || nextConnection.ipAddress || 'Printer',
+    imageDataUrl: nextImageDataUrl,
     ...nextConnection,
   };
 
@@ -1492,6 +1585,197 @@ export function getActiveMaterialProfile(stateOverride?: ProfileStoreState): Mat
 export function getMaterialProfilesForPrinter(printerProfileId: string, stateOverride?: ProfileStoreState): MaterialProfile[] {
   const snapshot = stateOverride ?? state;
   return snapshot.materialProfiles.filter((profile) => profile.printerProfileId === printerProfileId);
+}
+
+export function getOfficialPrinterProfileUpdates(stateOverride?: ProfileStoreState): OfficialPrinterProfileUpdateInfo[] {
+  const snapshot = stateOverride ?? state;
+  const presetsById = new Map(getAllPrinterPresets().map((preset) => [preset.presetId, preset] as const));
+
+  return snapshot.printerProfiles
+    .filter((profile) => profile.isOfficial === true && typeof profile.officialPresetId === 'string' && profile.officialPresetId.trim().length > 0)
+    .map((profile) => {
+      const presetId = profile.officialPresetId!.trim();
+      const preset = presetsById.get(presetId);
+      if (!preset) return null;
+
+      const currentVersion = normalizeProfileVersion(profile.officialPresetVersion, 1);
+      const latestVersion = normalizeProfileVersion((preset as any).profileVersion, 1);
+      if (latestVersion <= currentVersion) return null;
+
+      return {
+        printerProfileId: profile.id,
+        printerName: profile.name,
+        presetId,
+        currentVersion,
+        latestVersion,
+      } satisfies OfficialPrinterProfileUpdateInfo;
+    })
+    .filter((item): item is OfficialPrinterProfileUpdateInfo => item !== null);
+}
+
+export function getOfficialMaterialProfileUpdates(stateOverride?: ProfileStoreState): OfficialMaterialProfileUpdateInfo[] {
+  const snapshot = stateOverride ?? state;
+  const templatesById = new Map(
+    getAllMaterialTemplates()
+      .filter((template) => typeof template.templateId === 'string' && template.templateId.trim().length > 0)
+      .map((template) => [template.templateId!.trim(), template] as const),
+  );
+
+  return snapshot.materialProfiles
+    .filter((profile) => typeof profile.officialTemplateId === 'string' && profile.officialTemplateId.trim().length > 0)
+    .map((profile) => {
+      const templateId = profile.officialTemplateId!.trim();
+      const template = templatesById.get(templateId);
+      if (!template) return null;
+
+      const currentVersion = normalizeProfileVersion(profile.officialTemplateVersion, 1);
+      const latestVersion = normalizeProfileVersion((template as any).profileVersion, 1);
+      if (latestVersion <= currentVersion) return null;
+
+      return {
+        materialProfileId: profile.id,
+        materialName: profile.name,
+        templateId,
+        currentVersion,
+        latestVersion,
+      } satisfies OfficialMaterialProfileUpdateInfo;
+    })
+    .filter((item): item is OfficialMaterialProfileUpdateInfo => item !== null);
+}
+
+export function applyOfficialPrinterProfileUpdate(printerProfileId: string): ApplyOfficialProfileUpdateResult {
+  ensureHydrated();
+
+  const profile = state.printerProfiles.find((item) => item.id === printerProfileId);
+  if (!profile) return 'not-found';
+
+  const presetId = resolveOfficialPresetId(profile);
+  if (!presetId) return 'not-linked';
+
+  const preset = getAllPrinterPresets().find((item) => item.presetId === presetId);
+  if (!preset) return 'not-linked';
+
+  const latestVersion = normalizeProfileVersion((preset as any).profileVersion, 1);
+  const currentVersion = normalizeProfileVersion(profile.officialPresetVersion, 1);
+  if (latestVersion <= currentVersion) return 'already-latest';
+
+  if (profile.isOfficial === true) {
+    setState(ensureActiveMaterialForActivePrinter({
+      ...state,
+      printerProfiles: state.printerProfiles.map((item) => {
+        if (item.id !== printerProfileId) return item;
+
+        return {
+          ...item,
+          name: preset.name,
+          manufacturer: preset.manufacturer,
+          imageDataUrl: typeof preset.imageAssetPath === 'string' && preset.imageAssetPath.trim().length > 0
+            ? preset.imageAssetPath
+            : item.imageDataUrl,
+          antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
+          networkSupport: normalizeNetworkSupport(preset.networkSupport),
+          networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
+          platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
+          pixelSize: sanitizePixelSize((preset as any).pixelSize),
+          bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+          officialPresetId: preset.presetId,
+          officialPresetVersion: latestVersion,
+          isOfficial: true,
+          isCustom: false,
+          buildVolumeMm: preset.buildVolumeMm,
+          display: {
+            resolutionX: preset.display.resolutionX,
+            resolutionY: preset.display.resolutionY,
+            outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+            mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
+            mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
+          },
+          // Preserve user-managed connection/fleet state.
+          network: sanitizePrinterNetworkSettings(item.network),
+          networkFleet: item.networkFleet,
+          activeNetworkDeviceId: item.activeNetworkDeviceId,
+          networkConnection: item.networkConnection,
+        };
+      }),
+    }));
+
+    return 'updated';
+  }
+
+  // Custom profiles linked to official presets are not overwritten for safety.
+  setState(ensureActiveMaterialForActivePrinter({
+    ...state,
+    printerProfiles: state.printerProfiles.map((item) => item.id === printerProfileId
+      ? {
+        ...item,
+        officialPresetId: preset.presetId,
+        officialPresetVersion: latestVersion,
+      }
+      : item),
+  }));
+
+  return 'version-bumped-custom';
+}
+
+export function applyOfficialMaterialProfileUpdate(materialProfileId: string): ApplyOfficialProfileUpdateResult {
+  ensureHydrated();
+
+  const material = state.materialProfiles.find((item) => item.id === materialProfileId);
+  if (!material) return 'not-found';
+
+  const templateId = typeof material.officialTemplateId === 'string' ? material.officialTemplateId.trim() : '';
+  if (!templateId) return 'not-linked';
+
+  const template = getAllMaterialTemplates().find((item) => (item.templateId ?? '').trim() === templateId);
+  if (!template) return 'not-linked';
+
+  const latestVersion = normalizeProfileVersion((template as any).profileVersion, 1);
+  const currentVersion = normalizeProfileVersion(material.officialTemplateVersion, 1);
+  if (latestVersion <= currentVersion) return 'already-latest';
+
+  const isOfficialMaterial = material.id.startsWith('material-default-');
+
+  setState(ensureActiveMaterialForActivePrinter({
+    ...state,
+    materialProfiles: state.materialProfiles.map((item) => {
+      if (item.id !== materialProfileId) return item;
+
+      if (!isOfficialMaterial) {
+        // Preserve custom values; only acknowledge latest baseline version.
+        return {
+          ...item,
+          officialTemplateId: templateId,
+          officialTemplateVersion: latestVersion,
+        };
+      }
+
+      return {
+        ...item,
+        name: template.name,
+        brand: template.brand,
+        currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : item.currencyCode,
+        bottlePrice: Number((template as any).bottlePrice) || item.bottlePrice,
+        bottleCapacityMl: Number((template as any).bottleCapacityMl) || item.bottleCapacityMl,
+        resinFamily: (template.resinFamily ?? item.resinFamily) as MaterialProfile['resinFamily'],
+        scaleCompensationPct: {
+          x: Number((template as any).scaleCompensationPct?.x) || 0,
+          y: Number((template as any).scaleCompensationPct?.y) || 0,
+          z: Number((template as any).scaleCompensationPct?.z) || 0,
+        },
+        layerHeightMm: Number((template as any).layerHeightMm) || item.layerHeightMm,
+        normalExposureSec: Number((template as any).normalExposureSec) || item.normalExposureSec,
+        bottomExposureSec: Number((template as any).bottomExposureSec) || item.bottomExposureSec,
+        bottomLayerCount: Number((template as any).bottomLayerCount) || item.bottomLayerCount,
+        liftDistanceMm: Number((template as any).liftDistanceMm) || item.liftDistanceMm,
+        liftSpeedMmMin: Number((template as any).liftSpeedMmMin) || item.liftSpeedMmMin,
+        retractSpeedMmMin: Number((template as any).retractSpeedMmMin) || item.retractSpeedMmMin,
+        officialTemplateId: templateId,
+        officialTemplateVersion: latestVersion,
+      };
+    }),
+  }));
+
+  return isOfficialMaterial ? 'updated' : 'version-bumped-custom';
 }
 
 export function getInstalledPlugins(): InstalledProfilePlugin[] {

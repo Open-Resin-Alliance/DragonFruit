@@ -103,6 +103,12 @@ function sanitizePositiveNumber(value: unknown): number | null {
   return n;
 }
 
+function sanitizeProfileVersion(value: unknown): number | undefined {
+  const n = sanitizePositiveNumber(value);
+  if (n == null) return undefined;
+  return Math.max(1, Math.round(n));
+}
+
 function resolveBuildDimensionMm(
   explicitValue: unknown,
   resolutionPx: unknown,
@@ -154,6 +160,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
 
     return {
       presetId: String((preset as any).presetId),
+      profileVersion: sanitizeProfileVersion((preset as any).profileVersion),
       manufacturer: String((preset as any).manufacturer),
       name: String((preset as any).name),
       family: typeof (preset as any).family === 'string' && (preset as any).family.trim().length > 0

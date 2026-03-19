@@ -245,6 +245,12 @@ function sanitizeOptionalPositiveNumber(value: unknown): number | undefined {
   return n;
 }
 
+function sanitizeProfileVersion(value: unknown): number | undefined {
+  const n = sanitizeOptionalPositiveNumber(value);
+  if (n == null) return undefined;
+  return Math.max(1, Math.round(n));
+}
+
 function sanitizeOutputFormat(value: unknown): PrinterPreset['display']['outputFormat'] {
   return value === '.nanodlp' || value === '.goo' || value === '.lumen'
     ? value
@@ -320,6 +326,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
 
   return {
     presetId,
+    profileVersion: sanitizeProfileVersion((value as any).profileVersion),
     manufacturer,
     name,
     family: family || undefined,
