@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
+import { normalizeOutputFormat } from '@/features/profiles/outputFormatUtils';
 
 type GithubRepoRef = {
   owner: string;
@@ -10,6 +12,14 @@ const MAX_PRINTER_PRESETS = 128;
 const MAX_MATERIAL_TEMPLATES = 512;
 const MAX_INLINE_ASSET_BYTES = 2_500_000;
 const MAX_INLINE_ASSET_BUDGET_BYTES = 20_000_000;
+const DEFAULT_GITHUB_PLUGIN_ALLOWLIST = 'open-resin-alliance/*';
+
+type GithubAllowlistRule = {
+  owner: string;
+  repo: string | '*';
+};
+
+type DebugPluginKind = 'official' | '3rd';
 
 function boundedString(value: unknown, max = 120): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -29,10 +39,8 @@ function optionalHttpUrl(value: unknown): string | undefined {
   }
 }
 
-function parseOutputFormat(value: unknown): '.nanodlp' | '.goo' | '.lumen' {
-  return value === '.nanodlp' || value === '.goo' || value === '.lumen'
-    ? value
-    : '.goo';
+function parseOutputFormat(value: unknown): string {
+  return normalizeOutputFormat(value);
 }
 
 function sanitizeNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -70,7 +78,9 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
         ? (value as any).display.mirrorY
         : undefined,
     },
-    networkSupport: (value as any).networkSupport === 'nanodlp' ? 'nanodlp' : undefined,
+    // GitHub-installed plugins are simple/data-only manifests.
+    // Complex runtime network capabilities are compile-time only.
+    networkSupport: undefined,
   };
 }
 
@@ -138,6 +148,182 @@ function parseGithubRepoUrl(input: string): GithubRepoRef | null {
   } catch {
     return null;
   }
+}
+
+function parseDebugPluginKind(input: string): DebugPluginKind | null {
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) return null;
+
+  if (trimmed === 'df://debug_plugin_official') return 'official';
+  if (trimmed === 'df://debug_plugin_3rd') return '3rd';
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'df:' && parsed.protocol !== 'dragonfruit:') return null;
+    const target = parsed.hostname || parsed.pathname.replace(/^\/+/, '');
+    if (target === 'debug_plugin_official') return 'official';
+    if (target === 'debug_plugin_3rd') return '3rd';
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function buildDebugPluginManifest(kind: DebugPluginKind) {
+  if (kind === 'official') {
+    return {
+      schemaVersion: 1,
+      id: 'debug-official-plugin',
+      name: 'Debug Official Plugin',
+      version: '0.0.1-debug',
+      description: 'Synthetic allowlisted debug plugin used to validate the install workflow.',
+      author: 'Open Resin Alliance',
+      homepage: 'https://github.com/Open-Resin-Alliance/DragonFruit',
+      printerPresets: [
+        {
+          presetId: 'debug.official.printer',
+          manufacturer: 'ORA Debug',
+          name: 'Official Debug Printer',
+          buildVolumeMm: {
+            width: 143,
+            depth: 89,
+            height: 175,
+          },
+          display: {
+            resolutionX: 2560,
+            resolutionY: 1620,
+            outputFormat: 'nanodlp',
+          },
+        },
+      ],
+      materialTemplates: [
+        {
+          name: 'Official Debug Resin',
+          brand: 'ORA Debug',
+          currencyCode: 'USD',
+          bottlePrice: 0,
+          bottleCapacityMl: 1000,
+          resinFamily: 'standard',
+          scaleCompensationPct: {
+            x: 0,
+            y: 0,
+            z: 0,
+          },
+          layerHeightMm: 0.05,
+          normalExposureSec: 2.5,
+          bottomExposureSec: 28,
+          bottomLayerCount: 5,
+          liftDistanceMm: 6,
+          liftSpeedMmMin: 60,
+          retractSpeedMmMin: 150,
+        },
+      ],
+    };
+  }
+
+  return {
+    schemaVersion: 1,
+    id: 'debug-3rdparty-plugin',
+    name: 'Debug 3rd-Party Plugin',
+    version: '0.0.1-debug',
+    description: 'Synthetic unverified debug plugin used to validate the liability-warning workflow.',
+    author: 'Example Third Party',
+    homepage: 'https://example.com/debug-plugin-3rd-party',
+    printerPresets: [
+      {
+        presetId: 'debug.3rd.printer',
+        manufacturer: 'Third-Party Debug',
+        name: '3rd-Party Debug Printer',
+        buildVolumeMm: {
+          width: 130,
+          depth: 80,
+          height: 150,
+        },
+        display: {
+          resolutionX: 1920,
+          resolutionY: 1080,
+          outputFormat: 'nanodlp',
+        },
+      },
+    ],
+    materialTemplates: [
+      {
+        name: '3rd-Party Debug Resin',
+        brand: 'Example Vendor',
+        currencyCode: 'USD',
+        bottlePrice: 0,
+        bottleCapacityMl: 1000,
+        resinFamily: 'standard',
+        scaleCompensationPct: {
+          x: 0,
+          y: 0,
+          z: 0,
+        },
+        layerHeightMm: 0.05,
+        normalExposureSec: 2.7,
+        bottomExposureSec: 30,
+        bottomLayerCount: 5,
+        liftDistanceMm: 6,
+        liftSpeedMmMin: 60,
+        retractSpeedMmMin: 150,
+      },
+    ],
+  };
+}
+
+function parseExpectedSha256(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  if (!/^[a-f0-9]{64}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+function computeSha256Hex(input: string): string {
+  return createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+function parseGithubAllowlistRules(): GithubAllowlistRule[] {
+  const rawConfig = (process.env.DRAGONFRUIT_PLUGIN_GITHUB_ALLOWLIST ?? DEFAULT_GITHUB_PLUGIN_ALLOWLIST)
+    .trim();
+
+  const entries = rawConfig
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  const rules: GithubAllowlistRule[] = [];
+  for (const entry of entries) {
+    if (entry === '*') {
+      rules.push({ owner: '*', repo: '*' });
+      continue;
+    }
+
+    const parts = entry.split('/').map((part) => part.trim().toLowerCase()).filter(Boolean);
+    if (parts.length < 2) continue;
+    const owner = parts[0];
+    const repo = parts[1] === '*' ? '*' : parts[1];
+    if (!owner) continue;
+    rules.push({ owner, repo });
+  }
+
+  if (rules.length === 0) {
+    return [{ owner: 'open-resin-alliance', repo: '*' }];
+  }
+  return rules;
+}
+
+function isGithubRepoAllowed(owner: string, repo: string, rules: GithubAllowlistRule[]): boolean {
+  const ownerLower = owner.trim().toLowerCase();
+  const repoLower = repo.trim().toLowerCase();
+  if (!ownerLower || !repoLower) return false;
+
+  return rules.some((rule) => {
+    if (rule.owner === '*') return true;
+    if (rule.owner !== ownerLower) return false;
+    return rule.repo === '*' || rule.repo === repoLower;
+  });
 }
 
 async function resolveDefaultBranch(owner: string, repo: string): Promise<string> {
@@ -291,6 +477,9 @@ export async function POST(request: Request) {
   }
 
   const repoUrl = typeof (payload as any)?.repoUrl === 'string' ? (payload as any).repoUrl : '';
+  const allowUnverifiedInstall = (payload as any)?.allowUnverifiedInstall === true;
+  const acknowledgeLiabilityWarning = (payload as any)?.acknowledgeLiabilityWarning === true;
+  const debugPluginKind = parseDebugPluginKind(repoUrl);
   const manifestPath = typeof (payload as any)?.manifestPath === 'string' && (payload as any).manifestPath.trim().length > 0
     ? (payload as any).manifestPath.trim().replace(/^\/+/, '')
     : 'dragonfruit-plugin.json';
@@ -299,9 +488,67 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: 'Invalid manifest path' }, { status: 400 });
   }
 
+  if (debugPluginKind) {
+    const debugAllowlistRules = ['open-resin-alliance/*'];
+    const isOfficialDebug = debugPluginKind === 'official';
+
+    if (!isOfficialDebug && !(allowUnverifiedInstall && acknowledgeLiabilityWarning)) {
+      return NextResponse.json({
+        ok: false,
+        error: 'Debug 3rd-party plugin is intentionally unverified and requires liability acknowledgement.',
+        requiresLiabilityWarning: true,
+        unverifiedRepo: {
+          owner: 'debug',
+          name: 'plugin-3rd-party',
+        },
+        allowlistRules: debugAllowlistRules,
+      }, { status: 403 });
+    }
+
+    const manifest = buildDebugPluginManifest(debugPluginKind);
+    const manifestSha256 = computeSha256Hex(JSON.stringify(manifest));
+
+    return NextResponse.json({
+      ok: true,
+      repo: {
+        owner: isOfficialDebug ? 'open-resin-alliance' : 'debug',
+        name: isOfficialDebug ? 'debug-plugin-official' : 'plugin-3rd-party',
+        branch: 'debug',
+      },
+      repoAllowlisted: isOfficialDebug,
+      manifestSha256,
+      allowlistRules: debugAllowlistRules,
+      rawManifestUrl: repoUrl,
+      manifest,
+    });
+  }
+
   const repoRef = parseGithubRepoUrl(repoUrl);
   if (!repoRef) {
     return NextResponse.json({ ok: false, error: 'Invalid GitHub repository URL' }, { status: 400 });
+  }
+
+  const allowlistRules = parseGithubAllowlistRules();
+  const isAllowlistedRepo = isGithubRepoAllowed(repoRef.owner, repoRef.repo, allowlistRules);
+  if (!isAllowlistedRepo && !(allowUnverifiedInstall && acknowledgeLiabilityWarning)) {
+    return NextResponse.json({
+      ok: false,
+      error: `Repository is not in the plugin allowlist: ${repoRef.owner}/${repoRef.repo}`,
+      requiresLiabilityWarning: true,
+      unverifiedRepo: {
+        owner: repoRef.owner,
+        name: repoRef.repo,
+      },
+      allowlistRules: allowlistRules.map((rule) => `${rule.owner}/${rule.repo}`),
+    }, { status: 403 });
+  }
+
+  const expectedManifestSha256 = parseExpectedSha256((payload as any)?.expectedManifestSha256);
+  if ((payload as any)?.expectedManifestSha256 != null && !expectedManifestSha256) {
+    return NextResponse.json({
+      ok: false,
+      error: 'Invalid expectedManifestSha256 (must be 64-char lowercase hex).',
+    }, { status: 400 });
   }
 
   const branch = repoRef.branch || await resolveDefaultBranch(repoRef.owner, repoRef.repo);
@@ -324,8 +571,26 @@ export async function POST(request: Request) {
       }, { status: 404 });
     }
 
-    const manifestPayload = await response.json().catch(() => null);
-    if (!manifestPayload) {
+    const manifestText = await response.text();
+    const manifestSha256 = computeSha256Hex(manifestText);
+
+    if (expectedManifestSha256 && manifestSha256 !== expectedManifestSha256) {
+      return NextResponse.json({
+        ok: false,
+        error: 'Manifest hash mismatch.',
+        rawManifestUrl,
+        expectedManifestSha256,
+        manifestSha256,
+      }, { status: 409 });
+    }
+
+    let manifestPayload: unknown;
+    try {
+      manifestPayload = JSON.parse(manifestText) as unknown;
+    } catch {
+      manifestPayload = null;
+    }
+    if (!manifestPayload || typeof manifestPayload !== 'object') {
       return NextResponse.json({ ok: false, error: 'Manifest is not valid JSON', rawManifestUrl }, { status: 400 });
     }
 
@@ -343,6 +608,9 @@ export async function POST(request: Request) {
         name: repoRef.repo,
         branch,
       },
+      repoAllowlisted: isAllowlistedRepo,
+      manifestSha256,
+      allowlistRules: allowlistRules.map((rule) => `${rule.owner}/${rule.repo}`),
       rawManifestUrl,
       manifest,
     });

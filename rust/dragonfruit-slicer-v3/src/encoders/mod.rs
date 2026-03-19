@@ -4,8 +4,7 @@
 //! masks, or both) plus metadata; concrete file/container formats are encoded
 //! through this trait.
 
-#[path = "../../../../plugins/athena/slicing/rust/encoder_impl.rs"]
-pub mod athena_plugin;
+pub mod generated_plugin_encoders;
 pub mod registry;
 
 use crate::engine::SlicerV3Error;

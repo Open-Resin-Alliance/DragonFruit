@@ -38,11 +38,22 @@ import {
   getDefaultProfileNetworkUiAdapter,
   getProfileNetworkUiAdapter,
 } from '@/features/plugins/pluginRegistry';
+import { getAvailableOutputFormatOptions } from '@/features/slicing/formats/registry';
 import {
   getPrinterReachabilityServerSnapshot,
   getPrinterReachabilitySnapshot,
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
+import {
+  buildAdvancedRemoteMaterialSections,
+  buildBasicRemoteMaterialSections,
+  buildRemoteMaterialChips,
+  buildSortedRemoteMaterialDraftEntries,
+  formatRemoteMaterialFieldLabel,
+  isLikelyNumericRemoteMaterialField,
+  type RemoteMaterialEditDraft,
+  type RemoteMaterialProfile,
+} from '@/features/plugins/remoteMaterialUiUtils';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 type ProfileSettingsModalProps = {
@@ -59,70 +70,7 @@ type DeleteConfirmTarget =
 
 type MaterialDraft = Omit<MaterialProfile, 'id' | 'printerProfileId'>;
 
-type NanoDlpMaterial = {
-  id: string;
-  name: string;
-  locked: boolean;
-  meta: Record<string, unknown>;
-};
-
-type NanoDlpEditDraft = Record<string, string>;
-
-function formatNanoDlpMetaLabel(key: string): string {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/[_\-]+/g, ' ')
-    .trim();
-}
-
-function isLikelyNumericNanoDlpField(key: string, value: string): boolean {
-  const normalizedKey = key.toLowerCase();
-  if (Number.isFinite(Number(value))) return true;
-  return (
-    normalizedKey.includes('time')
-    || normalizedKey.includes('layer')
-    || normalizedKey.includes('speed')
-    || normalizedKey.includes('height')
-    || normalizedKey.includes('distance')
-    || normalizedKey.includes('exposure')
-    || normalizedKey.includes('lift')
-    || normalizedKey.includes('wait')
-    || normalizedKey.includes('depth')
-  );
-}
-
-function buildNanoDlpMaterialChips(
-  material: NanoDlpMaterial,
-  resolveMaterialProcessValues: (meta: Record<string, unknown>) => {
-    layerHeightMm?: number;
-    normalExposureSec?: number;
-    bottomExposureSec?: number;
-    bottomLayerCount?: number;
-  },
-): string[] {
-  const processValues = resolveMaterialProcessValues(material.meta ?? {});
-  const parts: string[] = [];
-
-  if (processValues.bottomLayerCount != null) {
-    parts.push(`Burn-In ${processValues.bottomLayerCount}L`);
-  }
-
-  if (processValues.bottomExposureSec != null) {
-    parts.push(`Burn-In ${processValues.bottomExposureSec.toFixed(1)}s`);
-  }
-
-  if (processValues.normalExposureSec != null) {
-    parts.push(`Cure ${processValues.normalExposureSec.toFixed(1)}s`);
-  }
-
-  return parts;
-}
-
-const OUTPUT_FORMAT_OPTIONS: Array<{ value: PrinterOutputFormat; label: string }> = [
-  { value: '.nanodlp', label: '.nanodlp' },
-  { value: '.goo', label: '.goo' },
-  { value: '.lumen', label: '.lumen' },
-];
+const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 
 const RESIN_FAMILY_OPTIONS: Array<{ value: MaterialProfile['resinFamily']; label: string }> = [
   { value: 'standard', label: 'Standard' },
@@ -190,15 +138,15 @@ export function ProfileSettingsModal({
   const [showManualNetworkEntry, setShowManualNetworkEntry] = React.useState(false);
   const [hasAutoScannedOnOpen, setHasAutoScannedOnOpen] = React.useState(false);
   const [discoveredPrinters, setDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
-    const [cachedDiscoveredPrinters, setCachedDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
-  const [nanodlpMaterials, setNanodlpMaterials] = React.useState<NanoDlpMaterial[]>([]);
-  const [isLoadingNanodlpMaterials, setIsLoadingNanodlpMaterials] = React.useState(false);
-  const [nanodlpMaterialsError, setNanodlpMaterialsError] = React.useState<string | null>(null);
-  const [selectedNanodlpMaterialId, setSelectedNanodlpMaterialId] = React.useState<string>('');
-  const [isNanodlpEditDialogOpen, setIsNanodlpEditDialogOpen] = React.useState(false);
-  const [nanodlpEditTab, setNanodlpEditTab] = React.useState<'basic' | 'advanced'>('basic');
-  const [isSavingNanodlpEdit, setIsSavingNanodlpEdit] = React.useState(false);
-  const [nanodlpEditDraft, setNanodlpEditDraft] = React.useState<NanoDlpEditDraft>({});
+  const [cachedDiscoveredPrinters, setCachedDiscoveredPrinters] = React.useState<Array<{ id: string; name: string; ipAddress: string; status: 'online' | 'reachable' }>>([]);
+  const [remoteMaterials, setRemoteMaterials] = React.useState<RemoteMaterialProfile[]>([]);
+  const [isLoadingRemoteMaterials, setIsLoadingRemoteMaterials] = React.useState(false);
+  const [remoteMaterialsError, setRemoteMaterialsError] = React.useState<string | null>(null);
+  const [selectedRemoteMaterialId, setSelectedRemoteMaterialId] = React.useState<string>('');
+  const [isRemoteMaterialEditDialogOpen, setIsRemoteMaterialEditDialogOpen] = React.useState(false);
+  const [remoteMaterialEditTab, setRemoteMaterialEditTab] = React.useState<'basic' | 'advanced'>('basic');
+  const [isSavingRemoteMaterialEdit, setIsSavingRemoteMaterialEdit] = React.useState(false);
+  const [remoteMaterialEditDraft, setRemoteMaterialEditDraft] = React.useState<RemoteMaterialEditDraft>({});
   const [deleteConfirmTarget, setDeleteConfirmTarget] = React.useState<DeleteConfirmTarget | null>(null);
   const [editMaterialDraft, setEditMaterialDraft] = React.useState<MaterialDraft>({
     name: 'Standard 405nm',
@@ -477,19 +425,19 @@ export function ProfileSettingsModal({
   );
   const isNanodlpPrinter = Boolean(networkUiAdapter);
   const selectedNetworkModeLabel = networkUiAdapter?.displayName ?? 'Unknown';
-  const shouldUseNanodlpOnDeviceMaterials = Boolean(
+  const shouldUseRemoteOnDeviceMaterials = Boolean(
     Boolean(networkUiAdapter)
     && selectedPrinter?.networkConnection?.connected
     && (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress),
   );
-  const shouldShowNanodlpConnectInfo = Boolean(isNanodlpPrinter && !shouldUseNanodlpOnDeviceMaterials);
+  const shouldShowRemoteMaterialConnectInfo = Boolean(isNanodlpPrinter && !shouldUseRemoteOnDeviceMaterials);
 
-  const selectedNanodlpMaterial = React.useMemo(() => {
-    if (!selectedNanodlpMaterialId) return null;
-    return nanodlpMaterials.find((material) => material.id === selectedNanodlpMaterialId) ?? null;
-  }, [nanodlpMaterials, selectedNanodlpMaterialId]);
+  const selectedRemoteMaterial = React.useMemo(() => {
+    if (!selectedRemoteMaterialId) return null;
+    return remoteMaterials.find((material) => material.id === selectedRemoteMaterialId) ?? null;
+  }, [remoteMaterials, selectedRemoteMaterialId]);
 
-  const selectedNanodlpMaterialIdRef = React.useRef('');
+  const selectedRemoteMaterialIdRef = React.useRef('');
   const lastHandledOpenPrinterLibraryTokenRef = React.useRef(0);
   const lastHandledOpenNetworkSettingsTokenRef = React.useRef(0);
   const wasOpenRef = React.useRef(false);
@@ -498,12 +446,12 @@ export function ProfileSettingsModal({
   const discoveryRunIdRef = React.useRef(0);
 
   React.useEffect(() => {
-    selectedNanodlpMaterialIdRef.current = selectedNanodlpMaterialId;
-  }, [selectedNanodlpMaterialId]);
+    selectedRemoteMaterialIdRef.current = selectedRemoteMaterialId;
+  }, [selectedRemoteMaterialId]);
 
   const selectedPrinterResolvedId = selectedPrinter?.id ?? '';
   const selectedPrinterNetworkSupportMode = selectedPrinter?.networkSupport ?? null;
-  const selectedNanodlpHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
+  const selectedRemoteMaterialHost = (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress || '').trim();
   const selectedPrinterPreset = React.useMemo(() => {
     if (!selectedPrinter) return null;
     const presetId = resolveOfficialPresetIdFromProfile(selectedPrinter);
@@ -648,9 +596,9 @@ export function ProfileSettingsModal({
     () => managedNetworkPrinters.find((device) => device.id === editingFleetUnitId) ?? null,
     [editingFleetUnitId, managedNetworkPrinters],
   );
-  const isSelectedNanodlpPrinterOffline = React.useMemo(() => {
+  const isSelectedRemoteMaterialPrinterOffline = React.useMemo(() => {
     if (!isNanodlpPrinter) return false;
-    if (!selectedNanodlpHost) return false;
+    if (!selectedRemoteMaterialHost) return false;
 
     if (activeManagedNetworkPrinter) {
       if (printerReachabilityByDeviceId[activeManagedNetworkPrinter.id] === false) return true;
@@ -662,17 +610,17 @@ export function ProfileSettingsModal({
     activeManagedNetworkPrinter,
     isNanodlpPrinter,
     printerReachabilityByDeviceId,
-    selectedNanodlpHost,
+    selectedRemoteMaterialHost,
     selectedPrinter?.networkConnection?.connected,
   ]);
-  const shouldShowNanodlpSelectedPrinterOfflineState = isSelectedNanodlpPrinterOffline && hasMultipleConnectedManagedPrinters;
-  const shouldShowNanodlpMaterialsPanel = shouldUseNanodlpOnDeviceMaterials || shouldShowNanodlpSelectedPrinterOfflineState;
+  const shouldShowRemoteMaterialSelectedPrinterOfflineState = isSelectedRemoteMaterialPrinterOffline && hasMultipleConnectedManagedPrinters;
+  const shouldShowRemoteMaterialsPanel = shouldUseRemoteOnDeviceMaterials || shouldShowRemoteMaterialSelectedPrinterOfflineState;
 
   const primaryEditFields = effectiveNetworkUiAdapter.primaryEditFields;
   const basicEditSections = effectiveNetworkUiAdapter.basicSections;
   const advancedEditSectionsDefs = effectiveNetworkUiAdapter.advancedSections;
 
-  const nanodlpPrimaryFieldByKey = React.useMemo(() => {
+  const remoteMaterialPrimaryFieldByKey = React.useMemo(() => {
     const map = new Map<string, (typeof primaryEditFields)[number]>();
     primaryEditFields.forEach((field) => {
       map.set(field.key, field);
@@ -680,80 +628,45 @@ export function ProfileSettingsModal({
     return map;
   }, [primaryEditFields]);
 
-  const sortedNanodlpDraftEntries = React.useMemo(() => {
-    const entries = Object.entries(nanodlpEditDraft);
-    const primaryOrder = new Map<string, number>();
-    primaryEditFields.forEach((field, index) => {
-      primaryOrder.set(field.key, index);
-    });
+  const sortedRemoteMaterialDraftEntries = React.useMemo(() => {
+    return buildSortedRemoteMaterialDraftEntries(remoteMaterialEditDraft, primaryEditFields);
+  }, [remoteMaterialEditDraft, primaryEditFields]);
 
-    return entries.sort(([keyA], [keyB]) => {
-      const indexA = primaryOrder.get(keyA);
-      const indexB = primaryOrder.get(keyB);
+  const basicRemoteMaterialSections = React.useMemo(() => {
+    return buildBasicRemoteMaterialSections(
+      remoteMaterialEditDraft,
+      primaryEditFields,
+      basicEditSections,
+    );
+  }, [basicEditSections, primaryEditFields, remoteMaterialEditDraft]);
 
-      const isPrimaryA = indexA != null;
-      const isPrimaryB = indexB != null;
+  const advancedRemoteMaterialSections = React.useMemo(() => {
+    return buildAdvancedRemoteMaterialSections(
+      sortedRemoteMaterialDraftEntries,
+      primaryEditFields,
+      advancedEditSectionsDefs,
+      effectiveNetworkUiAdapter.resolveAdvancedSectionId,
+    );
+  }, [advancedEditSectionsDefs, effectiveNetworkUiAdapter.resolveAdvancedSectionId, primaryEditFields, sortedRemoteMaterialDraftEntries]);
 
-      if (isPrimaryA && isPrimaryB) return (indexA as number) - (indexB as number);
-      if (isPrimaryA) return -1;
-      if (isPrimaryB) return 1;
-      return keyA.localeCompare(keyB);
-    });
-  }, [nanodlpEditDraft, primaryEditFields]);
+  const isRemoteMaterialDynamicWaitEnabledState = React.useMemo(() => {
+    return effectiveNetworkUiAdapter.isDynamicWaitEnabled(remoteMaterialEditDraft);
+  }, [remoteMaterialEditDraft, effectiveNetworkUiAdapter]);
 
-  const basicNanodlpDraftEntries = React.useMemo(() => {
-    return primaryEditFields
-      .map((field) => [field.key, nanodlpEditDraft[field.key]] as const)
-      .filter(([, value]) => typeof value === 'string');
-  }, [nanodlpEditDraft, primaryEditFields]);
-
-  const basicNanodlpSections = React.useMemo(() => {
-    const entryMap = new Map(basicNanodlpDraftEntries);
-    return basicEditSections
-      .map((section) => ({
-        ...section,
-        entries: section.keys
-          .map((key) => [key, entryMap.get(key)] as const)
-          .filter(([, value]) => typeof value === 'string') as Array<readonly [string, string]>,
-      }))
-      .filter((section) => section.entries.length > 0);
-  }, [basicEditSections, basicNanodlpDraftEntries]);
-
-  const advancedNanodlpDraftEntries = React.useMemo(() => {
-    return sortedNanodlpDraftEntries
-      .filter(([key]) => !nanodlpPrimaryFieldByKey.has(key));
-  }, [nanodlpPrimaryFieldByKey, sortedNanodlpDraftEntries]);
-
-  const advancedNanodlpSections = React.useMemo(() => {
-    const sectionTitleById = new Map<string, string>([
-      ...advancedEditSectionsDefs.map((section) => [section.id, section.title] as const),
-      ['other', 'Other Advanced Controls'] as const,
-    ]);
-
-    const grouped = new Map<string, Array<readonly [string, string]>>();
-    for (const entry of advancedNanodlpDraftEntries) {
-      const sectionId = effectiveNetworkUiAdapter.resolveAdvancedSectionId(entry[0]);
-      const current = grouped.get(sectionId);
-      if (current) {
-        current.push(entry);
-      } else {
-        grouped.set(sectionId, [entry]);
-      }
+  React.useEffect(() => {
+    if (!selectedPrinterSupportsNetworkSettings) {
+      setPrinterRailViewMode('profiles');
+      return;
     }
 
-    const orderedIds = [...advancedEditSectionsDefs.map((section) => section.id), 'other'];
-    return orderedIds
-      .map((id) => ({
-        id,
-        title: sectionTitleById.get(id) ?? 'Advanced',
-        entries: grouped.get(id) ?? [],
-      }))
-      .filter((section) => section.entries.length > 0);
-  }, [advancedEditSectionsDefs, advancedNanodlpDraftEntries, effectiveNetworkUiAdapter]);
+    if (selectedPrinterFleetCount > 1) {
+      return;
+    }
 
-  const isNanodlpDynamicWaitEnabledState = React.useMemo(() => {
-    return effectiveNetworkUiAdapter.isDynamicWaitEnabled(nanodlpEditDraft);
-  }, [nanodlpEditDraft, effectiveNetworkUiAdapter]);
+    if (printerRailViewMode === 'fleet') {
+      setPrinterRailViewMode('profiles');
+    }
+  }, [printerRailViewMode, selectedPrinterFleetCount, selectedPrinterSupportsNetworkSettings]);
 
   React.useEffect(() => {
     if (!selectedPrinterSupportsNetworkSettings) {
@@ -922,19 +835,19 @@ export function ProfileSettingsModal({
     }
   }, [selectedPrinterSupportsNetworkSettings]);
 
-  const loadNanodlpMaterials = React.useCallback(async () => {
+  const loadRemoteMaterials = React.useCallback(async () => {
     if (!selectedPrinterResolvedId) return;
     if (!networkUiAdapter) return;
 
-    const host = selectedNanodlpHost;
+    const host = selectedRemoteMaterialHost;
     if (!host) {
-      setNanodlpMaterials([]);
-      setNanodlpMaterialsError('Connect to a NanoDLP printer to load on-device materials.');
+      setRemoteMaterials([]);
+      setRemoteMaterialsError(`Connect to a ${selectedNetworkModeLabel} printer to load on-device materials.`);
       return;
     }
 
-    setIsLoadingNanodlpMaterials(true);
-    setNanodlpMaterialsError(null);
+    setIsLoadingRemoteMaterials(true);
+    setRemoteMaterialsError(null);
 
     try {
       const response = await pluginNetworkFetch({
@@ -948,17 +861,17 @@ export function ProfileSettingsModal({
         ? payload.materials.filter((item: any) => typeof item?.id === 'string' && typeof item?.name === 'string')
         : [];
 
-      setNanodlpMaterials(materials);
+      setRemoteMaterials(materials);
 
-      const preferredId = selectedNanodlpMaterialIdRef.current;
+      const preferredId = selectedRemoteMaterialIdRef.current;
       const nextSelected = materials.find((item: any) => item.id === preferredId)
         ?? materials.find((item: any) => item.locked !== true)
         ?? materials[0]
         ?? null;
 
       if (nextSelected) {
-        const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues((nextSelected as NanoDlpMaterial).meta ?? {});
-        setSelectedNanodlpMaterialId(nextSelected.id);
+        const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues((nextSelected as RemoteMaterialProfile).meta ?? {});
+        setSelectedRemoteMaterialId(nextSelected.id);
         updatePrinterNetworkConnectionStatus(selectedPrinterResolvedId, {
           selectedMaterialId: nextSelected.id,
           selectedMaterialName: nextSelected.name,
@@ -968,38 +881,38 @@ export function ProfileSettingsModal({
           selectedMaterialBottomLayerCount: processValues.bottomLayerCount,
         });
       } else {
-        setSelectedNanodlpMaterialId('');
+        setSelectedRemoteMaterialId('');
       }
 
       const errorMessage = typeof payload?.error === 'string' ? payload.error : '';
       if (errorMessage) {
-        setNanodlpMaterialsError(errorMessage);
+        setRemoteMaterialsError(errorMessage);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load NanoDLP materials.';
-      setNanodlpMaterials([]);
-      setNanodlpMaterialsError(message);
+      const message = error instanceof Error ? error.message : `Failed to load ${selectedNetworkModeLabel} materials.`;
+      setRemoteMaterials([]);
+      setRemoteMaterialsError(message);
     } finally {
-      setIsLoadingNanodlpMaterials(false);
+      setIsLoadingRemoteMaterials(false);
     }
-  }, [effectiveNetworkUiAdapter, networkUiAdapter, selectedNanodlpHost, selectedPrinterResolvedId]);
+  }, [effectiveNetworkUiAdapter, networkUiAdapter, selectedRemoteMaterialHost, selectedPrinterResolvedId]);
 
   React.useEffect(() => {
-    if (!shouldUseNanodlpOnDeviceMaterials || !selectedPrinterResolvedId) {
-      setNanodlpMaterials([]);
-      setSelectedNanodlpMaterialId('');
-      setIsNanodlpEditDialogOpen(false);
-      setNanodlpMaterialsError(null);
+    if (!shouldUseRemoteOnDeviceMaterials || !selectedPrinterResolvedId) {
+      setRemoteMaterials([]);
+      setSelectedRemoteMaterialId('');
+      setIsRemoteMaterialEditDialogOpen(false);
+      setRemoteMaterialsError(null);
       return;
     }
 
-    void loadNanodlpMaterials();
-  }, [loadNanodlpMaterials, selectedPrinterResolvedId, shouldUseNanodlpOnDeviceMaterials]);
+    void loadRemoteMaterials();
+  }, [loadRemoteMaterials, selectedPrinterResolvedId, shouldUseRemoteOnDeviceMaterials]);
 
-  const handleSelectNanodlpMaterial = React.useCallback((material: NanoDlpMaterial) => {
+  const handleSelectRemoteMaterial = React.useCallback((material: RemoteMaterialProfile) => {
     if (!selectedPrinter) return;
     const processValues = effectiveNetworkUiAdapter.resolveMaterialProcessValues(material.meta ?? {});
-    setSelectedNanodlpMaterialId(material.id);
+    setSelectedRemoteMaterialId(material.id);
     updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
       selectedMaterialId: material.id,
       selectedMaterialName: material.name,
@@ -1010,32 +923,32 @@ export function ProfileSettingsModal({
     });
   }, [effectiveNetworkUiAdapter, selectedPrinter]);
 
-  const openNanodlpEditDialog = React.useCallback(() => {
-    if (!selectedNanodlpMaterial) return;
-    setNanodlpEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(selectedNanodlpMaterial.meta ?? {}));
-    setNanodlpEditTab('basic');
-    setIsNanodlpEditDialogOpen(true);
-  }, [effectiveNetworkUiAdapter, selectedNanodlpMaterial]);
+  const openRemoteMaterialEditDialog = React.useCallback(() => {
+    if (!selectedRemoteMaterial) return;
+    setRemoteMaterialEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(selectedRemoteMaterial.meta ?? {}));
+    setRemoteMaterialEditTab('basic');
+    setIsRemoteMaterialEditDialogOpen(true);
+  }, [effectiveNetworkUiAdapter, selectedRemoteMaterial]);
 
-  const openNanodlpEditDialogForMaterial = React.useCallback((material: NanoDlpMaterial) => {
+  const openRemoteMaterialEditDialogForMaterial = React.useCallback((material: RemoteMaterialProfile) => {
     if (material.locked) return;
-    handleSelectNanodlpMaterial(material);
-    setNanodlpEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(material.meta ?? {}));
-    setNanodlpEditTab('basic');
-    setIsNanodlpEditDialogOpen(true);
-  }, [effectiveNetworkUiAdapter, handleSelectNanodlpMaterial]);
+    handleSelectRemoteMaterial(material);
+    setRemoteMaterialEditDraft(effectiveNetworkUiAdapter.resolveEditDraftFromMeta(material.meta ?? {}));
+    setRemoteMaterialEditTab('basic');
+    setIsRemoteMaterialEditDialogOpen(true);
+  }, [effectiveNetworkUiAdapter, handleSelectRemoteMaterial]);
 
-  const handleSaveNanodlpEdits = React.useCallback(async () => {
+  const handleSaveRemoteMaterialEdits = React.useCallback(async () => {
     if (!selectedPrinter) return;
-    if (!selectedNanodlpMaterial) return;
+    if (!selectedRemoteMaterial) return;
     if (!networkUiAdapter) return;
 
     const host = (selectedPrinter.networkConnection?.ipAddress || selectedPrinter.network?.ipAddress || '').trim();
-    const profileId = Number(selectedNanodlpMaterial.id);
+    const profileId = Number(selectedRemoteMaterial.id);
     if (!host || !Number.isFinite(profileId) || profileId <= 0) return;
 
-    setIsSavingNanodlpEdit(true);
-    setNanodlpMaterialsError(null);
+    setIsSavingRemoteMaterialEdit(true);
+    setRemoteMaterialsError(null);
 
     try {
       const response = await pluginNetworkFetch({
@@ -1043,25 +956,25 @@ export function ProfileSettingsModal({
         operation: networkUiAdapter.operations.materialsEdit,
         host,
         profileId,
-        fields: effectiveNetworkUiAdapter.denormalizeEditDraftForBackend(nanodlpEditDraft),
+        fields: effectiveNetworkUiAdapter.denormalizeEditDraftForBackend(remoteMaterialEditDraft),
       });
 
       const payload = await response.json().catch(() => null) as any;
       if (!response.ok || payload?.ok !== true) {
-        throw new Error(typeof payload?.error === 'string' ? payload.error : 'Failed to save NanoDLP material profile.');
+        throw new Error(typeof payload?.error === 'string' ? payload.error : `Failed to save ${selectedNetworkModeLabel} material profile.`);
       }
 
-      setIsNanodlpEditDialogOpen(false);
-      setNetworkConnectionMessage('NanoDLP profile updated. Refreshing materials…');
-      await loadNanodlpMaterials();
+      setIsRemoteMaterialEditDialogOpen(false);
+      setNetworkConnectionMessage(`${selectedNetworkModeLabel} profile updated. Refreshing materials…`);
+      await loadRemoteMaterials();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to save NanoDLP profile.';
-      setNanodlpMaterialsError(message);
+      const message = error instanceof Error ? error.message : `Failed to save ${selectedNetworkModeLabel} profile.`;
+      setRemoteMaterialsError(message);
       setNetworkConnectionMessage(message);
     } finally {
-      setIsSavingNanodlpEdit(false);
+      setIsSavingRemoteMaterialEdit(false);
     }
-  }, [effectiveNetworkUiAdapter, loadNanodlpMaterials, nanodlpEditDraft, networkUiAdapter, selectedNanodlpMaterial, selectedPrinter]);
+  }, [effectiveNetworkUiAdapter, loadRemoteMaterials, remoteMaterialEditDraft, networkUiAdapter, selectedRemoteMaterial, selectedPrinter]);
 
   React.useEffect(() => {
     if (isNetworkSettingsOpen) {
@@ -1199,7 +1112,7 @@ export function ProfileSettingsModal({
 
         return {
           id: `${selectedPrinter.id}-local-scan-${index}`,
-          name: hostName || printerName || 'NanoDLP Printer',
+          name: hostName || printerName || `${selectedNetworkModeLabel} Printer`,
           ipAddress,
           status: 'online' as const,
         };
@@ -1211,7 +1124,7 @@ export function ProfileSettingsModal({
 
       setNetworkScanProgressPct(44);
       setNetworkScanPhaseLabel('Scanning local subnet…');
-      setNetworkConnectionMessage('Scanning local subnet for NanoDLP devices…');
+      setNetworkConnectionMessage(`Scanning local subnet for ${selectedNetworkModeLabel} devices…`);
             setNetworkScanProgressPct(42);
             setNetworkScanPhaseLabel('Verifying previously discovered printers…');
             setNetworkConnectionMessage('Checking if previously discovered printers are still available…');
@@ -1320,7 +1233,7 @@ export function ProfileSettingsModal({
 
           return {
             id: `${selectedPrinter.id}-scan-batch-${subnetBatchStart}-${index}`,
-            name: hostName || printerName || 'NanoDLP Printer',
+            name: hostName || printerName || `${selectedNetworkModeLabel} Printer`,
             ipAddress,
             status: 'online' as const,
           };
@@ -1380,14 +1293,14 @@ export function ProfileSettingsModal({
       if (merged.length > 0) {
         if (isCurrentRun()) {
           setNetworkConnectionMessage(
-            `Found ${merged.length} NanoDLP device${merged.length === 1 ? '' : 's'} (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`,
+            `Found ${merged.length} ${selectedNetworkModeLabel} device${merged.length === 1 ? '' : 's'} (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`,
           );
         }
       } else {
         if (isCurrentRun()) {
           setNetworkConnectionMessage(
             scannedSubnetHosts > 0 || scannedLocalHostnames > 0
-              ? `No NanoDLP devices found (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`
+              ? `No ${selectedNetworkModeLabel} devices found (resolved ${scannedLocalHostnames} .local hostnames, scanned ${scannedSubnetHosts} subnet hosts / ${scannedEndpoints} endpoints).`
               : 'No local IPv4 subnet detected by the scanner. Try entering printer IP and scanning again.',
           );
         }
@@ -1501,7 +1414,7 @@ export function ProfileSettingsModal({
     }
 
     setIsNetworkConnecting(true);
-    setNetworkConnectionMessage('Connecting to NanoDLP host…');
+    setNetworkConnectionMessage(`Connecting to ${selectedNetworkModeLabel} host…`);
 
     try {
       const response = await pluginNetworkFetch({
@@ -1558,7 +1471,7 @@ export function ProfileSettingsModal({
       } else {
         const statusText = typeof payload?.statusText === 'string'
           ? payload.statusText
-          : 'NanoDLP host unreachable.';
+          : `${selectedNetworkModeLabel} host unreachable.`;
 
         updatePrinterNetworkConnectionStatus(selectedPrinter.id, {
           mode: selectedPrinter.networkSupport,
@@ -2810,11 +2723,11 @@ export function ProfileSettingsModal({
                     Material Settings
                   </h3>
                   <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    {shouldUseNanodlpOnDeviceMaterials
-                      ? <>Connected NanoDLP profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
-                      : shouldShowNanodlpSelectedPrinterOfflineState
+                    {shouldUseRemoteOnDeviceMaterials
+                      ? <>Connected {selectedNetworkModeLabel} profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
+                      : shouldShowRemoteMaterialSelectedPrinterOfflineState
                         ? <>The selected printer appears offline. Showing on-device materials view with offline status.</>
-                        : shouldShowNanodlpConnectInfo
+                        : shouldShowRemoteMaterialConnectInfo
                           ? <>Connect to a machine to view on-device material profiles.</>
                           : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
                   </p>
@@ -2825,19 +2738,19 @@ export function ProfileSettingsModal({
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {shouldUseNanodlpOnDeviceMaterials && (
+                  {shouldUseRemoteOnDeviceMaterials && (
                     <button
                       type="button"
-                      onClick={() => { void loadNanodlpMaterials(); }}
-                      disabled={isLoadingNanodlpMaterials || !selectedNanodlpHost}
+                      onClick={() => { void loadRemoteMaterials(); }}
+                      disabled={isLoadingRemoteMaterials || !selectedRemoteMaterialHost}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                       style={{ color: 'var(--text-strong)' }}
                     >
-                      {isLoadingNanodlpMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                      {isLoadingNanodlpMaterials ? 'Loading…' : 'Refresh'}
+                      {isLoadingRemoteMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                      {isLoadingRemoteMaterials ? 'Loading…' : 'Refresh'}
                     </button>
                   )}
-                  {!shouldUseNanodlpOnDeviceMaterials && !shouldShowNanodlpSelectedPrinterOfflineState && !shouldShowNanodlpConnectInfo && (
+                  {!shouldUseRemoteOnDeviceMaterials && !shouldShowRemoteMaterialSelectedPrinterOfflineState && !shouldShowRemoteMaterialConnectInfo && (
                     <>
                       <button
                         type="button"
@@ -2885,28 +2798,28 @@ export function ProfileSettingsModal({
             </div>
 
             <div className="p-3 flex flex-col gap-3 flex-1 min-h-0">
-              {shouldUseNanodlpOnDeviceMaterials ? (
+              {shouldUseRemoteOnDeviceMaterials ? (
                 <>
                   <div className="rounded-xl border overflow-hidden flex flex-col flex-1 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
-                      {isLoadingNanodlpMaterials ? (
+                      {isLoadingRemoteMaterials ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
                           Loading materials from printer…
                         </div>
-                      ) : nanodlpMaterials.length === 0 ? (
+                      ) : remoteMaterials.length === 0 ? (
                         <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
-                          {nanodlpMaterialsError || 'No on-device materials were returned by this NanoDLP host.'}
+                          {remoteMaterialsError || `No on-device materials were returned by this ${selectedNetworkModeLabel} host.`}
                         </div>
                       ) : (
-                        nanodlpMaterials.map((material) => {
-                          const active = selectedNanodlpMaterialId === material.id;
-                          const chips = buildNanoDlpMaterialChips(material, effectiveNetworkUiAdapter.resolveMaterialProcessValues);
+                        remoteMaterials.map((material) => {
+                          const active = selectedRemoteMaterialId === material.id;
+                          const chips = buildRemoteMaterialChips(material, effectiveNetworkUiAdapter.resolveMaterialProcessValues);
                           return (
                             <button
                               key={material.id}
                               type="button"
-                              onClick={() => handleSelectNanodlpMaterial(material)}
-                              onDoubleClick={() => openNanodlpEditDialogForMaterial(material)}
+                              onClick={() => handleSelectRemoteMaterial(material)}
+                              onDoubleClick={() => openRemoteMaterialEditDialogForMaterial(material)}
                               className="w-full rounded-md border px-2.5 py-2 text-left"
                               style={active
                                 ? {
@@ -2949,14 +2862,14 @@ export function ProfileSettingsModal({
                   </div>
 
                   <div className="rounded-xl border p-3 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                    {selectedNanodlpMaterial ? (
+                    {selectedRemoteMaterial ? (
                       <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{selectedNanodlpMaterial.name}</span>
+                          <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{selectedRemoteMaterial.name}</span>
                           <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}>
-                            Profile ID: {selectedNanodlpMaterial.id}
+                            Profile ID: {selectedRemoteMaterial.id}
                           </span>
-                          {selectedNanodlpMaterial.locked && (
+                          {selectedRemoteMaterial.locked && (
                             <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)', color: '#fbbf24', background: 'var(--surface-2)' }}>
                               Locked Profile
                             </span>
@@ -2964,10 +2877,10 @@ export function ProfileSettingsModal({
                           <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
                             Synced with Machine
                           </span>
-                          {!selectedNanodlpMaterial.locked && (
+                          {!selectedRemoteMaterial.locked && (
                             <button
                               type="button"
-                              onClick={openNanodlpEditDialog}
+                              onClick={openRemoteMaterialEditDialog}
                               className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
                               style={{ color: 'var(--accent-secondary)' }}
                             >
@@ -2978,12 +2891,12 @@ export function ProfileSettingsModal({
                       </div>
                     ) : (
                       <div className="h-full flex items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                        Select a printer material profile to edit available NanoDLP parameters.
+                        Select a printer material profile to edit available {selectedNetworkModeLabel} parameters.
                       </div>
                     )}
                   </div>
                 </>
-              ) : shouldShowNanodlpSelectedPrinterOfflineState ? (
+              ) : shouldShowRemoteMaterialSelectedPrinterOfflineState ? (
                 <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-center max-w-[520px]">
                     <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)' }}>
@@ -3010,14 +2923,14 @@ export function ProfileSettingsModal({
                         Open Fleet Management
                       </button>
                     )}
-                    {nanodlpMaterialsError && (
+                    {remoteMaterialsError && (
                       <div className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        {nanodlpMaterialsError}
+                        {remoteMaterialsError}
                       </div>
                     )}
                   </div>
                 </div>
-              ) : shouldShowNanodlpConnectInfo ? (
+              ) : shouldShowRemoteMaterialConnectInfo ? (
                 <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-center max-w-[520px]">
                     <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)', background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)' }}>
@@ -3572,205 +3485,22 @@ export function ProfileSettingsModal({
           </div>
         )}
 
-        {isNanodlpEditDialogOpen && selectedNanodlpMaterial && (
-          <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !isSavingNanodlpEdit) setIsNanodlpEditDialogOpen(false);
-          }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
-              <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
-                <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit NanoDLP Resin Profile</h3>
-                  <p className="ui-meta">{selectedNanodlpMaterial.name} • Profile ID {selectedNanodlpMaterial.id}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsNanodlpEditDialogOpen(false)}
-                  disabled={isSavingNanodlpEdit}
-                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
-                  aria-label="Close NanoDLP edit dialog"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="p-3 space-y-3 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-                <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                  <button
-                    type="button"
-                    onClick={() => setNanodlpEditTab('basic')}
-                    className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
-                    style={nanodlpEditTab === 'basic'
-                      ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
-                      : { color: 'var(--text-muted)' }}
-                  >
-                    Basic
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNanodlpEditTab('advanced')}
-                    className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
-                    style={nanodlpEditTab === 'advanced'
-                      ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
-                      : { color: 'var(--text-muted)' }}
-                  >
-                    Advanced
-                  </button>
-                </div>
-
-                {nanodlpEditTab === 'basic' ? (
-                  <div className="space-y-2.5">
-                    {basicNanodlpSections.map((section) => (
-                      <div
-                        key={section.id}
-                        className="rounded-lg border p-2.5"
-                        style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
-                      >
-                        <div className="ui-meta font-semibold uppercase tracking-wide mb-2 flex items-center justify-between gap-2">
-                          <span>{section.title}</span>
-                          {section.id === 'timing' && isNanodlpDynamicWaitEnabledState && (
-                            <span
-                              className="text-[10px] rounded-full border px-2 py-0.5 normal-case tracking-normal"
-                              style={{
-                                borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
-                                background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
-                                color: '#fbbf24',
-                              }}
-                              title="Dynamic Wait is controlling Wait Before Print fields"
-                            >
-                              Dynamic Wait active
-                            </span>
-                          )}
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                          {section.entries.map(([key, value]) => {
-                            const field = nanodlpPrimaryFieldByKey.get(key);
-                            const isDynamicWaitLockedField = isNanodlpDynamicWaitEnabledState && (key === 'SupportBeforeWait' || key === 'BeforeWait');
-                            const dynamicWaitHelp = isDynamicWaitLockedField
-                              ? 'Controlled by Dynamic Wait. Disable Dynamic Wait in Advanced settings to edit this value.'
-                              : undefined;
-                            const numericValue = Number(value);
-                            const isNumeric = Number.isFinite(numericValue);
-                            if (isNumeric) {
-                              return (
-                                <LabeledNumberInput
-                                  key={key}
-                                  label={field?.label ?? formatNanoDlpMetaLabel(key)}
-                                  helpText={dynamicWaitHelp ?? field?.description}
-                                  disabled={isDynamicWaitLockedField}
-                                  value={numericValue}
-                                  onChange={(next) => setNanodlpEditDraft((prev) => ({
-                                    ...prev,
-                                    [key]: key === 'SupportLayerNumber' || key === 'TransitionalLayer'
-                                      ? String(Math.max(0, Math.round(next)))
-                                      : String(next),
-                                  }))}
-                                />
-                              );
-                            }
-
-                            return (
-                              <LabeledInput
-                                key={key}
-                                label={field?.label ?? formatNanoDlpMetaLabel(key)}
-                                helpText={dynamicWaitHelp ?? field?.description}
-                                disabled={isDynamicWaitLockedField}
-                                value={value}
-                                onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: next }))}
-                              />
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {advancedNanodlpSections.length > 0 ? (
-                      advancedNanodlpSections.map((section) => (
-                        <div
-                          key={section.id}
-                          className="rounded-lg border p-2.5"
-                          style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
-                        >
-                          <div className="ui-meta font-semibold uppercase tracking-wide mb-2">{section.title}</div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                            {section.entries.map(([key, value]) => {
-                              const numericValue = Number(value);
-                              const useNumericInput = Number.isFinite(numericValue)
-                                || (value.trim().length === 0 && isLikelyNumericNanoDlpField(key, value));
-
-                              if (useNumericInput) {
-                                return (
-                                  <LabeledNumberInput
-                                    key={key}
-                                    label={formatNanoDlpMetaLabel(key)}
-                                    helpText={effectiveNetworkUiAdapter.getFieldHelpText(key)}
-                                    value={Number.isFinite(numericValue) ? numericValue : 0}
-                                    onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: String(next) }))}
-                                  />
-                                );
-                              }
-
-                              return (
-                                <LabeledInput
-                                  key={key}
-                                  label={formatNanoDlpMetaLabel(key)}
-                                  helpText={effectiveNetworkUiAdapter.getFieldHelpText(key)}
-                                  value={value}
-                                  onChange={(next) => setNanodlpEditDraft((prev) => ({ ...prev, [key]: next }))}
-                                />
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
-                        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                          No additional advanced controls were found for this profile.
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div
-                className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
-                style={{
-                  borderColor: 'var(--border-subtle)',
-                  background: 'color-mix(in srgb, var(--surface-0), transparent 4%)',
-                  backdropFilter: 'blur(8px)',
-                }}
-              >
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Applies to NanoDLP profile on the printer (all scalar parameters from this profile).
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsNanodlpEditDialogOpen(false)}
-                    disabled={isSavingNanodlpEdit}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleSaveNanodlpEdits(); }}
-                    disabled={isSavingNanodlpEdit}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-60"
-                    style={{ color: 'var(--accent-secondary)' }}
-                  >
-                    {isSavingNanodlpEdit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                    {isSavingNanodlpEdit ? 'Saving…' : 'Save to NanoDLP'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        <RemoteMaterialEditDialog
+          isOpen={isRemoteMaterialEditDialogOpen}
+          material={selectedRemoteMaterial}
+          networkModeLabel={selectedNetworkModeLabel}
+          isSaving={isSavingRemoteMaterialEdit}
+          editTab={remoteMaterialEditTab}
+          onEditTabChange={setRemoteMaterialEditTab}
+          basicSections={basicRemoteMaterialSections}
+          advancedSections={advancedRemoteMaterialSections}
+          primaryFieldByKey={remoteMaterialPrimaryFieldByKey}
+          isDynamicWaitEnabledState={isRemoteMaterialDynamicWaitEnabledState}
+          resolveFieldHelpText={effectiveNetworkUiAdapter.getFieldHelpText}
+          onDraftChange={setRemoteMaterialEditDraft}
+          onClose={() => setIsRemoteMaterialEditDialogOpen(false)}
+          onSave={() => { void handleSaveRemoteMaterialEdits(); }}
+        />
 
         {showOfficialLockDialog && (
           <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
@@ -3861,6 +3591,250 @@ export function ProfileSettingsModal({
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+type RemoteMaterialEditDialogProps = {
+  isOpen: boolean;
+  material: RemoteMaterialProfile | null;
+  networkModeLabel: string;
+  isSaving: boolean;
+  editTab: 'basic' | 'advanced';
+  onEditTabChange: (tab: 'basic' | 'advanced') => void;
+  basicSections: Array<{
+    id: string;
+    title: string;
+    entries: Array<readonly [string, string]>;
+  }>;
+  advancedSections: Array<{
+    id: string;
+    title: string;
+    entries: Array<readonly [string, string]>;
+  }>;
+  primaryFieldByKey: Map<string, { label: string; description?: string }>;
+  isDynamicWaitEnabledState: boolean;
+  resolveFieldHelpText: (fieldKey: string) => string;
+  onDraftChange: React.Dispatch<React.SetStateAction<RemoteMaterialEditDraft>>;
+  onClose: () => void;
+  onSave: () => void;
+};
+
+function RemoteMaterialEditDialog({
+  isOpen,
+  material,
+  networkModeLabel,
+  isSaving,
+  editTab,
+  onEditTabChange,
+  basicSections,
+  advancedSections,
+  primaryFieldByKey,
+  isDynamicWaitEnabledState,
+  resolveFieldHelpText,
+  onDraftChange,
+  onClose,
+  onSave,
+}: RemoteMaterialEditDialogProps) {
+  if (!isOpen || !material) return null;
+
+  return (
+    <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !isSaving) onClose();
+    }}>
+      <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl overflow-hidden flex flex-col ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: 'var(--border-subtle)' }}>
+          <div>
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Edit {networkModeLabel} Resin Profile</h3>
+            <p className="ui-meta">{material.name} • Profile ID {material.id}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSaving}
+            className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+            style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+            aria-label={`Close ${networkModeLabel} edit dialog`}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-3 space-y-3 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+          <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
+            <button
+              type="button"
+              onClick={() => onEditTabChange('basic')}
+              className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
+              style={editTab === 'basic'
+                ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                : { color: 'var(--text-muted)' }}
+            >
+              Basic
+            </button>
+            <button
+              type="button"
+              onClick={() => onEditTabChange('advanced')}
+              className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
+              style={editTab === 'advanced'
+                ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                : { color: 'var(--text-muted)' }}
+            >
+              Advanced
+            </button>
+          </div>
+
+          {editTab === 'basic' ? (
+            <div className="space-y-2.5">
+              {basicSections.map((section) => (
+                <div
+                  key={section.id}
+                  className="rounded-lg border p-2.5"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                >
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2 flex items-center justify-between gap-2">
+                    <span>{section.title}</span>
+                    {section.id === 'timing' && isDynamicWaitEnabledState && (
+                      <span
+                        className="text-[10px] rounded-full border px-2 py-0.5 normal-case tracking-normal"
+                        style={{
+                          borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 45%)',
+                          background: 'color-mix(in srgb, #f59e0b, var(--surface-2) 88%)',
+                          color: '#fbbf24',
+                        }}
+                        title="Dynamic Wait is controlling Wait Before Print fields"
+                      >
+                        Dynamic Wait active
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    {section.entries.map(([key, value]) => {
+                      const field = primaryFieldByKey.get(key);
+                      const isDynamicWaitLockedField = isDynamicWaitEnabledState && (key === 'SupportBeforeWait' || key === 'BeforeWait');
+                      const dynamicWaitHelp = isDynamicWaitLockedField
+                        ? 'Controlled by Dynamic Wait. Disable Dynamic Wait in Advanced settings to edit this value.'
+                        : undefined;
+                      const numericValue = Number(value);
+                      const isNumeric = Number.isFinite(numericValue);
+                      if (isNumeric) {
+                        return (
+                          <LabeledNumberInput
+                            key={key}
+                            label={field?.label ?? formatRemoteMaterialFieldLabel(key)}
+                            helpText={dynamicWaitHelp ?? field?.description}
+                            disabled={isDynamicWaitLockedField}
+                            value={numericValue}
+                            onChange={(next) => onDraftChange((prev) => ({
+                              ...prev,
+                              [key]: key === 'SupportLayerNumber' || key === 'TransitionalLayer'
+                                ? String(Math.max(0, Math.round(next)))
+                                : String(next),
+                            }))}
+                          />
+                        );
+                      }
+
+                      return (
+                        <LabeledInput
+                          key={key}
+                          label={field?.label ?? formatRemoteMaterialFieldLabel(key)}
+                          helpText={dynamicWaitHelp ?? field?.description}
+                          disabled={isDynamicWaitLockedField}
+                          value={value}
+                          onChange={(next) => onDraftChange((prev) => ({ ...prev, [key]: next }))}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {advancedSections.length > 0 ? (
+                advancedSections.map((section) => (
+                  <div
+                    key={section.id}
+                    className="rounded-lg border p-2.5"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                  >
+                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2">{section.title}</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      {section.entries.map(([key, value]) => {
+                        const numericValue = Number(value);
+                        const useNumericInput = Number.isFinite(numericValue)
+                          || (value.trim().length === 0 && isLikelyNumericRemoteMaterialField(key, value));
+
+                        if (useNumericInput) {
+                          return (
+                            <LabeledNumberInput
+                              key={key}
+                              label={formatRemoteMaterialFieldLabel(key)}
+                              helpText={resolveFieldHelpText(key)}
+                              value={Number.isFinite(numericValue) ? numericValue : 0}
+                              onChange={(next) => onDraftChange((prev) => ({ ...prev, [key]: String(next) }))}
+                            />
+                          );
+                        }
+
+                        return (
+                          <LabeledInput
+                            key={key}
+                            label={formatRemoteMaterialFieldLabel(key)}
+                            helpText={resolveFieldHelpText(key)}
+                            value={value}
+                            onChange={(next) => onDraftChange((prev) => ({ ...prev, [key]: next }))}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    No additional advanced controls were found for this profile.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div
+          className="px-3 py-2 border-t flex items-center justify-between gap-2 shrink-0 sticky bottom-0"
+          style={{
+            borderColor: 'var(--border-subtle)',
+            background: 'color-mix(in srgb, var(--surface-0), transparent 4%)',
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            {`Applies to ${networkModeLabel} profile on the printer (all scalar parameters from this profile).`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isSaving}
+              className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-full"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={isSaving}
+              className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-60"
+              style={{ color: 'var(--accent-secondary)' }}
+            >
+              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              {isSaving ? 'Saving…' : `Save to ${networkModeLabel}`}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

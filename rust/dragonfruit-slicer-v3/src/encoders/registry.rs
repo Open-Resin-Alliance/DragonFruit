@@ -1,6 +1,6 @@
 //! Centralized output-format registry for V3 encoders.
 
-use crate::encoders::athena_plugin::AthenaPluginEncoder;
+use crate::encoders::generated_plugin_encoders::build_generated_plugin_encoders;
 use crate::encoders::FormatEncoder;
 use std::sync::OnceLock;
 
@@ -8,8 +8,8 @@ static ENCODERS: OnceLock<Vec<Box<dyn FormatEncoder>>> = OnceLock::new();
 
 fn encoders() -> &'static [Box<dyn FormatEncoder>] {
     ENCODERS
-    // Athena plugin registry entry owns the `.nanodlp` output format.
-    .get_or_init(|| vec![Box::new(AthenaPluginEncoder)])
+        // Plugin-provided encoders are generated at build time from allowlisted definitions.
+        .get_or_init(build_generated_plugin_encoders)
         .as_slice()
 }
 
@@ -23,5 +23,8 @@ pub fn find_encoder(output_format: &str) -> Option<&'static dyn FormatEncoder> {
 
 /// Returns all currently registered output extensions.
 pub fn supported_output_formats() -> Vec<&'static str> {
-    encoders().iter().map(|encoder| encoder.output_format()).collect()
+    encoders()
+        .iter()
+        .map(|encoder| encoder.output_format())
+        .collect()
 }

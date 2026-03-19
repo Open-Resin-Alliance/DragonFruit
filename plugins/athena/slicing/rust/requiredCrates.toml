@@ -1,0 +1,18 @@
+# Athena Plugin Cargo Dependencies for Slicer V3
+#
+# This file declares any additional Rust crates required by the Athena encoder.
+# The generator will merge these into dragonfruit-slicer-v3/Cargo.toml during build.
+#
+# Currently, Athena's encoder uses only core dragonfruit-slicer-v3 dependencies
+# (serde, zip, base64, etc.), so this file is minimal.
+#
+# If additional crates are needed in the future, declare them below.
+
+# Example (currently commented out):
+# [dependencies]
+# image = "0.24"
+# imageproc = { version = "0.23", features = ["image-hashing"] }
+
+[notes]
+purpose = "NanoDLP encoder for Concepts3D Athena printers"
+minimum-rust = "1.70"

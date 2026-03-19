@@ -819,7 +819,13 @@ fn main() {
     let _ = sweep_stale_temp_artifacts(7 * 24 * 60 * 60);
 
     // Initialize plugin registry and register built-in plugins
-    let _ = plugin_registry::initialize_plugins();
+    if let Err(error) = plugin_registry::initialize_plugins() {
+        if cfg!(debug_assertions) {
+            eprintln!("[plugin-registry] WARNING: {error}");
+        } else {
+            panic!("Failed to initialize plugin registry: {error}");
+        }
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {

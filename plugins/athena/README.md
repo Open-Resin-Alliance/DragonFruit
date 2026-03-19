@@ -1,92 +1,165 @@
-# Athena Plugin
+# Athena Complex Plugin
 
-Built-in vendor plugin for Athena / Concepts3D NanoDLP workflows.
+Athena is DragonFruit’s reference **complex plugin** for NanoDLP-class printers.
 
-## What lives here
+It demonstrates end-to-end plugin ownership across:
 
+- profile and material semantics
+- network protocol operations
+- upload orchestration
+- monitoring parsing
+- native slicing container encoding (`.nanodlp`)
+
+---
+
+## 1) Purpose and scope
+
+Athena exists to keep vendor-specific behavior outside core app modules while still supporting deep runtime integration.
+
+Primary scope:
+
+- NanoDLP connection/discovery/material/print operations
+- Athena printer preset + asset pack
+- Athena-specific monitoring interpretation
+- Athena-owned native output format support
+
+Out of scope:
+
+- generic plugin registry behavior (owned by core framework)
+- runtime-installed executable plugin code
+
+---
+
+## 2) Folder map
+
+`plugins/athena/`:
+
+- `pluginDefinition.ts`
+  - complex plugin definition + capabilities
 - `pluginManifest.ts`
-  - built-in plugin manifest consumed by the plugin registry
-  - carries Athena-owned printer presets and resolves plugin asset URLs
-- `printers/concepts3d/printers.json`
-  - Athena/Concepts3D printer preset pack
-- `printers/concepts3d/assets/*`
-  - preset thumbnail assets served via `/api/profile-assets/plugins/athena/...`
-- `network/nanodlp.ts`
-  - NanoDLP network parsing/heuristics shared by API routes
+  - built-in metadata + printer preset pack binding
+- `printers/printers.json`
+  - Athena printer presets
+- `printers/assets/*`
+  - preset thumbnails
 - `nanodlp/*`
-  - NanoDLP edit semantics used by Profile Settings UI
+  - profile/material UI semantics and transformation helpers
+- `network/nanodlp.ts`
+  - shared NanoDLP utility layer
+- `network/networkHandlers.ts`
+  - canonical plugin network entrypoint (`handlePluginNetworkOperation`)
+- `network/nanodlpHandlers.ts`
+  - Athena NanoDLP operation router implementation
+- `network/handlers/*`
+  - operation-focused modules (`connect`, `discover`, `materials`, `jobs`, `printer`)
+- `network/index.ts`
+  - Athena network barrel + upload entrypoint
 - `slicing/nanodlpFormatDefinition.ts`
-  - Athena-owned TypeScript format metadata used to map `.nanodlp` printers to Rust/WASM encoder entrypoints
+  - TS format metadata for `.nanodlp`
+- `slicing/rust/encoder_impl.rs`
+  - Rust encoder implementation (`create_plugin_encoder()`)
 
-## Runtime integration map
+---
 
-- Plugin registration:
-  - `src/features/plugins/pluginRegistry.ts`
-- Settings UI plugin management:
-  - `src/components/settings/PluginsSettingsTab.tsx`
-- NanoDLP network routes that use Athena helpers:
-  - `src/app/api/network/nanodlp/connect/route.ts`
-  - `src/app/api/network/nanodlp/discover/route.ts`
-  - `src/app/api/network/nanodlp/materials/route.ts`
-  - `src/app/api/network/nanodlp/materials/edit/route.ts`
-- Profile asset serving (including plugin-owned assets):
-  - `src/app/api/profile-assets/[...assetPath]/route.ts`
+## 3) Capability declaration
 
-## Contributor notes
+Athena declares capabilities in `pluginDefinition.ts`:
 
-- Keep Athena-specific logic in this plugin rather than core profile modules.
-- Prefer adding new NanoDLP behavior in small focused modules under `nanodlp/`.
-- If adding new plugin-owned assets, ensure URLs normalize to `/api/profile-assets/plugins/athena/...`.
+- `networkOperations: true`
+- `uploadWithProgress: true`
+- `tauriRuntimePlugin: true`
+- `slicerEncoder: true`
 
-## Example call flow
+These flags must stay consistent with source entrypoints; generator checks enforce this.
 
-This is a typical end-to-end path when a user edits an Athena NanoDLP material profile:
+---
 
-1. **Settings opens profile editor**
+## 4) Integration points (how Athena gets wired)
 
-- `src/components/settings/ProfileSettingsModal.tsx` imports from
-  `plugins/athena/nanodlp/*` (via `nanodlpProfilePlugin.ts`).
+Athena is wired through **generated registries** (not manual core registration):
 
-2. **Material metadata is converted to editable UI state**
+- `src/features/plugins/generatedBuiltinComplexPlugins.ts`
+- `src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts`
+- `src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts`
+- `src-tauri/src/generated_builtin_plugins.rs`
+- `rust/dragonfruit-slicer-v3/src/encoders/generated_plugin_encoders.rs`
 
-- `resolveNanodlpEditDraftFromMeta(...)` builds the draft.
-- `NANODLP_PRIMARY_EDIT_FIELDS` and `NANODLP_BASIC_SECTIONS` drive Basic tab.
-- `isSensibleNanoDlpAdvancedField(...)` and section helpers drive Advanced tab.
+Core consumers:
 
-3. **Dynamic Wait lock behavior is applied**
+- `src/features/plugins/pluginRegistry.ts`
+- `src/features/plugins/networkPluginRegistry.ts`
+- `src/app/api/network/plugin/route.ts`
+- `src-tauri/src/plugin_registry.rs`
+- `rust/dragonfruit-slicer-v3/src/encoders/registry.rs`
 
-- `isNanoDlpDynamicWaitEnabled(...)` determines if Wait-Before fields are
-  locked and shows the “Dynamic Wait active” chip.
+---
 
-4. **User saves edits**
+## 5) Request lifecycle examples
 
-- `denormalizeNanodlpEditDraftForBackend(...)` normalizes payload values.
-- UI calls `/api/network/nanodlp/materials/edit`.
+### 5.1 Network operation path
 
-5. **API route uses Athena network helpers**
+1. UI sends operation to generic route: `/api/network/plugin`
+2. Core registry resolves `pluginId: 'athena'`
+3. Athena entrypoint `handlePluginNetworkOperation` runs
+4. Athena operation router delegates to `network/handlers/*`
+5. Response returns as normalized `{ status, body }`
 
-- Route uses `plugins/athena/network/nanodlp.ts` for host/port parsing and
-  NanoDLP-specific request normalization.
+### 5.2 Material edit flow
 
-6. **Runtime presets/assets remain plugin-owned**
+1. UI derives draft using `nanodlp/*` helpers
+2. Draft is denormalized to NanoDLP payload
+3. Operation dispatches through generic plugin route
+4. Athena handler applies NanoDLP-specific semantics
 
-- Built-in Athena presets come from `pluginManifest.ts`.
-- Thumbnail assets are served from
-  `/api/profile-assets/plugins/athena/printers/concepts3d/assets/...`.
+### 5.3 Slicing output flow (`.nanodlp`)
 
-## Slicing format ownership
+1. Format selection resolves Athena-owned format metadata
+2. Native encoder registry resolves Athena plugin encoder
+3. `create_plugin_encoder()` returns encoder instance
+4. Athena Rust encoder writes NanoDLP container
 
-Athena's `.nanodlp` container format is plugin-owned:
+---
 
-- TS metadata definition:
-  - `plugins/athena/slicing/nanodlpFormatDefinition.ts`
-- Rust/WASM format module scaffold:
-  - `plugins/athena/slicing/rust/encoder_impl.rs`
-  - (registered by the native V3 encoder registry in `rust/dragonfruit-slicer-v3/src/encoders/registry.rs`)
+## 6) Asset and preset ownership
 
-This keeps vendor-specific container rules localized while the UI stays generic.
+Athena assets are plugin-owned and served via:
 
-### Supported vs unsupported container targets
+- `/api/profile-assets/plugins/athena/printers/assets/<file>`
 
-- Supported for Athena plugin: `.nanodlp`
+Preset source of truth:
+
+- `plugins/athena/printers/printers.json`
+
+---
+
+## 7) Contributor rules for Athena changes
+
+When editing Athena, keep these boundaries:
+
+1. Vendor-specific logic stays under `plugins/athena/*`
+2. Core routes/registries remain vendor-agnostic
+3. New network behavior should land in `network/handlers/*`
+4. Update docs when capabilities or folder contracts change
+5. Regenerate and validate before PR
+
+Required checks:
+
+- `npm run generate:plugin-registry`
+- `npm run check:plugin-allowlist`
+- `npm run check:generated-plugin-registry`
+- `npm run build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+
+---
+
+## 8) Known format support
+
+- Supported: `.nanodlp`
 - Not supported: `.ctb`
+
+---
+
+## 9) Related docs
+
+- Plugin framework: `plugins/README.md`
+- Complex plugin contribution framework: `plugins/CONTRIBUTING_COMPLEX_PLUGINS.md`

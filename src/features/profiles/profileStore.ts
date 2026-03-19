@@ -10,9 +10,10 @@ import {
   type InstalledProfilePlugin,
   type PluginManifest,
 } from '@/features/plugins/pluginRegistry';
+import { normalizeOutputFormat, DEFAULT_OUTPUT_FORMAT } from '@/features/profiles/outputFormatUtils';
 
-export type PrinterOutputFormat = '.nanodlp' | '.goo' | '.lumen';
-export type PrinterNetworkSupport = 'nanodlp';
+export type PrinterOutputFormat = string;
+export type PrinterNetworkSupport = string;
 
 export type PrinterNetworkSettings = {
   discoveryEnabled: boolean;
@@ -117,8 +118,12 @@ export type PrinterProfile = {
 };
 
 function normalizeNetworkSupport(value: unknown): PrinterNetworkSupport | undefined {
-  if (value === 'nanodlp') return 'nanodlp';
-  return undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  // Keep this permissive so plugin-defined modes remain forward-compatible.
+  // Legacy persisted values such as "nanodlp" are preserved.
+  return normalized;
 }
 
 function sanitizePlatformBadge(input: unknown): PrinterPlatformBadge | undefined {
@@ -230,8 +235,6 @@ const STORAGE_KEY = 'dragonfruit-profiles-v1';
 const STORAGE_BACKUP_KEY = 'dragonfruit-profiles-v1-backup';
 const LEGACY_STORAGE_KEYS = ['dragonfruit-profiles'];
 const PROFILE_STORE_SCHEMA_VERSION = 3;
-
-const DEFAULT_OUTPUT_FORMAT: PrinterOutputFormat = '.goo';
 
 const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
   discoveryEnabled: true,
@@ -517,12 +520,6 @@ function isOfficialProfileByHeuristic(profile: Partial<PrinterProfile>): boolean
   if (typeof profile.id === 'string' && profile.id.startsWith('printer-default-')) return true;
   if (profile.isOfficial === true) return true;
   return false;
-}
-
-function normalizeOutputFormat(value: unknown): PrinterOutputFormat {
-  if (value === '.nanodlp' || value === '.goo' || value === '.lumen') return value;
-  if (value === '.luman') return '.lumen';
-  return DEFAULT_OUTPUT_FORMAT;
 }
 
 function normalizeMirrorFlag(value: unknown, fallback = false): boolean {
@@ -1783,9 +1780,17 @@ export function getInstalledPlugins(): InstalledProfilePlugin[] {
   return getInstalledProfilePlugins();
 }
 
-export function installPluginFromManifest(manifest: PluginManifest, sourceUrl?: string): InstalledProfilePlugin {
+export function installPluginFromManifest(
+  manifest: PluginManifest,
+  sourceUrl?: string,
+  options?: {
+    manifestSha256?: string;
+    installTrust?: 'allowlisted' | 'unverified-user-approved';
+    liabilityAcceptedAt?: string;
+  },
+): InstalledProfilePlugin {
   ensureHydrated();
-  const plugin = installExternalProfilePlugin(manifest, sourceUrl);
+  const plugin = installExternalProfilePlugin(manifest, sourceUrl, options);
   notify();
   return plugin;
 }

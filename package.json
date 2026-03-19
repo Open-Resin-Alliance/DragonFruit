@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "generate:plugin-registry": "node scripts/generate-plugin-registry.mjs",
+    "check:plugin-allowlist": "node scripts/check-complex-plugin-allowlist.mjs",
+    "check:generated-plugin-registry": "node scripts/verify-generated-plugin-registry.mjs",
+    "predev": "npm run generate:plugin-registry",
+    "prebuild": "npm run generate:plugin-registry",
+    "prebuild:tauri": "npm run generate:plugin-registry",
+    "pretauri:dev": "npm run generate:plugin-registry",
+    "pretauri:build": "npm run generate:plugin-registry",
     "dev": "next dev -p 3005",
     "nas": "next dev -p 3005 --webpack",
     "build": "next build",
@@ -15,6 +23,7 @@
     "tauri:bundle:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage",
     "tauri:bundle:macos": "tauri build --target x86_64-apple-darwin --bundles app,dmg",
     "tauri:bundle:macos:arm64": "tauri build --target aarch64-apple-darwin --bundles app,dmg",
+    "guard:plugin-boundaries": "node scripts/check-plugin-boundaries.mjs",
     "lint": "eslint",
     "test": "node --import tsx --test src/supports/__tests__/*.test.ts",
     "test:watch": "node --import tsx --test --watch src/supports/__tests__/*.test.ts"

@@ -153,7 +153,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 
 import { IslandScanWorkflowCard } from '@/volumeAnalysis/IslandScan/workflow/IslandScanWorkflowCard';
 import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/components/IslandVolumesHierarchyCard';
-import { uploadToNanoDlpWithProgress, type UploadProgressEvent } from '../../plugins/athena/network';
+import { uploadPrintJobWithProgress, type PluginUploadProgressEvent } from '@/features/plugins/pluginUploadBridge';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 
 interface ShaftHoverDebugDetail {
@@ -568,10 +568,11 @@ export default function Home() {
   );
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
   const activeMaterialProfile = React.useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
-  const nanodlpSelectedMaterialLayerHeightMm = React.useMemo(() => {
-    if (activePrinterProfile?.networkSupport !== 'nanodlp') return null;
-    if (activePrinterProfile.networkConnection?.connected !== true) return null;
-    const candidate = Number(activePrinterProfile.networkConnection?.selectedMaterialLayerHeightMm);
+  const networkSelectedMaterialLayerHeightMm = React.useMemo(() => {
+    const profile = activePrinterProfile;
+    if (!profile || !profile.networkSupport) return null;
+    if (profile.networkConnection?.connected !== true) return null;
+    const candidate = Number(profile.networkConnection?.selectedMaterialLayerHeightMm);
     if (!Number.isFinite(candidate) || candidate <= 0) return null;
     return candidate;
   }, [
@@ -1865,9 +1866,9 @@ export default function Home() {
     const pixelSizeX = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.x ?? 1));
     const pixelSizeY = Math.max(0.0001, Number(activePrinterProfile?.pixelSize?.y ?? 1));
     const bitDepth = Math.max(0, Math.round(Number(activePrinterProfile?.bitDepth?.bits ?? 0)));
-    const isNanodlpArtifact = (printingArtifact?.outputName ?? '').toLowerCase().endsWith('.nanodlp');
+    const hasPrintableArtifact = (printingArtifact?.outputName ?? '').trim().length > 0;
 
-    if (!isNanodlpArtifact || printerWidth <= 0 || printerHeight <= 0) {
+    if (!hasPrintableArtifact || printerWidth <= 0 || printerHeight <= 0) {
       return null;
     }
 
@@ -2708,25 +2709,28 @@ export default function Home() {
   }, [activeMaterialProfile, printingPreviewTotalLayers]);
 
   const canDownloadPrintArtifact = Boolean(printingArtifact);
-  const nanodlpNetworkUiAdapter = React.useMemo(() => getProfileNetworkUiAdapter('nanodlp'), []);
+  const activeNetworkUiAdapter = React.useMemo(
+    () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
+    [activePrinterProfile?.networkSupport],
+  );
   const printingMonitoringAdapter = React.useMemo(
     () => getProfileMonitoringUiAdapter(activePrinterProfile?.networkSupport),
     [activePrinterProfile?.networkSupport],
   );
   const slicedLayerHeightMm = React.useMemo(() => {
-    if (nanodlpSelectedMaterialLayerHeightMm != null) {
-      return Math.max(0.001, Number(nanodlpSelectedMaterialLayerHeightMm));
+    if (networkSelectedMaterialLayerHeightMm != null) {
+      return Math.max(0.001, Number(networkSelectedMaterialLayerHeightMm));
     }
     return Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
-  }, [activeMaterialProfile?.layerHeightMm, nanodlpSelectedMaterialLayerHeightMm]);
+  }, [activeMaterialProfile?.layerHeightMm, networkSelectedMaterialLayerHeightMm]);
   const isLayerHeightMatch = React.useCallback((candidateLayerHeightMm: number | null | undefined) => {
     if (candidateLayerHeightMm == null) return false;
     return Math.abs(candidateLayerHeightMm - slicedLayerHeightMm) <= 0.0005;
   }, [slicedLayerHeightMm]);
   const connectedPrinterFleet = React.useMemo(() => {
-    if (!activePrinterProfile || activePrinterProfile.networkSupport !== 'nanodlp') return [] as PrinterNetworkDevice[];
+    if (!activePrinterProfile || !activeNetworkUiAdapter) return [] as PrinterNetworkDevice[];
     return (activePrinterProfile.networkFleet ?? []).filter((device) => device.connected);
-  }, [activePrinterProfile]);
+  }, [activeNetworkUiAdapter, activePrinterProfile]);
   const printableConnectedPrinterFleet = React.useMemo(() => {
     return connectedPrinterFleet;
   }, [connectedPrinterFleet]);
@@ -2810,7 +2814,7 @@ export default function Home() {
 
     const selectedName = activePrinterProfile?.networkConnection?.selectedMaterialName?.trim();
     if (
-      activePrinterProfile?.networkSupport === 'nanodlp'
+      activeNetworkUiAdapter
       && activePrinterProfile?.networkConnection?.connected === true
       && selectedName
       && selectedName.length > 0
@@ -2821,9 +2825,9 @@ export default function Home() {
     return activeMaterialProfile?.name ?? 'No resin selected';
   }, [
     activeMaterialProfile?.name,
+    activeNetworkUiAdapter,
     activePrinterProfile?.networkConnection?.connected,
     activePrinterProfile?.networkConnection?.selectedMaterialName,
-    activePrinterProfile?.networkSupport,
     printingTargetDevice?.selectedMaterialName,
   ]);
   const sendToPrinterButtonLabel = sendToPrinterTargetName
@@ -2831,8 +2835,7 @@ export default function Home() {
     : 'Send to Printer';
   const canSendToPrinter = Boolean(
     printingArtifact
-    && printingArtifact.outputName.toLowerCase().endsWith('.nanodlp')
-    && activePrinterProfile?.networkSupport === 'nanodlp'
+    && activeNetworkUiAdapter
     && printableConnectedPrinterFleet.length > 0,
   );
   const canPrintNow = Boolean(
@@ -2901,16 +2904,20 @@ export default function Home() {
       .join(' ')
       .toLowerCase();
 
-    const isNanodlp = activePrinterProfile?.networkSupport === 'nanodlp';
-    if (!isNanodlp) return false;
+    const hasMonitoringAdapter = Boolean(
+      printingMonitoringAdapter.available
+      && printingMonitoringAdapter.pluginId,
+    );
+    if (!hasMonitoringAdapter) return false;
     return /\bathena\b/.test(fingerprint);
   }, [
     activePrinterProfile?.manufacturer,
     activePrinterProfile?.name,
-    activePrinterProfile?.networkSupport,
     monitoringDevice?.displayName,
     monitoringDevice?.hostName,
     monitoringDevice?.ipAddress,
+    printingMonitoringAdapter.available,
+    printingMonitoringAdapter.pluginId,
   ]);
   const monitorWebcamDisplayAspectRatio = React.useMemo(() => {
     if (printingMonitorWebcamAspectRatio == null || !Number.isFinite(printingMonitorWebcamAspectRatio) || printingMonitorWebcamAspectRatio <= 0) {
@@ -3158,16 +3165,15 @@ export default function Home() {
       printingMonitoringAdapter.available
       && printingMonitoringAdapter.pluginId
       && printingMonitoringAdapter.operations
-      && activePrinterProfile?.networkSupport === 'nanodlp',
     );
     if (!hasMonitoring) return false;
     if (!hasMonitorSelectableTarget) return false;
     return true;
-  }, [activePrinterProfile?.networkSupport, hasMonitorSelectableTarget, printingMonitoringAdapter]);
+  }, [hasMonitorSelectableTarget, printingMonitoringAdapter]);
 
   React.useEffect(() => {
     const shouldProbeFleetReachability = Boolean(
-      activePrinterProfile?.networkSupport === 'nanodlp'
+      activeNetworkUiAdapter
       && printingMonitoringAdapter.available
       && printingMonitoringAdapter.pluginId
       && printingMonitoringAdapter.operations?.status,
@@ -3252,8 +3258,8 @@ export default function Home() {
       window.clearInterval(intervalId);
     };
   }, [
+    activeNetworkUiAdapter,
     activePrinterProfile?.networkFleet,
-    activePrinterProfile?.networkSupport,
     printingMonitoringAdapter,
   ]);
 
@@ -3328,7 +3334,7 @@ export default function Home() {
   }, [printingMonitorModalOpen, showTopbarMonitorButton]);
 
   React.useEffect(() => {
-    if (!activePrinterProfile || activePrinterProfile.networkSupport !== 'nanodlp') {
+    if (!activePrinterProfile || !activeNetworkUiAdapter) {
       setPrintingTargetDeviceId(null);
       return;
     }
@@ -3366,14 +3372,14 @@ export default function Home() {
     } else {
       setPrintingTargetDeviceId(null);
     }
-  }, [activePrinterProfile, printableConnectedPrinterFleet, printerReachabilityByDeviceId, printingTargetDeviceId]);
+  }, [activeNetworkUiAdapter, activePrinterProfile, printableConnectedPrinterFleet, printerReachabilityByDeviceId, printingTargetDeviceId]);
 
   React.useEffect(() => {
     if (!printingTargetPickerOpen) {
       setIsPrintingTargetMaterialsLoading(false);
       return;
     }
-    if (!printingTargetDevice || !nanodlpNetworkUiAdapter) {
+    if (!printingTargetDevice || !activeNetworkUiAdapter) {
       setPrintingTargetMaterialOptions([]);
       setPrintingTargetMaterialId('');
       setPrintingTargetMaterialError('Select a printer to load matching material settings.');
@@ -3390,7 +3396,7 @@ export default function Home() {
       return;
     }
 
-    const cacheKey = `${nanodlpNetworkUiAdapter.pluginId}:${host.toLowerCase()}`;
+    const cacheKey = `${activeNetworkUiAdapter.pluginId}:${host.toLowerCase()}`;
     const applyResolvedMaterials = (parsed: FleetUploadMaterialOption[]) => {
       let matching = parsed.filter((material) => isLayerHeightMatch(material.layerHeightMm));
 
@@ -3433,8 +3439,8 @@ export default function Home() {
     void (async () => {
       try {
         const response = await pluginNetworkFetch({
-          pluginId: nanodlpNetworkUiAdapter.pluginId,
-          operation: nanodlpNetworkUiAdapter.operations.materials,
+          pluginId: activeNetworkUiAdapter.pluginId,
+          operation: activeNetworkUiAdapter.operations.materials,
           host,
         });
 
@@ -3444,7 +3450,7 @@ export default function Home() {
         const parsed: FleetUploadMaterialOption[] = rawMaterials
           .map((item: any) => {
             if (typeof item?.id !== 'string' || typeof item?.name !== 'string') return null;
-            const processValues = nanodlpNetworkUiAdapter.resolveMaterialProcessValues((item?.meta ?? {}) as Record<string, unknown>);
+            const processValues = activeNetworkUiAdapter.resolveMaterialProcessValues((item?.meta ?? {}) as Record<string, unknown>);
             return {
               id: item.id,
               name: item.name,
@@ -3475,8 +3481,8 @@ export default function Home() {
       cancelled = true;
     };
   }, [
+    activeNetworkUiAdapter,
     isLayerHeightMatch,
-    nanodlpNetworkUiAdapter,
     printingTargetDevice,
     printingTargetPickerOpen,
     slicedLayerHeightMm,
@@ -4457,7 +4463,8 @@ export default function Home() {
 
   const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice, selectedMaterialIdOverride?: string) => {
     if (!printingArtifact || !activePrinterProfile) return;
-    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (!activeNetworkUiAdapter) return;
+    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.platesList) return;
 
     const host = (targetDevice.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
     const port = targetDevice.port || 80;
@@ -4467,7 +4474,7 @@ export default function Home() {
       return;
     }
     if (!selectedMaterialId) {
-      setPrintingSendStatusText('Select a matching NanoDLP material profile before upload.');
+      setPrintingSendStatusText('Select a matching material profile before upload.');
       return;
     }
     if (!selectedMaterialIdOverride && !isLayerHeightMatch(targetDevice.selectedMaterialLayerHeightMm ?? null)) {
@@ -4525,20 +4532,25 @@ export default function Home() {
       }
 
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
+      const networkMode = (activeNetworkUiAdapter.mode || '').trim();
+      if (!networkMode) {
+        throw new Error('No network mode available for printer upload.');
+      }
       
-      // Build the NanoDLP host URL
+      // Build the printer host URL
       const hostUrl = `http://${host}${port && port !== 80 ? `:${port}` : ''}`;
 
-      // Track upload progress and send directly to NanoDLP
+      // Track upload progress and send via active plugin handler
       let resolvedPlateId: number | null = null;
       
-      const uploadResult = await uploadToNanoDlpWithProgress(
+      const uploadResult = await uploadPrintJobWithProgress({
+        networkMode,
         hostUrl,
         zipBlob,
-        pathBase,
-        selectedMaterialId,
-        {
-          onProgress: (event: UploadProgressEvent) => {
+        path: pathBase,
+        profileId: selectedMaterialId,
+        callbacks: {
+          onProgress: (event: PluginUploadProgressEvent) => {
             const progress = event.percentComplete / 100;
             const clampedProgress = Math.min(progress, 0.9999);
             if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
@@ -4564,7 +4576,7 @@ export default function Home() {
                 printingUploadProcessingHandoffTimeoutRef.current = null;
                 setPrintingUploadDialogStage('processing');
                 setPrintingSendStageText('Processing on device…');
-                setPrintingSendStatusText('Upload complete. NanoDLP is processing file metadata…');
+                setPrintingSendStatusText(`Upload complete. ${activeNetworkUiAdapter.displayName} is processing file metadata…`);
                 setPrintingUploadTelemetry(null);
                 setPrintingDeviceProcessingStartedAtMs(Date.now());
               }, 220);
@@ -4585,10 +4597,10 @@ export default function Home() {
             resolvedPlateId = plateId;
           },
         },
-      );
+      });
 
       if (!uploadResult.ok) {
-        throw new Error('Upload failed at NanoDLP');
+        throw new Error('Upload failed on printer backend');
       }
 
       const startedAt = Date.now();
@@ -4600,8 +4612,8 @@ export default function Home() {
       while ((Date.now() - startedAt) < timeoutMs) {
         try {
           const responseReady = await pluginNetworkFetch({
-            pluginId: 'athena',
-            operation: 'nanodlp/plates/list/json',
+            pluginId: printingMonitoringAdapter.pluginId,
+            operation: printingMonitoringAdapter.operations.platesList,
             ipAddress: host,
             port,
             plateId: resolvedPlateId,
@@ -4685,24 +4697,27 @@ export default function Home() {
       setPrintingSendBusy(false);
     }
   }, [
+    activeNetworkUiAdapter,
     activePrinterProfile,
     isLayerHeightMatch,
     printingArtifact,
+    printingMonitoringAdapter.operations,
+    printingMonitoringAdapter.pluginId,
     printingTargetMaterialOptions,
     slicedLayerHeightMm,
   ]);
 
   const handleSendToPrinter = React.useCallback(async () => {
     if (!printingArtifact || !activePrinterProfile) return;
-    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (!activeNetworkUiAdapter) return;
     if (printableConnectedPrinterFleet.length === 0) {
-      setPrintingSendStatusText('No connected printer with a selected NanoDLP material is available for upload.');
+      setPrintingSendStatusText('No connected printer with a selected material profile is available for upload.');
       return;
     }
 
     const selectedTarget = printingTargetDevice ?? printableConnectedPrinterFleet[0] ?? null;
     if (!selectedTarget) {
-      setPrintingSendStatusText('No connected printer with a selected NanoDLP material is available for upload.');
+      setPrintingSendStatusText('No connected printer with a selected material profile is available for upload.');
       return;
     }
 
@@ -4712,7 +4727,7 @@ export default function Home() {
     }
 
     await performSendToPrinter(selectedTarget);
-  }, [activePrinterProfile, isLayerHeightMatch, performSendToPrinter, printableConnectedPrinterFleet, printingArtifact, printingTargetDevice]);
+  }, [activeNetworkUiAdapter, activePrinterProfile, isLayerHeightMatch, performSendToPrinter, printableConnectedPrinterFleet, printingArtifact, printingTargetDevice]);
 
   const openPrintingMonitorForTargetDevice = React.useCallback((deviceId: string | null) => {
     printingMonitorStartFocusDeviceIdRef.current = deviceId;
@@ -4723,7 +4738,7 @@ export default function Home() {
 
   const handlePrintNow = React.useCallback(async () => {
     if (!activePrinterProfile || !printingTargetDevice) return;
-    if (activePrinterProfile.networkSupport !== 'nanodlp') return;
+    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.start) return;
     if (printingTargetDevice.connected !== true) return;
     if (!printingReadyPlateId) return;
 
@@ -4741,8 +4756,8 @@ export default function Home() {
 
     try {
       const response = await pluginNetworkFetch({
-        pluginId: 'athena',
-        operation: 'nanodlp/printer/start',
+        pluginId: printingMonitoringAdapter.pluginId,
+        operation: printingMonitoringAdapter.operations.start,
         ipAddress: host,
         port,
         plateId: printingReadyPlateId,
@@ -4768,7 +4783,7 @@ export default function Home() {
     } finally {
       setPrintingPrintNowBusy(false);
     }
-  }, [activePrinterProfile, openPrintingMonitorForTargetDevice, printingReadyPlateId, printingTargetDevice]);
+  }, [activePrinterProfile, openPrintingMonitorForTargetDevice, printingMonitoringAdapter.operations, printingMonitoringAdapter.pluginId, printingReadyPlateId, printingTargetDevice]);
 
   const executeStartMonitorRecentPlate = React.useCallback(async (plateId: number) => {
     if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.start) return;
@@ -6331,8 +6346,8 @@ export default function Home() {
   }, [runExportThumbnailCapture]);
 
   React.useEffect(() => {
-    const profileLayerHeightMm = nanodlpSelectedMaterialLayerHeightMm != null
-      ? Math.max(0.001, Number(nanodlpSelectedMaterialLayerHeightMm))
+    const profileLayerHeightMm = networkSelectedMaterialLayerHeightMm != null
+      ? Math.max(0.001, Number(networkSelectedMaterialLayerHeightMm))
       : Math.max(0.001, Number(activeMaterialProfile?.layerHeightMm ?? 0.05));
     const targetMicron = Math.max(1, Math.round(profileLayerHeightMm * 1000));
     if (slicing.layerHeightMicron !== targetMicron) {
@@ -6340,7 +6355,7 @@ export default function Home() {
     }
   }, [
     activeMaterialProfile?.layerHeightMm,
-    nanodlpSelectedMaterialLayerHeightMm,
+    networkSelectedMaterialLayerHeightMm,
     slicing.layerHeightMicron,
     slicing.setLayerHeightMicron,
   ]);
@@ -10632,7 +10647,7 @@ export default function Home() {
                   Post-Processing
                 </div>
                 <div className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-                  Upload to NanoDLP
+                  Upload to {activeNetworkUiAdapter?.displayName ?? 'Printer'}
                 </div>
                 <div className="mt-0.5 text-xs truncate" style={{ color: 'var(--text-muted)' }}>
                   {printingArtifact?.outputName ?? 'Preparing artifact'}
@@ -10725,7 +10740,7 @@ export default function Home() {
                     />
                   </div>
                   <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                    Processing on NanoDLP… elapsed {printingProcessingElapsedLabel}
+                    Processing on {activeNetworkUiAdapter?.displayName ?? 'printer backend'}… elapsed {printingProcessingElapsedLabel}
                   </div>
                 </>
               ) : (

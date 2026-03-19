@@ -1,4 +1,4 @@
-import concepts3dPrinters from './printers/concepts3d/printers.json';
+import athenaPrinters from './printers/printers.json';
 import type { PrinterPreset } from '../../src/features/profiles/profileStore';
 
 /**
@@ -132,8 +132,8 @@ function resolveBuildDimensionMm(
  *
  * Note:
  * - This manifest is bundled with the app (not fetched remotely).
- * - Concepts3D printer profiles and assets are plugin-owned under
- *   `plugins/athena/printers/concepts3d`.
+ * - Athena printer profiles and assets are plugin-owned under
+ *   `plugins/athena/printers`.
  * - Presets are coerced into the strict runtime `PrinterPreset` shape to ensure
  *   stable behavior when merged with other profile sources.
  */
@@ -142,8 +142,8 @@ export const ATHENA_PLUGIN_MANIFEST = {
   id: 'athena-builtin',
   name: 'Athena Plugin',
   version: '1.1.0',
-  description: 'Athena/NanoDLP integration and Concepts3D profile pack.',
-  printerPresets: withResolvedImagePaths('plugins/athena/printers/concepts3d', concepts3dPrinters).map((preset) => {
+  description: 'Athena/NanoDLP integration and Athena profile pack.',
+  printerPresets: withResolvedImagePaths('plugins/athena/printers', athenaPrinters).map((preset) => {
     const resolutionX = Number((preset as any).display?.resolutionX) || 2560;
     const resolutionY = Number((preset as any).display?.resolutionY) || 1620;
     const outputFormat = ((preset as any).display?.outputFormat === '.nanodlp'
