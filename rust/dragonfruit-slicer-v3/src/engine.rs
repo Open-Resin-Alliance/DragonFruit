@@ -330,7 +330,7 @@ pub fn slice_with_progress_v3_to_path(
 
             let (_rendered_layers, _layer_area_stats, mut perf) = slice_and_rasterize_v3(
                 job,
-                requires_area_stats,
+                false,
                 requires_png_layers,
                 false,
                 Some(&mut raw_mask_sink),
