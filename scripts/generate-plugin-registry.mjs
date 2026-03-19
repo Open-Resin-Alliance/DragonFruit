@@ -12,6 +12,7 @@ const tsGeneratedNetworkHandlersPath = path.join(repoRoot, 'src', 'features', 'p
 const tsGeneratedUploadHandlersPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginUploadHandlers.ts');
 const rustGeneratedPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
 const rustSlicerGeneratedEncodersPath = path.join(repoRoot, 'rust', 'dragonfruit-slicer-v3', 'src', 'encoders', 'generated_plugin_encoders.rs');
+const cargoAuditPath = path.join(repoRoot, 'src-tauri', 'generated_crate_requirements.toml');
 
 function toImportAlias(pluginId) {
       return `${pluginId.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^([0-9])/, '_$1')}Definition`;
@@ -125,15 +126,168 @@ function enforceFormatsJsonConsistency(pluginId, formatsMetadata) {
       }
 }
 
-// Cargo crate dependency scaffold (for future implementation)
-// When plugins declare requiredCrates.toml, this would:
-// 1. Parse each plugin's requiredCrates.toml for [dependencies] and [optional-dependencies]
-// 2. Validate semantic versioning and enforce strict conflict detection
-// 3. Merge discovered crates into dragonfruit-slicer-v3/Cargo.toml
-// 4. Generate src-tauri/generated_crate_requirements.toml audit file
-//
-// For now, plugins can declare requiredCrates.toml for documentation,
-// but manual Cargo.toml updates are needed. Full automation coming soon.
+// Parse requiredCrates.toml format: simple TOML-like sections
+function parseRequiredCratesToml(tomlContent, pluginId) {
+      const result = { dependencies: {}, optionalDependencies: {}, features: {}, notes: {} };
+      let currentSection = null;
+
+      for (const line of tomlContent.split('\n')) {
+            const trimmed = line.trim();
+
+            // Skip comments and empty lines
+            if (!trimmed || trimmed.startsWith('#')) continue;
+
+            // Detect section headers like [dependencies], [optional-dependencies], etc.
+            const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
+            if (sectionMatch) {
+                  const section = sectionMatch[1];
+                  if (section === 'dependencies') currentSection = 'dependencies';
+                  else if (section === 'optional-dependencies') currentSection = 'optionalDependencies';
+                  else if (section === 'features') currentSection = 'features';
+                  else if (section === 'notes') currentSection = 'notes';
+                  continue;
+            }
+
+            // Parse key = value pairs
+            const kvMatch = trimmed.match(/^([a-zA-Z0-9_-]+)\s*=\s*(.+)$/);
+            if (kvMatch && currentSection) {
+                  const [, key, value] = kvMatch;
+                  let cleanValue = value.trim();
+
+                  // Handle quoted strings
+                  if ((cleanValue.startsWith('"') && cleanValue.endsWith('"')) ||
+                        (cleanValue.startsWith("'") && cleanValue.endsWith("'"))) {
+                        cleanValue = cleanValue.slice(1, -1);
+                  }
+
+                  // Validate semver for dependencies
+                  if ((currentSection === 'dependencies' || currentSection === 'optionalDependencies') &&
+                        !/^(?:\^|~|>=|<=|>|<|=)?[\d.x*]+/.test(cleanValue.trim())) {
+                        throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml: crate "${key}" version "${cleanValue}" is not valid semver`);
+                  }
+
+                  result[currentSection][key] = cleanValue;
+            }
+      }
+
+      return result;
+}
+
+// Enforce strict version conflict detection across all plugins
+function enforceCargoDepConsistency(discovered) {
+      const allCrateDeps = {};
+      const crateOrigins = {};
+
+      for (const plugin of discovered) {
+            if (!plugin.hasRequiredCrates || !plugin.requiredCratesMetadata) continue;
+
+            const { dependencies = {}, optionalDependencies = {} } = plugin.requiredCratesMetadata;
+            const allPluginDeps = { ...dependencies, ...optionalDependencies };
+
+            for (const [crate, versionSpec] of Object.entries(allPluginDeps)) {
+                  const cleanVersion = versionSpec.trim();
+
+                  if (!allCrateDeps[crate]) {
+                        allCrateDeps[crate] = cleanVersion;
+                        crateOrigins[crate] = plugin.id;
+                  } else if (allCrateDeps[crate] !== cleanVersion) {
+                        throw new Error(
+                              `[plugin-registry] Cargo crate conflict: "${crate}" version mismatch: plugin "${crateOrigins[crate]}" wants "${allCrateDeps[crate]}", plugin "${plugin.id}" wants "${cleanVersion}". Plugins must coordinate on compatible versions.`,
+                        );
+                  }
+            }
+      }
+
+      return allCrateDeps;
+}
+
+// Build cargo audit file for transparency
+function buildCargoAuditFile(discovered, mergedCargoDeps) {
+      const lines = [
+            '# AUTO-GENERATED FILE. DO NOT EDIT.',
+            '# Generated by scripts/generate-plugin-registry.mjs',
+            '#',
+            '# This file documents all Cargo crate requirements declared by plugins.',
+            '# It is merged into dragonfruit-slicer-v3/Cargo.toml during the build.',
+            '# Keep this file for reference and auditing purposes.',
+            '#',
+      ];
+
+      const pluginsWithDeps = discovered.filter((p) => p.hasRequiredCrates && p.requiredCratesMetadata);
+
+      if (pluginsWithDeps.length === 0) {
+            lines.push('# No plugins declare cargo crate requirements.');
+            return lines.join('\n');
+      }
+
+      for (const plugin of pluginsWithDeps) {
+            const { dependencies = {}, optionalDependencies = {} } = plugin.requiredCratesMetadata;
+            if (Object.keys(dependencies).length === 0 && Object.keys(optionalDependencies).length === 0) {
+                  continue;
+            }
+
+            lines.push(`# ${plugin.id}`);
+            for (const [crate, version] of Object.entries(dependencies)) {
+                  lines.push(`# ${crate} = "${version}"`);
+            }
+            for (const [crate, version] of Object.entries(optionalDependencies)) {
+                  lines.push(`# ${crate} (optional) = "${version}"`);
+            }
+            lines.push('#');
+      }
+
+      lines.push('# Merged into dragonfruit-slicer-v3/Cargo.toml [dependencies]:');
+      for (const [crate, version] of Object.entries(mergedCargoDeps)) {
+            lines.push(`# ${crate} = "${version}"`);
+      }
+
+      return lines.join('\n');
+}
+
+// Merge plugin cargo dependencies into dragonfruit-slicer-v3/Cargo.toml
+async function mergePluginCratesIntoCargoToml(mergedCargoDeps) {
+      const cargoTomlPath = path.join(repoRoot, 'rust', 'dragonfruit-slicer-v3', 'Cargo.toml');
+      let content = await fs.readFile(cargoTomlPath, 'utf8');
+
+      // Find the [dependencies] section
+      const depsSectionStart = content.indexOf('[dependencies]');
+      if (depsSectionStart === -1) {
+            throw new Error('dragonfruit-slicer-v3/Cargo.toml does not have a [dependencies] section');
+      }
+
+      // Find the next section (or end of file)
+      const nextSectionStart = content.indexOf('\n[', depsSectionStart + 1);
+      const depsSectionEnd = nextSectionStart === -1 ? content.length : nextSectionStart;
+
+      // Parse existing deps to avoid duplicates
+      const depsSection = content.substring(depsSectionStart, depsSectionEnd);
+      const existingDeps = new Set();
+      for (const line of depsSection.split('\n')) {
+            const match = line.match(/^([a-zA-Z0-9_-]+)\s*=/);
+            if (match) {
+                  existingDeps.add(match[1]);
+            }
+      }
+
+      // Collect new deps that don't already exist
+      const newDeps = [];
+      for (const [crate, version] of Object.entries(mergedCargoDeps)) {
+            if (!existingDeps.has(crate)) {
+                  newDeps.push(`${crate} = "${version}"`);
+            }
+      }
+
+      // Append new deps if any
+      if (newDeps.length > 0) {
+            const insertPoint = depsSectionEnd;
+            const newDepsStr = '\n' + newDeps.join('\n');
+            const updatedContent = content.substring(0, insertPoint) + newDepsStr + content.substring(insertPoint);
+            await fs.writeFile(cargoTomlPath, updatedContent, 'utf8');
+            return newDeps.length;
+      }
+
+      return 0;
+}
 
 async function discoverPlugins() {
       const entries = await fs.readdir(pluginsRoot, { withFileTypes: true });
@@ -153,7 +307,8 @@ async function discoverPlugins() {
             const tsNetworkHandlerPath = path.join(pluginDir, 'network', 'networkHandlers.ts');
             const tsUploadHandlerPath = path.join(pluginDir, 'network', 'index.ts');
             const rustSlicerEncoderPath = path.join(pluginDir, 'slicing', 'rust', 'encoder_impl.rs');
-            const formatsJsonPath = path.join(pluginDir, 'slicing', 'formats.json'); const requiredCratesPath = path.join(pluginDir, 'slicing', 'rust', 'requiredCrates.toml');
+            const formatsJsonPath = path.join(pluginDir, 'slicing', 'formats.json');
+            const requiredCratesPath = path.join(pluginDir, 'slicing', 'rust', 'requiredCrates.toml');
             const hasPluginDefinition = await fs.access(pluginDefinitionPath).then(() => true).catch(() => false);
             if (!hasPluginDefinition) continue;
 
@@ -177,6 +332,17 @@ async function discoverPlugins() {
                   }
             }
 
+            let requiredCratesMetadata = null;
+            const hasRequiredCrates = await fs.access(requiredCratesPath).then(() => true).catch(() => false);
+            if (hasRequiredCrates) {
+                  try {
+                        const requiredCratesContent = await fs.readFile(requiredCratesPath, 'utf8');
+                        requiredCratesMetadata = parseRequiredCratesToml(requiredCratesContent, pluginId);
+                  } catch (err) {
+                        throw new Error(`[plugin-registry] Plugin "${pluginId}" requiredCrates.toml parsing failed: ${err.message}`);
+                  }
+            }
+
             discovered.push({
                   id: pluginId,
                   hasRustPlugin,
@@ -187,8 +353,8 @@ async function discoverPlugins() {
                   capabilities,
                   hasFormatsJson,
                   formatsMetadata,
-                  hasRequiredCrates: false,
-                  requiredCratesMetadata: null,
+                  hasRequiredCrates,
+                  requiredCratesMetadata,
             });
       }
 
@@ -462,17 +628,30 @@ async function main() {
       const rustSource = buildRustGeneratedFile(filteredDiscovered, allowlistHash);
       const rustSlicerEncodersSource = buildRustSlicerGeneratedEncodersFile(filteredDiscovered);
 
+      // Phase 2: Cargo dependency automation
+      let mergedCargoDeps = {};
+      if (filteredDiscovered.some((p) => p.hasRequiredCrates)) {
+            mergedCargoDeps = enforceCargoDepConsistency(filteredDiscovered);
+            const numMergedDeps = await mergePluginCratesIntoCargoToml(mergedCargoDeps);
+            console.log(`[plugin-registry] Merged ${numMergedDeps} cargo crate(s) into dragonfruit-slicer-v3/Cargo.toml`);
+      }
+
+      // Generate cargo audit file for transparency
+      const cargoAuditContent = buildCargoAuditFile(filteredDiscovered, mergedCargoDeps);
+
       await ensureParent(tsGeneratedPath);
       await ensureParent(tsGeneratedNetworkHandlersPath);
       await ensureParent(tsGeneratedUploadHandlersPath);
       await ensureParent(rustGeneratedPath);
       await ensureParent(rustSlicerGeneratedEncodersPath);
+      await ensureParent(cargoAuditPath);
 
       await fs.writeFile(tsGeneratedPath, tsSource, 'utf8');
       await fs.writeFile(tsGeneratedNetworkHandlersPath, tsNetworkHandlersSource, 'utf8');
       await fs.writeFile(tsGeneratedUploadHandlersPath, tsUploadHandlersSource, 'utf8');
       await fs.writeFile(rustGeneratedPath, rustSource, 'utf8');
       await fs.writeFile(rustSlicerGeneratedEncodersPath, rustSlicerEncodersSource, 'utf8');
+      await fs.writeFile(cargoAuditPath, cargoAuditContent, 'utf8');
 
       console.log(`[plugin-registry] Generated TS+Rust plugin registry for ${filteredDiscovered.length} plugin(s).`);
       console.log(`[plugin-registry] Allowlist SHA256: ${allowlistHash}`);
