@@ -611,6 +611,22 @@ async function ensureParent(filePath) {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 
+async function writeFileIfChanged(filePath, content) {
+      let existing = null;
+      try {
+            existing = await fs.readFile(filePath, 'utf8');
+      } catch {
+            // File does not exist yet; we'll create it below.
+      }
+
+      if (existing === content) {
+            return false;
+      }
+
+      await fs.writeFile(filePath, content, 'utf8');
+      return true;
+}
+
 async function main() {
       const discovered = await discoverPlugins();
       const allowlist = await readAllowlist();
@@ -646,14 +662,16 @@ async function main() {
       await ensureParent(rustSlicerGeneratedEncodersPath);
       await ensureParent(cargoAuditPath);
 
-      await fs.writeFile(tsGeneratedPath, tsSource, 'utf8');
-      await fs.writeFile(tsGeneratedNetworkHandlersPath, tsNetworkHandlersSource, 'utf8');
-      await fs.writeFile(tsGeneratedUploadHandlersPath, tsUploadHandlersSource, 'utf8');
-      await fs.writeFile(rustGeneratedPath, rustSource, 'utf8');
-      await fs.writeFile(rustSlicerGeneratedEncodersPath, rustSlicerEncodersSource, 'utf8');
-      await fs.writeFile(cargoAuditPath, cargoAuditContent, 'utf8');
+      let changedFiles = 0;
+      if (await writeFileIfChanged(tsGeneratedPath, tsSource)) changedFiles += 1;
+      if (await writeFileIfChanged(tsGeneratedNetworkHandlersPath, tsNetworkHandlersSource)) changedFiles += 1;
+      if (await writeFileIfChanged(tsGeneratedUploadHandlersPath, tsUploadHandlersSource)) changedFiles += 1;
+      if (await writeFileIfChanged(rustGeneratedPath, rustSource)) changedFiles += 1;
+      if (await writeFileIfChanged(rustSlicerGeneratedEncodersPath, rustSlicerEncodersSource)) changedFiles += 1;
+      if (await writeFileIfChanged(cargoAuditPath, cargoAuditContent)) changedFiles += 1;
 
       console.log(`[plugin-registry] Generated TS+Rust plugin registry for ${filteredDiscovered.length} plugin(s).`);
+      console.log(`[plugin-registry] Updated ${changedFiles} generated file(s).`);
       console.log(`[plugin-registry] Allowlist SHA256: ${allowlistHash}`);
 }
 
