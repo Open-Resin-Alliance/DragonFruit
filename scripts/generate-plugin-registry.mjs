@@ -125,6 +125,16 @@ function enforceFormatsJsonConsistency(pluginId, formatsMetadata) {
       }
 }
 
+// Cargo crate dependency scaffold (for future implementation)
+// When plugins declare requiredCrates.toml, this would:
+// 1. Parse each plugin's requiredCrates.toml for [dependencies] and [optional-dependencies]
+// 2. Validate semantic versioning and enforce strict conflict detection
+// 3. Merge discovered crates into dragonfruit-slicer-v3/Cargo.toml
+// 4. Generate src-tauri/generated_crate_requirements.toml audit file
+//
+// For now, plugins can declare requiredCrates.toml for documentation,
+// but manual Cargo.toml updates are needed. Full automation coming soon.
+
 async function discoverPlugins() {
       const entries = await fs.readdir(pluginsRoot, { withFileTypes: true });
       const pluginIds = entries
@@ -143,8 +153,7 @@ async function discoverPlugins() {
             const tsNetworkHandlerPath = path.join(pluginDir, 'network', 'networkHandlers.ts');
             const tsUploadHandlerPath = path.join(pluginDir, 'network', 'index.ts');
             const rustSlicerEncoderPath = path.join(pluginDir, 'slicing', 'rust', 'encoder_impl.rs');
-            const formatsJsonPath = path.join(pluginDir, 'slicing', 'formats.json');
-
+            const formatsJsonPath = path.join(pluginDir, 'slicing', 'formats.json'); const requiredCratesPath = path.join(pluginDir, 'slicing', 'rust', 'requiredCrates.toml');
             const hasPluginDefinition = await fs.access(pluginDefinitionPath).then(() => true).catch(() => false);
             if (!hasPluginDefinition) continue;
 
@@ -178,6 +187,8 @@ async function discoverPlugins() {
                   capabilities,
                   hasFormatsJson,
                   formatsMetadata,
+                  hasRequiredCrates: false,
+                  requiredCratesMetadata: null,
             });
       }
 
