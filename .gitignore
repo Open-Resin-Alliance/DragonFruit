@@ -56,3 +56,12 @@ src-tauri/gen/
 conversion/
 
 **/target/
+
+# AI agent skills and config
+.agents/
+.claude/
+CLAUDE.md
+spec/
+
+# Generated test fixtures (regenerate with: npx tsx scripts/island-debug-export.ts --synthetic all)
+fixtures/island-scan/

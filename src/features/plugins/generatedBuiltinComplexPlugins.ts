@@ -8,7 +8,7 @@ export const GENERATED_BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST = Object.freeze([
   'athena'
 ]) as readonly string[];
 
-export const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256 = 'ce36f29e59f3e7776bd0e87b363c61874a07b74da1eeee186a213e07906acd8b' as const;
+export const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256 = '2d47bbc204f2ea9e6e3eb4ad016b01e388acde514aa41fd775e9cdb8015c1396' as const;
 
 export const GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS: ComplexPluginDefinition[] = [
   athenaDefinition
