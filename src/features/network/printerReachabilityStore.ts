@@ -2,6 +2,8 @@ export type PrinterReachabilityMap = Record<string, boolean | null>;
 
 type Listener = () => void;
 
+const SERVER_SNAPSHOT: PrinterReachabilityMap = {};
+
 let reachabilityMap: PrinterReachabilityMap = {};
 const listeners = new Set<Listener>();
 
@@ -35,7 +37,7 @@ export function getPrinterReachabilitySnapshot(): PrinterReachabilityMap {
 }
 
 export function getPrinterReachabilityServerSnapshot(): PrinterReachabilityMap {
-  return {};
+  return SERVER_SNAPSHOT;
 }
 
 export function setPrinterReachabilityMap(next: PrinterReachabilityMap): void {
