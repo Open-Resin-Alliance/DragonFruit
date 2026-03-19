@@ -212,13 +212,18 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     aaOnSupports: nativeJob.aaOnSupports,
   });
 
+  let progressTotal = solidMesh.totalLayers;
+  let progressDone = 0;
+
   options.onProgress?.(0, solidMesh.totalLayers, 'Slicing');
 
-  const slicerProgressCallback = (done: number, total: number) => {
+  const slicerProgressCallback = (done: number, total: number, phase: string) => {
+    progressTotal = Math.max(1, total);
+    progressDone = Math.max(0, Math.min(done, progressTotal));
     options.onProgress?.(
-      done,
-      total,
-      done >= total ? `Packaging (${nativeJob.pngCompressionStrategy})` : 'Slicing',
+      progressDone,
+      progressTotal,
+      phase,
     );
   };
 
@@ -231,13 +236,13 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   logDebug('Native slicing completed', { coreSlicingMs });
 
   throwIfAborted(options.abortSignal);
-  options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Finalizing Package');
+  options.onProgress?.(Math.max(progressDone, progressTotal), progressTotal, 'Finalizing');
 
   const outputExt = format.outputFormat.replace(/^\./, '') || 'slice';
   const outputName = `${safeFilenameBase(options.filenameBase)}.${outputExt}`;
 
   const totalElapsedMs = performance.now() - orchestratorStartMs;
-  options.onProgress?.(solidMesh.totalLayers, solidMesh.totalLayers, 'Handoff');
+  options.onProgress?.(progressTotal, progressTotal, 'Handoff');
   const layersPerSecond = totalElapsedMs > 0
     ? (solidMesh.totalLayers * 1000) / totalElapsedMs
     : null;

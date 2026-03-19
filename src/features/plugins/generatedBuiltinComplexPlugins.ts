@@ -3,13 +3,16 @@
  */
 import type { ComplexPluginDefinition } from '@/features/plugins/complexPluginContracts';
 import athenaDefinition from '../../../plugins/athena/pluginDefinition';
+import ctbDefinition from '../../../plugins/ctb/pluginDefinition';
 
 export const GENERATED_BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST = Object.freeze([
-  'athena'
+  'athena',
+  'ctb'
 ]) as readonly string[];
 
-export const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256 = 'ce36f29e59f3e7776bd0e87b363c61874a07b74da1eeee186a213e07906acd8b' as const;
+export const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256 = '1240df4dac0242d861dfc16271ef996c85ac6f764a78f5f4a95bcbe0a2d256a3' as const;
 
 export const GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS: ComplexPluginDefinition[] = [
-  athenaDefinition
+  athenaDefinition,
+  ctbDefinition
 ];

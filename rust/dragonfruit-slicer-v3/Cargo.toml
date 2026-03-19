@@ -15,6 +15,9 @@ rayon = "1.10"
 png = "0.17"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 base64 = "0.22"
+aes = "0.8"
+cbc = "0.1"
+sha2 = "0.10"
 time = "=0.3.36"
 time-core = "=0.1.2"
 

@@ -217,6 +217,15 @@ fn cancel_flag() -> &'static Arc<AtomicBool> {
 struct SliceProgressPayload {
     done: u32,
     total: u32,
+    phase: String,
+}
+
+fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
+    match phase {
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -258,8 +267,15 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
             .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
 
         let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            Box::new(move |done: u32, total: u32| {
-                let _ = win.emit("slicer://progress", SliceProgressPayload { done, total });
+            std::sync::Arc::new(move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
+                let _ = win.emit(
+                    "slicer://progress",
+                    SliceProgressPayload {
+                        done: update.done,
+                        total: update.total,
+                        phase: phase_to_label(update.phase).to_string(),
+                    },
+                );
             });
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
@@ -339,8 +355,15 @@ async fn slice_solid_native_to_temp_path(
         };
 
         let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            Box::new(move |done: u32, total: u32| {
-                let _ = win.emit("slicer://progress", SliceProgressPayload { done, total });
+            std::sync::Arc::new(move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
+                let _ = win.emit(
+                    "slicer://progress",
+                    SliceProgressPayload {
+                        done: update.done,
+                        total: update.total,
+                        phase: phase_to_label(update.phase).to_string(),
+                    },
+                );
             });
 
         slicer_pool().install(

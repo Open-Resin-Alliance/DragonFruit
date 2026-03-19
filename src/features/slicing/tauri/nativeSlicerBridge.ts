@@ -80,6 +80,7 @@ type NativeSolidSliceMetadataPayload = {
 type SliceProgressEvent = {
   done: number;
   total: number;
+  phase?: string;
 };
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
@@ -176,7 +177,7 @@ export async function isNativeSlicerAvailable(): Promise<boolean> {
   return Boolean(core);
 }
 
-export type SlicerProgressCallback = (done: number, total: number) => void;
+export type SlicerProgressCallback = (done: number, total: number, phase: string) => void;
 
 export type NativeSliceTempPathArtifact = {
   tempPath: string;
@@ -246,7 +247,7 @@ export async function sliceSolidAndEncodeWithNativeSlicer(
     unlistenProgress = await eventModule.listen<SliceProgressEvent>(
       'slicer://progress',
       (event) => {
-        onProgress(event.payload.done, event.payload.total);
+        onProgress(event.payload.done, event.payload.total, event.payload.phase ?? 'Slicing');
       },
     );
   }
@@ -341,7 +342,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
     unlistenProgress = await eventModule.listen<SliceProgressEvent>(
       'slicer://progress',
       (event) => {
-        onProgress(event.payload.done, event.payload.total);
+        onProgress(event.payload.done, event.payload.total, event.payload.phase ?? 'Slicing');
       },
     );
   }

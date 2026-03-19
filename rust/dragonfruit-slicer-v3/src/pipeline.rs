@@ -9,7 +9,10 @@ use crate::engine::SlicerV3Error;
 use crate::geometry::Triangle;
 use crate::metrics::SlicingPerfV3;
 use crate::raster::rasterize_layer_with_stats;
-use crate::types::{LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceJobV3};
+use crate::types::{
+    LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceJobV3, SliceProgressPhaseV3,
+    SliceProgressUpdateV3,
+};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -57,13 +60,30 @@ pub fn render_layers_bounded(
     compute_area_stats: bool,
     emit_png_layers: bool,
     emit_raw_mask_layers: bool,
+    mut on_raw_mask_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     let render_wall_start = std::time::Instant::now();
     let total_layers = job.total_layers;
-    let max_concurrent = choose_max_concurrent();
-    let buffer = (max_concurrent * 2).clamp(2, 16);
+
+    // For high-resolution renders, reduce thread count to avoid memory explosion
+    // when multiple workers simultaneously allocate large rasterization buffers.
+    let layer_pixels = (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
+    let mut max_concurrent = choose_max_concurrent();
+    if layer_pixels > 12_000_000 && max_concurrent > 2 {
+        // 12M pixels ≈ 4000x3000. For each extra concurrent worker with a 56MB
+        // mask (plus potential PNG encoding), memory usage grows rapidly.
+        max_concurrent = max_concurrent / 2;
+    }
+
+    // When streaming raw masks directly to encoder, minimize buffer to avoid
+    // accumulating large masks in memory: use buffer of 2 instead of max_concurrent.
+    let buffer = if on_raw_mask_layer.is_some() && !emit_raw_mask_layers {
+        2
+    } else {
+        (max_concurrent * 2).clamp(2, 16)
+    };
 
     let progress = AtomicU32::new(0);
     let raster_ns = AtomicU64::new(0);
@@ -72,6 +92,8 @@ pub fn render_layers_bounded(
 
     let empty_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
     let full_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
+
+    let need_raw_masks = emit_raw_mask_layers || on_raw_mask_layer.is_some();
 
     let mut out_pngs = emit_png_layers.then(|| vec![Vec::<u8>::new(); total_layers as usize]);
     let mut out_masks = emit_raw_mask_layers.then(|| vec![Vec::<u8>::new(); total_layers as usize]);
@@ -119,7 +141,7 @@ pub fn render_layers_bounded(
                                 None
                             };
 
-                            let raw_mask = if emit_raw_mask_layers {
+                            let raw_mask = if need_raw_masks {
                                 Some(vec![0u8; layer_pixels_len])
                             } else {
                                 None
@@ -182,7 +204,7 @@ pub fn render_layers_bounded(
                             None
                         };
 
-                        let raw_mask = if emit_raw_mask_layers {
+                        let raw_mask = if need_raw_masks {
                             Some(mask)
                         } else {
                             None
@@ -211,7 +233,11 @@ pub fn render_layers_bounded(
                     // flush at once behind a delayed lower-index layer.
                     let done = progress.fetch_add(1, Ordering::Relaxed) + 1;
                     if let Some(ref cb) = on_progress {
-                        cb(done, total_layers);
+                        cb(SliceProgressUpdateV3 {
+                            done,
+                            total: total_layers,
+                            phase: SliceProgressPhaseV3::Slicing,
+                        });
                     }
 
                     pending[layer as usize] = Some((png, raw_mask, stats));
@@ -222,8 +248,19 @@ pub fn render_layers_bounded(
                         if let (Some(ref mut out), Some(png)) = (out_pngs.as_mut(), png) {
                             out[next as usize] = png;
                         }
-                        if let (Some(ref mut out), Some(mask)) = (out_masks.as_mut(), raw_mask) {
-                            out[next as usize] = mask;
+                        match (out_masks.as_mut(), raw_mask) {
+                            (Some(out), Some(mask)) => {
+                                out[next as usize] = mask;
+                            }
+                            (None, Some(mask)) => {
+                                if let Some(ref mut sink) = on_raw_mask_layer {
+                                    if let Err(err) = sink(next, mask) {
+                                        pipeline_error = Err(err);
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                         area_stats[next as usize] = stats;
                         if cancel_flag

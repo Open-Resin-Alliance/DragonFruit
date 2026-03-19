@@ -9,12 +9,15 @@ const ALLOWED_CORE_IMPORT_SEAMS = new Set([
       path.normalize('src/features/plugins/networkPluginRegistry.ts'),
       path.normalize('src/features/slicing/formats/registry.ts'),
       path.normalize('src/features/plugins/builtinComplexPlugins.ts'),
+      path.normalize('src/features/plugins/generatedBuiltinComplexPlugins.ts'),
       path.normalize('src/features/plugins/builtinComplexPluginNetworkHandlers.ts'),
       path.normalize('src/features/plugins/builtinComplexPluginUploadHandlers.ts'),
+      path.normalize('src/features/plugins/generatedBuiltinComplexPluginNetworkHandlers.ts'),
+      path.normalize('src/features/plugins/generatedBuiltinComplexPluginUploadHandlers.ts'),
       path.normalize('src/features/plugins/pluginUploadBridge.ts'),
 ]);
 
-const IMPORT_RE = /from\s+['"][^'"]*plugins\/athena\//g;
+const IMPORT_RE = /from\s+['"][^'"]*plugins\/(?!generatedBuiltinComplexPlugin|generatedBuiltinComplexPlugins)[a-zA-Z0-9_-]+\//g;
 
 async function* walk(dir) {
       const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -36,6 +39,7 @@ async function main() {
 
             const relativePath = path.normalize(path.relative(projectRoot, filePath));
             const file = await fs.readFile(filePath, 'utf8');
+            IMPORT_RE.lastIndex = 0;
 
             if (!IMPORT_RE.test(file)) continue;
             if (ALLOWED_CORE_IMPORT_SEAMS.has(relativePath)) continue;
@@ -44,7 +48,7 @@ async function main() {
       }
 
       if (violations.length === 0) {
-            console.log('[plugin-boundary] OK: no new direct athena plugin imports in core src files.');
+            console.log('[plugin-boundary] OK: no disallowed direct plugin imports in core src files.');
             return;
       }
 

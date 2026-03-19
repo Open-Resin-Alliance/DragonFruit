@@ -3,6 +3,9 @@
   "builtinComplexPlugins": [
     {
       "id": "athena"
+    },
+    {
+      "id": "ctb"
     }
   ]
 }

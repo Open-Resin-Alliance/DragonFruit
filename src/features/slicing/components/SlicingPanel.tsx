@@ -117,7 +117,7 @@ function formatProgressLayerLabel(done: number, total: number): string {
   return `${doneSafe}/${totalSafe}`;
 }
 
-type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'finalizing' | 'handoff' | 'other';
+type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'encoding' | 'finalizing' | 'handoff' | 'other';
 
 function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   const lower = phase.toLowerCase();
@@ -125,7 +125,8 @@ function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   if (lower.includes('preparing')) return 'preparing';
   if (lower.includes('staging mesh') || lower.includes('transferring mesh')) return 'staging';
   if (lower.includes('slicing layer') || lower.includes('raster')) return 'slicing';
-  if (lower.includes('finalizing') || lower.includes('encoding') || lower.includes('metadata') || lower.includes('compression') || lower.includes('packaging')) return 'finalizing';
+  if (lower.includes('encoding') || lower.includes('metadata') || lower.includes('compression') || lower.includes('packaging')) return 'encoding';
+  if (lower.includes('finalizing')) return 'finalizing';
   if (lower.includes('opening printing') || lower.includes('handoff') || lower.includes('ready')) return 'handoff';
   return 'other';
 }
@@ -206,6 +207,8 @@ export function SlicingPanel({
   const [currentPhase, setCurrentPhase] = useState('Idle');
   const [progressDone, setProgressDone] = useState(0);
   const [progressTotal, setProgressTotal] = useState(1);
+  const [slicingLayerDone, setSlicingLayerDone] = useState(0);
+  const [slicingLayerTotal, setSlicingLayerTotal] = useState(1);
   const [currentElapsedMs, setCurrentElapsedMs] = useState(0);
   const [currentRasterMs, setCurrentRasterMs] = useState(0);
   const [liveLayersPerSec, setLiveLayersPerSec] = useState<number | null>(null);
@@ -305,29 +308,22 @@ export function SlicingPanel({
 
   const progressPercent = useMemo(() => {
     const total = Math.max(1, progressTotal);
-    const layerProgress = Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
-    if (slicingModalStage !== 'running') {
-      return layerProgress;
-    }
-
-    const phaseKind = resolveSlicingPhaseKind(currentPhase);
-    switch (phaseKind) {
-      case 'preparing':
-        return layerProgress;
-      case 'staging':
-        return layerProgress;
-      case 'slicing':
-        return Math.min(99, layerProgress);
-      case 'finalizing':
-        return 99;
-      case 'handoff':
-        return 99;
-      default:
-        return Math.min(99, layerProgress);
-    }
-  }, [currentPhase, progressDone, progressTotal, slicingModalStage]);
+    return Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
+  }, [progressDone, progressTotal]);
 
   const phaseKind = useMemo(() => resolveSlicingPhaseKind(currentPhase), [currentPhase]);
+  const encodeUnitTotal = Math.max(1, progressTotal - slicingLayerTotal);
+  const encodeUnitDone = Math.max(0, Math.min(encodeUnitTotal, progressDone - slicingLayerTotal));
+  const progressCounterLabel = phaseKind === 'slicing'
+    ? 'Sliced Layers'
+    : phaseKind === 'encoding'
+      ? 'Encoded Layers'
+      : 'Pipeline Units';
+  const progressCounterValue = phaseKind === 'slicing'
+    ? formatProgressLayerLabel(slicingLayerDone, slicingLayerTotal)
+    : phaseKind === 'encoding'
+      ? formatProgressLayerLabel(encodeUnitDone, encodeUnitTotal)
+      : formatProgressLayerLabel(progressDone, progressTotal);
   const canCancelSlicing = slicingModalStage === 'running'
     && (phaseKind === 'preparing' || phaseKind === 'staging' || phaseKind === 'slicing');
 
@@ -579,6 +575,8 @@ export function SlicingPanel({
     setSliceStatus('Preparing');
     setProgressDone(0);
     setProgressTotal(1);
+    setSlicingLayerDone(0);
+    setSlicingLayerTotal(1);
     setCurrentElapsedMs(0);
     setCurrentRasterMs(0);
     setLiveLayersPerSec(null);
@@ -631,14 +629,19 @@ export function SlicingPanel({
         onProgress: (done, total, phase) => {
           const phaseKind = resolveSlicingPhaseKind(phase);
           const isSlicingPhase = phaseKind === 'slicing';
+          const safeTotal = Math.max(1, total);
+          const safeDone = Math.max(0, Math.min(done, safeTotal));
           setCurrentPhase(phase);
           setSliceStatus(phase);
-          setProgressDone(done);
-          setProgressTotal(Math.max(1, total));
+          setProgressDone(safeDone);
+          setProgressTotal(safeTotal);
 
           const nowMs = performance.now();
 
           if (isSlicingPhase) {
+            setSlicingLayerDone(safeDone);
+            setSlicingLayerTotal(safeTotal);
+
             if (slicingPhaseStartMs == null) {
               slicingPhaseStartMs = nowMs;
             }
@@ -650,8 +653,8 @@ export function SlicingPanel({
             // Compute speed from cumulative elapsed time to avoid burst-induced spikes
             // when progress events are delivered in batches.
             const phaseElapsedMs = Math.max(1, nowMs - slicingPhaseStartMs);
-            if (done > 0 && phaseElapsedMs > 300) {
-              const rawRate = (done * 1000) / phaseElapsedMs;
+            if (safeDone > 0 && phaseElapsedMs > 300) {
+              const rawRate = (safeDone * 1000) / phaseElapsedMs;
               const alpha = 0.2;
               const priorRate = smoothedMetricsRef.current.layersPerSec;
               const smoothedRate = priorRate > 0
@@ -660,7 +663,7 @@ export function SlicingPanel({
               smoothedMetricsRef.current.layersPerSec = smoothedRate;
               setLiveLayersPerSec(smoothedRate);
 
-              const remaining = Math.max(0, total - done);
+              const remaining = Math.max(0, safeTotal - safeDone);
               if (smoothedRate > 0) {
                 const rawRemainingMs = (remaining / smoothedRate) * 1000;
                 const priorRemaining = smoothedMetricsRef.current.remainingMs;
@@ -1221,8 +1224,8 @@ export function SlicingPanel({
                     <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{slicingElapsedLabel}</div>
                   </div>
                   <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layers</div>
-                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{formatProgressLayerLabel(progressDone, progressTotal)}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{progressCounterLabel}</div>
+                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{progressCounterValue}</div>
                   </div>
                 </div>
 
@@ -1332,9 +1335,9 @@ export function SlicingPanel({
                   <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Sliced Layers</div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{progressCounterLabel}</div>
                   <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                    {formatProgressLayerLabel(progressDone, progressTotal)}
+                    {progressCounterValue}
                   </div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>

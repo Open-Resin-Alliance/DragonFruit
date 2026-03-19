@@ -1,6 +1,7 @@
 //! Shared data contracts for the DragonFruit V3 slicing pipeline.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::metrics::SlicingPerfV3;
 
@@ -110,5 +111,21 @@ pub struct LayerAreaStatsV3 {
     pub area_count: u32,
 }
 
-/// Progress callback signature `(done_layers, total_layers)`.
-pub type ProgressCallbackV3 = Box<dyn Fn(u32, u32) + Send + Sync>;
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SliceProgressPhaseV3 {
+    Slicing,
+    Encoding,
+    Finalizing,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SliceProgressUpdateV3 {
+    pub done: u32,
+    pub total: u32,
+    pub phase: SliceProgressPhaseV3,
+}
+
+/// Progress callback signature for full end-to-end slicing lifecycle.
+pub type ProgressCallbackV3 = Arc<dyn Fn(SliceProgressUpdateV3) + Send + Sync>;

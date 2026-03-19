@@ -1,0 +1,3 @@
+[submodule "plugins/ctb"]
+	path = plugins/ctb
+	url = https://github.com/Open-Resin-Alliance/df-plugin-ctb.git

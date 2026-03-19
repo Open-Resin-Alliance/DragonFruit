@@ -11,7 +11,7 @@ pub mod athena_network;
 
 #[allow(dead_code)]
 pub const GENERATED_BUILTIN_PLUGIN_IDS: &[&str] = &["athena"];
-pub const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256: &str = "ce36f29e59f3e7776bd0e87b363c61874a07b74da1eeee186a213e07906acd8b";
+pub const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256: &str = "1240df4dac0242d861dfc16271ef996c85ac6f764a78f5f4a95bcbe0a2d256a3";
 
 pub fn register_generated_plugins() -> Result<(), String> {
     register_plugin(athena_plugin::get_plugin_registration())?;
