@@ -53,6 +53,70 @@ fn choose_max_concurrent() -> usize {
     env.clamp(1, hw)
 }
 
+fn cap_concurrency_for_mask_bytes(
+    requested: usize,
+    layer_pixels_len: usize,
+    streaming_raw_mask_sink: bool,
+) -> usize {
+    let bytes_per_mask = layer_pixels_len;
+    let mut capped = requested.max(1);
+
+    // Optional override: memory budget for in-flight raw masks (MB).
+    // Lets high-RAM workstations use more cores for giant layers.
+    let budget_override = std::env::var("DF_V3_MAX_MASK_INFLIGHT_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= 64)
+        .map(|mb| mb.saturating_mul(1024 * 1024));
+
+    // By default, keep non-streaming formats (e.g. NanoDLP PNG path)
+    // unconstrained so they can use available CPU cores. We only apply
+    // aggressive large-mask caps automatically in streaming raw-mask mode
+    // where giant buffers can pile up and crash.
+    if !streaming_raw_mask_sink && budget_override.is_none() {
+        return capped;
+    }
+
+    if let Some(budget_bytes) = budget_override {
+        let allowed = (budget_bytes / bytes_per_mask.max(1)).max(1);
+        capped = capped.min(allowed);
+    }
+
+    // Safety-first caps for very large layers (e.g., 7,680x7,680 ~= 56.25 MB/mask).
+    // These avoid simultaneous large allocations across many workers.
+    if budget_override.is_none() {
+        if bytes_per_mask >= 48 * 1024 * 1024 {
+            capped = capped.min(1);
+        } else if bytes_per_mask >= 24 * 1024 * 1024 {
+            capped = capped.min(2);
+        } else if bytes_per_mask >= 12 * 1024 * 1024 {
+            capped = capped.min(4);
+        }
+    }
+
+    // In streaming mode, downstream encode work can also retain large buffers.
+    // Keep raster producers tighter to prevent queueing huge masks.
+    if streaming_raw_mask_sink {
+        if budget_override.is_none() {
+            if bytes_per_mask >= 12 * 1024 * 1024 {
+                capped = capped.min(2);
+            }
+        }
+    }
+
+    capped.max(1)
+}
+
+fn choose_streaming_buffer_depth_for_mask_bytes(layer_pixels_len: usize) -> usize {
+    let bytes_per_mask = layer_pixels_len;
+    if bytes_per_mask >= 24 * 1024 * 1024 {
+        // For giant layers (e.g., 16K-class), keep exactly one queued mask.
+        1
+    } else {
+        2
+    }
+}
+
 /// Render all layers into requested payload buffers while preserving order.
 pub fn render_layers_bounded(
     job: &SliceJobV3,
@@ -78,10 +142,14 @@ pub fn render_layers_bounded(
         max_concurrent = max_concurrent / 2;
     }
 
+    let streaming_raw_mask_sink = on_raw_mask_layer.is_some() && !emit_raw_mask_layers;
+    max_concurrent =
+        cap_concurrency_for_mask_bytes(max_concurrent, layer_pixels, streaming_raw_mask_sink);
+
     // When streaming raw masks directly to encoder, minimize buffer to avoid
     // accumulating large masks in memory: use buffer of 2 instead of max_concurrent.
-    let buffer = if on_raw_mask_layer.is_some() && !emit_raw_mask_layers {
-        2
+    let buffer = if streaming_raw_mask_sink {
+        choose_streaming_buffer_depth_for_mask_bytes(layer_pixels)
     } else {
         (max_concurrent * 2).clamp(2, 16)
     };
@@ -95,7 +163,7 @@ pub fn render_layers_bounded(
     let full_png_cache = emit_png_layers.then(|| Mutex::<Option<Vec<u8>>>::new(None));
 
     let need_raw_masks = emit_raw_mask_layers || on_raw_mask_layer.is_some();
-    let progress_on_drain = on_raw_mask_layer.is_some() && !emit_raw_mask_layers;
+    let progress_on_drain = streaming_raw_mask_sink;
 
     let mut out_pngs = emit_png_layers.then(|| vec![Vec::<u8>::new(); total_layers as usize]);
     let mut out_masks = emit_raw_mask_layers.then(|| vec![Vec::<u8>::new(); total_layers as usize]);
