@@ -113,6 +113,21 @@ export function ContactConeRenderer({
     const displayEmissive = hoverVisible ? '#ffffff' : emissive;
     const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.35) : emissiveIntensity;
 
+    const rayIntersectsJointOrKnot = (e: any): boolean => {
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                const primitiveType = current.userData?.supportPrimitiveType;
+                if (primitiveType === 'joint' || primitiveType === 'knot') {
+                    return true;
+                }
+                current = current.parent;
+            }
+        }
+        return false;
+    };
+
     // Socket joint position (at the large end of the cone)
     // const socketPos = getSocketPosition(coneStartPos, normal, profile);
 
@@ -121,7 +136,11 @@ export function ContactConeRenderer({
 
     return (
         <group
-            onPointerMove={() => {
+            onPointerMove={(e: any) => {
+                if (rayIntersectsJointOrKnot(e)) {
+                    if (isHovered) setIsHovered(false);
+                    return;
+                }
                 if (!hoverVisible) setIsHovered(true);
             }}
             onPointerOut={() => {

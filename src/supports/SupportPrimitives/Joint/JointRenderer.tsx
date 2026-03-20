@@ -95,6 +95,19 @@ export function JointRenderer({
     const displayEmissive = isHovered ? '#ffffff' : propEmissive;
     const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
 
+    const isPointerOverThisJoint = (e: any): boolean => {
+        if (!groupRef.current) return false;
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                if (current === groupRef.current) return true;
+                current = current.parent;
+            }
+        }
+        return false;
+    };
+
     const handleClick = (e: any) => {
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
@@ -108,7 +121,8 @@ export function JointRenderer({
             emitImmediateModelHover(null);
         }
 
-        if (!isTopPickedJoint) return;
+        const pointerOverJoint = isPointerOverThisJoint(e);
+        if (!pointerOverJoint || !isParentSelected) return;
         handleJointClick(e, joint.id, !!isInteractable, isParentSelected, isSelected, (id) => {
             if (onSelect) onSelect(id);
             if (onClick) onClick(e);
@@ -131,7 +145,8 @@ export function JointRenderer({
 
         // Only allow left-click (button 0) for dragging
         if (e.button !== 0) return;
-        if (!isParentSelected || !isInteractable || !isTopPickedJoint) return;
+        const pointerOverJoint = isPointerOverThisJoint(e);
+        if (!isParentSelected || !isInteractable || !pointerOverJoint) return;
         
         e.stopPropagation();
         
@@ -175,21 +190,8 @@ export function JointRenderer({
             emitImmediateModelHover(null);
         }
 
-        const topIntersectionObject = Array.isArray(e?.intersections)
-            ? ((e.intersections[0] as { object?: THREE.Object3D | null } | undefined)?.object ?? null)
-            : null;
-
-        let isTopPointerTargetNow = false;
-        let current = topIntersectionObject;
-        while (current) {
-            if (current === groupRef.current) {
-                isTopPointerTargetNow = true;
-                break;
-            }
-            current = current.parent;
-        }
-
-        if (!isTopPointerTargetNow || !isParentSelected) {
+        const pointerOverJoint = isPointerOverThisJoint(e);
+        if (!pointerOverJoint || !isParentSelected) {
             setPointerHoverActive((prev) => (prev ? false : prev));
             return;
         }
@@ -208,25 +210,26 @@ export function JointRenderer({
         document.body.style.cursor = '';
     };
     
-    const hitboxRadius = radius;
+    const hitboxRadius = isParentSelected ? radius * 1.15 : radius;
 
     return (
         <group 
             ref={groupRef}
             position={[joint.pos.x, joint.pos.y, joint.pos.z]}
+            userData={{ supportPrimitiveType: 'joint' }}
             onClick={handleClick}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerLeave={handlePointerLeave}
         >
             {/* Hitbox Mesh - Only expanded when parent is selected */}
-            <mesh raycast={raycast}>
+            <mesh raycast={raycast} userData={{ supportPrimitiveType: 'joint' }}>
                 <sphereGeometry args={[hitboxRadius, 16, 12]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
 
             {/* Visual Mesh - Purely display */}
-            <mesh raycast={raycast}>
+            <mesh raycast={raycast} userData={{ supportPrimitiveType: 'joint' }}>
                 <sphereGeometry args={[radius, 16, 12]} />
                 <meshStandardMaterial 
                     color={displayColor} 

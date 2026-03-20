@@ -84,8 +84,25 @@ export function ShaftRenderer({
     const direction = new THREE.Vector3().subVectors(endVec, startVec).normalize();
     const up = new THREE.Vector3(0, 1, 0);
     const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
+
+    const rayIntersectsJointOrKnot = (e: any): boolean => {
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                const primitiveType = current.userData?.supportPrimitiveType;
+                if (primitiveType === 'joint' || primitiveType === 'knot') {
+                    return true;
+                }
+                current = current.parent;
+            }
+        }
+        return false;
+    };
     
     const handleClick = (e: any) => {
+        if (rayIntersectsJointOrKnot(e)) return;
+
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
 
@@ -135,6 +152,11 @@ export function ShaftRenderer({
     
     // Handle pointer move for branch placement preview
     const handlePointerMove = (e: any) => {
+        if (rayIntersectsJointOrKnot(e)) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
         const topIntersectionObject = Array.isArray(e?.intersections)
             ? ((e.intersections[0] as { object?: THREE.Object3D | null } | undefined)?.object ?? null)
             : null;
@@ -199,7 +221,7 @@ export function ShaftRenderer({
                     onClick={handleClick}
                     onPointerMove={handlePointerMove}
                     onPointerLeave={handlePointerLeave}
-                    userData={{ segmentId: id }}
+                    userData={{ segmentId: id, supportPrimitiveType: 'shaft' }}
                 >
                     <cylinderGeometry args={[pickRadiusEnd, pickRadiusStart, 1, Math.max(8, radialSegments)]} />
                     <meshBasicMaterial transparent opacity={0} depthWrite={false} />
@@ -207,7 +229,7 @@ export function ShaftRenderer({
             )}
             <mesh
                 raycast={enableSegmentInteraction ? NOOP_RAYCAST : raycast}
-                userData={enableSegmentInteraction ? { excludeFromPickingClone: true } : undefined}
+                userData={enableSegmentInteraction ? { excludeFromPickingClone: true, supportPrimitiveType: 'shaft' } : { supportPrimitiveType: 'shaft' }}
             >
                 <cylinderGeometry args={[visualRadiusEnd, visualRadiusStart, 1, radialSegments]} />
                 <meshStandardMaterial 
