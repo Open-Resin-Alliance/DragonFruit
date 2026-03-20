@@ -34,7 +34,7 @@ import { getRaftSettings, subscribeToRaftStore } from './Rafts/Crenelated/RaftSt
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { DEBUG_SECTION_COLORS as AUTO_BRACING_DEBUG_SECTION_COLORS } from './autoBracing/settings';
 import { VoronoiSeedDebugMarkers } from './autoBracing/VoronoiSeedDebugMarkers';
-import { isJointHoverCategory, isSupportHoverCategory } from './interaction/shared/hover/supportHoverResolver';
+import { isJointHoverCategory } from './interaction/shared/hover/supportHoverResolver';
 
 interface SupportRendererProps {
     mode?: SupportMode;
@@ -129,10 +129,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
     const knotGizmoInteractionLockTimeoutRef = React.useRef<number | null>(null);
     const rawHoveredCategory = state.hoveredCategory as string | null | undefined;
-    const rawSupportLikeHover = isSupportHoverCategory(rawHoveredCategory);
     const jointCategoryHoverSuppressed = isJointHoverCategory(rawHoveredCategory);
     const supportInteractionSuppressed = mode === 'support' && (disableSelectionAndHover || gizmoInteractionLockActive);
-    const supportSelectionAndHoverSuppressed = supportInteractionSuppressed || (mode === 'support' && jointCategoryHoverSuppressed);
+    const supportSelectionAndHoverSuppressed = supportInteractionSuppressed;
     const supportPointerInteractable = interactionHooksEnabled && mode === 'support' && !navigationLodActive;
     const isInteractable = supportPointerInteractable && !supportInteractionSuppressed;
     const isPreparePointerInteractable = interactionHooksEnabled && mode === 'prepare' && !navigationLodActive;
@@ -441,14 +440,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, []);
 
     const effectiveHoverModelId = supportSelectionAndHoverSuppressed ? null : (immediateModelHoverId ?? hoverModelId);
-    const suppressSupportLikeVisualHoverFromModel = !supportSelectionAndHoverSuppressed
-        && rawSupportLikeHover
-        && immediateModelHoverId !== null;
     const effectiveVisualActiveModelId = mode === 'prepare'
         ? (immediatePrepareActiveModelId ?? activeModelId)
         : activeModelId;
-    const hoveredCategoryForVisual = supportSelectionAndHoverSuppressed || suppressSupportLikeVisualHoverFromModel ? 'none' : state.hoveredCategory;
-    const hoveredIdForVisual = supportSelectionAndHoverSuppressed || suppressSupportLikeVisualHoverFromModel ? null : state.hoveredId;
+    const hoveredCategoryForVisual = supportSelectionAndHoverSuppressed ? 'none' : state.hoveredCategory;
+    const hoveredIdForVisual = supportSelectionAndHoverSuppressed ? null : state.hoveredId;
     const supportIdBySegmentId = useMemo(() => {
         const map = new Map<string, string>();
 
@@ -549,9 +545,25 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return null;
     }, [hoveredCategoryForVisual, hoveredIdForVisual, supportIdBySegmentId, supportIdByJointId, supportIdByKnotId]);
 
-    const hoveredSupportIdForVisual = suppressSupportLikeVisualHoverFromModel
-        ? null
-        : (marqueeHoveredSupportId ?? hoveredSupportIdFromPicking ?? sceneHoveredSupportId);
+    const hoveredSupportIdForVisual = marqueeHoveredSupportId ?? hoveredSupportIdFromPicking ?? sceneHoveredSupportId;
+    const hoveredSupportIsSelected = hoveredSupportIdForVisual !== null && selectedSupportIdSet.has(hoveredSupportIdForVisual);
+    const previousSelectionKeyRef = React.useRef<string>('');
+
+    useEffect(() => {
+        const selectionKey = `${selectedId ?? ''}|${effectiveSelectedSupportIds.join(',')}`;
+        if (previousSelectionKeyRef.current === selectionKey) return;
+        previousSelectionKeyRef.current = selectionKey;
+
+        if (sceneHoveredSupportId === null) return;
+
+        if (pendingSceneHoverClearFrameRef.current != null) {
+            cancelAnimationFrame(pendingSceneHoverClearFrameRef.current);
+            pendingSceneHoverClearFrameRef.current = null;
+        }
+
+        setSceneHoveredSupportId((prev) => (prev === null ? prev : null));
+        emitSupportModelPointerHover(null);
+    }, [sceneHoveredSupportId, selectedId, effectiveSelectedSupportIds]);
 
     useEffect(() => {
         if (mode !== 'prepare') {
@@ -2109,6 +2121,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const hoveredSupportShaftSet = useMemo(() => {
         if (!isInteractable) return null;
+        if (hoveredSupportIsSelected) return null;
 
         const hoveredSupportId = hoveredSupportIdForVisual;
         if (!hoveredSupportId) return null;
@@ -2132,7 +2145,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (kickstandSet) return kickstandSet;
 
         return null;
-    }, [isInteractable, hoveredSupportIdForVisual, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, kickstandShaftsBySupport]);
+    }, [isInteractable, hoveredSupportIdForVisual, hoveredSupportIsSelected, trunkShaftsBySupport, branchShaftsBySupport, braceShaftsBySupport, twigShaftsBySupport, stickShaftsBySupport, kickstandShaftsBySupport]);
 
     const hoveredSupportOverlayShafts = useMemo(() => {
         if (!hoveredSupportShaftSet) return [] as InstancedShaft[];
@@ -2147,12 +2160,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const hoveredSupportConeSet = useMemo(() => {
         if (!isInteractable) return null;
+        if (hoveredSupportIsSelected) return null;
 
         const hoveredSupportId = hoveredSupportIdForVisual;
         if (!hoveredSupportId) return null;
 
         return contactConesBySupport.get(hoveredSupportId) ?? null;
-    }, [isInteractable, hoveredSupportIdForVisual, contactConesBySupport]);
+    }, [isInteractable, hoveredSupportIdForVisual, hoveredSupportIsSelected, contactConesBySupport]);
 
     const hoveredSupportOverlayCones = useMemo(() => {
         if (!hoveredSupportConeSet) return [] as InstancedContactCone[];
@@ -2164,6 +2178,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
     const hoveredSupportJointSet = useMemo(() => {
         if (!isInteractable) return null;
+        if (hoveredSupportIsSelected) return null;
 
         const hoveredSupportId = hoveredSupportIdForVisual;
         if (!hoveredSupportId) return null;
@@ -2187,6 +2202,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, [
         isInteractable,
         hoveredSupportIdForVisual,
+        hoveredSupportIsSelected,
         trunkJointsBySupport,
         branchJointsBySupport,
         twigJointsBySupport,

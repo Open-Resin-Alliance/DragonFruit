@@ -5,7 +5,6 @@ import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getSnapshot, subscribe } from '../../state';
 import { handleKnotClick } from '../../interaction/clickHandlers';
-import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface KnotRendererProps {
@@ -44,8 +43,8 @@ export function KnotRenderer({
     const displayDiameter = isParentSelected ? resolvedDiameter : blendedDiameter;
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
-    const immediateModelHoverId = useImmediateModelHoverId();
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
+    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const isSelected = state.selectedId === knot.id;
@@ -79,14 +78,13 @@ export function KnotRenderer({
         };
     }, [register, unregister, knot.id, enablePicking, isParentSelected]);
 
-    const isTopPickedKnot = immediateModelHoverId === null
-        && frontBlockingModelId === null
+    const isTopPickedKnot = frontBlockingModelId === null
         && hit.category === 'knot'
         && hit.objectId === knot.id
         && isParentSelected;
-    const isHovered = isTopPickedKnot && !isSelected;
+    const isHovered = (isTopPickedKnot || pointerHoverActive) && !isSelected;
 
-    const displayColor = isSelected ? '#1a75ff' : (isParentSelected ? '#00ff00' : propColor);
+    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#00ff00' : propColor));
     const displayEmissive = isHovered ? '#ffffff' : propEmissive;
     const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
 
@@ -158,6 +156,7 @@ export function KnotRenderer({
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(frontModelId);
             return;
         }
@@ -166,6 +165,20 @@ export function KnotRenderer({
             setFrontBlockingModelId(null);
             emitImmediateModelHover(null);
         }
+
+        const isTopPickedKnotNow = frontBlockingModelId === null
+            && hit.category === 'knot'
+            && hit.objectId === knot.id
+            && isParentSelected;
+
+        if (!isTopPickedKnotNow) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
+        if (isParentSelected && isInteractable) {
+            setPointerHoverActive((prev) => (prev ? prev : true));
+        }
     };
 
     const handlePointerLeave = () => {
@@ -173,10 +186,11 @@ export function KnotRenderer({
             setFrontBlockingModelId(null);
             emitImmediateModelHover(null);
         }
+        setPointerHoverActive((prev) => (prev ? false : prev));
         document.body.style.cursor = '';
     };
 
-    const hitboxRadius = radius * 2.0;
+    const hitboxRadius = radius;
 
     return (
         <group

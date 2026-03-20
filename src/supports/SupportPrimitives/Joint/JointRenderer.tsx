@@ -5,7 +5,6 @@ import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { subscribe, getSnapshot, setSelectedId } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
-import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface JointRendererProps {
@@ -45,8 +44,8 @@ export function JointRenderer({
     const displayDiameter = isParentSelected ? resolvedDiameter : blendedDiameter;
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
-    const immediateModelHoverId = useImmediateModelHoverId();
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
+    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     // State Subscription
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -84,16 +83,15 @@ export function JointRenderer({
 
     // Determine Hover State
     // Only show hover if parent is selected (editable mode) AND joint is not already selected
-    const isTopPickedJoint = immediateModelHoverId === null
-        && frontBlockingModelId === null
+    const isTopPickedJoint = frontBlockingModelId === null
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
-    const isHovered = isTopPickedJoint && !isSelected;
+    const isHovered = (isTopPickedJoint || pointerHoverActive) && !isSelected;
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
-    const displayColor = isSelected ? '#1a75ff' : (isParentSelected ? '#888888' : propColor);
+    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#888888' : propColor));
     const displayEmissive = isHovered ? '#ffffff' : propEmissive;
     const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
 
@@ -167,6 +165,7 @@ export function JointRenderer({
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(frontModelId);
             return;
         }
@@ -175,6 +174,29 @@ export function JointRenderer({
             setFrontBlockingModelId(null);
             emitImmediateModelHover(null);
         }
+
+        const topIntersectionObject = Array.isArray(e?.intersections)
+            ? ((e.intersections[0] as { object?: THREE.Object3D | null } | undefined)?.object ?? null)
+            : null;
+
+        let isTopPointerTargetNow = false;
+        let current = topIntersectionObject;
+        while (current) {
+            if (current === groupRef.current) {
+                isTopPointerTargetNow = true;
+                break;
+            }
+            current = current.parent;
+        }
+
+        if (!isTopPointerTargetNow || !isParentSelected) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
+        if (isParentSelected && isInteractable) {
+            setPointerHoverActive((prev) => (prev ? prev : true));
+        }
     };
 
     const handlePointerLeave = () => {
@@ -182,11 +204,11 @@ export function JointRenderer({
             setFrontBlockingModelId(null);
             emitImmediateModelHover(null);
         }
+        setPointerHoverActive((prev) => (prev ? false : prev));
         document.body.style.cursor = '';
     };
     
-    // Only use expanded hitbox when parent is selected (editable mode)
-    const hitboxRadius = isParentSelected ? radius * 2.5 : radius;
+    const hitboxRadius = radius;
 
     return (
         <group 
@@ -198,7 +220,7 @@ export function JointRenderer({
             onPointerLeave={handlePointerLeave}
         >
             {/* Hitbox Mesh - Only expanded when parent is selected */}
-            <mesh raycast={raycast} userData={{ excludeFromPickingClone: true }}>
+            <mesh raycast={raycast}>
                 <sphereGeometry args={[hitboxRadius, 16, 12]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>

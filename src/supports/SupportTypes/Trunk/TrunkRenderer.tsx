@@ -59,7 +59,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
 
     // Handle Click
     const handleClick = (e: any) => {
-        if (!isPickingHovered) return;
+        if (!isPickingHovered && !isSelected) return;
         handleSupportClick(e, trunk.id, !!isInteractable);
     };
 

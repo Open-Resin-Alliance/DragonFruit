@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
@@ -66,6 +66,8 @@ export function ContactConeRenderer({
     const bodyRadius = profile.bodyDiameterMm / 2;
     const length = profile.lengthMm;
     const penetrationMm = profile.penetrationMm ?? 0;
+    const [isHovered, setIsHovered] = useState(false);
+    const hoverVisible = isHovered && isInteractable && isParentSelected;
 
     // Resolve accurate colors logic
     const finalDiskColor = diskColor || color;
@@ -108,6 +110,8 @@ export function ContactConeRenderer({
     // Calculate cone center (based on shifted start position)
     const center = getConeCenterPosition(coneStartPos, normal, profile);
     const quaternion = getConeQuaternion(normal);
+    const displayEmissive = hoverVisible ? '#ffffff' : emissive;
+    const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.35) : emissiveIntensity;
 
     // Socket joint position (at the large end of the cone)
     // const socketPos = getSocketPosition(coneStartPos, normal, profile);
@@ -116,7 +120,14 @@ export function ContactConeRenderer({
     // const jointRadius = getJointRadius(profile.bodyDiameterMm);
 
     return (
-        <group>
+        <group
+            onPointerMove={() => {
+                if (!hoverVisible) setIsHovered(true);
+            }}
+            onPointerOut={() => {
+                if (isHovered) setIsHovered(false);
+            }}
+        >
             {/* --- Contact Primitive (Disk) --- */}
             {profile.type === 'disk' && (
                 <ContactDiskRenderer
@@ -148,8 +159,8 @@ export function ContactConeRenderer({
                     <cylinderGeometry args={[contactRadius, bodyRadius, length, radialSegments]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
-                        emissive={emissive}
-                        emissiveIntensity={emissiveIntensity}
+                        emissive={displayEmissive}
+                        emissiveIntensity={displayEmissiveIntensity}
                         transparent={transparent}
                         opacity={opacity}
                         depthWrite={!transparent}
@@ -164,8 +175,8 @@ export function ContactConeRenderer({
                     <sphereGeometry args={[contactRadius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
-                        emissive={emissive}
-                        emissiveIntensity={emissiveIntensity}
+                        emissive={displayEmissive}
+                        emissiveIntensity={displayEmissiveIntensity}
                         transparent={transparent}
                         opacity={opacity}
                         depthWrite={!transparent}

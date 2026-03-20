@@ -65,7 +65,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
 
   // Handle Click
   const handleClick = (e: any) => {
-    if (!isPickingHovered) return;
+    if (!isPickingHovered && !isSelected) return;
     handleSupportClick(e, branch.id, !!isInteractable);
   };
 

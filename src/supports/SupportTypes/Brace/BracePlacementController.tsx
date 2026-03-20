@@ -18,6 +18,7 @@ import { bracePlacementStore, useBracePlacementState } from './bracePlacementSta
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { generateUuid } from '@/utils/uuid';
 import { clearSelection } from '../../interaction/SupportSelection';
+import { snappingSessionStore } from '../../interaction/shared/placement/snapping/snappingSession';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -592,7 +593,8 @@ export function BracePlacementController() {
     useFrame(() => {
         if (!altActive && stage === 'idle') return;
 
-        const result = updateSnapping();
+        updateSnapping();
+        const resolvedSnap = snappingSessionStore.getSnapshot();
 
         // Hover preview (before first click): show a knot-sized sphere on the hovered segment.
         if (stage === 'idle') {
@@ -618,12 +620,12 @@ export function BracePlacementController() {
                 return;
             }
 
-            if (result.state === 'locked' && result.targetId && result.t !== undefined) {
+            if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
                 const settings = getSettings();
                 const fallbackDia = settings.shaft.diameterMm;
 
-                if (leafMeta.has(result.targetId)) {
-                    const resolved = resolveLeafSurface(result.targetId, result.snappedPos, result.t);
+                if (leafMeta.has(resolvedSnap.targetId)) {
+                    const resolved = resolveLeafSurface(resolvedSnap.targetId, resolvedSnap.snappedPos, resolvedSnap.t);
                     if (resolved) {
                         bracePlacementStore.setPreview({
                             start: resolved.pos,
@@ -635,10 +637,10 @@ export function BracePlacementController() {
                         bracePlacementStore.setPreview(null);
                     }
                 } else {
-                    const target = resolveNearestPathTarget(result.targetId, result.snappedPos) ?? getTarget(result.targetId);
+                    const target = resolveNearestPathTarget(resolvedSnap.targetId, resolvedSnap.snappedPos) ?? getTarget(resolvedSnap.targetId);
                     let hostDia = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : fallbackDia;
-                    if (result.targetId.startsWith('braceSegment:')) {
-                        const braceId = result.targetId.slice('braceSegment:'.length);
+                    if (resolvedSnap.targetId.startsWith('braceSegment:')) {
+                        const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
                         const brace = supportState.braces[braceId];
                         const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                         const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -651,13 +653,13 @@ export function BracePlacementController() {
                                 0.001,
                                 (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                             );
-                            hostDia = THREE.MathUtils.lerp(startDia, endDia, result.t);
+                            hostDia = THREE.MathUtils.lerp(startDia, endDia, resolvedSnap.t);
                         }
                     }
                     // Zero-length preview: renders as a single sphere with green lights.
                     bracePlacementStore.setPreview({
-                        start: result.snappedPos,
-                        end: result.snappedPos,
+                        start: resolvedSnap.snappedPos,
+                        end: resolvedSnap.snappedPos,
                         startDiameterMm: hostDia,
                         endDiameterMm: hostDia,
                     });
@@ -723,24 +725,24 @@ export function BracePlacementController() {
                     bracePlacementStore.setSnapTarget(null);
                 }
             }
-        } else if (result.state === 'locked' && result.targetId && result.t !== undefined) {
-            if (leafMeta.has(result.targetId)) {
+        } else if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
+            if (leafMeta.has(resolvedSnap.targetId)) {
                 const startModelId = start.ownerModelId;
-                const meta = leafMeta.get(result.targetId);
+                const meta = leafMeta.get(resolvedSnap.targetId);
                 if (meta && startModelId && meta.modelId && startModelId !== meta.modelId) {
                     bracePlacementStore.setSnapTarget(null);
                 } else {
-                    const resolved = resolveLeafSurface(result.targetId, result.snappedPos, result.t);
+                    const resolved = resolveLeafSurface(resolvedSnap.targetId, resolvedSnap.snappedPos, resolvedSnap.t);
                     const minMm = 0.25;
                     const minT = meta ? THREE.MathUtils.clamp(minMm / Math.max(0.0001, meta.lengthMm), 0, 0.99) : 0;
-                    const coneT = Math.max(result.t, minT);
+                    const coneT = Math.max(resolvedSnap.t, minT);
 
-                    const sameLeaf = start.kind === 'leaf' && start.leafId === result.targetId;
+                    const sameLeaf = start.kind === 'leaf' && start.leafId === resolvedSnap.targetId;
 
                     if (resolved && !sameLeaf) {
                         const snapTarget = {
                             kind: 'leaf' as const,
-                            leafId: result.targetId,
+                            leafId: resolvedSnap.targetId,
                             coneT,
                             snappedPos: resolved.pos,
                             hostDiameterMm: resolved.diameterMm,
@@ -754,12 +756,12 @@ export function BracePlacementController() {
                     }
                 }
             } else {
-                const target = resolveNearestPathTarget(result.targetId, result.snappedPos) ?? getTarget(result.targetId);
+                const target = resolveNearestPathTarget(resolvedSnap.targetId, resolvedSnap.snappedPos) ?? getTarget(resolvedSnap.targetId);
                 let hostDiameterMm = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : undefined;
-                let ownerModelId = segmentMeta.get(result.targetId)?.modelId;
+                let ownerModelId = segmentMeta.get(resolvedSnap.targetId)?.modelId;
 
-                if (result.targetId.startsWith('braceSegment:')) {
-                    const braceId = result.targetId.slice('braceSegment:'.length);
+                if (resolvedSnap.targetId.startsWith('braceSegment:')) {
+                    const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
                     const brace = supportState.braces[braceId];
                     const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                     const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -772,16 +774,16 @@ export function BracePlacementController() {
                             0.001,
                             (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
                         );
-                        hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, result.t);
+                        hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, resolvedSnap.t);
                         ownerModelId = brace.modelId;
                     }
                 }
 
                 const snapTarget = {
                     kind: 'shaft' as const,
-                    segmentId: result.targetId,
-                    snappedPos: result.snappedPos,
-                    t: result.t,
+                    segmentId: resolvedSnap.targetId,
+                    snappedPos: resolvedSnap.snappedPos,
+                    t: resolvedSnap.t,
                     hostDiameterMm,
                     ownerModelId,
                 };

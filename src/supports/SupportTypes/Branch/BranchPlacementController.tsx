@@ -35,6 +35,7 @@ import { generateUuid } from '@/utils/uuid';
 import { clearSelection } from '../../interaction/SupportSelection';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
+import { snappingSessionStore } from '../../interaction/shared/placement/snapping/snappingSession';
 
 export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
@@ -322,7 +323,8 @@ export function BranchPlacementController() {
         raycaster.setFromCamera(pointer, camera);
 
         // Try to snap to a shaft first
-        const result = updateSnapping();
+        updateSnapping();
+        const resolvedSnap = snappingSessionStore.getSnapshot();
 
         const settings = getSettings();
         const fallbackHostDiameterMm = settings.shaft.diameterMm;
@@ -332,22 +334,22 @@ export function BranchPlacementController() {
         let hostDiameterMm: number | undefined = undefined;
         let t: number | undefined = undefined;
 
-        if (result.state === 'locked' && result.targetId && result.snappedPos && result.t !== undefined) {
+        if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
             meshHoverRef.current = null;
             meshKindRef.current = null;
-            knotPos = result.snappedPos;
-            t = result.t;
+            knotPos = resolvedSnap.snappedPos;
+            t = resolvedSnap.t;
 
-            segmentId = result.targetId;
+            segmentId = resolvedSnap.targetId;
 
-            const target = getTarget(result.targetId);
+            const target = getTarget(resolvedSnap.targetId);
             if (target?.pathSegment?.radius !== undefined) {
                 hostDiameterMm = target.pathSegment.radius * 2;
             }
 
             // If snapped to a brace, compute local tapered host diameter.
-            if (result.targetId.startsWith('braceSegment:')) {
-                const braceId = result.targetId.slice('braceSegment:'.length);
+            if (resolvedSnap.targetId.startsWith('braceSegment:')) {
+                const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
                 const brace = supportState.braces[braceId];
                 const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
                 const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
@@ -361,14 +363,14 @@ export function BranchPlacementController() {
                         0.001,
                         (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
                     );
-                    hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, result.t);
+                    hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, resolvedSnap.t);
                 }
             }
 
             branchPlacementStore.setSnapTarget({
-                targetId: result.targetId,
-                snappedPos: result.snappedPos,
-                t: result.t,
+                targetId: resolvedSnap.targetId,
+                snappedPos: resolvedSnap.snappedPos,
+                t: resolvedSnap.t,
                 hostDiameterMm,
                 hostSegmentId: segmentId,
             });
