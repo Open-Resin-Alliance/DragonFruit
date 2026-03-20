@@ -173,13 +173,13 @@ function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
 }
 
 function resolveInitialMinimumAaAlphaPercent(): number {
-  if (typeof window === 'undefined') return 30;
+  if (typeof window === 'undefined') return 35;
 
   const stored = window.localStorage.getItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY)
     ?? window.sessionStorage.getItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY);
-  if (stored == null || stored.trim().length === 0) return 30;
+  if (stored == null || stored.trim().length === 0) return 35;
   const parsed = Number(stored);
-  if (!Number.isFinite(parsed)) return 30;
+  if (!Number.isFinite(parsed)) return 35;
   return Math.max(0, Math.min(100, Math.round(parsed)));
 }
 
@@ -1112,7 +1112,7 @@ export function SlicingPanel({
                   <div className="grid grid-cols-2 gap-1">
                     {(['Profile', 'Override'] as const).map((mode) => {
                       const active = (mode === 'Profile' && !enableMinimumAaAlphaOverride) || (mode === 'Override' && enableMinimumAaAlphaOverride);
-                      const displayText = mode === 'Profile' ? `Profile (${activeMaterialProfile?.minimumAaAlphaPercent ?? 30}%)` : 'Override';
+                      const displayText = mode === 'Profile' ? `Profile (${activeMaterialProfile?.minimumAaAlphaPercent ?? 35}%)` : 'Override';
                       return (
                         <button
                           key={mode}

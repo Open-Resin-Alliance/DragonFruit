@@ -163,7 +163,7 @@ export function ProfileSettingsModal({
     liftDistanceMm: 6,
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
-    minimumAaAlphaPercent: 30,
+    minimumAaAlphaPercent: 35,
   });
   const [newMaterialDraft, setNewMaterialDraft] = React.useState<Omit<MaterialProfile, 'id' | 'printerProfileId'>>({
     name: 'New Resin',
@@ -180,7 +180,7 @@ export function ProfileSettingsModal({
     liftDistanceMm: 6,
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
-    minimumAaAlphaPercent: 30,
+    minimumAaAlphaPercent: 35,
   });
   const [isEditingPrinter, setIsEditingPrinter] = React.useState(false);
   const [uploadTargetPrinterId, setUploadTargetPrinterId] = React.useState<string | null>(null);
@@ -1691,7 +1691,7 @@ export function ProfileSettingsModal({
       liftDistanceMm: 6,
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
-      minimumAaAlphaPercent: 30,
+      minimumAaAlphaPercent: 35,
     });
     setIsCreateMaterialOpen(true);
   }, [printerMaterials.length, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue]);

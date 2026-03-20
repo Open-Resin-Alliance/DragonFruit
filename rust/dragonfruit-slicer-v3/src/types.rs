@@ -18,7 +18,8 @@ fn default_anti_aliasing_level() -> String {
 }
 
 fn default_minimum_aa_alpha_percent() -> f32 {
-  30.0
+    35.0
+}
 
 fn default_false() -> bool {
     false

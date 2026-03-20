@@ -2,7 +2,7 @@
 
 mod network;
 fn default_minimum_aa_alpha_percent() -> f32 {
-    30.0
+    35.0
 }
 mod plugin_registry;
 

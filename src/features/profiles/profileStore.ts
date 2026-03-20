@@ -192,7 +192,7 @@ export type MaterialProfile = {
   minimumAaAlphaPercent: number;
 };
 
-function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 30): number {
+function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(100, numeric));
@@ -551,7 +551,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
   return getAllMaterialTemplates().map((template) => ({
     ...template,
     currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
-    minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 30),
+    minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
     id: createDefaultMaterialIdFromTemplateName(template.name),
     printerProfileId: primaryPrinterId,
     officialTemplateId: typeof (template as any).templateId === 'string' && (template as any).templateId.trim().length > 0
@@ -712,7 +712,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           liftDistanceMm: Number((profile as any).liftDistanceMm) || 6,
           liftSpeedMmMin: Number((profile as any).liftSpeedMmMin) || 60,
           retractSpeedMmMin: Number((profile as any).retractSpeedMmMin) || 150,
-          minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 30),
+          minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
         };
       })
       .filter((profile): profile is MaterialProfile => profile !== null)
@@ -881,7 +881,7 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
       liftDistanceMm: 6,
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
-      minimumAaAlphaPercent: 30,
+      minimumAaAlphaPercent: 35,
     };
 
     return {
@@ -1063,7 +1063,7 @@ export function addMaterialProfile(
     liftDistanceMm: partial?.liftDistanceMm ?? 6,
     liftSpeedMmMin: partial?.liftSpeedMmMin ?? 60,
     retractSpeedMmMin: partial?.retractSpeedMmMin ?? 150,
-    minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 30),
+    minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
   };
 
   setState(ensureActiveMaterialForActivePrinter({
@@ -1354,7 +1354,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
         liftDistanceMm: 6,
         liftSpeedMmMin: 60,
         retractSpeedMmMin: 150,
-        minimumAaAlphaPercent: 30,
+        minimumAaAlphaPercent: 35,
       },
     ];
 

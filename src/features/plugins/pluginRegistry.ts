@@ -305,7 +305,7 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
     liftDistanceMm: sanitizeNumber(value.liftDistanceMm, 6, 0, 1000),
     liftSpeedMmMin: sanitizeNumber(value.liftSpeedMmMin, 60, 0, 100000),
     retractSpeedMmMin: sanitizeNumber(value.retractSpeedMmMin, 150, 0, 100000),
-    minimumAaAlphaPercent: sanitizeNumber(value.minimumAaAlphaPercent, 30, 0, 100),
+    minimumAaAlphaPercent: sanitizeNumber(value.minimumAaAlphaPercent, 35, 0, 100),
   };
 }
 
