@@ -32,6 +32,16 @@ function resolvePngCompressionStrategy(
   return 'balanced';
 }
 
+function resolveContainerCompressionLevel(strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal'): number {
+  switch (strategy) {
+    case 'fastest': return 1;
+    case 'balanced': return 3;
+    case 'smallest': return 6;
+    case 'optimal': return 9;
+    default: return 2;
+  }
+}
+
 const DEBUG_PREFIX = '[SlicingDebug]';
 
 function logDebug(...args: unknown[]): void {
@@ -201,6 +211,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
   options.onProgress?.(0, solidMesh.totalLayers, 'Staging');
 
+  const resolvedPngStrategy = resolvePngCompressionStrategy(
+    solidMesh.pngCompressionStrategy,
+    options.antiAliasingLevel ?? 'Off',
+    format.layerDataKind === 'png',
+  );
+
   const nativeJob = {
     outputFormat: format.outputFormat,
     sourceWidthPx: solidMesh.sourceWidthPx,
@@ -209,18 +225,14 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     heightPx: solidMesh.heightPx,
     xPackingMode: solidMesh.xPackingMode,
     computeBackend: solidMesh.computeBackend,
-    pngCompressionStrategy: resolvePngCompressionStrategy(
-      solidMesh.pngCompressionStrategy,
-      options.antiAliasingLevel ?? 'Off',
-      format.layerDataKind === 'png',
-    ),
+    pngCompressionStrategy: resolvedPngStrategy,
     bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
     aaOnSupports: options.aaOnSupports ?? false,
     mirrorX: solidMesh.mirrorX,
     mirrorY: solidMesh.mirrorY,
     modelTriangleCount: solidMesh.modelTriangleCount,
-    containerCompressionLevel: 2,
+    containerCompressionLevel: resolveContainerCompressionLevel(resolvedPngStrategy),
     buildWidthMm: solidMesh.buildWidthMm,
     buildDepthMm: solidMesh.buildDepthMm,
     layerHeightMm: solidMesh.layerHeightMm,

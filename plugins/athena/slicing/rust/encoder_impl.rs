@@ -299,7 +299,15 @@ fn write_nanodlp_archive<W: Write + Seek>(
         .compression_level(Some(normalize_container_compression_level(
             job.container_compression_level,
         )));
-    let layer_opt = FileOptions::default().compression_method(CompressionMethod::Stored);
+
+    // We used to use Stored for layers because PNGs are already compressed.
+    // However, when using fast PNG compression, a light ZIP Deflate pass
+    // across the archive can still squeeze out significant redundant data.
+    let layer_opt = FileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .compression_level(Some(normalize_container_compression_level(
+            job.container_compression_level,
+        )));
 
     let meta_json = json!({
         "format_version": 3,
