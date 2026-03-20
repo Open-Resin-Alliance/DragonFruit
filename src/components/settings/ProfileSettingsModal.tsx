@@ -38,7 +38,11 @@ import {
   getDefaultProfileNetworkUiAdapter,
   getProfileNetworkUiAdapter,
 } from '@/features/plugins/pluginRegistry';
-import { getAvailableOutputFormatOptions } from '@/features/slicing/formats/registry';
+import {
+  getAvailableOutputFormatOptions,
+  getAvailableFormatVersionOptions,
+  resolveOutputFormatVersion,
+} from '@/features/slicing/formats/registry';
 import {
   getPrinterReachabilityServerSnapshot,
   getPrinterReachabilitySnapshot,
@@ -271,6 +275,19 @@ export function ProfileSettingsModal({
     return profileState.printerProfiles.find((profile) => profile.id === selectedPrinterId) ?? fallback;
   }, [profileState, selectedPrinterId]);
 
+  const selectedFormatVersionOptions = React.useMemo(() => {
+    if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
+    return getAvailableFormatVersionOptions(selectedPrinter.display.outputFormat);
+  }, [selectedPrinter]);
+
+  const selectedResolvedFormatVersion = React.useMemo(() => {
+    if (!selectedPrinter) return undefined;
+    return resolveOutputFormatVersion(
+      selectedPrinter.display.outputFormat,
+      selectedPrinter.display.formatVersion,
+    );
+  }, [selectedPrinter]);
+
   const selectedBuildDimensionMode: BuildDimensionEditMode = React.useMemo(() => {
     if (!selectedPrinter) return 'manual';
     return buildDimensionModeByPrinterId[selectedPrinter.id] ?? 'manual';
@@ -315,6 +332,11 @@ export function ProfileSettingsModal({
       ...selectedPrinter.display,
       ...partialDisplay,
     };
+
+    nextDisplay.formatVersion = resolveOutputFormatVersion(
+      nextDisplay.outputFormat,
+      partialDisplay.formatVersion ?? nextDisplay.formatVersion,
+    );
 
     updatePrinterProfile(selectedPrinter.id, {
       display: nextDisplay,
@@ -2539,6 +2561,23 @@ export function ProfileSettingsModal({
                       options={OUTPUT_FORMAT_OPTIONS}
                       onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
                     />
+
+                    {selectedFormatVersionOptions.length > 0 && (
+                      <label className="space-y-1 block">
+                        <span className="ui-label font-medium">Format version</span>
+                        <select
+                          value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
+                          onChange={(event) => handlePrinterDisplayChange({ formatVersion: event.target.value })}
+                          className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm"
+                        >
+                          {selectedFormatVersionOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
 
                     <LabeledToggleInput
                       label="Mirror X"

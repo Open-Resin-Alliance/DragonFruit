@@ -1,4 +1,5 @@
 export const DEFAULT_OUTPUT_FORMAT = '.lumen';
+const FORMAT_VERSION_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 
 const LEGACY_FORMAT_ALIASES: Record<string, string> = {
   '.luman': '.lumen',
@@ -22,4 +23,17 @@ export function normalizeOutputFormat(value: unknown, fallback = DEFAULT_OUTPUT_
   if (!OUTPUT_FORMAT_RE.test(aliased)) return fallback;
 
   return aliased;
+}
+
+/**
+ * Normalize optional format-version tags used by encoder-specific versioning.
+ *
+ * Examples: `v1`, `v2v3`, `v4v5`, `v5enc`.
+ */
+export function normalizeFormatVersion(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (!FORMAT_VERSION_RE.test(trimmed)) return undefined;
+  return trimmed;
 }

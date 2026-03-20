@@ -10,7 +10,11 @@ import {
   type InstalledProfilePlugin,
   type PluginManifest,
 } from '@/features/plugins/pluginRegistry';
-import { normalizeOutputFormat, DEFAULT_OUTPUT_FORMAT } from '@/features/profiles/outputFormatUtils';
+import {
+  normalizeOutputFormat,
+  normalizeFormatVersion,
+  DEFAULT_OUTPUT_FORMAT,
+} from '@/features/profiles/outputFormatUtils';
 
 export type PrinterOutputFormat = string;
 export type PrinterNetworkSupport = string;
@@ -79,6 +83,7 @@ export type PrinterPreset = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    formatVersion?: string;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -108,6 +113,7 @@ export type PrinterProfile = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    formatVersion?: string;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -460,6 +466,7 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
   display: {
     ...preset.display,
     outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+    formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
     mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown } | undefined)?.mirrorX, false),
     mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown } | undefined)?.mirrorY, false),
   },
@@ -646,6 +653,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
             resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
             outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
+            formatVersion: normalizeFormatVersion(rawDisplay?.formatVersion ?? fallbackDisplay?.formatVersion),
             mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
             mirrorY: normalizeMirrorFlag(rawDisplay?.mirrorY, normalizeMirrorFlag(fallbackDisplay?.mirrorY, false)),
           },
@@ -959,6 +967,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       resolutionX: partial?.display?.resolutionX ?? 2560,
       resolutionY: partial?.display?.resolutionY ?? 1620,
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
+      formatVersion: normalizeFormatVersion(partial?.display?.formatVersion),
       mirrorX: normalizeMirrorFlag(partial?.display?.mirrorX, false),
       mirrorY: normalizeMirrorFlag(partial?.display?.mirrorY, false),
     },
@@ -1021,6 +1030,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
       resolutionX: preset.display.resolutionX,
       resolutionY: preset.display.resolutionY,
       outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+      formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
       mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
       mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
     },
@@ -1115,6 +1125,7 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
           resolutionX: Number(updates.display.resolutionX) || profile.display.resolutionX,
           resolutionY: Number(updates.display.resolutionY) || profile.display.resolutionY,
           outputFormat: normalizeOutputFormat(updates.display.outputFormat ?? profile.display.outputFormat),
+          formatVersion: normalizeFormatVersion(updates.display.formatVersion ?? profile.display.formatVersion),
           mirrorX: normalizeMirrorFlag(updates.display.mirrorX, profile.display.mirrorX === true),
           mirrorY: normalizeMirrorFlag(updates.display.mirrorY, profile.display.mirrorY === true),
         }
@@ -1696,6 +1707,7 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
             resolutionX: preset.display.resolutionX,
             resolutionY: preset.display.resolutionY,
             outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+            formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
             mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
             mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
           },

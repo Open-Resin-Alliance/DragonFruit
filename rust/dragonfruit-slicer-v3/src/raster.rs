@@ -750,6 +750,7 @@ mod tests {
 
         SliceJobV3 {
             output_format: output_format.to_string(),
+            format_version: None,
             source_width_px: 256,
             source_height_px: 256,
             width_px: 256,

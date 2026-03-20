@@ -2,6 +2,12 @@ import type { MaterialProfile, PrinterOutputFormat, PrinterProfile } from '@/fea
 
 export type SlicingFormatOwnership = 'core' | 'plugin';
 
+export type SlicingFormatVersionOption = {
+  value: string;
+  label: string;
+  isDefault?: boolean;
+};
+
 export type SlicingFormatDefinition = {
   id: string;
   outputFormat: PrinterOutputFormat;
@@ -9,6 +15,7 @@ export type SlicingFormatDefinition = {
   ownership: SlicingFormatOwnership;
   layerDataKind: 'png' | 'raw-mask';
   pluginId?: string;
+  formatVersions?: SlicingFormatVersionOption[];
   rustModulePath: string;
   wasmExportName: string;
   notes?: string;

@@ -8,6 +8,7 @@ type TauriEventModule = {
 
 export type NativeSolidSliceJobEnvelope = {
   outputFormat: string;
+  formatVersion?: string | null;
   sourceWidthPx: number;
   sourceHeightPx: number;
   widthPx: number;
@@ -34,6 +35,7 @@ export type NativeSolidSliceJobEnvelope = {
 
 type NativeSolidSlicePayload = {
   output_format: string;
+  format_version?: string | null;
   source_width_px: number;
   source_height_px: number;
   width_px: number;
@@ -61,6 +63,7 @@ type NativeSolidSlicePayload = {
 /** Metadata-only payload for the binary mesh staging path (no inline triangles). */
 type NativeSolidSliceMetadataPayload = {
   output_format: string;
+  format_version?: string | null;
   source_width_px: number;
   source_height_px: number;
   width_px: number;
@@ -129,6 +132,7 @@ async function loadTauriEvent(): Promise<TauriEventModule | null> {
 function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayload {
   return {
     output_format: job.outputFormat,
+    format_version: job.formatVersion ?? null,
     source_width_px: job.sourceWidthPx,
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,
@@ -157,6 +161,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
 function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidSliceMetadataPayload {
   return {
     output_format: job.outputFormat,
+    format_version: job.formatVersion ?? null,
     source_width_px: job.sourceWidthPx,
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,

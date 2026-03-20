@@ -8,7 +8,7 @@ import type {
   RemoteMaterialSettingsAdapter,
 } from '@/features/plugins/complexPluginContracts';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
-import { normalizeOutputFormat } from '@/features/profiles/outputFormatUtils';
+import { normalizeOutputFormat, normalizeFormatVersion } from '@/features/profiles/outputFormatUtils';
 
 export type PluginSource = 'builtin' | 'github';
 export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
@@ -259,6 +259,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       resolutionX,
       resolutionY,
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
+      formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,

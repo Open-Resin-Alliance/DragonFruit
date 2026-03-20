@@ -1,7 +1,7 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
-import { resolveSlicingFormatDefinition } from './formats/registry';
+import { resolveOutputFormatVersion, resolveSlicingFormatDefinition } from './formats/registry';
 import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
   isNativeSlicerAvailable,
@@ -112,6 +112,7 @@ export type SliceExportResult = {
     layersPerSecond: number | null;
     jobConfig: {
       outputFormat: string;
+      formatVersion?: string;
       outputDisplayName: string;
       sourceWidthPx: number;
       sourceHeightPx: number;
@@ -220,6 +221,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
   const nativeJob = {
     outputFormat: format.outputFormat,
+    formatVersion: resolveOutputFormatVersion(
+      format.outputFormat,
+      options.printerProfile.display.formatVersion,
+    ),
     sourceWidthPx: solidMesh.sourceWidthPx,
     sourceHeightPx: solidMesh.sourceHeightPx,
     widthPx: solidMesh.widthPx,
@@ -315,6 +320,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       layersPerSecond,
       jobConfig: {
         outputFormat: format.outputFormat,
+        formatVersion: nativeJob.formatVersion,
         outputDisplayName: format.displayName,
         sourceWidthPx: nativeJob.sourceWidthPx,
         sourceHeightPx: nativeJob.sourceHeightPx,

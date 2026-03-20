@@ -124,6 +124,7 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
 
     let job = SliceJobV3 {
         output_format: output_format.to_string(),
+        format_version: None,
         source_width_px: cfg.source_width_px,
         source_height_px: cfg.source_height_px,
         width_px: cfg.output_width_px,

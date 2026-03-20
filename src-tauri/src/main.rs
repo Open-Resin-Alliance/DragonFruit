@@ -159,6 +159,8 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
 #[derive(Deserialize)]
 struct SliceJobMetadata {
     output_format: String,
+    #[serde(default)]
+    format_version: Option<String>,
     source_width_px: u32,
     source_height_px: u32,
     width_px: u32,
@@ -341,6 +343,7 @@ async fn slice_solid_native_to_temp_path(
 
         let job = dragonfruit_slicer_v3::SliceJobV3 {
             output_format: meta.output_format,
+            format_version: meta.format_version,
             source_width_px: meta.source_width_px,
             source_height_px: meta.source_height_px,
             width_px: meta.width_px,

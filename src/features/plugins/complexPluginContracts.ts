@@ -126,6 +126,11 @@ export type PluginSlicingFormatDefinitionContract = {
   displayName: string;
   ownership: 'core' | 'plugin';
   pluginId?: string;
+  formatVersions?: Array<{
+    value: string;
+    label: string;
+    isDefault?: boolean;
+  }>;
   rustModulePath: string;
   wasmExportName: string;
   notes?: string;

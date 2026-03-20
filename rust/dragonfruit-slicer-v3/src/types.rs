@@ -29,6 +29,9 @@ fn default_false() -> bool {
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
     pub output_format: String,
+    /// Optional encoder-specific format version tag (e.g. `v4v5`, `v5enc`).
+    #[serde(default)]
+    pub format_version: Option<String>,
     /// Source raster resolution used for layer PNG generation.
     pub source_width_px: u32,
     pub source_height_px: u32,
