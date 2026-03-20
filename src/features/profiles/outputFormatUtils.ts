@@ -37,3 +37,16 @@ export function normalizeFormatVersion(value: unknown): string | undefined {
   if (!FORMAT_VERSION_RE.test(trimmed)) return undefined;
   return trimmed;
 }
+
+/**
+ * Normalize optional settings-mode tags used by encoder-specific material schemas.
+ *
+ * Examples: `basic`, `twostage`, `highspeed`.
+ */
+export function normalizeSettingsMode(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (!FORMAT_VERSION_RE.test(trimmed)) return undefined;
+  return trimmed;
+}

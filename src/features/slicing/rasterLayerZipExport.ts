@@ -1621,6 +1621,9 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       normalExposureSec: options.materialProfile.normalExposureSec,
       bottomExposureSec: options.materialProfile.bottomExposureSec,
       bottomLayerCount: options.materialProfile.bottomLayerCount,
+      liftDistanceMm: options.materialProfile.liftDistanceMm,
+      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
+      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
     },
     effective: {
       widthPx: settings.widthPx,
@@ -1741,6 +1744,9 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
       normalExposureSec: options.materialProfile.normalExposureSec,
       bottomExposureSec: options.materialProfile.bottomExposureSec,
       bottomLayerCount: options.materialProfile.bottomLayerCount,
+      liftDistanceMm: options.materialProfile.liftDistanceMm,
+      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
+      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
     },
     effective: {
       widthPx: settings.widthPx,

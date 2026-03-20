@@ -36,12 +36,15 @@ import {
 } from '@/features/profiles/profileStore';
 import {
   getDefaultProfileNetworkUiAdapter,
+  getProfileLocalMaterialSettingsAdapter,
   getProfileNetworkUiAdapter,
 } from '@/features/plugins/pluginRegistry';
 import {
   getAvailableOutputFormatOptions,
   getAvailableFormatVersionOptions,
+  getAvailableSettingsModeOptions,
   resolveOutputFormatVersion,
+  resolveOutputSettingsMode,
 } from '@/features/slicing/formats/registry';
 import {
   getPrinterReachabilityServerSnapshot,
@@ -73,6 +76,7 @@ type DeleteConfirmTarget =
   | { kind: 'material'; id: string; name: string };
 
 type MaterialDraft = Omit<MaterialProfile, 'id' | 'printerProfileId'>;
+type LocalSettingsByOutputDraft = NonNullable<MaterialProfile['localSettingsByOutput']>;
 
 const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
 
@@ -104,6 +108,45 @@ function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): num
   const safeResolution = Math.max(1, Math.round(resolutionPx));
   const safePixelSize = Math.max(0.001, Number(pixelSizeUm) || 0.001);
   return Number(((safeResolution * safePixelSize) / 1000).toFixed(3));
+}
+
+function resolveDefaultLocalSettingsForOutput(outputFormat: string): LocalSettingsByOutputDraft {
+  const adapter = getProfileLocalMaterialSettingsAdapter(outputFormat);
+  if (!adapter) return {};
+
+  const normalizedOutput = outputFormat.trim().toLowerCase();
+  const defaults: Record<string, string | number | boolean> = {};
+  adapter.fields.forEach((field) => {
+    defaults[field.key] = field.defaultValue;
+  });
+
+  return Object.keys(defaults).length > 0 ? { [normalizedOutput]: defaults } : {};
+}
+
+function mergeWithLocalSettingsDefaults(
+  outputFormat: string,
+  source?: MaterialProfile['localSettingsByOutput'],
+): LocalSettingsByOutputDraft {
+  const normalizedOutput = outputFormat.trim().toLowerCase();
+  const existing = source && typeof source === 'object' ? source : {};
+  const base: LocalSettingsByOutputDraft = Object.entries(existing).reduce<LocalSettingsByOutputDraft>((acc, [key, value]) => {
+    if (!value || typeof value !== 'object') return acc;
+    acc[key.trim().toLowerCase()] = { ...(value as Record<string, string | number | boolean>) };
+    return acc;
+  }, {});
+
+  const adapter = getProfileLocalMaterialSettingsAdapter(normalizedOutput);
+  if (!adapter) return base;
+
+  const outputValues = { ...(base[normalizedOutput] ?? {}) };
+  adapter.fields.forEach((field) => {
+    if (!Object.prototype.hasOwnProperty.call(outputValues, field.key)) {
+      outputValues[field.key] = field.defaultValue;
+    }
+  });
+  base[normalizedOutput] = outputValues;
+
+  return base;
 }
 
 export function ProfileSettingsModal({
@@ -186,6 +229,8 @@ export function ProfileSettingsModal({
     retractSpeedMmMin: 150,
     minimumAaAlphaPercent: 35,
   });
+  const [editMaterialLocalSettingsByOutput, setEditMaterialLocalSettingsByOutput] = React.useState<LocalSettingsByOutputDraft>({});
+  const [newMaterialLocalSettingsByOutput, setNewMaterialLocalSettingsByOutput] = React.useState<LocalSettingsByOutputDraft>({});
   const [isEditingPrinter, setIsEditingPrinter] = React.useState(false);
   const [uploadTargetPrinterId, setUploadTargetPrinterId] = React.useState<string | null>(null);
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
@@ -288,6 +333,35 @@ export function ProfileSettingsModal({
     );
   }, [selectedPrinter]);
 
+  const selectedSettingsModeOptions = React.useMemo(() => {
+    if (!selectedPrinter) return [] as Array<{ value: string; label: string; isDefault?: boolean }>;
+    return getAvailableSettingsModeOptions(selectedPrinter.display.outputFormat);
+  }, [selectedPrinter]);
+
+  const selectedResolvedSettingsMode = React.useMemo(() => {
+    if (!selectedPrinter) return undefined;
+    return resolveOutputSettingsMode(
+      selectedPrinter.display.outputFormat,
+      selectedPrinter.display.settingsMode,
+    );
+  }, [selectedPrinter]);
+
+  const selectedLocalMaterialSettingsAdapter = React.useMemo(() => {
+    if (!selectedPrinter) return null;
+    return getProfileLocalMaterialSettingsAdapter(selectedPrinter.display.outputFormat);
+  }, [selectedPrinter]);
+
+  const usePluginLocalSettingsAsReplacement = Boolean(
+    selectedLocalMaterialSettingsAdapter?.replacesDefaultMaterialSettings,
+  );
+
+  const replacementMaterialModalLabel = React.useMemo(() => {
+    if (!selectedPrinter || !usePluginLocalSettingsAsReplacement) return null;
+    const normalized = selectedPrinter.display.outputFormat.replace(/^\./, '').trim();
+    if (!normalized) return null;
+    return normalized.toUpperCase();
+  }, [selectedPrinter, usePluginLocalSettingsAsReplacement]);
+
   const selectedBuildDimensionMode: BuildDimensionEditMode = React.useMemo(() => {
     if (!selectedPrinter) return 'manual';
     return buildDimensionModeByPrinterId[selectedPrinter.id] ?? 'manual';
@@ -336,6 +410,10 @@ export function ProfileSettingsModal({
     nextDisplay.formatVersion = resolveOutputFormatVersion(
       nextDisplay.outputFormat,
       partialDisplay.formatVersion ?? nextDisplay.formatVersion,
+    );
+    nextDisplay.settingsMode = resolveOutputSettingsMode(
+      nextDisplay.outputFormat,
+      partialDisplay.settingsMode ?? nextDisplay.settingsMode,
     );
 
     updatePrinterProfile(selectedPrinter.id, {
@@ -1667,7 +1745,12 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
       minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
     });
-  }, [isMaterialEditorOpen, selectedMaterial]);
+    if (selectedPrinter) {
+      setEditMaterialLocalSettingsByOutput(
+        mergeWithLocalSettingsDefaults(selectedPrinter.display.outputFormat, selectedMaterial.localSettingsByOutput),
+      );
+    }
+  }, [isMaterialEditorOpen, selectedMaterial, selectedPrinter]);
 
   const handlePickPrinter = React.useCallback((printerId: string) => {
     setSelectedPrinterId(printerId);
@@ -1715,6 +1798,7 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
     });
+    setNewMaterialLocalSettingsByOutput(resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat));
     setIsCreateMaterialOpen(true);
   }, [printerMaterials.length, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue]);
 
@@ -1725,6 +1809,7 @@ export function ProfileSettingsModal({
       ...newMaterialDraft,
       name: newMaterialDraft.name.trim() || `Material ${printerMaterials.length + 1}`,
       brand: newMaterialDraft.brand.trim() || 'Default',
+      localSettingsByOutput: newMaterialLocalSettingsByOutput,
     });
 
     setSelectedManufacturer((newMaterialDraft.brand || 'Default').trim() || 'Default');
@@ -1732,7 +1817,7 @@ export function ProfileSettingsModal({
     setSelectedMaterialId(newId);
     setActiveMaterialProfile(newId);
     setIsCreateMaterialOpen(false);
-  }, [newMaterialDraft, printerMaterials.length, selectedPrinter]);
+  }, [newMaterialDraft, newMaterialLocalSettingsByOutput, printerMaterials.length, selectedPrinter]);
 
   const requestDeleteSelectedMaterial = React.useCallback(() => {
     if (!selectedMaterial) return;
@@ -1759,10 +1844,11 @@ export function ProfileSettingsModal({
       name: editMaterialDraft.name.trim() || selectedMaterial.name,
       brand: editMaterialDraft.brand.trim() || 'Default',
       currencyCode: editMaterialDraft.currencyCode.trim().toUpperCase() || 'USD',
+      localSettingsByOutput: editMaterialLocalSettingsByOutput,
     });
 
     setIsMaterialEditorOpen(false);
-  }, [editMaterialDraft, selectedMaterial]);
+  }, [editMaterialDraft, editMaterialLocalSettingsByOutput, selectedMaterial]);
 
   const handleApplySelectedPrinterOfficialUpdate = React.useCallback(() => {
     if (!selectedPrinterUpdate) return;
@@ -2568,9 +2654,26 @@ export function ProfileSettingsModal({
                         <select
                           value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
                           onChange={(event) => handlePrinterDisplayChange({ formatVersion: event.target.value })}
-                          className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm"
+                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
                         >
                           {selectedFormatVersionOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
+                    {selectedSettingsModeOptions.length > 0 && (
+                      <label className="space-y-1 block">
+                        <span className="ui-label font-medium">Settings mode</span>
+                        <select
+                          value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
+                          onChange={(event) => handlePrinterDisplayChange({ settingsMode: event.target.value })}
+                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
+                        >
+                          {selectedSettingsModeOptions.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
                             </option>
@@ -3383,7 +3486,11 @@ export function ProfileSettingsModal({
             <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Resin Profile Settings</h3>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
+                      ? `Edit ${replacementMaterialModalLabel} Resin Profile`
+                      : 'Resin Profile Settings'}
+                  </h3>
                   <p className="ui-meta">{selectedMaterial.name} • {selectedMaterial.brand}</p>
                 </div>
                 <button
@@ -3398,7 +3505,20 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="p-3 space-y-3">
-                <MaterialProfileFormSections draft={editMaterialDraft} onChange={setEditMaterialDraft} />
+                {usePluginLocalSettingsAsReplacement && (
+                  <MaterialProfileIdentitySection draft={editMaterialDraft} onChange={setEditMaterialDraft} />
+                )}
+                {!usePluginLocalSettingsAsReplacement && (
+                  <MaterialProfileFormSections draft={editMaterialDraft} onChange={setEditMaterialDraft} />
+                )}
+                <PluginLocalMaterialSettingsSections
+                  outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
+                  settingsMode={selectedResolvedSettingsMode}
+                  adapter={selectedLocalMaterialSettingsAdapter}
+                  localSettingsByOutput={editMaterialLocalSettingsByOutput}
+                  onChange={setEditMaterialLocalSettingsByOutput}
+                  replacementMode={usePluginLocalSettingsAsReplacement}
+                />
 
               <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -3435,7 +3555,11 @@ export function ProfileSettingsModal({
             <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
-                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Create Resin Profile</h3>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    {usePluginLocalSettingsAsReplacement && replacementMaterialModalLabel
+                      ? `Create ${replacementMaterialModalLabel} Resin Profile`
+                      : 'Create Resin Profile'}
+                  </h3>
                   <p className="ui-meta">{selectedPrinter.name}</p>
                 </div>
                 <button
@@ -3450,7 +3574,20 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="p-3 space-y-3">
-                <MaterialProfileFormSections draft={newMaterialDraft} onChange={setNewMaterialDraft} />
+                {usePluginLocalSettingsAsReplacement && (
+                  <MaterialProfileIdentitySection draft={newMaterialDraft} onChange={setNewMaterialDraft} />
+                )}
+                {!usePluginLocalSettingsAsReplacement && (
+                  <MaterialProfileFormSections draft={newMaterialDraft} onChange={setNewMaterialDraft} />
+                )}
+                <PluginLocalMaterialSettingsSections
+                  outputFormat={selectedPrinter.display.outputFormat}
+                  settingsMode={selectedResolvedSettingsMode}
+                  adapter={selectedLocalMaterialSettingsAdapter}
+                  localSettingsByOutput={newMaterialLocalSettingsByOutput}
+                  onChange={setNewMaterialLocalSettingsByOutput}
+                  replacementMode={usePluginLocalSettingsAsReplacement}
+                />
               </div>
 
               <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -3883,6 +4020,310 @@ function RemoteMaterialEditDialog({
   );
 }
 
+type PluginLocalMaterialSettingsSectionsProps = {
+  outputFormat: string;
+  settingsMode?: string;
+  adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter>;
+  localSettingsByOutput: LocalSettingsByOutputDraft;
+  onChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
+  replacementMode?: boolean;
+};
+
+function PluginLocalMaterialSettingsSections({
+  outputFormat,
+  settingsMode,
+  adapter,
+  localSettingsByOutput,
+  onChange,
+  replacementMode = false,
+}: PluginLocalMaterialSettingsSectionsProps) {
+  if (!adapter || adapter.fields.length === 0) return null;
+
+  const normalizedOutput = outputFormat.trim().toLowerCase();
+  const tabs = React.useMemo(() => {
+    const declared = [...(adapter.tabs ?? [])]
+      .filter((tab) => {
+        if (settingsMode?.toLowerCase() === 'simple' && tab.id.toLowerCase() === 'twostage') {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    if (declared.length > 0) return declared;
+    return [{ id: 'local', title: adapter.displayName ?? 'Local Settings', order: 0 }];
+  }, [adapter.displayName, adapter.tabs, settingsMode]);
+
+  const defaultTabId = React.useMemo(() => {
+    if (settingsMode) {
+      const modeMatch = tabs.find((tab) => tab.id.trim().toLowerCase() === settingsMode.trim().toLowerCase());
+      if (modeMatch) return modeMatch.id;
+    }
+    return tabs[0]?.id ?? 'local';
+  }, [settingsMode, tabs]);
+
+  const [activeTabId, setActiveTabId] = React.useState(defaultTabId);
+
+  React.useEffect(() => {
+    if (!tabs.some((tab) => tab.id === activeTabId)) {
+      setActiveTabId(defaultTabId);
+    }
+  }, [activeTabId, defaultTabId, tabs]);
+
+  const valuesForOutput = localSettingsByOutput[normalizedOutput] ?? {};
+
+  const fieldsForActiveTab = React.useMemo(() => {
+    const fallbackTabId = tabs[0]?.id;
+    return adapter.fields
+      .filter((field) => (field.placement?.tabId ?? fallbackTabId) === activeTabId)
+      .sort((a, b) => (a.placement?.order ?? 0) - (b.placement?.order ?? 0));
+  }, [activeTabId, adapter.fields, tabs]);
+
+  const sectionById = React.useMemo(() => {
+    const map = new Map<string, { id: string; title: string; order?: number }>();
+    (adapter.sections ?? []).forEach((section) => {
+      map.set(section.id, section);
+    });
+    return map;
+  }, [adapter.sections]);
+
+  const cardById = React.useMemo(() => {
+    const map = new Map<string, { id: string; title: string; order?: number }>();
+    (adapter.cards ?? []).forEach((card) => {
+      map.set(card.id, card);
+    });
+    return map;
+  }, [adapter.cards]);
+
+  const sectionGroups = React.useMemo(() => {
+    const grouped = new Map<string, typeof fieldsForActiveTab>();
+
+    fieldsForActiveTab.forEach((field) => {
+      const sectionId = field.placement?.sectionId ?? 'general';
+      const current = grouped.get(sectionId);
+      if (current) {
+        current.push(field);
+      } else {
+        grouped.set(sectionId, [field]);
+      }
+    });
+
+    return Array.from(grouped.entries())
+      .map(([sectionId, fields]) => ({
+        sectionId,
+        sectionTitle: sectionById.get(sectionId)?.title ?? 'General',
+        sectionOrder: sectionById.get(sectionId)?.order ?? 0,
+        fields,
+      }))
+      .sort((a, b) => a.sectionOrder - b.sectionOrder || a.sectionTitle.localeCompare(b.sectionTitle));
+  }, [fieldsForActiveTab, sectionById]);
+
+  const setFieldValue = React.useCallback((fieldKey: string, nextValue: string | number | boolean) => {
+    onChange((prev) => ({
+      ...prev,
+      [normalizedOutput]: {
+        ...(prev[normalizedOutput] ?? {}),
+        [fieldKey]: nextValue,
+      },
+    }));
+  }, [normalizedOutput, onChange]);
+
+  return (
+    <div
+      className={replacementMode ? 'space-y-2' : 'rounded-lg border p-2.5 space-y-2'}
+      style={replacementMode
+        ? undefined
+        : { borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+    >
+      {!replacementMode && (
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="ui-meta font-semibold uppercase tracking-wide">{adapter.displayName ?? 'Format-specific settings'}</div>
+            <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Applied to {normalizedOutput} metadata for export.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tabs.length > 1 && (
+        <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
+          {tabs.map((tab) => {
+            const active = tab.id === activeTabId;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTabId(tab.id)}
+                className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
+                style={active
+                  ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                  : { color: 'var(--text-muted)' }}
+              >
+                {tab.title}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {sectionGroups.length === 0 ? (
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          No custom settings are available for this tab.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {sectionGroups.map((section) => {
+            const cardGroups = new Map<string, typeof section.fields>();
+            section.fields.forEach((field) => {
+              const cardId = field.placement?.cardId ?? 'general';
+              const existing = cardGroups.get(cardId);
+              if (existing) {
+                existing.push(field);
+              } else {
+                cardGroups.set(cardId, [field]);
+              }
+            });
+
+            const cards = Array.from(cardGroups.entries())
+              .map(([cardId, fields]) => ({
+                cardId,
+                cardTitle: cardById.get(cardId)?.title ?? 'General',
+                cardOrder: cardById.get(cardId)?.order ?? 0,
+                fields: [...fields].sort((a, b) => (a.placement?.order ?? 0) - (b.placement?.order ?? 0)),
+              }))
+              .sort((a, b) => a.cardOrder - b.cardOrder || a.cardTitle.localeCompare(b.cardTitle));
+
+            return (
+              <div key={section.sectionId} className="space-y-1.5">
+                {!replacementMode && (
+                  <div className="ui-meta font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    {section.sectionTitle}
+                  </div>
+                )}
+                {cards.map((card) => {
+                  const renderedKeys = new Set<string>();
+                  return (
+                  <div
+                    key={`${section.sectionId}-${card.cardId}`}
+                    className="rounded-lg border p-2.5"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                  >
+                    <div className="ui-meta font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>{card.cardTitle}</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {card.fields.map((field) => {
+                        if (renderedKeys.has(field.key)) return null;
+
+                        const fieldValue = Object.prototype.hasOwnProperty.call(valuesForOutput, field.key)
+                          ? valuesForOutput[field.key]
+                          : field.defaultValue;
+
+                        if (field.splitWithKey) {
+                          const pairedField = card.fields.find((candidate) => candidate.key === field.splitWithKey);
+                          if (pairedField) {
+                            const pairedValue = Object.prototype.hasOwnProperty.call(valuesForOutput, pairedField.key)
+                              ? valuesForOutput[pairedField.key]
+                              : pairedField.defaultValue;
+                            renderedKeys.add(field.key);
+                            renderedKeys.add(pairedField.key);
+                            return (
+                              <LabeledTwoStageNumberInput
+                                key={field.key}
+                                label={field.label}
+                                helpText={field.description}
+                                firstValue={Number(fieldValue)}
+                                secondValue={Number(pairedValue)}
+                                onFirstChange={(next) => {
+                                  const normalized = field.kind === 'integer' ? Math.round(next) : next;
+                                  const clampedMin = field.min != null ? Math.max(field.min, normalized) : normalized;
+                                  const clamped = field.max != null ? Math.min(field.max, clampedMin) : clampedMin;
+                                  setFieldValue(field.key, clamped);
+                                }}
+                                onSecondChange={(next) => {
+                                  const normalized = pairedField.kind === 'integer' ? Math.round(next) : next;
+                                  const clampedMin = pairedField.min != null ? Math.max(pairedField.min, normalized) : normalized;
+                                  const clamped = pairedField.max != null ? Math.min(pairedField.max, clampedMin) : clampedMin;
+                                  setFieldValue(pairedField.key, clamped);
+                                }}
+                              />
+                            );
+                          }
+                        }
+
+                        if (field.kind === 'boolean') {
+                          return (
+                            <LabeledToggleInput
+                              key={field.key}
+                              label={field.label}
+                              checked={Boolean(fieldValue)}
+                              onChange={(next) => setFieldValue(field.key, next)}
+                            />
+                          );
+                        }
+
+                        if (field.kind === 'select' && Array.isArray(field.options) && field.options.length > 0) {
+                          return (
+                            <label key={field.key} className="space-y-1 block">
+                              <span className="ui-label font-medium">{field.label}</span>
+                              <div className="relative">
+                                <select
+                                  value={String(fieldValue)}
+                                  onChange={(event) => setFieldValue(field.key, event.target.value)}
+                                  className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
+                                >
+                                  {field.options.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <ChevronDown
+                                  className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                                  style={{ color: 'var(--text-muted)' }}
+                                />
+                              </div>
+                            </label>
+                          );
+                        }
+
+                        if (field.kind === 'number' || field.kind === 'integer') {
+                          return (
+                            <LabeledNumberInput
+                              key={field.key}
+                              label={field.label}
+                              helpText={field.description}
+                              value={Number(fieldValue)}
+                              onChange={(next) => {
+                                const normalized = field.kind === 'integer' ? Math.round(next) : next;
+                                const clampedMin = field.min != null ? Math.max(field.min, normalized) : normalized;
+                                const clamped = field.max != null ? Math.min(field.max, clampedMin) : clampedMin;
+                                setFieldValue(field.key, clamped);
+                              }}
+                            />
+                          );
+                        }
+
+                        return (
+                          <LabeledInput
+                            key={field.key}
+                            label={field.label}
+                            helpText={field.description}
+                            value={String(fieldValue)}
+                            onChange={(next) => setFieldValue(field.key, next)}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                );})}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type LabeledInputProps = {
   label: string;
   helpText?: string;
@@ -3926,7 +4367,7 @@ function LabeledInput({ label, helpText, disabled = false, value, onChange }: La
         }}
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
-        className={`ui-input w-full h-[34px] px-2.5 py-1.5 text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+        className={`ui-input w-full h-[36px] px-2.5 leading-tight text-sm ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
       />
     </label>
   );
@@ -4019,7 +4460,7 @@ function LabeledNumberInput({ label, helpText, disabled = false, value, onChange
               nudge(-1);
             }
           }}
-          className={`ui-input w-full h-[34px] pl-2.5 pr-6 py-1.5 text-sm no-spinners ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+          className={`ui-input w-full h-[36px] pl-2.5 pr-6 leading-tight text-sm no-spinners ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
         />
 
         <div className="absolute inset-y-0 right-1 flex w-4 flex-col items-center justify-center gap-0.5">
@@ -4049,6 +4490,59 @@ function LabeledNumberInput({ label, helpText, disabled = false, value, onChange
   );
 }
 
+type LabeledTwoStageNumberInputProps = {
+  label: string;
+  helpText?: string;
+  firstValue: number;
+  secondValue: number;
+  onFirstChange: (value: number) => void;
+  onSecondChange: (value: number) => void;
+};
+
+function LabeledTwoStageNumberInput({
+  label,
+  helpText,
+  firstValue,
+  secondValue,
+  onFirstChange,
+  onSecondChange,
+}: LabeledTwoStageNumberInputProps) {
+  return (
+    <label className="space-y-1 block md:col-span-2">
+      <span className="ui-label font-medium inline-flex items-center gap-1.5">
+        {label}
+        {helpText && (
+          <span
+            title={helpText}
+            aria-label={`${label} help`}
+            className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] font-semibold cursor-help"
+            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}
+          >
+            ?
+          </span>
+        )}
+      </span>
+      <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
+        <input
+          type="number"
+          value={Number.isFinite(firstValue) ? firstValue : 0}
+          onChange={(event) => onFirstChange(Number(event.target.value))}
+          className="ui-input w-full h-[36px] px-2.5 text-sm leading-tight no-spinners"
+          aria-label={`${label} stage 1`}
+        />
+        <div className="text-sm px-1 font-semibold" style={{ color: 'var(--text-muted)' }}>{'>'}</div>
+        <input
+          type="number"
+          value={Number.isFinite(secondValue) ? secondValue : 0}
+          onChange={(event) => onSecondChange(Number(event.target.value))}
+          className="ui-input w-full h-[36px] px-2.5 text-sm leading-tight no-spinners"
+          aria-label={`${label} stage 2`}
+        />
+      </div>
+    </label>
+  );
+}
+
 type LabeledSelectInputProps = {
   label: string;
   value: PrinterOutputFormat;
@@ -4062,17 +4556,23 @@ function LabeledSelectInput({ label, value, options, onChange }: LabeledSelectIn
       <span className="ui-label font-medium">
         {label}
       </span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value as PrinterOutputFormat)}
-        className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm"
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value as PrinterOutputFormat)}
+          className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+          style={{ color: 'var(--text-muted)' }}
+        />
+      </div>
     </label>
   );
 }
@@ -4132,17 +4632,23 @@ function LabeledResinFamilySelect({ label, value, options, onChange }: LabeledRe
       <span className="ui-label font-medium">
         {label}
       </span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value as MaterialProfile['resinFamily'])}
-        className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm"
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value as MaterialProfile['resinFamily'])}
+          className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
+        >
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+          style={{ color: 'var(--text-muted)' }}
+        />
+      </div>
     </label>
   );
 }
@@ -4286,6 +4792,43 @@ function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSec
   );
 }
 
+type MaterialProfileIdentitySectionProps = {
+  draft: MaterialDraft;
+  onChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+};
+
+function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIdentitySectionProps) {
+  return (
+    <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+      <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Resin Profile</div>
+      <div className="grid grid-cols-2 gap-2">
+        <LabeledInput
+          label="Manufacturer"
+          value={draft.brand}
+          onChange={(value) => onChange((prev) => ({ ...prev, brand: value }))}
+        />
+        <LabeledInput
+          label="Name"
+          value={draft.name}
+          onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
+        />
+        <LabeledResinFamilySelect
+          label="Resin family"
+          value={draft.resinFamily}
+          options={RESIN_FAMILY_OPTIONS}
+          onChange={(value) => onChange((prev) => ({ ...prev, resinFamily: value }))}
+        />
+        <LabeledCurrencySelect
+          label="Currency"
+          value={draft.currencyCode || 'USD'}
+          options={CURRENCY_OPTIONS}
+          onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
+        />
+      </div>
+    </div>
+  );
+}
+
 type LabeledCurrencySelectProps = {
   label: string;
   value: string;
@@ -4299,17 +4842,23 @@ function LabeledCurrencySelect({ label, value, options, onChange }: LabeledCurre
       <span className="ui-label font-medium">
         {label}
       </span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
+        >
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+          style={{ color: 'var(--text-muted)' }}
+        />
+      </div>
     </label>
   );
 }

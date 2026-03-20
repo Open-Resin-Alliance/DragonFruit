@@ -8,6 +8,12 @@ export type SlicingFormatVersionOption = {
   isDefault?: boolean;
 };
 
+export type SlicingSettingsModeOption = {
+  value: string;
+  label: string;
+  isDefault?: boolean;
+};
+
 export type SlicingFormatDefinition = {
   id: string;
   outputFormat: PrinterOutputFormat;
@@ -16,6 +22,7 @@ export type SlicingFormatDefinition = {
   layerDataKind: 'png' | 'raw-mask';
   pluginId?: string;
   formatVersions?: SlicingFormatVersionOption[];
+  settingsModes?: SlicingSettingsModeOption[];
   rustModulePath: string;
   wasmExportName: string;
   notes?: string;

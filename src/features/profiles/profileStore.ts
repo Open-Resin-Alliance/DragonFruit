@@ -13,6 +13,7 @@ import {
 import {
   normalizeOutputFormat,
   normalizeFormatVersion,
+  normalizeSettingsMode,
   DEFAULT_OUTPUT_FORMAT,
 } from '@/features/profiles/outputFormatUtils';
 
@@ -84,6 +85,7 @@ export type PrinterPreset = {
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
     formatVersion?: string;
+    settingsMode?: string;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -114,6 +116,7 @@ export type PrinterProfile = {
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
     formatVersion?: string;
+    settingsMode?: string;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -172,6 +175,9 @@ function sanitizeBitDepth(input: unknown): PrinterBitDepth | undefined {
   };
 }
 
+export type LocalMaterialSettingsValue = string | number | boolean;
+export type LocalMaterialSettingsMap = Record<string, LocalMaterialSettingsValue>;
+
 export type MaterialProfile = {
   id: string;
   printerProfileId: string;
@@ -196,12 +202,45 @@ export type MaterialProfile = {
   liftSpeedMmMin: number;
   retractSpeedMmMin: number;
   minimumAaAlphaPercent: number;
+  localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
 };
 
 function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(100, numeric));
+}
+
+function sanitizeLocalMaterialSettingsMap(input: unknown): LocalMaterialSettingsMap | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const source = input as Record<string, unknown>;
+  const next: LocalMaterialSettingsMap = {};
+
+  Object.entries(source).forEach(([key, rawValue]) => {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) return;
+
+    if (typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean') {
+      next[normalizedKey] = rawValue;
+    }
+  });
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function sanitizeLocalSettingsByOutput(input: unknown): Record<string, LocalMaterialSettingsMap> | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const source = input as Record<string, unknown>;
+  const next: Record<string, LocalMaterialSettingsMap> = {};
+
+  Object.entries(source).forEach(([outputFormatRaw, value]) => {
+    const outputFormat = normalizeOutputFormat(outputFormatRaw);
+    const sanitized = sanitizeLocalMaterialSettingsMap(value);
+    if (!sanitized) return;
+    next[outputFormat] = sanitized;
+  });
+
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export type MaterialTemplate = Omit<MaterialProfile, 'id' | 'printerProfileId'> & {
@@ -467,6 +506,7 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
     ...preset.display,
     outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
     formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
+    settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown } | undefined)?.settingsMode),
     mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown } | undefined)?.mirrorX, false),
     mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown } | undefined)?.mirrorY, false),
   },
@@ -559,6 +599,7 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
     ...template,
     currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
     minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
+    localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput),
     id: createDefaultMaterialIdFromTemplateName(template.name),
     printerProfileId: primaryPrinterId,
     officialTemplateId: typeof (template as any).templateId === 'string' && (template as any).templateId.trim().length > 0
@@ -654,6 +695,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
             outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
             formatVersion: normalizeFormatVersion(rawDisplay?.formatVersion ?? fallbackDisplay?.formatVersion),
+            settingsMode: normalizeSettingsMode(rawDisplay?.settingsMode ?? fallbackDisplay?.settingsMode),
             mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
             mirrorY: normalizeMirrorFlag(rawDisplay?.mirrorY, normalizeMirrorFlag(fallbackDisplay?.mirrorY, false)),
           },
@@ -721,6 +763,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           liftSpeedMmMin: Number((profile as any).liftSpeedMmMin) || 60,
           retractSpeedMmMin: Number((profile as any).retractSpeedMmMin) || 150,
           minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
+          localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
         };
       })
       .filter((profile): profile is MaterialProfile => profile !== null)
@@ -890,6 +933,7 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
+      localSettingsByOutput: undefined,
     };
 
     return {
@@ -968,6 +1012,7 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       resolutionY: partial?.display?.resolutionY ?? 1620,
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
       formatVersion: normalizeFormatVersion(partial?.display?.formatVersion),
+      settingsMode: normalizeSettingsMode(partial?.display?.settingsMode),
       mirrorX: normalizeMirrorFlag(partial?.display?.mirrorX, false),
       mirrorY: normalizeMirrorFlag(partial?.display?.mirrorY, false),
     },
@@ -1031,6 +1076,7 @@ export function addPrinterProfileFromPreset(presetId: string): string {
       resolutionY: preset.display.resolutionY,
       outputFormat: normalizeOutputFormat(preset.display.outputFormat),
       formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
+      settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
       mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
       mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
     },
@@ -1074,6 +1120,7 @@ export function addMaterialProfile(
     liftSpeedMmMin: partial?.liftSpeedMmMin ?? 60,
     retractSpeedMmMin: partial?.retractSpeedMmMin ?? 150,
     minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
+    localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
   };
 
   setState(ensureActiveMaterialForActivePrinter({
@@ -1126,6 +1173,7 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
           resolutionY: Number(updates.display.resolutionY) || profile.display.resolutionY,
           outputFormat: normalizeOutputFormat(updates.display.outputFormat ?? profile.display.outputFormat),
           formatVersion: normalizeFormatVersion(updates.display.formatVersion ?? profile.display.formatVersion),
+          settingsMode: normalizeSettingsMode(updates.display.settingsMode ?? profile.display.settingsMode),
           mirrorX: normalizeMirrorFlag(updates.display.mirrorX, profile.display.mirrorX === true),
           mirrorY: normalizeMirrorFlag(updates.display.mirrorY, profile.display.mirrorY === true),
         }
@@ -1285,6 +1333,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
       brand: updates.brand !== undefined ? updates.brand : profile.brand,
       currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
       name: updates.name !== undefined ? updates.name : profile.name,
+      localSettingsByOutput: updates.localSettingsByOutput !== undefined
+        ? sanitizeLocalSettingsByOutput(updates.localSettingsByOutput)
+        : profile.localSettingsByOutput,
     };
   });
 
@@ -1366,6 +1417,7 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
         liftSpeedMmMin: 60,
         retractSpeedMmMin: 150,
         minimumAaAlphaPercent: 35,
+        localSettingsByOutput: undefined,
       },
     ];
 
@@ -1708,6 +1760,7 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
             resolutionY: preset.display.resolutionY,
             outputFormat: normalizeOutputFormat(preset.display.outputFormat),
             formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
+            settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
             mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
             mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
           },
@@ -1794,6 +1847,8 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
           (template as any).minimumAaAlphaPercent,
           item.minimumAaAlphaPercent,
         ),
+        localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput)
+          ?? item.localSettingsByOutput,
         officialTemplateId: templateId,
         officialTemplateVersion: latestVersion,
       };

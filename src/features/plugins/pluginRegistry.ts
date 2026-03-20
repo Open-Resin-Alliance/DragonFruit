@@ -1,5 +1,6 @@
 import type { MaterialProfile, PrinterPreset } from '@/features/profiles/profileStore';
 import type {
+  PluginLocalMaterialSettingsAdapterContract,
   PluginMonitoringSnapshotContract,
   PluginMonitoringUiAdapterContract,
   PluginMonitoringWebcamInfoContract,
@@ -8,7 +9,7 @@ import type {
   RemoteMaterialSettingsAdapter,
 } from '@/features/plugins/complexPluginContracts';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
-import { normalizeOutputFormat, normalizeFormatVersion } from '@/features/profiles/outputFormatUtils';
+import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
 
 export type PluginSource = 'builtin' | 'github';
 export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
@@ -37,8 +38,12 @@ export type PrinterMonitoringWebcamInfo = {
 export type ProfileMonitoringUiAdapter = {
 } & PluginMonitoringUiAdapterContract;
 
+export type ProfileLocalMaterialSettingsAdapter = {
+} & PluginLocalMaterialSettingsAdapterContract;
+
 const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>();
 const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>();
+const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT = new Map<string, ProfileLocalMaterialSettingsAdapter>();
 let builtinAdaptersHydrated = false;
 
 function ensureBuiltinAdaptersHydrated(): void {
@@ -54,6 +59,15 @@ function ensureBuiltinAdaptersHydrated(): void {
     const monitoringAdapters = definition.monitoringAdaptersByMode ?? {};
     Object.values(monitoringAdapters).forEach((adapter) => {
       MONITORING_ADAPTERS_BY_MODE.set(adapter.mode, adapter);
+    });
+
+    const localMaterialAdapters = definition.localMaterialSettingsByOutput ?? {};
+    Object.entries(localMaterialAdapters).forEach(([outputFormat, adapter]) => {
+      const normalized = normalizeOutputFormat(outputFormat);
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.set(normalized, {
+        ...adapter,
+        outputFormat: normalized,
+      });
     });
   });
 }
@@ -106,6 +120,14 @@ export function getProfileMonitoringUiAdapter(mode: string | null | undefined): 
   ensureBuiltinAdaptersHydrated();
   if (!mode || typeof mode !== 'string') return GENERIC_MONITORING_STUB_ADAPTER;
   return MONITORING_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? GENERIC_MONITORING_STUB_ADAPTER;
+}
+
+export function getProfileLocalMaterialSettingsAdapter(
+  outputFormat: string | null | undefined,
+): ProfileLocalMaterialSettingsAdapter | null {
+  ensureBuiltinAdaptersHydrated();
+  if (!outputFormat || typeof outputFormat !== 'string') return null;
+  return LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.get(normalizeOutputFormat(outputFormat)) ?? null;
 }
 
 export type InstalledProfilePlugin = {
@@ -260,6 +282,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       resolutionY,
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
       formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
+      settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,

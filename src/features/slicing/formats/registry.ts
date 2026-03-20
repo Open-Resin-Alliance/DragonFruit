@@ -2,7 +2,7 @@ import type { PrinterOutputFormat } from '@/features/profiles/profileStore';
 import type { ResolveSlicingFormatContext, SlicingFormatDefinition } from './types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
-import { normalizeFormatVersion } from '@/features/profiles/outputFormatUtils';
+import { normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
 
 const CORE_LUMEN_FORMAT_DEFINITION: SlicingFormatDefinition = {
   id: 'core.lumen.v1',
@@ -109,6 +109,42 @@ export function resolveOutputFormatVersion(
   if (!outputFormat) return normalizedRequested;
 
   const options = getAvailableFormatVersionOptions(outputFormat, preferredPluginId);
+  if (options.length === 0) {
+    return normalizedRequested;
+  }
+
+  if (normalizedRequested) {
+    const matched = options.find((entry) => entry.value.toLowerCase() === normalizedRequested.toLowerCase());
+    if (matched) return matched.value;
+  }
+
+  const defaultOption = options.find((entry) => entry.isDefault);
+  return (defaultOption ?? options[0])?.value;
+}
+
+export function getAvailableSettingsModeOptions(
+  outputFormat: PrinterOutputFormat | string | null | undefined,
+  preferredPluginId?: string,
+): Array<{ value: string; label: string; isDefault?: boolean }> {
+  if (!outputFormat) return [];
+
+  const definition = resolveSlicingFormatDefinitionByOutput(outputFormat as PrinterOutputFormat, preferredPluginId);
+  return (definition?.settingsModes ?? []).map((entry) => ({
+    value: entry.value,
+    label: entry.label,
+    isDefault: entry.isDefault,
+  }));
+}
+
+export function resolveOutputSettingsMode(
+  outputFormat: PrinterOutputFormat | string | null | undefined,
+  requestedMode: string | null | undefined,
+  preferredPluginId?: string,
+): string | undefined {
+  const normalizedRequested = normalizeSettingsMode(requestedMode);
+  if (!outputFormat) return normalizedRequested;
+
+  const options = getAvailableSettingsModeOptions(outputFormat, preferredPluginId);
   if (options.length === 0) {
     return normalizedRequested;
   }

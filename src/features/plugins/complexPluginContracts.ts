@@ -131,9 +131,90 @@ export type PluginSlicingFormatDefinitionContract = {
     label: string;
     isDefault?: boolean;
   }>;
+  settingsModes?: Array<{
+    value: string;
+    label: string;
+    isDefault?: boolean;
+  }>;
   rustModulePath: string;
   wasmExportName: string;
   notes?: string;
+};
+
+export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select';
+
+export type LocalMaterialFieldOption = {
+  value: string;
+  label: string;
+};
+
+export type LocalMaterialTabSchema = {
+  id: string;
+  title: string;
+  order?: number;
+  description?: string;
+};
+
+export type LocalMaterialSectionSchema = {
+  id: string;
+  title: string;
+  tabId?: string;
+  order?: number;
+  description?: string;
+};
+
+export type LocalMaterialCardSchema = {
+  id: string;
+  title: string;
+  tabId?: string;
+  sectionId?: string;
+  order?: number;
+  description?: string;
+};
+
+export type LocalMaterialFieldPlacement = {
+  /** Preferred tab target for this field (e.g. basic, advanced, custom). */
+  tabId?: string;
+  /** Optional section grouping under a tab. */
+  sectionId?: string;
+  /** Optional card grouping within a section/tab (e.g. metadata, print-settings). */
+  cardId?: string;
+  /** Render order within the destination group. */
+  order?: number;
+};
+
+/**
+ * Declarative local material field schema for file-format-specific settings.
+ *
+ * These fields are intended for local export profiles (not remote printer APIs)
+ * and can be surfaced by UI based on selected output format/plugin.
+ */
+export type LocalMaterialFieldSchema = {
+  key: string;
+  label: string;
+  kind: LocalMaterialFieldKind;
+  defaultValue: number | string | boolean;
+  /** Optional key to render as a two-stage paired input row with this field. */
+  splitWithKey?: string;
+  description?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: LocalMaterialFieldOption[];
+  placement?: LocalMaterialFieldPlacement;
+  /** Optional metadata path override for serialization (dot notation). */
+  metadataPath?: string;
+};
+
+export type PluginLocalMaterialSettingsAdapterContract = {
+  outputFormat: string;
+  displayName?: string;
+  /** When true, plugin-defined material fields replace stock local material fields in the UI. */
+  replacesDefaultMaterialSettings?: boolean;
+  tabs?: LocalMaterialTabSchema[];
+  sections?: LocalMaterialSectionSchema[];
+  cards?: LocalMaterialCardSchema[];
+  fields: LocalMaterialFieldSchema[];
 };
 
 export type ComplexPluginManifestReference = {
@@ -164,4 +245,5 @@ export type ComplexPluginDefinition = {
   monitoringAdaptersByMode?: Record<string, PluginMonitoringUiAdapterContract>;
   networkOperationHandler?: PluginNetworkOperationHandlerContract;
   slicingFormatsByOutput?: Record<string, PluginSlicingFormatDefinitionContract>;
+  localMaterialSettingsByOutput?: Record<string, PluginLocalMaterialSettingsAdapterContract>;
 };

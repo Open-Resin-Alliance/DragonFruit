@@ -1,7 +1,7 @@
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
-import { resolveOutputFormatVersion, resolveSlicingFormatDefinition } from './formats/registry';
+import { resolveOutputFormatVersion, resolveOutputSettingsMode, resolveSlicingFormatDefinition } from './formats/registry';
 import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
   isNativeSlicerAvailable,
@@ -9,6 +9,7 @@ import {
   type NativeSlicerPerfMetrics,
   type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
+import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 
 function resolvePngCompressionStrategy(
   mode: PngCompressionStrategy,
@@ -113,6 +114,7 @@ export type SliceExportResult = {
     jobConfig: {
       outputFormat: string;
       formatVersion?: string;
+      settingsMode?: string;
       outputDisplayName: string;
       sourceWidthPx: number;
       sourceHeightPx: number;
@@ -166,6 +168,102 @@ function safeFilenameBase(raw: string): string {
   if (!trimmed) return 'slice_export';
   const cleaned = trimmed.replace(/[^a-z0-9-_]+/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   return cleaned || 'slice_export';
+}
+
+function setMetadataPathValue(target: Record<string, unknown>, path: string, value: unknown): void {
+  const segments = path
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+
+  if (segments.length === 0) return;
+
+  let cursor: Record<string, unknown> = target;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const segment = segments[i];
+    const existing = cursor[segment];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      cursor[segment] = {};
+    }
+    cursor = cursor[segment] as Record<string, unknown>;
+  }
+
+  cursor[segments[segments.length - 1]] = value;
+}
+
+function coerceLocalMaterialSettingValue(
+  rawValue: string | number | boolean,
+  kind: 'number' | 'integer' | 'text' | 'boolean' | 'select',
+): string | number | boolean {
+  if (kind === 'boolean') {
+    if (typeof rawValue === 'boolean') return rawValue;
+    if (typeof rawValue === 'string') {
+      const normalized = rawValue.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+    }
+    return Boolean(rawValue);
+  }
+
+  if (kind === 'number' || kind === 'integer') {
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return kind === 'integer' ? 0 : 0;
+    return kind === 'integer' ? Math.round(parsed) : parsed;
+  }
+
+  return String(rawValue);
+}
+
+function mergeMetadataOverridesIntoMetadata(
+  metadataJson: string,
+  outputFormat: string,
+  materialProfile: MaterialProfile,
+  settingsMode?: string,
+): string {
+  try {
+    const parsed = JSON.parse(metadataJson) as Record<string, unknown>;
+
+    if (settingsMode) {
+      const printer = (parsed.printer ?? {}) as Record<string, unknown>;
+      parsed.printer = {
+        ...printer,
+        settingsMode,
+      };
+
+      const exportNode = (parsed.export ?? {}) as Record<string, unknown>;
+      const formatKey = outputFormat.replace(/^\./, '').toLowerCase();
+      const formatNode = (exportNode[formatKey] ?? {}) as Record<string, unknown>;
+      exportNode[formatKey] = {
+        ...formatNode,
+        settingsMode,
+      };
+      parsed.export = exportNode;
+    }
+
+    const adapter = getProfileLocalMaterialSettingsAdapter(outputFormat);
+    const fieldSchema = adapter?.fields ?? [];
+    if (fieldSchema.length > 0) {
+      const localForOutput = materialProfile.localSettingsByOutput?.[outputFormat] ?? {};
+
+      fieldSchema.forEach((field) => {
+        const fieldValue = Object.prototype.hasOwnProperty.call(localForOutput, field.key)
+          ? localForOutput[field.key]
+          : field.defaultValue;
+
+        const coercedValue = coerceLocalMaterialSettingValue(
+          fieldValue,
+          field.kind,
+        );
+
+        const targetPath = (field.metadataPath?.trim() || `material.${field.key}`);
+        setMetadataPathValue(parsed, targetPath, coercedValue);
+      });
+    }
+
+    return JSON.stringify(parsed);
+  } catch {
+    return metadataJson;
+  }
 }
 
 /**
@@ -225,6 +323,10 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       format.outputFormat,
       options.printerProfile.display.formatVersion,
     ),
+    settingsMode: resolveOutputSettingsMode(
+      format.outputFormat,
+      options.printerProfile.display.settingsMode,
+    ),
     sourceWidthPx: solidMesh.sourceWidthPx,
     sourceHeightPx: solidMesh.sourceHeightPx,
     widthPx: solidMesh.widthPx,
@@ -256,7 +358,12 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       ? encodeBytesToBase64(options.exportThumbnailPng)
       : null,
     trianglesXYZ: solidMesh.trianglesXYZ,
-    metadataJson: solidMesh.metadataJson,
+    metadataJson: mergeMetadataOverridesIntoMetadata(
+      solidMesh.metadataJson,
+      format.outputFormat,
+      options.materialProfile,
+      resolveOutputSettingsMode(format.outputFormat, options.printerProfile.display.settingsMode),
+    ),
   };
 
   const coreStartMs = performance.now();
@@ -321,6 +428,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
       jobConfig: {
         outputFormat: format.outputFormat,
         formatVersion: nativeJob.formatVersion,
+        settingsMode: nativeJob.settingsMode,
         outputDisplayName: format.displayName,
         sourceWidthPx: nativeJob.sourceWidthPx,
         sourceHeightPx: nativeJob.sourceHeightPx,
