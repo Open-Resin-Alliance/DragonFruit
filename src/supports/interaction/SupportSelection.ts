@@ -7,6 +7,7 @@ import {
     selectSupportIds,
 } from './shared/selection/selectionController';
 import { useResolvedSelectionState } from './shared/selection/resolvedSelectionStore';
+import { setSelectedId } from '../state';
 
 /**
  * Interaction module for V2 support selection.

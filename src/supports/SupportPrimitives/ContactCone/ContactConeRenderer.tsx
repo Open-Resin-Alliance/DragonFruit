@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import * as THREE from 'three';
 import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
@@ -128,6 +129,18 @@ export function ContactConeRenderer({
     const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.35) : emissiveIntensity;
 
     const handleConeClick = (e: any) => {
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                const primitiveType = current.userData?.supportPrimitiveType;
+                if (primitiveType === 'joint' || primitiveType === 'knot') {
+                    return;
+                }
+                current = current.parent;
+            }
+        }
+
         if (!contactDiskId) return;
         handleContactDiskClick(e, contactDiskId, isInteractable, isParentSelected, isContactDiskSelected);
     };
@@ -136,6 +149,22 @@ export function ContactConeRenderer({
         if (!contactDiskId || !isInteractable || (!isParentSelected && !isContactDiskSelected)) {
             setIsHovered(false);
             return;
+        }
+
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                const primitiveType = current.userData?.supportPrimitiveType;
+                if (primitiveType === 'joint' || primitiveType === 'knot') {
+                    emitImmediateModelHover(null);
+                    setHoveredId(null);
+                    setHoveredCategory('none');
+                    setIsHovered(false);
+                    return;
+                }
+                current = current.parent;
+            }
         }
 
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
