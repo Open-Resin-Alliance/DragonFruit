@@ -252,12 +252,27 @@ export default function FootprintBorderRenderer({
     return null;
   }
 
-  return (
-    <primitive object={new THREE.Line(borderLine, new THREE.LineBasicMaterial({
-      color,
-      linewidth: 5,
-      opacity: 0.5,
-      transparent: true
-    }))} />
-  );
+  const borderObject = React.useMemo(() => {
+    if (!borderLine) return null;
+    const line = new THREE.Line(
+      borderLine,
+      new THREE.LineBasicMaterial({
+        color,
+        linewidth: 5,
+        opacity: 0.5,
+        transparent: true,
+      }),
+    );
+    line.userData = {
+      ...(line.userData ?? {}),
+      thumbnailHelperType: 'footprintBorder',
+    };
+    return line;
+  }, [borderLine, color]);
+
+  if (!borderObject) {
+    return null;
+  }
+
+  return <primitive object={borderObject} />;
 }
