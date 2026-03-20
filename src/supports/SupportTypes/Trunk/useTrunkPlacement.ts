@@ -12,6 +12,7 @@ import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { getSettings } from '../../Settings';
 import { decideGridPlacement } from '../../PlacementLogic/Grid';
 import { clearSelection } from '../../interaction/SupportSelection';
+import { isContactDiskHudInteractionActive } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 export function useTrunkPlacementV2() {
     const HOVER_MIN_INTERVAL_MS = 9;
@@ -58,6 +59,12 @@ export function useTrunkPlacementV2() {
     }, []);
 
     const processSupportHover = useCallback((hit: THREE.Intersection | null) => {
+        if (isContactDiskHudInteractionActive()) {
+            clearPreview();
+            lastProcessedHoverRef.current = null;
+            return;
+        }
+
         if (isPlacementHardDisabled) {
             clearPreview();
             lastProcessedHoverRef.current = null;

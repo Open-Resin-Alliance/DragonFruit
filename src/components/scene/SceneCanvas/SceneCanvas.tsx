@@ -1,6 +1,6 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { OrbitControls } from '@react-three/drei';
@@ -34,6 +34,7 @@ import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/c
 import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { JointPlacementPreview } from '@/supports/SupportPrimitives/Joint/JointPlacementPreview';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
+import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { BranchPlacementController } from '@/supports/SupportTypes/Branch/BranchPlacementController';
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
@@ -395,6 +396,21 @@ export function SceneCanvas({
     getSupportSnapshot,
     getSupportSnapshot,
   );
+  const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleContactDiskHudInteractionChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ active?: boolean }>).detail;
+      setContactDiskHudInteractionActive(!!detail?.active);
+    };
+
+    window.addEventListener('contact-disk-hud-interaction-change', handleContactDiskHudInteractionChange as EventListener);
+    return () => {
+      window.removeEventListener('contact-disk-hud-interaction-change', handleContactDiskHudInteractionChange as EventListener);
+    };
+  }, []);
 
   const kickstandStateForBounds = React.useSyncExternalStore(
     subscribeToKickstandStore,
@@ -768,7 +784,7 @@ export function SceneCanvas({
   const [hoveredSupportPointerModelId, setHoveredSupportPointerModelId] = React.useState<string | null>(null);
   const hoveredSupportModelIdFromStore = React.useMemo(() => {
     const category = supportStateForBounds.hoveredCategory;
-    if (category !== 'support' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
+    if (category !== 'support' && category !== 'contactDisk' && category !== 'segment' && category !== 'joint' && category !== 'knot') {
       return null;
     }
     return getModelIdForSupportEntityId(supportStateForBounds.hoveredId);
@@ -1190,11 +1206,13 @@ export function SceneCanvas({
   const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
   const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
+  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive;
 
   const branchHoverDotVisible = Boolean(
     branchHoverPosition
     && !branchTipPosition
     && !branchPlacementPreview
+    && !suppressSupportPlacementPreviewRendering
     && !supportHoverTargetActive
     && !!hoveredMeshModelId,
   );
@@ -2783,9 +2801,10 @@ export function SceneCanvas({
     }
 
     if (mode === 'support') {
+      if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
       clearSelection();
     }
-  }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive]);
+  }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
 
   React.useEffect(() => {
     updateCameraBelowBuildPlate();
@@ -4620,6 +4639,7 @@ export function SceneCanvas({
 
               {/* Render V2 Trunk Placement Preview (hide when in branch/leaf mode) */}
               {trunkPlacementPreview &&
+                !suppressSupportPlacementPreviewRendering &&
                 !blockSupportPlacement &&
                 !isDraggingHandle &&
                 !isBranchPlacementActive &&
@@ -4646,7 +4666,7 @@ export function SceneCanvas({
 
               {/* Render Branch Tip Marker - only show when NO preview is visible */}
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
-              {isBranchPlacementActive && branchTipPosition && !branchPlacementPreview && (
+              {isBranchPlacementActive && branchTipPosition && !branchPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[branchTipPosition.x, branchTipPosition.y, branchTipPosition.z]} raycast={() => null}>
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
@@ -4655,13 +4675,13 @@ export function SceneCanvas({
 
               {/* Render Branch Placement Preview - ALWAYS show when data exists */}
               {/* Don't check blockSupportPlacement - branch placement needs to work while hovering supports */}
-              {branchPlacementPreview && isBranchPlacementActive && !isDraggingHandle && (
+              {branchPlacementPreview && isBranchPlacementActive && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
                 <SupportBuilder data={branchPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
               )}
 
               {/* Render Leaf Hover Preview Dot - shows when Alt+Shift is held before first click */}
               {/* Uses tip contact diameter to match actual tip size */}
-              {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && (
+              {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafHoverPosition.x, leafHoverPosition.y, leafHoverPosition.z]} raycast={() => null}>
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
                   <meshStandardMaterial
@@ -4676,7 +4696,7 @@ export function SceneCanvas({
 
               {/* Render Leaf Tip Marker - only show when NO preview is visible */}
               {/* Once preview shows, the contact cone at the tip replaces this marker */}
-              {isLeafPlacementActive && leafTipPosition && !leafPlacementPreview && (
+              {isLeafPlacementActive && leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
                 <mesh position={[leafTipPosition.x, leafTipPosition.y, leafTipPosition.z]} raycast={() => null}>
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
@@ -4685,15 +4705,15 @@ export function SceneCanvas({
 
               {/* Render Leaf Placement Preview - ALWAYS show when data exists */}
               {/* Don't check blockSupportPlacement - leaf placement needs to work while hovering supports */}
-              {leafPlacementPreview && !isDraggingHandle && (
+              {leafPlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
                 <SupportBuilder data={leafPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
               )}
 
               {/* Render Brace Placement Preview */}
-              {bracePlacementPreview && !isDraggingHandle && <BracePreviewRenderer preview={bracePlacementPreview} />}
+              {bracePlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && <BracePreviewRenderer preview={bracePlacementPreview} />}
 
               {/* Render Kickstand Placement Preview */}
-              {kickstandPlacementPreview && !isDraggingHandle && (
+              {kickstandPlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
                 <SupportBuilder
                   data={kickstandPlacementPreview}
                   isPreview
@@ -4841,13 +4861,17 @@ export function SceneCanvas({
 
       {/* Support Limitation Tooltip Overlay */}
       <SupportLimitationFeedback
-        error={leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null}
+        error={suppressSupportPlacementPreviewRendering ? null : (leafPlacementPreview?.error ?? (isBranchPlacementActive ? branchPlacementPreview?.error : null) ?? trunkPlacementPreview?.error ?? null)}
         warning={
-          leafPlacementPreview?.warning ??
-          (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
-          trunkPlacementPreview?.warning ??
-          interactionWarning ??
-          null
+          suppressSupportPlacementPreviewRendering
+            ? null
+            : (
+              leafPlacementPreview?.warning ??
+              (isBranchPlacementActive ? branchPlacementPreview?.warning : null) ??
+              trunkPlacementPreview?.warning ??
+              interactionWarning ??
+              null
+            )
         }
       />
 

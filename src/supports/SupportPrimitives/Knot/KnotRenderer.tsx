@@ -186,8 +186,8 @@ export function KnotRenderer({
 
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
 
         const pointerOverKnot = isPointerOverThisKnot(e);
         if (!pointerOverKnot || !isParentSelected) {
@@ -203,13 +203,13 @@ export function KnotRenderer({
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
         setPointerHoverActive((prev) => (prev ? false : prev));
         if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
             setHoveredCategory('none');
             setHoveredId(null);
         }
+        emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };
 

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementState';
+import { emitImmediateModelHover } from '../../interaction/pointerOcclusion';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 
@@ -170,6 +171,7 @@ export function ShaftRenderer({
             }
             current = current.parent;
         }
+        emitImmediateModelHover(null);
 
         if (!isTopPointerTargetNow) {
             setPointerHoverActive((prev) => (prev ? false : prev));
@@ -197,6 +199,7 @@ export function ShaftRenderer({
     // Handle pointer leaving shaft - clear branch preview
     const handlePointerLeave = () => {
         setPointerHoverActive((prev) => (prev ? false : prev));
+        emitImmediateModelHover(null);
 
         if (!enableSegmentInteraction) return;
 

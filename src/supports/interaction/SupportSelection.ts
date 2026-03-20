@@ -49,6 +49,10 @@ export function selectJoint(id: string) {
     selectJointById(id);
 }
 
+export function selectContactDisk(id: string) {
+    setSelectedId(id);
+}
+
 /**
  * Clear any current selection (support or joint).
  */

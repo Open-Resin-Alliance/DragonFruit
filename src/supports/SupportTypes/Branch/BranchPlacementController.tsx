@@ -32,6 +32,7 @@ import { buildTwig } from '../Twig/twigBuilder';
 import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
+import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSelection } from '../../interaction/SupportSelection';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
@@ -293,6 +294,15 @@ export function BranchPlacementController() {
 
     // Continuous update loop - show preview when mouse is over something valid
     useFrame(() => {
+        if (isContactDiskHudInteractionActive() || shouldSuppressContactDiskHudPlacementCommit()) {
+            branchPlacementStore.setHoverPosition(null);
+            branchPlacementStore.setPreviewData(null);
+            branchPlacementStore.setSnapTarget(null);
+            meshHoverRef.current = null;
+            meshKindRef.current = null;
+            return;
+        }
+
         if (altActive && stage === 'idle') {
             if (isHoveringSupportTarget) {
                 branchPlacementStore.setHoverPosition(null);
@@ -463,6 +473,11 @@ export function BranchPlacementController() {
         if (!isActive || stage !== 'awaitingBase') return;
 
         const handleClick = (e: MouseEvent) => {
+            if (shouldSuppressContactDiskHudPlacementCommit()) {
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+            }
             const snapTarget = branchPlacementStore.getSnapTarget();
             if (!tipPosition || !tipNormal) return;
 

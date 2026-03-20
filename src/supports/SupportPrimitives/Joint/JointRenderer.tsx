@@ -187,8 +187,8 @@ export function JointRenderer({
 
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
+        emitImmediateModelHover(null);
 
         const pointerOverJoint = isPointerOverThisJoint(e);
         if (!pointerOverJoint || !isParentSelected) {
@@ -204,9 +204,9 @@ export function JointRenderer({
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
         }
         setPointerHoverActive((prev) => (prev ? false : prev));
+        emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };
     

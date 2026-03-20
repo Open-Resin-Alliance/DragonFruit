@@ -128,10 +128,24 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const interactionHooksEnabled = !passive;
     const [gizmoInteractionLockActive, setGizmoInteractionLockActive] = React.useState(false);
     const knotGizmoInteractionLockTimeoutRef = React.useRef<number | null>(null);
+    const [contactDiskHudHoverActive, setContactDiskHudHoverActive] = React.useState(false);
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const handleContactDiskHudInteractionChange = (event: Event) => {
+            const detail = (event as CustomEvent<{ active?: boolean }>).detail;
+            setContactDiskHudHoverActive(!!detail?.active);
+        };
+
+        window.addEventListener('contact-disk-hud-interaction-change', handleContactDiskHudInteractionChange as EventListener);
+        return () => {
+            window.removeEventListener('contact-disk-hud-interaction-change', handleContactDiskHudInteractionChange as EventListener);
+        };
+    }, []);
     const rawHoveredCategory = state.hoveredCategory as string | null | undefined;
     const primitiveHoverSuppressesSceneShaftHover = rawHoveredCategory === 'knot' || isJointHoverCategory(rawHoveredCategory);
     const jointCategoryHoverSuppressed = isJointHoverCategory(rawHoveredCategory);
-    const supportInteractionSuppressed = mode === 'support' && (disableSelectionAndHover || gizmoInteractionLockActive);
+    const supportInteractionSuppressed = mode === 'support' && (disableSelectionAndHover || gizmoInteractionLockActive || contactDiskHudHoverActive);
     const supportSelectionAndHoverSuppressed = supportInteractionSuppressed;
     const supportPointerInteractable = interactionHooksEnabled && mode === 'support' && !navigationLodActive;
     const isInteractable = supportPointerInteractable && !supportInteractionSuppressed;
@@ -537,14 +551,43 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return map;
     }, [state.branches, state.leaves, state.braces, kickstandState.kickstands]);
 
+    const supportIdByContactDiskId = useMemo(() => {
+        const map = new Map<string, string>();
+
+        for (const trunk of Object.values(state.trunks)) {
+            if (trunk.contactCone?.id) map.set(trunk.contactCone.id, trunk.id);
+        }
+
+        for (const branch of Object.values(state.branches)) {
+            if (branch.contactCone?.id) map.set(branch.contactCone.id, branch.id);
+        }
+
+        for (const leaf of Object.values(state.leaves)) {
+            if (leaf.contactCone?.id) map.set(leaf.contactCone.id, leaf.id);
+        }
+
+        for (const twig of Object.values(state.twigs)) {
+            if (twig.contactDiskA?.id) map.set(twig.contactDiskA.id, twig.id);
+            if (twig.contactDiskB?.id) map.set(twig.contactDiskB.id, twig.id);
+        }
+
+        for (const stick of Object.values(state.sticks)) {
+            if (stick.contactConeA?.id) map.set(stick.contactConeA.id, stick.id);
+            if (stick.contactConeB?.id) map.set(stick.contactConeB.id, stick.id);
+        }
+
+        return map;
+    }, [state.trunks, state.branches, state.leaves, state.twigs, state.sticks]);
+
     const hoveredSupportIdFromPicking = useMemo(() => {
         if (!hoveredIdForVisual) return null;
         if (hoveredCategoryForVisual === 'support') return hoveredIdForVisual;
         if (hoveredCategoryForVisual === 'segment') return supportIdBySegmentId.get(hoveredIdForVisual) ?? null;
         if (isJointHoverCategory(hoveredCategoryForVisual)) return supportIdByJointId.get(hoveredIdForVisual) ?? null;
         if (hoveredCategoryForVisual === 'knot') return supportIdByKnotId.get(hoveredIdForVisual) ?? null;
+        if (hoveredCategoryForVisual === 'contactDisk') return supportIdByContactDiskId.get(hoveredIdForVisual) ?? null;
         return null;
-    }, [hoveredCategoryForVisual, hoveredIdForVisual, supportIdBySegmentId, supportIdByJointId, supportIdByKnotId]);
+    }, [hoveredCategoryForVisual, hoveredIdForVisual, supportIdBySegmentId, supportIdByJointId, supportIdByKnotId, supportIdByContactDiskId]);
 
     const primitiveHoverOnSelectedSupport = hoveredSupportIdFromPicking !== null
         && selectedSupportIdSet.has(hoveredSupportIdFromPicking)
@@ -789,6 +832,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     || segment.topJoint?.id === selectedId
                     || segment.bottomJoint?.id === selectedId,
                 )
+                || trunk.contactCone?.id === selectedId
                 : false;
             if (isTrunkSelected || isChildSelected) selected.add(trunk.id);
         }
@@ -815,6 +859,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     || segment.topJoint?.id === selectedId
                     || segment.bottomJoint?.id === selectedId,
                 )
+                || branch.contactCone?.id === selectedId
                 : false;
             if (isBranchSelected || isKnotSelected || isChildSelected) selected.add(branch.id);
         }
@@ -860,6 +905,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     || segment.topJoint?.id === selectedId
                     || segment.bottomJoint?.id === selectedId,
                 )
+                || twig.contactDiskA.id === selectedId
+                || twig.contactDiskB.id === selectedId
                 : false;
             if (isTwigSelected || isChildSelected) selected.add(twig.id);
         }
@@ -885,6 +932,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     || segment.topJoint?.id === selectedId
                     || segment.bottomJoint?.id === selectedId,
                 )
+                || stick.contactConeA.id === selectedId
+                || stick.contactConeB.id === selectedId
                 : false;
             if (isStickSelected || isChildSelected) selected.add(stick.id);
         }
@@ -931,7 +980,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const leaf of Object.values(state.leaves)) {
             const isLeafSelected = (useMultiSelectionDetail && selectedSupportIdSet.has(leaf.id)) || selectedId === leaf.id;
             const isKnotSelected = hasSingleSelection ? leaf.parentKnotId === selectedId : false;
-            if (isLeafSelected || isKnotSelected) selected.add(leaf.id);
+            const isContactDiskSelected = hasSingleSelection ? leaf.contactCone?.id === selectedId : false;
+            if (isLeafSelected || isKnotSelected || isContactDiskSelected) selected.add(leaf.id);
         }
 
         return selected;
