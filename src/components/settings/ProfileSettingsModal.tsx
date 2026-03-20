@@ -35,6 +35,7 @@ import {
   type PrinterProfile,
 } from '@/features/profiles/profileStore';
 import {
+  getAvailableProfileNetworkModes,
   getDefaultProfileNetworkUiAdapter,
   getProfileLocalMaterialSettingsAdapter,
   getProfileNetworkUiAdapter,
@@ -103,6 +104,10 @@ function resolveOfficialPresetIdFromProfile(profile: PrinterProfile): string | n
 
 type BuildDimensionEditMode = 'manual' | 'auto';
 type PrinterRailViewMode = 'profiles' | 'fleet';
+type ManualBuildDimensions = {
+  width: number;
+  depth: number;
+};
 
 function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): number {
   const safeResolution = Math.max(1, Math.round(resolutionPx));
@@ -237,6 +242,7 @@ export function ProfileSettingsModal({
   const [presetSearch, setPresetSearch] = React.useState('');
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('');
   const [buildDimensionModeByPrinterId, setBuildDimensionModeByPrinterId] = React.useState<Record<string, BuildDimensionEditMode>>({});
+  const [manualBuildDimensionsByPrinterId, setManualBuildDimensionsByPrinterId] = React.useState<Record<string, ManualBuildDimensions>>({});
   const [printerRailViewMode, setPrinterRailViewMode] = React.useState<PrinterRailViewMode>('profiles');
   const [isEditFleetUnitModalOpen, setIsEditFleetUnitModalOpen] = React.useState(false);
   const [editingFleetUnitId, setEditingFleetUnitId] = React.useState<string | null>(null);
@@ -387,6 +393,20 @@ export function ProfileSettingsModal({
 
   const setBuildDimensionMode = React.useCallback((mode: BuildDimensionEditMode) => {
     if (!selectedPrinter) return;
+    if (mode === selectedBuildDimensionMode) return;
+
+    const currentManualDimensions: ManualBuildDimensions = {
+      width: selectedPrinter.buildVolumeMm.width,
+      depth: selectedPrinter.buildVolumeMm.depth,
+    };
+
+    if (selectedBuildDimensionMode === 'manual' && mode === 'auto') {
+      setManualBuildDimensionsByPrinterId((prev) => ({
+        ...prev,
+        [selectedPrinter.id]: currentManualDimensions,
+      }));
+    }
+
     setBuildDimensionModeByPrinterId((prev) => ({
       ...prev,
       [selectedPrinter.id]: mode,
@@ -397,7 +417,41 @@ export function ProfileSettingsModal({
         buildVolumeMm: applyAutoBuildDimensions(selectedPrinter),
       });
     }
-  }, [applyAutoBuildDimensions, selectedPrinter]);
+
+    if (mode === 'manual') {
+      const remembered = manualBuildDimensionsByPrinterId[selectedPrinter.id];
+      if (remembered) {
+        updatePrinterProfile(selectedPrinter.id, {
+          buildVolumeMm: {
+            ...selectedPrinter.buildVolumeMm,
+            width: remembered.width,
+            depth: remembered.depth,
+          },
+        });
+      }
+    }
+  }, [applyAutoBuildDimensions, manualBuildDimensionsByPrinterId, selectedBuildDimensionMode, selectedPrinter]);
+
+  React.useEffect(() => {
+    if (!selectedPrinter) return;
+    if (selectedBuildDimensionMode !== 'manual') return;
+
+    const nextManualDimensions: ManualBuildDimensions = {
+      width: selectedPrinter.buildVolumeMm.width,
+      depth: selectedPrinter.buildVolumeMm.depth,
+    };
+
+    setManualBuildDimensionsByPrinterId((prev) => {
+      const current = prev[selectedPrinter.id];
+      if (current && current.width === nextManualDimensions.width && current.depth === nextManualDimensions.depth) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [selectedPrinter.id]: nextManualDimensions,
+      };
+    });
+  }, [selectedBuildDimensionMode, selectedPrinter]);
 
   const handlePrinterDisplayChange = React.useCallback((partialDisplay: Partial<PrinterProfile['display']>) => {
     if (!selectedPrinter) return;
@@ -517,6 +571,25 @@ export function ProfileSettingsModal({
   }, [officialMaterialUpdates, selectedMaterial]);
 
   const selectedPrinterSupportsNetworkSettings = Boolean(selectedPrinter?.networkSupport);
+  const registeredNetworkModeOptions = React.useMemo<Array<{ value: PrinterOutputFormat; label: string }>>(() => {
+    const modes = getAvailableProfileNetworkModes();
+    return [
+      { value: '', label: 'None (Local only)' },
+      ...modes.map((mode) => ({
+        value: mode.mode,
+        label: mode.displayName,
+      })),
+    ];
+  }, []);
+  const selectedPrinterNetworkModeOptions = React.useMemo<Array<{ value: PrinterOutputFormat; label: string }>>(() => {
+    const currentMode = (selectedPrinter?.networkSupport ?? '').trim().toLowerCase();
+    if (!currentMode) return registeredNetworkModeOptions;
+    if (registeredNetworkModeOptions.some((option) => option.value === currentMode)) return registeredNetworkModeOptions;
+    return [
+      ...registeredNetworkModeOptions,
+      { value: currentMode, label: `Unknown (${currentMode})` },
+    ];
+  }, [registeredNetworkModeOptions, selectedPrinter?.networkSupport]);
   const networkUiAdapter = React.useMemo(
     () => getProfileNetworkUiAdapter(selectedPrinter?.networkSupport),
     [selectedPrinter?.networkSupport],
@@ -605,7 +678,7 @@ export function ProfileSettingsModal({
     const pixelY = Number(selectedPrinter.pixelSize?.y ?? 0);
 
     const candidates = availablePrinterPresets
-      .filter((preset) => preset.networkSupport === 'nanodlp')
+      .filter((preset) => preset.networkSupport === selectedPrinter?.networkSupport)
       .filter((preset) => typeof preset.networkFilter === 'string' && preset.networkFilter.trim().length > 0);
 
     const byDisplayAndPixel = candidates.find((preset) => {
@@ -1690,10 +1763,11 @@ export function ProfileSettingsModal({
     if (!file.type.startsWith('image/')) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = reader.result;
       if (typeof result !== 'string') return;
-      setEditingFleetUnitImageDataUrl(result);
+      const normalized = await normalizeUploadedPrinterImageDataUrl(result);
+      setEditingFleetUnitImageDataUrl(normalized);
     };
     reader.readAsDataURL(file);
   }, []);
@@ -1921,10 +1995,11 @@ export function ProfileSettingsModal({
     if (!file.type.startsWith('image/')) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = reader.result;
       if (typeof result !== 'string') return;
-      updatePrinterProfile(printerId, { imageDataUrl: result });
+      const normalized = await normalizeUploadedPrinterImageDataUrl(result);
+      updatePrinterProfile(printerId, { imageDataUrl: normalized });
     };
     reader.readAsDataURL(file);
   }, [uploadTargetPrinterId]);
@@ -2340,8 +2415,8 @@ export function ProfileSettingsModal({
                   const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
                     ? `${bitDepthBits} Bit`
                     : null;
-                  const cardWidth = isEditingPrinter ? 'w-[198px]' : 'w-[236px]';
-                  const imageHeight = isEditingPrinter ? 'h-[124px]' : 'h-[148px]';
+                  const cardWidth = 'w-[236px]';
+                  const imageHeight = 'h-[148px]';
 
                   return (
                     <div
@@ -2520,189 +2595,6 @@ export function ProfileSettingsModal({
                 </div>
               )}
 
-              {isEditingPrinter && selectedPrinter ? (
-                <div className="mt-3 rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>
-                    Edit Printer Profile
-                  </div>
-
-                  <div className="mb-3 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setBuildDimensionMode('manual')}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
-                      style={selectedBuildDimensionMode === 'manual'
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
-                        : { color: 'var(--text-muted)' }}
-                    >
-                      Manual build mm
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setBuildDimensionMode('auto')}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
-                      style={selectedBuildDimensionMode === 'auto'
-                        ? {
-                            color: 'var(--accent-secondary)',
-                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                          }
-                        : { color: 'var(--text-muted)' }}
-                    >
-                      Auto-calc from px + μm
-                    </button>
-                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      {selectedBuildDimensionMode === 'auto'
-                        ? 'Build width/depth are derived from resolution and pixel size.'
-                        : 'Build width/depth are edited directly in mm.'}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    <LabeledInput
-                      label="Printer name"
-                      value={selectedPrinter.name}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, { name: value })}
-                    />
-                    <LabeledInput
-                      label="Manufacturer"
-                      value={selectedPrinter.manufacturer ?? ''}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, { manufacturer: value })}
-                    />
-
-                    <LabeledNumberInput
-                      label="Build width (mm)"
-                      disabled={selectedBuildDimensionMode === 'auto'}
-                      value={selectedPrinter.buildVolumeMm.width}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
-                        buildVolumeMm: {
-                          ...selectedPrinter.buildVolumeMm,
-                          width: value,
-                        },
-                      })}
-                    />
-                    <LabeledNumberInput
-                      label="Build depth (mm)"
-                      disabled={selectedBuildDimensionMode === 'auto'}
-                      value={selectedPrinter.buildVolumeMm.depth}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
-                        buildVolumeMm: {
-                          ...selectedPrinter.buildVolumeMm,
-                          depth: value,
-                        },
-                      })}
-                    />
-
-                    <LabeledNumberInput
-                      label="Build height (mm)"
-                      value={selectedPrinter.buildVolumeMm.height}
-                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
-                        buildVolumeMm: {
-                          ...selectedPrinter.buildVolumeMm,
-                          height: value,
-                        },
-                      })}
-                    />
-                    <LabeledNumberInput
-                      label="Resolution X (px)"
-                      value={selectedPrinter.display.resolutionX}
-                      onChange={(value) => handlePrinterDisplayChange({
-                        resolutionX: Math.max(1, Math.round(value)),
-                      })}
-                    />
-
-                    <LabeledNumberInput
-                      label="Resolution Y (px)"
-                      value={selectedPrinter.display.resolutionY}
-                      onChange={(value) => handlePrinterDisplayChange({
-                        resolutionY: Math.max(1, Math.round(value)),
-                      })}
-                    />
-
-                    <LabeledNumberInput
-                      label="Pixel size X (μm)"
-                      value={selectedPrinter.pixelSize?.x ?? 1}
-                      onChange={(value) => handlePrinterPixelSizeChange('x', value)}
-                    />
-
-                    <LabeledNumberInput
-                      label="Pixel size Y (μm)"
-                      value={selectedPrinter.pixelSize?.y ?? 1}
-                      onChange={(value) => handlePrinterPixelSizeChange('y', value)}
-                    />
-
-                    <LabeledNumberInput
-                      label="Bit depth"
-                      value={selectedPrinter.bitDepth?.bits ?? 8}
-                      onChange={handlePrinterBitDepthChange}
-                    />
-
-                    <LabeledSelectInput
-                      label="Output format"
-                      value={selectedPrinter.display.outputFormat}
-                      options={OUTPUT_FORMAT_OPTIONS}
-                      onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
-                    />
-
-                    {selectedFormatVersionOptions.length > 0 && (
-                      <label className="space-y-1 block">
-                        <span className="ui-label font-medium">Format version</span>
-                        <select
-                          value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
-                          onChange={(event) => handlePrinterDisplayChange({ formatVersion: event.target.value })}
-                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
-                        >
-                          {selectedFormatVersionOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-
-                    {selectedSettingsModeOptions.length > 0 && (
-                      <label className="space-y-1 block">
-                        <span className="ui-label font-medium">Settings mode</span>
-                        <select
-                          value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
-                          onChange={(event) => handlePrinterDisplayChange({ settingsMode: event.target.value })}
-                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
-                        >
-                          {selectedSettingsModeOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-
-                    <LabeledToggleInput
-                      label="Mirror X"
-                      checked={selectedPrinter.display.mirrorX === true}
-                      onChange={(checked) => handlePrinterDisplayChange({ mirrorX: checked })}
-                    />
-
-                    <LabeledToggleInput
-                      label="Mirror Y"
-                      checked={selectedPrinter.display.mirrorY === true}
-                      onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
-                    />
-
-                    <LabeledToggleInput
-                      label="Anti-Aliasing"
-                      checked={selectedPrinter.antiAliasing === true}
-                      onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { antiAliasing: checked })}
-                    />
-                  </div>
-                </div>
-              ) : null}
-
               {hasPrinters && (
               <div className="mt-2.5 rounded-lg border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), transparent 8%)' }}>
                 <div className="flex flex-wrap items-center gap-2">
@@ -2791,39 +2683,14 @@ export function ProfileSettingsModal({
                             showOfficialProfileDialog(selectedPrinter.id);
                             return;
                           }
-                          setIsEditingPrinter((prev) => !prev);
+                          setIsEditingPrinter(true);
                         }}
                         disabled={!hasPrinters}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
                         style={{ color: 'var(--text-strong)' }}
                       >
-                        {isEditingPrinter ? 'Done Editing' : 'Edit Printer'}
+                        Edit Printer
                       </button>
-                      {isEditingPrinter && selectedPrinter && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => triggerImageUpload(selectedPrinter.id)}
-                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                            style={{ color: 'var(--text-strong)' }}
-                          >
-                            <Upload className="w-3.5 h-3.5" />
-                            Upload Image
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!selectedPrinter.imageDataUrl) return;
-                              updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
-                            }}
-                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                            style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            Clear Image
-                          </button>
-                        </>
-                      )}
                       <button
                         type="button"
                         onClick={handleExportSelectedPrinterBundle}
@@ -3543,6 +3410,298 @@ export function ProfileSettingsModal({
                   </button>
                 </div>
               </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isEditingPrinter && selectedPrinter && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsEditingPrinter(false);
+          }}>
+            <div className="w-full max-w-[960px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+              <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Printer Profile Settings
+                  </h3>
+                  <p className="ui-meta">{selectedPrinter.name} • {selectedPrinter.manufacturer || 'Generic'}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingPrinter(false)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Close printer editor"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3 space-y-3">
+                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Identity</div>
+                  <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-3 md:items-stretch">
+                    <div className="space-y-3">
+                      <LabeledInput
+                        label="Printer name"
+                        value={selectedPrinter.name}
+                        onChange={(value) => updatePrinterProfile(selectedPrinter.id, { name: value })}
+                      />
+
+                      <LabeledInput
+                        label="Manufacturer"
+                        value={selectedPrinter.manufacturer ?? ''}
+                        onChange={(value) => updatePrinterProfile(selectedPrinter.id, { manufacturer: value })}
+                      />
+
+                      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
+                        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Profile Image</div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => triggerImageUpload(selectedPrinter.id)}
+                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
+                            style={{ color: 'var(--text-strong)' }}
+                          >
+                            <Upload className="w-3.5 h-3.5" />
+                            Upload Image
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!selectedPrinter.imageDataUrl) return;
+                              updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
+                            }}
+                            disabled={!selectedPrinter.imageDataUrl}
+                            className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                            style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Clear Image
+                          </button>
+                        </div>
+                        <p className="mt-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          Tip: use a front/angled photo for faster visual identification.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border p-2.5 h-full min-h-0 flex" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
+                      <div className="w-full h-full min-h-0 rounded-md border overflow-hidden flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
+                        {selectedPrinter.imageDataUrl ? (
+                          <AutoTrimmedImage src={selectedPrinter.imageDataUrl} alt={selectedPrinter.name} className="h-full w-full object-contain" />
+                        ) : (
+                          <div className="text-[11px] text-center px-3" style={{ color: 'var(--text-muted)' }}>
+                            <Printer className="w-5 h-5 mx-auto mb-1" />
+                            No preview image
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Build Volume</div>
+                  <div
+                    className="mb-3 rounded-lg border p-2.5 flex flex-wrap items-center justify-between gap-2"
+                    style={{
+                      borderColor: 'var(--border-subtle)',
+                      background: 'color-mix(in srgb, var(--surface-1), transparent 7%)',
+                    }}
+                  >
+                    <div>
+                      <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                        Auto-calculate width/depth
+                      </div>
+                      <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                        Uses resolution × pixel size. Non-destructive: switching back restores previous manual width/depth.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={selectedBuildDimensionMode === 'auto'}
+                      onClick={() => setBuildDimensionMode(selectedBuildDimensionMode === 'auto' ? 'manual' : 'auto')}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                      style={selectedBuildDimensionMode === 'auto'
+                        ? {
+                            color: 'var(--accent-secondary)',
+                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                          }
+                        : { color: 'var(--text-strong)' }}
+                    >
+                      {selectedBuildDimensionMode === 'auto' ? 'Auto' : 'Manual'}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    <LabeledNumberInput
+                      label="Build width (mm)"
+                      disabled={selectedBuildDimensionMode === 'auto'}
+                      value={selectedPrinter.buildVolumeMm.width}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        buildVolumeMm: {
+                          ...selectedPrinter.buildVolumeMm,
+                          width: value,
+                        },
+                      })}
+                    />
+                    <LabeledNumberInput
+                      label="Build depth (mm)"
+                      disabled={selectedBuildDimensionMode === 'auto'}
+                      value={selectedPrinter.buildVolumeMm.depth}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        buildVolumeMm: {
+                          ...selectedPrinter.buildVolumeMm,
+                          depth: value,
+                        },
+                      })}
+                    />
+                    <LabeledNumberInput
+                      label="Build height (mm)"
+                      value={selectedPrinter.buildVolumeMm.height}
+                      onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
+                        buildVolumeMm: {
+                          ...selectedPrinter.buildVolumeMm,
+                          height: value,
+                        },
+                      })}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Display</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    <LabeledNumberInput
+                      label="Resolution X (px)"
+                      value={selectedPrinter.display.resolutionX}
+                      onChange={(value) => handlePrinterDisplayChange({
+                        resolutionX: Math.max(1, Math.round(value)),
+                      })}
+                    />
+                    <LabeledNumberInput
+                      label="Resolution Y (px)"
+                      value={selectedPrinter.display.resolutionY}
+                      onChange={(value) => handlePrinterDisplayChange({
+                        resolutionY: Math.max(1, Math.round(value)),
+                      })}
+                    />
+                    <LabeledNumberInput
+                      label="Bit depth"
+                      value={selectedPrinter.bitDepth?.bits ?? 8}
+                      onChange={handlePrinterBitDepthChange}
+                    />
+
+                    <LabeledNumberInput
+                      label="Pixel size X (μm)"
+                      value={selectedPrinter.pixelSize?.x ?? 1}
+                      onChange={(value) => handlePrinterPixelSizeChange('x', value)}
+                    />
+                    <LabeledNumberInput
+                      label="Pixel size Y (μm)"
+                      value={selectedPrinter.pixelSize?.y ?? 1}
+                      onChange={(value) => handlePrinterPixelSizeChange('y', value)}
+                    />
+
+                    <LabeledToggleInput
+                      label="Anti-Aliasing"
+                      checked={selectedPrinter.antiAliasing === true}
+                      onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { antiAliasing: checked })}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
+                  <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Output</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    <LabeledSelectInput
+                      label="Output format"
+                      value={selectedPrinter.display.outputFormat}
+                      options={OUTPUT_FORMAT_OPTIONS}
+                      onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
+                    />
+
+                    <LabeledSelectInput
+                      label="Network support"
+                      value={selectedPrinter.networkSupport ?? ''}
+                      options={selectedPrinterNetworkModeOptions}
+                      onChange={(value) => {
+                        const nextMode = value.trim().toLowerCase();
+                        const normalizedMode = nextMode.length > 0 ? nextMode : undefined;
+                        updatePrinterProfile(selectedPrinter.id, { networkSupport: normalizedMode });
+                        if (!normalizedMode) {
+                          setIsNetworkSettingsOpen(false);
+                          setIsAddingNetworkPrinter(false);
+                        }
+                      }}
+                    />
+
+                    {selectedFormatVersionOptions.length > 0 && (
+                      <label className="space-y-1 block">
+                        <span className="ui-label font-medium">Format version</span>
+                        <select
+                          value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
+                          onChange={(event) => handlePrinterDisplayChange({ formatVersion: event.target.value })}
+                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
+                        >
+                          {selectedFormatVersionOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
+                    {selectedSettingsModeOptions.length > 0 && (
+                      <label className="space-y-1 block">
+                        <span className="ui-label font-medium">Settings mode</span>
+                        <select
+                          value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
+                          onChange={(event) => handlePrinterDisplayChange({ settingsMode: event.target.value })}
+                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
+                        >
+                          {selectedSettingsModeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+
+                    <LabeledToggleInput
+                      label="Mirror X"
+                      checked={selectedPrinter.display.mirrorX === true}
+                      onChange={(checked) => handlePrinterDisplayChange({ mirrorX: checked })}
+                    />
+
+                    <LabeledToggleInput
+                      label="Mirror Y"
+                      checked={selectedPrinter.display.mirrorY === true}
+                      onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Changes are applied immediately.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingPrinter(false)}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full"
+                  style={{ color: 'var(--accent-secondary)' }}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Done
+                </button>
               </div>
             </div>
           </div>
@@ -4927,6 +5086,146 @@ function cacheTrimmedImage(src: string, value: string) {
   persistTrimmedImageCacheToStorage();
 }
 
+type Rgba = { r: number; g: number; b: number; a: number };
+
+function readPixelRgba(pixels: Uint8ClampedArray, width: number, x: number, y: number): Rgba {
+  const index = (y * width + x) * 4;
+  return {
+    r: pixels[index],
+    g: pixels[index + 1],
+    b: pixels[index + 2],
+    a: pixels[index + 3],
+  };
+}
+
+function rgbaDelta(a: Rgba, b: Rgba): number {
+  return Math.max(
+    Math.abs(a.r - b.r),
+    Math.abs(a.g - b.g),
+    Math.abs(a.b - b.b),
+    Math.abs(a.a - b.a),
+  );
+}
+
+function resolveUniformBackgroundColor(width: number, height: number, pixels: Uint8ClampedArray): Rgba | null {
+  if (!width || !height) return null;
+  const corners = [
+    readPixelRgba(pixels, width, 0, 0),
+    readPixelRgba(pixels, width, width - 1, 0),
+    readPixelRgba(pixels, width, 0, height - 1),
+    readPixelRgba(pixels, width, width - 1, height - 1),
+  ];
+
+  if (corners.some((corner) => corner.a < 220)) return null;
+
+  const base = corners[0];
+  const isUniform = corners.every((corner) => rgbaDelta(corner, base) <= 24);
+  if (!isUniform) return null;
+
+  const avg = corners.reduce((acc, corner) => ({
+    r: acc.r + corner.r,
+    g: acc.g + corner.g,
+    b: acc.b + corner.b,
+    a: acc.a + corner.a,
+  }), { r: 0, g: 0, b: 0, a: 0 });
+
+  return {
+    r: Math.round(avg.r / corners.length),
+    g: Math.round(avg.g / corners.length),
+    b: Math.round(avg.b / corners.length),
+    a: Math.round(avg.a / corners.length),
+  };
+}
+
+function isLikelyBackgroundPixel(pixel: Rgba, background: Rgba | null): boolean {
+  if (pixel.a <= 8) return true;
+  if (!background) return false;
+
+  const colorDelta = Math.max(
+    Math.abs(pixel.r - background.r),
+    Math.abs(pixel.g - background.g),
+    Math.abs(pixel.b - background.b),
+  );
+  return pixel.a >= 220 && colorDelta <= 20;
+}
+
+async function normalizeUploadedPrinterImageDataUrl(src: string): Promise<string> {
+  try {
+    const image = new Image();
+    image.decoding = 'async';
+    image.src = src;
+    await image.decode();
+
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    if (!width || !height) return src;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return src;
+
+    ctx.drawImage(image, 0, 0);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const pixels = imageData.data;
+    const background = resolveUniformBackgroundColor(width, height, pixels);
+
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const pixel = readPixelRgba(pixels, width, x, y);
+        if (!isLikelyBackgroundPixel(pixel, background)) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (maxX < minX || maxY < minY) return src;
+
+    const trimmedWidth = maxX - minX + 1;
+    const trimmedHeight = maxY - minY + 1;
+    const pad = Math.max(2, Math.round(Math.max(trimmedWidth, trimmedHeight) * 0.04));
+    const paddedMinX = Math.max(0, minX - pad);
+    const paddedMinY = Math.max(0, minY - pad);
+    const paddedMaxX = Math.min(width - 1, maxX + pad);
+    const paddedMaxY = Math.min(height - 1, maxY + pad);
+    const paddedWidth = paddedMaxX - paddedMinX + 1;
+    const paddedHeight = paddedMaxY - paddedMinY + 1;
+
+    if (paddedWidth >= width * 0.99 && paddedHeight >= height * 0.99) return src;
+
+    const trimmedCanvas = document.createElement('canvas');
+    trimmedCanvas.width = paddedWidth;
+    trimmedCanvas.height = paddedHeight;
+    const trimmedCtx = trimmedCanvas.getContext('2d');
+    if (!trimmedCtx) return src;
+
+    trimmedCtx.drawImage(
+      canvas,
+      paddedMinX,
+      paddedMinY,
+      paddedWidth,
+      paddedHeight,
+      0,
+      0,
+      paddedWidth,
+      paddedHeight,
+    );
+
+    return trimmedCanvas.toDataURL('image/png');
+  } catch {
+    return src;
+  }
+}
+
 function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
   const [displaySrc, setDisplaySrc] = React.useState(src);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -4984,6 +5283,7 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
         ctx.drawImage(image, 0, 0);
         const imageData = ctx.getImageData(0, 0, width, height);
         const pixels = imageData.data;
+        const background = resolveUniformBackgroundColor(width, height, pixels);
 
         let minX = width;
         let minY = height;
@@ -4992,8 +5292,8 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
 
         for (let y = 0; y < height; y += 1) {
           for (let x = 0; x < width; x += 1) {
-            const alpha = pixels[(y * width + x) * 4 + 3];
-            if (alpha > 8) {
+            const pixel = readPixelRgba(pixels, width, x, y);
+            if (!isLikelyBackgroundPixel(pixel, background)) {
               if (x < minX) minX = x;
               if (y < minY) minY = y;
               if (x > maxX) maxX = x;
@@ -5082,7 +5382,7 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
   }, [src]);
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full min-h-0 overflow-hidden">
       {isLoading && (
         <div className="absolute inset-0 z-[1] flex items-center justify-center" style={{ background: 'color-mix(in srgb, #151923, transparent 32%)' }}>
           <Loader2 className="h-4 w-4 animate-spin" style={{ color: 'var(--accent-secondary)' }} />
@@ -5091,7 +5391,7 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
       <img
         src={displaySrc}
         alt={alt}
-        className={`${className ?? ''} transition-opacity duration-150 opacity-100`}
+        className={`absolute inset-0 ${className ?? ''} transition-opacity duration-150 opacity-100`}
       />
     </div>
   );

@@ -29,6 +29,13 @@ export type PluginManifest = {
 export type ProfileNetworkUiAdapter = {
 } & PluginNetworkUiAdapterContract;
 
+export type ProfileNetworkModeOption = {
+  mode: string;
+  displayName: string;
+  pluginId: string;
+  operationNamespace: string;
+};
+
 export type PrinterMonitoringSnapshot = {
 } & PluginMonitoringSnapshotContract;
 
@@ -114,6 +121,18 @@ export function getDefaultProfileNetworkUiAdapter(): ProfileNetworkUiAdapter {
     throw new Error('No built-in profile network adapters registered');
   }
   return first;
+}
+
+export function getAvailableProfileNetworkModes(): ProfileNetworkModeOption[] {
+  ensureBuiltinAdaptersHydrated();
+  return Array.from(NETWORK_ADAPTERS_BY_MODE.values())
+    .map((adapter) => ({
+      mode: adapter.mode,
+      displayName: adapter.displayName,
+      pluginId: adapter.pluginId,
+      operationNamespace: adapter.operationNamespace,
+    }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 export function getProfileMonitoringUiAdapter(mode: string | null | undefined): ProfileMonitoringUiAdapter {

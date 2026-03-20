@@ -652,12 +652,12 @@ export function TopBar({
           aria-label={topbarPrinterButtonAriaLabel}
           data-no-window-drag="true"
         >
-          <div className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-sm shrink-0">
+          <div className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-sm shrink-0" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
             {activePrinterThumbnailSrc ? (
               <img
                 src={activePrinterThumbnailSrc}
                 alt={activePrinterProfile?.name ?? 'Selected printer'}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-contain"
                 draggable={false}
                 onError={() => setPrinterThumbnailFailed(true)}
               />
@@ -838,12 +838,12 @@ export function TopBar({
                   role="menuitem"
                   title={device.ipAddress || undefined}
                 >
-                  <span className="inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                  <span className="inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm shrink-0" style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}>
                     {activePrinterThumbnailSrc ? (
                       <img
                         src={activePrinterThumbnailSrc}
                         alt={activePrinterProfile?.name ?? deviceName}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-contain"
                         draggable={false}
                         onError={() => setPrinterThumbnailFailed(true)}
                       />

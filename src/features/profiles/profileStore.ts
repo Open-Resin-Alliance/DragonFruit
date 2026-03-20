@@ -1136,11 +1136,49 @@ export function addMaterialProfile(
 export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterProfile, 'id'>>): void {
   ensureHydrated();
   let changed = false;
+  const hasNetworkSupportUpdate = Object.prototype.hasOwnProperty.call(updates, 'networkSupport');
 
   const printerProfiles = state.printerProfiles.map((profile) => {
     if (profile.id !== id) return profile;
     if (profile.isOfficial) return profile;
     changed = true;
+
+    const nextNetworkSupport = hasNetworkSupportUpdate
+      ? normalizeNetworkSupport(updates.networkSupport)
+      : profile.networkSupport;
+    const nextNetwork = updates.network !== undefined
+      ? sanitizePrinterNetworkSettings(updates.network)
+      : sanitizePrinterNetworkSettings(profile.network);
+    const nextNetworkConnection = updates.networkConnection !== undefined
+      ? (
+        nextNetworkSupport
+          ? sanitizePrinterNetworkConnectionState(
+            updates.networkConnection,
+            nextNetworkSupport,
+            nextNetwork.ipAddress,
+          )
+          : undefined
+      )
+      : profile.networkConnection;
+    const nextNetworkProfileState = nextNetworkSupport
+      ? deriveNetworkProfileState(
+        {
+          ...profile,
+          networkSupport: nextNetworkSupport,
+          network: nextNetwork,
+          networkFleet: updates.networkFleet !== undefined ? updates.networkFleet : profile.networkFleet,
+          activeNetworkDeviceId: updates.activeNetworkDeviceId !== undefined ? updates.activeNetworkDeviceId : profile.activeNetworkDeviceId,
+          networkConnection: nextNetworkConnection,
+        },
+        nextNetworkSupport,
+      )
+      : {
+        network: nextNetwork,
+        networkFleet: undefined,
+        activeNetworkDeviceId: undefined,
+        networkConnection: undefined,
+      };
+
     return {
       ...profile,
       ...updates,
@@ -1149,9 +1187,7 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       antiAliasing: updates.antiAliasing !== undefined
         ? normalizeAntiAliasingSupport(updates.antiAliasing)
         : profile.antiAliasing,
-      networkSupport: updates.networkSupport !== undefined
-        ? normalizeNetworkSupport(updates.networkSupport)
-        : profile.networkSupport,
+      networkSupport: nextNetworkSupport,
       networkFilter: updates.networkFilter !== undefined
         ? sanitizeNetworkFilter(updates.networkFilter)
         : profile.networkFilter,
@@ -1178,22 +1214,10 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
           mirrorY: normalizeMirrorFlag(updates.display.mirrorY, profile.display.mirrorY === true),
         }
         : profile.display,
-      network: updates.network !== undefined ? sanitizePrinterNetworkSettings(updates.network) : profile.network,
-      networkConnection: updates.networkConnection !== undefined
-        ? (
-          (updates.networkSupport !== undefined
-            ? normalizeNetworkSupport(updates.networkSupport)
-            : profile.networkSupport)
-            ? sanitizePrinterNetworkConnectionState(
-              updates.networkConnection,
-              (updates.networkSupport !== undefined
-                ? normalizeNetworkSupport(updates.networkSupport)
-                : profile.networkSupport)!,
-              sanitizePrinterNetworkSettings(updates.network ?? profile.network).ipAddress,
-            )
-            : undefined
-        )
-        : profile.networkConnection,
+      network: nextNetworkProfileState.network,
+      networkFleet: nextNetworkProfileState.networkFleet,
+      activeNetworkDeviceId: nextNetworkProfileState.activeNetworkDeviceId,
+      networkConnection: nextNetworkProfileState.networkConnection,
     };
   });
 
