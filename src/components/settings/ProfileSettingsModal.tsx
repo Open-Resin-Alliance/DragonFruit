@@ -163,6 +163,7 @@ export function ProfileSettingsModal({
     liftDistanceMm: 6,
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
+    minimumAaAlphaPercent: 30,
   });
   const [newMaterialDraft, setNewMaterialDraft] = React.useState<Omit<MaterialProfile, 'id' | 'printerProfileId'>>({
     name: 'New Resin',
@@ -179,6 +180,7 @@ export function ProfileSettingsModal({
     liftDistanceMm: 6,
     liftSpeedMmMin: 60,
     retractSpeedMmMin: 150,
+    minimumAaAlphaPercent: 30,
   });
   const [isEditingPrinter, setIsEditingPrinter] = React.useState(false);
   const [uploadTargetPrinterId, setUploadTargetPrinterId] = React.useState<string | null>(null);
@@ -1641,6 +1643,7 @@ export function ProfileSettingsModal({
       liftDistanceMm: selectedMaterial.liftDistanceMm,
       liftSpeedMmMin: selectedMaterial.liftSpeedMmMin,
       retractSpeedMmMin: selectedMaterial.retractSpeedMmMin,
+      minimumAaAlphaPercent: selectedMaterial.minimumAaAlphaPercent,
     });
   }, [isMaterialEditorOpen, selectedMaterial]);
 
@@ -1688,6 +1691,7 @@ export function ProfileSettingsModal({
       liftDistanceMm: 6,
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
+      minimumAaAlphaPercent: 30,
     });
     setIsCreateMaterialOpen(true);
   }, [printerMaterials.length, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue]);
@@ -4187,6 +4191,14 @@ function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSec
             label="Retract speed (mm/min)"
             value={draft.retractSpeedMmMin}
             onChange={(value) => onChange((prev) => ({ ...prev, retractSpeedMmMin: value }))}
+          />
+          <LabeledNumberInput
+            label="Minimum AA alpha (%)"
+            value={draft.minimumAaAlphaPercent}
+            onChange={(value) => onChange((prev) => ({
+              ...prev,
+              minimumAaAlphaPercent: Math.max(0, Math.min(100, value)),
+            }))}
           />
         </div>
       </div>

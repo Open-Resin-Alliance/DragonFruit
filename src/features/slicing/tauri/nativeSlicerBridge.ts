@@ -18,6 +18,7 @@ export type NativeSolidSliceJobEnvelope = {
   bvhAccelerationEnabled: boolean;
   antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
   aaOnSupports: boolean;
+  minimumAaAlphaPercent: number;
   mirrorX: boolean;
   mirrorY: boolean;
   modelTriangleCount: number;
@@ -43,6 +44,7 @@ type NativeSolidSlicePayload = {
   bvh_acceleration_enabled: boolean;
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
+  minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
   model_triangle_count: number;
@@ -66,6 +68,7 @@ type NativeSolidSliceMetadataPayload = {
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
+  minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
   container_compression_level: number;
@@ -136,6 +139,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     bvh_acceleration_enabled: job.bvhAccelerationEnabled,
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,
+    minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
     model_triangle_count: job.modelTriangleCount,
@@ -160,6 +164,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     png_compression_strategy: job.pngCompressionStrategy,
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,
+    minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),

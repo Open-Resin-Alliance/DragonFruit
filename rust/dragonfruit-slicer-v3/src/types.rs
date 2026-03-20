@@ -17,6 +17,9 @@ fn default_anti_aliasing_level() -> String {
     "Off".to_string()
 }
 
+fn default_minimum_aa_alpha_percent() -> f32 {
+  30.0
+
 fn default_false() -> bool {
     false
 }
@@ -53,6 +56,9 @@ pub struct SliceJobV3 {
     /// Whether AA should apply to support geometry (reserved for future split masks).
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// Minimum grayscale alpha (0-100%) for non-zero AA pixels.
+    #[serde(default = "default_minimum_aa_alpha_percent")]
+    pub minimum_aa_alpha_percent: f32,
     /// Mirror output image across X axis.
     #[serde(default = "default_false")]
     pub mirror_x: bool,

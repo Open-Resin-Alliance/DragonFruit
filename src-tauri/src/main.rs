@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod network;
+fn default_minimum_aa_alpha_percent() -> f32 {
+    30.0
+}
 mod plugin_registry;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -163,6 +166,8 @@ struct SliceJobMetadata {
     png_compression_strategy: String,
     anti_aliasing_level: String,
     aa_on_supports: bool,
+    #[serde(default = "default_minimum_aa_alpha_percent")]
+    minimum_aa_alpha_percent: f32,
     #[serde(default)]
     mirror_x: bool,
     #[serde(default)]
@@ -266,8 +271,8 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
         let job: dragonfruit_slicer_v3::types::SliceJobV3 = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            std::sync::Arc::new(move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
+        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 = std::sync::Arc::new(
+            move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
                 let _ = win.emit(
                     "slicer://progress",
                     SliceProgressPayload {
@@ -276,7 +281,8 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
                         phase: phase_to_label(update.phase).to_string(),
                     },
                 );
-            });
+            },
+        );
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
             let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
@@ -342,6 +348,7 @@ async fn slice_solid_native_to_temp_path(
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
             aa_on_supports: meta.aa_on_supports,
+            minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,
             container_compression_level: meta.container_compression_level,

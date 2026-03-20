@@ -447,6 +447,11 @@ pub fn rasterize_layer_with_stats(
     let aa_level_steps = aa_subpixel_steps(job.anti_aliasing_level.trim());
     let aa_steps = (aa_level_steps as usize).max(1);
     let aa_enabled = aa_steps > 1;
+    let min_aa_alpha_u8 = if aa_enabled {
+        ((job.minimum_aa_alpha_percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8
+    } else {
+        0
+    };
 
     let Some(scanline_index) = build_scanline_segment_index(&segments, height, aa_steps) else {
         return (mask, stats);
@@ -489,7 +494,8 @@ pub fn rasterize_layer_with_stats(
                 let mask_row = &mut mask[r_start..r_start + width];
                 for (acc, out) in row_accum.iter_mut().zip(mask_row.iter_mut()) {
                     if *acc > 0 {
-                        *out = (*acc / (aa_steps as u32)).min(255) as u8;
+                        let resolved = (*acc / (aa_steps as u32)).min(255) as u8;
+                        *out = resolved.max(min_aa_alpha_u8);
                         *acc = 0;
                     }
                 }
@@ -622,7 +628,8 @@ pub fn rasterize_layer_with_stats(
             let mask_row = &mut mask[r_start..r_start + width];
             for (acc, out) in row_accum.iter_mut().zip(mask_row.iter_mut()) {
                 if *acc > 0 {
-                    *out = (*acc / (aa_steps as u32)).min(255) as u8;
+                    let resolved = (*acc / (aa_steps as u32)).min(255) as u8;
+                    *out = resolved.max(min_aa_alpha_u8);
                     *acc = 0;
                 }
             }
@@ -756,6 +763,7 @@ mod tests {
             container_compression_level: 0,
             anti_aliasing_level: "Off".to_string(),
             aa_on_supports: false,
+            minimum_aa_alpha_percent: 30.0,
             mirror_x: false,
             mirror_y: false,
             triangles_xyz: Vec::new(),

@@ -55,7 +55,7 @@ export type SliceExportOrchestratorOptions = {
   materialProfile: MaterialProfile;
   filenameBase: string;
   antiAliasingLevel?: 'Off' | '2x' | '4x' | '8x' | '16x';
-  aaOnSupports?: boolean;
+  minimumAaAlphaPercentOverride?: number;
   outputMode?: 'download' | 'return';
   exportThumbnailPng?: Uint8Array | null;
   abortSignal?: AbortSignal;
@@ -124,6 +124,7 @@ export type SliceExportResult = {
       bvhAccelerationEnabled: boolean;
       antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
       aaOnSupports: boolean;
+      minimumAaAlphaPercent: number;
       modelTriangleCount: number;
       triangleFloatCount: number;
       buildWidthMm: number;
@@ -228,7 +229,16 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     pngCompressionStrategy: resolvedPngStrategy,
     bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
-    aaOnSupports: options.aaOnSupports ?? false,
+    aaOnSupports: true,
+    minimumAaAlphaPercent: Math.max(
+      0,
+      Math.min(
+        100,
+        options.minimumAaAlphaPercentOverride
+          ?? options.materialProfile.minimumAaAlphaPercent
+          ?? 50,
+      ),
+    ),
     mirrorX: solidMesh.mirrorX,
     mirrorY: solidMesh.mirrorY,
     modelTriangleCount: solidMesh.modelTriangleCount,
@@ -248,7 +258,6 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
   logDebug('Native slicing starting…');
   logDebug('Native slicing AA settings', {
     antiAliasingLevel: nativeJob.antiAliasingLevel,
-    aaOnSupports: nativeJob.aaOnSupports,
   });
 
   let progressTotal = solidMesh.totalLayers;
@@ -318,6 +327,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         bvhAccelerationEnabled: nativeJob.bvhAccelerationEnabled,
         antiAliasingLevel: nativeJob.antiAliasingLevel,
         aaOnSupports: nativeJob.aaOnSupports,
+        minimumAaAlphaPercent: nativeJob.minimumAaAlphaPercent,
         modelTriangleCount: nativeJob.modelTriangleCount,
         triangleFloatCount: nativeJob.trianglesXYZ.length,
         buildWidthMm: nativeJob.buildWidthMm,
