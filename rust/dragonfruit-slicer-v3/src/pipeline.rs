@@ -16,7 +16,33 @@ use crate::types::{
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
+static MASK_POOL: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+
+pub fn return_mask_to_pool(mask: Vec<u8>) {
+    if mask.is_empty() {
+        return;
+    }
+    if let Ok(mut pool) = MASK_POOL.get_or_init(|| Mutex::new(Vec::new())).lock() {
+        if pool.len() < 16 {
+            // Keep the capacity, don't drop
+            pool.push(mask);
+        }
+    }
+}
+
+pub fn get_recycled_mask(size: usize) -> Vec<u8> {
+    if let Ok(mut pool) = MASK_POOL.get_or_init(|| Mutex::new(Vec::new())).lock() {
+        while let Some(mut m) = pool.pop() {
+            if m.len() == size {
+                m.fill(0);
+                return m;
+            }
+        }
+    }
+    vec![0u8; size]
+}
 
 fn encode_uniform_png_cached(
     width: u32,
@@ -98,8 +124,12 @@ fn cap_concurrency_for_mask_bytes(
     // Keep raster producers tighter to prevent queueing huge masks.
     if streaming_raw_mask_sink {
         if budget_override.is_none() {
-            if bytes_per_mask >= 12 * 1024 * 1024 {
+            if bytes_per_mask >= 48 * 1024 * 1024 {
+                capped = capped.min(1);
+            } else if bytes_per_mask >= 24 * 1024 * 1024 {
                 capped = capped.min(2);
+            } else if bytes_per_mask >= 12 * 1024 * 1024 {
+                capped = capped.min(3);
             }
         }
     }
@@ -215,7 +245,14 @@ pub fn render_layers_bounded(
                                 };
 
                                 let raw_mask = if need_raw_masks {
-                                    Some(vec![0u8; layer_pixels_len])
+                                    if streaming_raw_mask_sink {
+                                        // Sentinel for guaranteed-empty layer in streaming mode:
+                                        // CTB workers can encode a full black run without
+                                        // materializing a full-size zero mask.
+                                        Some(Vec::new())
+                                    } else {
+                                        Some(crate::pipeline::get_recycled_mask(layer_pixels_len))
+                                    }
                                 } else {
                                     None
                                 };

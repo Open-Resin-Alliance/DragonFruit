@@ -452,7 +452,7 @@ pub fn rasterize_layer_with_stats(
 ) -> (Vec<u8>, LayerAreaStatsV3) {
     let width = job.source_width_px as usize;
     let height = job.source_height_px as usize;
-    let mut mask = vec![0u8; width * height];
+    let mut mask = crate::pipeline::get_recycled_mask(width * height);
     let mut stats = LayerAreaStatsV3::default();
 
     if layer_indices.is_empty() {
