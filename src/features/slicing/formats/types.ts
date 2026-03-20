@@ -7,6 +7,7 @@ export type SlicingFormatDefinition = {
   outputFormat: PrinterOutputFormat;
   displayName: string;
   ownership: SlicingFormatOwnership;
+  layerDataKind: 'png' | 'raw-mask';
   pluginId?: string;
   rustModulePath: string;
   wasmExportName: string;

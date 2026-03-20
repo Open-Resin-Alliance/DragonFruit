@@ -2,12 +2,35 @@ import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profil
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { buildSolidSliceMeshForWasm } from './rasterLayerZipExport';
 import { resolveSlicingFormatDefinition } from './formats/registry';
+import type { PngCompressionStrategy } from '@/components/settings/performancePreferences';
 import {
   isNativeSlicerAvailable,
   sliceSolidAndEncodeWithNativeSlicerToTempPath,
   type NativeSlicerPerfMetrics,
   type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
+
+function resolvePngCompressionStrategy(
+  mode: PngCompressionStrategy,
+  antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x',
+  outputUsesPngLayers: boolean,
+): 'fastest' | 'balanced' | 'smallest' | 'optimal' {
+  if (!outputUsesPngLayers) {
+    return 'fastest';
+  }
+
+  if (mode !== 'auto') {
+    return mode;
+  }
+
+  if (antiAliasingLevel === 'Off') {
+    return 'fastest';
+  }
+
+  // Any level of AA (2x, 4x, 8x, 16x) benefits from balanced compression 
+  // to avoid ballooning file sizes from the gray anti-aliased pixels.
+  return 'balanced';
+}
 
 const DEBUG_PREFIX = '[SlicingDebug]';
 
@@ -186,7 +209,11 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
     heightPx: solidMesh.heightPx,
     xPackingMode: solidMesh.xPackingMode,
     computeBackend: solidMesh.computeBackend,
-    pngCompressionStrategy: solidMesh.pngCompressionStrategy,
+    pngCompressionStrategy: resolvePngCompressionStrategy(
+      solidMesh.pngCompressionStrategy,
+      options.antiAliasingLevel ?? 'Off',
+      format.layerDataKind === 'png',
+    ),
     bvhAccelerationEnabled: solidMesh.bvhAccelerationEnabled,
     antiAliasingLevel: options.antiAliasingLevel ?? 'Off',
     aaOnSupports: options.aaOnSupports ?? false,

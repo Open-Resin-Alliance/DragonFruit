@@ -3,7 +3,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
-import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
+import {
+  getSavedSlicingPerformanceSettings,
+  type PngCompressionStrategy,
+} from '@/components/settings/performancePreferences';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
@@ -84,7 +87,7 @@ export type SolidSliceMeshForWasm = {
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
   computeBackend: 'auto' | 'cpu' | 'gpu';
-  pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
+  pngCompressionStrategy: PngCompressionStrategy;
   bvhAccelerationEnabled: boolean;
   mirrorX: boolean;
   mirrorY: boolean;

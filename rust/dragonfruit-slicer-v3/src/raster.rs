@@ -594,15 +594,13 @@ pub fn rasterize_layer_with_stats(
                     }
                 }
 
-                if compute_area_stats {
-                    let filled = (clamped_end - clamped_start + 1) as u32;
-                    stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
+                let filled = (clamped_end - clamped_start + 1) as u32;
+                stats.total_solid_pixels = stats.total_solid_pixels.saturating_add(filled);
 
-                    min_x = min_x.min(clamped_start as i32);
-                    max_x = max_x.max(clamped_end as i32);
-                    min_y = min_y.min(y as i32);
-                    max_y = max_y.max(y as i32);
-                }
+                min_x = min_x.min(clamped_start as i32);
+                max_x = max_x.max(clamped_end as i32);
+                min_y = min_y.min(y as i32);
+                max_y = max_y.max(y as i32);
             }
         }
 
@@ -612,30 +610,39 @@ pub fn rasterize_layer_with_stats(
         restore_active_edges_sorted(&mut active_edges);
     }
 
-    if compute_area_stats && stats.total_solid_pixels > 0 {
-        let stats_source = stats_mask.as_deref().unwrap_or(&mask);
-        let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
-            compute_component_area_stats_8_connected(
-                stats_source,
-                width,
-                height,
-                min_x as usize,
-                max_x as usize,
-                min_y as usize,
-                max_y as usize,
-                pixel_area_mm2,
-            );
-
-        stats.total_solid_pixels = total_pixels;
-        let total_area = (total_pixels as f64) * pixel_area_mm2;
-        stats.total_solid_area_mm2 = total_area;
-        stats.largest_area_mm2 = largest_area_mm2;
-        stats.smallest_area_mm2 = smallest_area_mm2;
+    if stats.total_solid_pixels > 0 {
         stats.min_x = min_x;
         stats.min_y = min_y;
         stats.max_x = max_x;
         stats.max_y = max_y;
-        stats.area_count = area_count;
+
+        if compute_area_stats {
+            let stats_source = stats_mask.as_deref().unwrap_or(&mask);
+            let (total_pixels, largest_area_mm2, smallest_area_mm2, area_count) =
+                compute_component_area_stats_8_connected(
+                    stats_source,
+                    width,
+                    height,
+                    min_x as usize,
+                    max_x as usize,
+                    min_y as usize,
+                    max_y as usize,
+                    pixel_area_mm2,
+                );
+
+            stats.total_solid_pixels = total_pixels;
+            let total_area = (total_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = largest_area_mm2;
+            stats.smallest_area_mm2 = smallest_area_mm2;
+            stats.area_count = area_count;
+        } else {
+            let total_area = (stats.total_solid_pixels as f64) * pixel_area_mm2;
+            stats.total_solid_area_mm2 = total_area;
+            stats.largest_area_mm2 = total_area;
+            stats.smallest_area_mm2 = total_area;
+            stats.area_count = 1;
+        }
     }
 
     (mask, stats)

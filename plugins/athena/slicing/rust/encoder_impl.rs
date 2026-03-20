@@ -20,36 +20,6 @@ pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
     vec![Box::new(AthenaPluginEncoder)]
 }
 
-fn nanodlp_requires_area_stats() -> bool {
-    std::env::var("DF_V3_NANODLP_AREA_STATS")
-        .ok()
-        .map(|v| {
-            let t = v.trim().to_ascii_lowercase();
-            !(t == "0" || t == "false" || t == "off" || t == "no")
-        })
-        .unwrap_or(true)
-}
-
-fn nanodlp_progress_interval(layers_count: u32) -> u32 {
-    let env = std::env::var("DF_V3_NANODLP_PROGRESS_EVERY")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .filter(|v| *v >= 1)
-        .unwrap_or(10);
-    env.min(layers_count.max(1))
-}
-
-fn estimate_nanodlp_archive_capacity(layer_pngs: &[Vec<u8>], metadata_json_len: usize) -> usize {
-    let layer_bytes: usize = layer_pngs.iter().map(|p| p.len()).sum();
-    let file_count = layer_pngs.len().saturating_add(8);
-    // PNG layers are stored; estimate local headers + central directory + JSON files.
-    let zip_overhead = file_count.saturating_mul(220);
-    layer_bytes
-        .saturating_add(metadata_json_len)
-        .saturating_add(64 * 1024)
-        .saturating_add(zip_overhead)
-}
-
 fn normalize_container_compression_level(raw: u8) -> i32 {
     (raw.min(9)) as i32
 }
@@ -330,7 +300,6 @@ fn write_nanodlp_archive<W: Write + Seek>(
             job.container_compression_level,
         )));
     let layer_opt = FileOptions::default().compression_method(CompressionMethod::Stored);
-    let progress_every = nanodlp_progress_interval(layers_count);
 
     let meta_json = json!({
         "format_version": 3,
@@ -365,10 +334,7 @@ fn write_nanodlp_archive<W: Write + Seek>(
         zip.start_file(name, layer_opt)?;
         zip.write_all(png)?;
         if let Some(progress) = on_progress {
-            let done = (idx as u32) + 1;
-            if done == layers_count || (done % progress_every) == 0 {
-                progress(done, layers_count.max(1));
-            }
+            progress((idx as u32) + 1, layers_count.max(1));
         }
     }
 
@@ -404,7 +370,7 @@ impl FormatEncoder for AthenaPluginEncoder {
     }
 
     fn requires_area_stats(&self) -> bool {
-        nanodlp_requires_area_stats()
+        false
     }
 
     fn estimate_encode_progress_units(&self, rendered_layers: &RenderedLayersV3) -> u32 {
@@ -429,8 +395,7 @@ impl FormatEncoder for AthenaPluginEncoder {
             ));
         };
 
-        let reserve = estimate_nanodlp_archive_capacity(layer_pngs, job.metadata_json.len());
-        let mut cursor = std::io::Cursor::new(Vec::<u8>::with_capacity(reserve));
+        let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
         write_nanodlp_archive(&mut cursor, job, layer_pngs, layer_area_stats, on_progress)?;
         Ok(cursor.into_inner())
     }
@@ -441,8 +406,7 @@ impl FormatEncoder for AthenaPluginEncoder {
         layer_pngs: &[Vec<u8>],
         layer_area_stats: &[LayerAreaStatsV3],
     ) -> Result<Vec<u8>, SlicerV3Error> {
-        let reserve = estimate_nanodlp_archive_capacity(layer_pngs, job.metadata_json.len());
-        let mut cursor = std::io::Cursor::new(Vec::<u8>::with_capacity(reserve));
+        let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
         write_nanodlp_archive(&mut cursor, job, layer_pngs, layer_area_stats, None)?;
         Ok(cursor.into_inner())
     }

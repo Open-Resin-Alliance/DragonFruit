@@ -8,6 +8,7 @@ const CORE_LUMEN_FORMAT_DEFINITION: SlicingFormatDefinition = {
   outputFormat: '.lumen',
   displayName: 'Lumen (Core Placeholder)',
   ownership: 'core',
+  layerDataKind: 'png',
   rustModulePath: 'formats::lumen',
   wasmExportName: 'encode_lumen_container',
   notes: 'Placeholder format definition. Rust encoder scaffold only.',
@@ -35,6 +36,14 @@ function resolveBuiltinPluginSlicingFormat(
 const CORE_FALLBACK_BY_OUTPUT_FORMAT: Partial<Record<PrinterOutputFormat, SlicingFormatDefinition>> = {
   '.lumen': CORE_LUMEN_FORMAT_DEFINITION,
 };
+
+export function outputFormatUsesPngLayers(outputFormat: PrinterOutputFormat | string | null | undefined): boolean {
+  if (!outputFormat) return true;
+  const format = outputFormat as PrinterOutputFormat;
+  const definition = resolveBuiltinPluginSlicingFormat(format) ?? CORE_FALLBACK_BY_OUTPUT_FORMAT[format];
+  if (!definition) return true;
+  return definition.layerDataKind === 'png';
+}
 
 export function getAvailableOutputFormatOptions(): Array<{ value: PrinterOutputFormat; label: string }> {
   const formats = new Set<PrinterOutputFormat>();

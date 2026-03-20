@@ -1208,6 +1208,7 @@ export function TopBar({
         onDebugPrimitivesPanelVisibleChange={onDebugPrimitivesPanelVisibleChange}
         view3dSettings={view3dSettings}
         onView3dSettingsChange={onView3dSettingsChange}
+        activeOutputFormat={activePrinterProfile?.display.outputFormat ?? null}
         heatmapColors={heatmapColors}
         onHeatmapColorChange={onHeatmapColorChange}
       />
