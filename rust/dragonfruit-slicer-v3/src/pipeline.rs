@@ -125,11 +125,11 @@ fn cap_concurrency_for_mask_bytes(
     if streaming_raw_mask_sink {
         if budget_override.is_none() {
             if bytes_per_mask >= 48 * 1024 * 1024 {
-                capped = capped.min(1);
-            } else if bytes_per_mask >= 24 * 1024 * 1024 {
                 capped = capped.min(2);
+            } else if bytes_per_mask >= 24 * 1024 * 1024 {
+                capped = capped.min(4);
             } else if bytes_per_mask >= 12 * 1024 * 1024 {
-                capped = capped.min(3);
+                capped = capped.min(8);
             }
         }
     }
