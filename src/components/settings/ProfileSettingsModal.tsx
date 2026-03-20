@@ -3251,7 +3251,7 @@ export function ProfileSettingsModal({
           <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setShowPresetPicker(false);
           }}>
-            <div className="w-full max-w-[1040px] max-h-[94vh] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[1040px] max-h-[94vh] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
@@ -3268,7 +3268,7 @@ export function ProfileSettingsModal({
                 </button>
               </div>
 
-              <div className="grid grid-cols-[220px_minmax(0,1fr)] min-h-[620px] max-h-[calc(94vh-56px)]">
+              <div className="grid grid-cols-[220px_minmax(0,1fr)] grid-rows-[1fr] min-h-[620px] flex-1 min-h-0 overflow-hidden">
                 <div className="border-r flex flex-col min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 8%)' }}>
                   <div className="p-2 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                     <div className="relative">
@@ -3308,7 +3308,7 @@ export function ProfileSettingsModal({
                   </div>
                 </div>
 
-                <div className="p-3 overflow-y-auto custom-scrollbar">
+                <div className="p-3 overflow-y-auto custom-scrollbar min-h-0">
                   {isSearching ? (
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-2.5">
                       {filteredPrinterPresets.map(renderPresetLibraryCard)}
