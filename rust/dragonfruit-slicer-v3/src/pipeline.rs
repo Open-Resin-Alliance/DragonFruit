@@ -166,13 +166,19 @@ pub fn render_layers_bounded(
     // when multiple workers simultaneously allocate large rasterization buffers.
     let layer_pixels = (job.source_width_px as usize).saturating_mul(job.source_height_px as usize);
     let mut max_concurrent = choose_max_concurrent();
+    let streaming_raw_mask_sink = on_raw_mask_layer.is_some() && !emit_raw_mask_layers;
     if layer_pixels > 12_000_000 && max_concurrent > 2 {
         // 12M pixels ≈ 4000x3000. For each extra concurrent worker with a 56MB
         // mask (plus potential PNG encoding), memory usage grows rapidly.
-        max_concurrent = max_concurrent / 2;
+        if streaming_raw_mask_sink || emit_raw_mask_layers {
+            max_concurrent /= 2;
+        } else {
+            // PNG-only paths (e.g. NanoDLP) can sustain higher parallelism than
+            // raw-mask pipelines while still keeping memory bounded.
+            max_concurrent = ((max_concurrent * 3) / 4).max(2);
+        }
     }
 
-    let streaming_raw_mask_sink = on_raw_mask_layer.is_some() && !emit_raw_mask_layers;
     max_concurrent =
         cap_concurrency_for_mask_bytes(max_concurrent, layer_pixels, streaming_raw_mask_sink);
 
