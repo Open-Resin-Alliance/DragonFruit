@@ -3,6 +3,7 @@
 import React from 'react';
 import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
+import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
   applyOfficialMaterialProfileUpdate,
   applyOfficialPrinterProfileUpdate,
@@ -3412,7 +3413,7 @@ export function ProfileSettingsModal({
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsMaterialEditorOpen(false);
           }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -3433,7 +3434,7 @@ export function ProfileSettingsModal({
                 </button>
               </div>
 
-              <div className="p-3 space-y-3">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
                 {usePluginLocalSettingsAsReplacement && (
                   <MaterialProfileIdentitySection draft={editMaterialDraft} onChange={setEditMaterialDraft} />
                 )}
@@ -3448,6 +3449,7 @@ export function ProfileSettingsModal({
                   onChange={setEditMaterialLocalSettingsByOutput}
                   replacementMode={usePluginLocalSettingsAsReplacement}
                 />
+              </div>
 
               <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -3472,7 +3474,6 @@ export function ProfileSettingsModal({
                   </button>
                 </div>
               </div>
-              </div>
             </div>
           </div>
         )}
@@ -3481,7 +3482,7 @@ export function ProfileSettingsModal({
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsEditingPrinter(false);
           }}>
-            <div className="w-full max-w-[960px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[960px] max-h-[88vh] rounded-xl border shadow-2xl ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -3500,7 +3501,7 @@ export function ProfileSettingsModal({
                 </button>
               </div>
 
-              <div className="p-3 space-y-3">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
                 <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Identity</div>
                   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-3 md:items-stretch">
@@ -3703,37 +3704,21 @@ export function ProfileSettingsModal({
                     />
 
                     {selectedFormatVersionOptions.length > 0 && (
-                      <label className="space-y-1 block">
-                        <span className="ui-label font-medium">Format version</span>
-                        <select
-                          value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
-                          onChange={(event) => handlePrinterDisplayChange({ formatVersion: event.target.value })}
-                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
-                        >
-                          {selectedFormatVersionOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      <SelectDropdown
+                        label="Format version"
+                        value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
+                        options={selectedFormatVersionOptions}
+                        onChange={(value) => handlePrinterDisplayChange({ formatVersion: value })}
+                      />
                     )}
 
                     {selectedSettingsModeOptions.length > 0 && (
-                      <label className="space-y-1 block">
-                        <span className="ui-label font-medium">Settings mode</span>
-                        <select
-                          value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
-                          onChange={(event) => handlePrinterDisplayChange({ settingsMode: event.target.value })}
-                          className="ui-input w-full h-[36px] px-2.5 pr-8 leading-tight text-sm"
-                        >
-                          {selectedSettingsModeOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      <SelectDropdown
+                        label="Settings mode"
+                        value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
+                        options={selectedSettingsModeOptions}
+                        onChange={(value) => handlePrinterDisplayChange({ settingsMode: value })}
+                      />
                     )}
 
                     <LabeledToggleInput
@@ -3773,7 +3758,7 @@ export function ProfileSettingsModal({
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setIsCreateMaterialOpen(false);
           }}>
-            <div className="w-full max-w-[920px] max-h-[88vh] overflow-y-auto rounded-xl border shadow-2xl custom-scrollbar ui-modal-panel-enter" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[920px] max-h-[88vh] rounded-xl border shadow-2xl ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
@@ -3794,7 +3779,7 @@ export function ProfileSettingsModal({
                 </button>
               </div>
 
-              <div className="p-3 space-y-3">
+              <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
                 {usePluginLocalSettingsAsReplacement && (
                   <MaterialProfileIdentitySection draft={newMaterialDraft} onChange={setNewMaterialDraft} />
                 )}
@@ -4103,8 +4088,8 @@ function RemoteMaterialEditDialog({
               {basicSections.map((section) => (
                 <div
                   key={section.id}
-                  className="rounded-lg border p-2.5"
-                  style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                  className="rounded-xl border p-3"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                 >
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2 flex items-center justify-between gap-2">
                     <span>{section.title}</span>
@@ -4170,8 +4155,8 @@ function RemoteMaterialEditDialog({
                 advancedSections.map((section) => (
                   <div
                     key={section.id}
-                    className="rounded-lg border p-2.5"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                    className="rounded-xl border p-3"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                   >
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2">{section.title}</div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
@@ -4206,7 +4191,7 @@ function RemoteMaterialEditDialog({
                   </div>
                 ))
               ) : (
-                <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     No additional advanced controls were found for this profile.
                   </div>
@@ -4362,10 +4347,10 @@ function PluginLocalMaterialSettingsSections({
 
   return (
     <div
-      className={replacementMode ? 'space-y-2' : 'rounded-lg border p-2.5 space-y-2'}
+      className={replacementMode ? 'space-y-2' : 'rounded-xl border p-3 space-y-2'}
       style={replacementMode
         ? undefined
-        : { borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+        : { borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
     >
       {!replacementMode && (
         <div className="flex items-center justify-between gap-2">
@@ -4438,8 +4423,8 @@ function PluginLocalMaterialSettingsSections({
                   return (
                   <div
                     key={`${section.sectionId}-${card.cardId}`}
-                    className="rounded-lg border p-2.5"
-                    style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}
+                    className="rounded-xl border p-3"
+                    style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}
                   >
                     <div className="ui-meta font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>{card.cardTitle}</div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -4496,7 +4481,7 @@ function PluginLocalMaterialSettingsSections({
                         if (field.kind === 'select' && Array.isArray(field.options) && field.options.length > 0) {
                           return (
                             <label key={field.key} className="space-y-1 block">
-                              <span className="ui-label font-medium">{field.label}</span>
+                              <span className="ui-label font-medium inline-flex items-center">{field.label}</span>
                               <div className="relative">
                                 <select
                                   value={String(fieldValue)}
@@ -4786,7 +4771,7 @@ type LabeledSelectInputProps = {
 function LabeledSelectInput({ label, value, options, onChange }: LabeledSelectInputProps) {
   return (
     <label className="space-y-1 block">
-      <span className="ui-label font-medium">
+      <span className="ui-label font-medium inline-flex items-center">
         {label}
       </span>
       <div className="relative">
@@ -4819,7 +4804,7 @@ type LabeledToggleInputProps = {
 function LabeledToggleInput({ label, checked, onChange }: LabeledToggleInputProps) {
   return (
     <label className="space-y-1 block">
-      <span className="ui-label font-medium">
+      <span className="ui-label font-medium inline-flex items-center">
         {label}
       </span>
       <button
@@ -4827,7 +4812,7 @@ function LabeledToggleInput({ label, checked, onChange }: LabeledToggleInputProp
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
-        className="ui-input w-full h-[34px] px-2.5 py-1.5 text-sm inline-flex items-center justify-between"
+        className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between"
         style={{
           borderColor: checked
             ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
@@ -4862,7 +4847,7 @@ type LabeledResinFamilySelectProps = {
 function LabeledResinFamilySelect({ label, value, options, onChange }: LabeledResinFamilySelectProps) {
   return (
     <label className="space-y-1 block">
-      <span className="ui-label font-medium">
+      <span className="ui-label font-medium inline-flex items-center">
         {label}
       </span>
       <div className="relative">
@@ -4894,7 +4879,7 @@ type MaterialProfileFormSectionsProps = {
 function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSectionsProps) {
   return (
     <>
-      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
         <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Metadata</div>
         <div className="grid grid-cols-2 gap-2">
           <LabeledInput
@@ -4932,7 +4917,7 @@ function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSec
         </div>
       </div>
 
-      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
         <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Print Settings</div>
         <div className="grid grid-cols-2 gap-2">
           <LabeledNumberInput
@@ -4981,7 +4966,7 @@ function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSec
         </div>
       </div>
 
-      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
         <div className="ui-meta font-semibold uppercase tracking-wide mb-2">
           Scale Compensation (% shrinkage)
         </div>
@@ -5032,7 +5017,7 @@ type MaterialProfileIdentitySectionProps = {
 
 function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIdentitySectionProps) {
   return (
-    <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
+    <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
       <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Resin Profile</div>
       <div className="grid grid-cols-2 gap-2">
         <LabeledInput
@@ -5072,7 +5057,7 @@ type LabeledCurrencySelectProps = {
 function LabeledCurrencySelect({ label, value, options, onChange }: LabeledCurrencySelectProps) {
   return (
     <label className="space-y-1 block">
-      <span className="ui-label font-medium">
+      <span className="ui-label font-medium inline-flex items-center">
         {label}
       </span>
       <div className="relative">
