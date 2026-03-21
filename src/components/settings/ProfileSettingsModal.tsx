@@ -1232,7 +1232,7 @@ export function ProfileSettingsModal({
           statusText: connectPayload?.statusText,
         });
         if (connectPayload?.connected === true && typeof connectPayload?.ipAddress === 'string') {
-          const resolvedName = [connectPayload.hostName, connectPayload.printerName, connectPayload.ipAddress]
+          const resolvedName = [connectPayload.printerName, connectPayload.hostName, connectPayload.ipAddress]
             .find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() ?? configuredHost;
 
           seedDevices.push({
@@ -1520,11 +1520,34 @@ export function ProfileSettingsModal({
     selectedPrinterNetworkFilterHint,
   ]);
 
-  const handleConnectNetworkPrinter = React.useCallback(async (options?: { host?: string; closeOnSuccess?: boolean }) => {
+  const handleConnectNetworkPrinter = React.useCallback(async (options?: { host?: string; closeOnSuccess?: boolean; preferredName?: string }) => {
     if (!selectedPrinter || !networkUiAdapter) return;
 
     const host = (options?.host ?? networkIpAddress).trim();
+    const normalizeAddress = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '');
+    const normalizeName = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+    const looksLikeGenericDiscoveryName = (value: string): boolean => {
+      const normalized = value.trim().toLowerCase();
+      if (!normalized) return true;
+      const modeLabel = selectedNetworkModeLabel.trim().toLowerCase();
+      const networkSupport = (selectedPrinter.networkSupport || '').trim().toLowerCase();
+      const genericCandidates = new Set([
+        'printer',
+        networkSupport ? `${networkSupport} printer` : '',
+        modeLabel ? `${modeLabel} printer` : '',
+      ]);
+      if (genericCandidates.has(normalized)) return true;
+
+      // Keep this mode-agnostic: simple two-token "<something> printer" labels
+      // are typically protocol defaults rather than user-meaningful device names.
+      const tokens = normalized.split(/\s+/).filter(Boolean);
+      if (tokens.length <= 2 && normalized.endsWith(' printer')) return true;
+
+      return false;
+    };
+
     const normalizedHost = host.toLowerCase();
+    const preferredOptionName = normalizeName(options?.preferredName);
     const debugSentinelHost = '192.168.999.999';
     if (!host) {
       const now = new Date().toISOString();
@@ -1606,9 +1629,43 @@ export function ProfileSettingsModal({
       const now = new Date().toISOString();
 
       if (payload?.connected === true) {
-        const resolvedHostName = [payload.printerName, payload.hostName, payload.ipAddress, host]
-          .find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() ?? host;
         const resolvedIpAddress = typeof payload.ipAddress === 'string' ? payload.ipAddress : host;
+        const normalizedResolvedIp = normalizeAddress(resolvedIpAddress);
+        const normalizedRequestedHost = normalizeAddress(host);
+
+        const knownDevice = managedNetworkPrinters.find((device) => {
+          const deviceIp = normalizeAddress(device.ipAddress);
+          return deviceIp.length > 0 && (deviceIp === normalizedResolvedIp || deviceIp === normalizedRequestedHost);
+        });
+
+        const discoveredDevice = discoveredPrinters.find((device) => {
+          const candidateIp = normalizeAddress((device as any)?.ipAddress);
+          return candidateIp.length > 0 && (candidateIp === normalizedResolvedIp || candidateIp === normalizedRequestedHost);
+        });
+
+        const preferredKnownName = [
+          normalizeName(knownDevice?.displayName),
+          normalizeName(knownDevice?.hostName),
+          normalizeName((discoveredDevice as any)?.name),
+        ].find((value) => value.length > 0 && !looksLikeGenericDiscoveryName(value));
+
+        const preferredPayloadName = [
+          normalizeName(payload.printerName),
+          normalizeName(payload.hostName),
+        ].find((value) => {
+          if (!value) return false;
+          if (looksLikeGenericDiscoveryName(value)) return false;
+          const normalizedValue = normalizeAddress(value);
+          return normalizedValue !== normalizedRequestedHost && normalizedValue !== normalizedResolvedIp;
+        });
+
+        const resolvedHostName = preferredPayloadName
+          || (preferredOptionName && !looksLikeGenericDiscoveryName(preferredOptionName) ? preferredOptionName : '')
+          || preferredKnownName
+          || normalizeName(payload.printerName)
+          || normalizeName(payload.hostName)
+          || resolvedIpAddress
+          || host;
 
         upsertPrinterNetworkDevice(selectedPrinter.id, {
           ipAddress: resolvedIpAddress,
@@ -1683,10 +1740,13 @@ export function ProfileSettingsModal({
       setIsNetworkConnecting(false);
     }
   }, [
+    discoveredPrinters,
     effectiveNetworkUiAdapter,
+    managedNetworkPrinters,
     networkDiscoveryEnabled,
     networkIpAddress,
     networkUiAdapter,
+    selectedNetworkModeLabel,
     selectedPrinter,
     selectedPrinterModelHint,
     selectedPrinterNetworkFilterHint,
@@ -2417,8 +2477,8 @@ export function ProfileSettingsModal({
                   const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
                     ? `${bitDepthBits} Bit`
                     : null;
-                  const cardWidth = isEditingPrinter ? 'w-[198px]' : 'w-[236px]';
-                  const imageHeight = isEditingPrinter ? 'h-[124px]' : 'h-[148px]';
+                  const cardWidth = 'w-[236px]';
+                  const imageHeight = 'h-[148px]';
 
                   return (
                     <div
@@ -3799,9 +3859,21 @@ export function ProfileSettingsModal({
               networkScanPhaseLabel={networkScanPhaseLabel}
               discoveredPrinters={discoveredPrinters}
               isNetworkConnecting={isNetworkConnecting}
-              onConnectDiscovered={(host) => { void handleConnectNetworkPrinter({ host, closeOnSuccess: false }); }}
+              onConnectDiscovered={(entry) => {
+                void handleConnectNetworkPrinter({
+                  host: entry.ipAddress,
+                  preferredName: entry.name,
+                  closeOnSuccess: false,
+                });
+              }}
               onSelectManagedPrinter={handleSelectManagedPrinter}
-              onReconnectManagedPrinter={(device) => { void handleConnectNetworkPrinter({ host: device.ipAddress, closeOnSuccess: false }); }}
+              onReconnectManagedPrinter={(device) => {
+                void handleConnectNetworkPrinter({
+                  host: device.ipAddress,
+                  preferredName: device.displayName || device.hostName || device.ipAddress,
+                  closeOnSuccess: false,
+                });
+              }}
               onDisconnectManagedPrinter={handleDisconnectManagedPrinter}
               onRemoveManagedPrinter={handleRemoveManagedPrinter}
               showManualNetworkEntry={showManualNetworkEntry}

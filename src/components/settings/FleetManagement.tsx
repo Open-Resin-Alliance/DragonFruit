@@ -25,7 +25,7 @@ type FleetManagementProps = {
   networkScanPhaseLabel: string;
   discoveredPrinters: DiscoveredNetworkPrinter[];
   isNetworkConnecting: boolean;
-  onConnectDiscovered: (host: string) => void;
+  onConnectDiscovered: (printer: DiscoveredNetworkPrinter) => void;
   onSelectManagedPrinter: (device: PrinterNetworkDevice) => void;
   onReconnectManagedPrinter: (device: PrinterNetworkDevice) => void;
   onDisconnectManagedPrinter: (device: PrinterNetworkDevice) => void;
@@ -366,7 +366,7 @@ export function FleetManagement({
                           </div>
                           <button
                             type="button"
-                            onClick={() => onConnectDiscovered(entry.ipAddress)}
+                            onClick={() => onConnectDiscovered(entry)}
                             disabled={isNetworkConnecting}
                             className="ui-button ui-button-secondary !h-8 !min-w-[120px] !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-60"
                             style={{ color: isEntryConnected ? 'var(--text-strong)' : 'var(--accent-secondary)' }}
