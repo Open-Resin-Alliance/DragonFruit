@@ -598,14 +598,16 @@ export function ProfileSettingsModal({
     () => networkUiAdapter ?? getDefaultProfileNetworkUiAdapter(),
     [networkUiAdapter],
   );
-  const isNanodlpPrinter = Boolean(networkUiAdapter);
+  const supportsRemoteMaterialProfiles = Boolean(
+    networkUiAdapter && networkUiAdapter.supportsRemoteMaterialProfiles !== false,
+  );
   const selectedNetworkModeLabel = networkUiAdapter?.displayName ?? 'Unknown';
   const shouldUseRemoteOnDeviceMaterials = Boolean(
-    Boolean(networkUiAdapter)
+    supportsRemoteMaterialProfiles
     && selectedPrinter?.networkConnection?.connected
     && (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress),
   );
-  const shouldShowRemoteMaterialConnectInfo = Boolean(isNanodlpPrinter && !shouldUseRemoteOnDeviceMaterials);
+  const shouldShowRemoteMaterialConnectInfo = Boolean(supportsRemoteMaterialProfiles && !shouldUseRemoteOnDeviceMaterials);
 
   const selectedRemoteMaterial = React.useMemo(() => {
     if (!selectedRemoteMaterialId) return null;
@@ -772,7 +774,7 @@ export function ProfileSettingsModal({
     [editingFleetUnitId, managedNetworkPrinters],
   );
   const isSelectedRemoteMaterialPrinterOffline = React.useMemo(() => {
-    if (!isNanodlpPrinter) return false;
+    if (!supportsRemoteMaterialProfiles) return false;
     if (!selectedRemoteMaterialHost) return false;
 
     if (activeManagedNetworkPrinter) {
@@ -783,7 +785,7 @@ export function ProfileSettingsModal({
     return selectedPrinter?.networkConnection?.connected === false;
   }, [
     activeManagedNetworkPrinter,
-    isNanodlpPrinter,
+    supportsRemoteMaterialProfiles,
     printerReachabilityByDeviceId,
     selectedRemoteMaterialHost,
     selectedPrinter?.networkConnection?.connected,
@@ -1287,7 +1289,7 @@ export function ProfileSettingsModal({
 
         return {
           id: `${selectedPrinter.id}-local-scan-${index}`,
-          name: hostName || printerName || `${selectedNetworkModeLabel} Printer`,
+          name: printerName || hostName || `${selectedNetworkModeLabel} Printer`,
           ipAddress,
           status: 'online' as const,
         };
@@ -1408,7 +1410,7 @@ export function ProfileSettingsModal({
 
           return {
             id: `${selectedPrinter.id}-scan-batch-${subnetBatchStart}-${index}`,
-            name: hostName || printerName || `${selectedNetworkModeLabel} Printer`,
+            name: printerName || hostName || `${selectedNetworkModeLabel} Printer`,
             ipAddress,
             status: 'online' as const,
           };
@@ -1604,7 +1606,7 @@ export function ProfileSettingsModal({
       const now = new Date().toISOString();
 
       if (payload?.connected === true) {
-        const resolvedHostName = [payload.hostName, payload.printerName, payload.ipAddress, host]
+        const resolvedHostName = [payload.printerName, payload.hostName, payload.ipAddress, host]
           .find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() ?? host;
         const resolvedIpAddress = typeof payload.ipAddress === 'string' ? payload.ipAddress : host;
 
@@ -2415,8 +2417,8 @@ export function ProfileSettingsModal({
                   const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
                     ? `${bitDepthBits} Bit`
                     : null;
-                  const cardWidth = 'w-[236px]';
-                  const imageHeight = 'h-[148px]';
+                  const cardWidth = isEditingPrinter ? 'w-[198px]' : 'w-[236px]';
+                  const imageHeight = isEditingPrinter ? 'h-[124px]' : 'h-[148px]';
 
                   return (
                     <div
@@ -2538,7 +2540,7 @@ export function ProfileSettingsModal({
                               setIsNetworkSettingsOpen(true);
                             }}
                             aria-label={fleetCount > 1 ? `Open fleet view (${fleetCount})` : 'Add another networked device'}
-                            className="ui-button ui-button-secondary !h-7 !w-8 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
+                            className="ui-button ui-button-secondary !h-7 !w-7 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
                             style={fleetCount > 1
                               ? {
                                   color: 'var(--text-strong)',
