@@ -1,14 +1,14 @@
-import { useState, useEffect, useCallback, useRef, useMemo, useSyncExternalStore } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick } from '../../state';
 import { splitShaft, splitBranchShaft, splitTwigShaft, splitStickShaft } from './jointUtils';
-import { useSnapping } from '../../interaction/useSnapping';
 import { SnapTarget } from '../../interaction/SnappingManager';
 import { Vec3 } from '../../types';
-import { jointCreationStore, useJointCreationState } from './jointCreationState';
-import { getSocketPosition } from '../ContactCone';
+import { useJointCreationState } from './jointCreationState';
 import { getJointDiameter } from '../../constants';
+import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
+import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 
 export function useJointCreation() {
     // Consume global state driven by page.tsx
@@ -19,178 +19,37 @@ export function useJointCreation() {
     const [preview, setPreview] = useState<{ pos: Vec3, diameter: number, normal?: Vec3 } | null>(null);
     const [target, setTarget] = useState<{ trunkId: string, segmentId: string, t?: number } | null>(null);
     
-    useEffect(() => {
-        console.log('[useJointCreation] Mounted. Active:', isActive);
-    }, []);
-
-    useEffect(() => {
-        console.log('[useJointCreation] Active state changed to:', isActive);
-        if (!isActive) {
-             setPreview(null);
-             setTarget(null);
-        }
-    }, [isActive]);
-
     // Pre-calculate all snap targets (memoized) - includes trunks/branches/twigs/sticks
     const allTargets = useMemo(() => {
-        const trunks = Object.values(supportState.trunks);
-        const branches = Object.values(supportState.branches);
-        const twigs = Object.values(supportState.twigs);
-        const sticks = Object.values(supportState.sticks);
-        const roots = Object.values(supportState.roots);
-        const knots = Object.values(supportState.knots);
-        const rootMap = new Map(roots.map(r => [r.id, r]));
-        const knotMap = new Map(knots.map(k => [k.id, k]));
-        const targets: SnapTarget[] = [];
+        return buildSupportPathSnapTargets(supportState, {
+            includeTrunks: true,
+            includeBranches: true,
+            includeBraces: false,
+            includeTwigs: true,
+            includeSticks: true,
+        });
+    }, [supportState]);
 
-        // Add trunk segments
-        for (const trunk of trunks) {
-            const root = rootMap.get(trunk.rootId);
-            if (!root || trunk.segments.length === 0) continue;
-
-            // Start from root base top (Match TrunkRenderer logic)
-            const diskHeight = 0.5;
-            const coneHeight = root.coneHeight || 1.5;
-            const startZOffset = diskHeight + coneHeight;
-            
-            const rootPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-            let currentStart = rootPos.clone().add(new THREE.Vector3(0, 0, startZOffset));
-
-            // Iterate segments to build path targets
-            for (const seg of trunk.segments) {
-                let endPoint: THREE.Vector3;
-
-                if (seg.topJoint) {
-                    endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                } else if (trunk.contactCone) {
-                    // Shaft ends at the cone's socket position
-                    const socketPos = getSocketPosition(
-                        trunk.contactCone.pos,
-                        trunk.contactCone.normal,
-                        trunk.contactCone.profile
-                    );
-                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-                } else {
-                    // Fallback for incomplete data
-                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
-                }
-
-                targets.push({
-                    // Use the segment id directly so GPU picking (which reports segmentId) can resolve it.
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                        end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                        radius: seg.diameter / 2,
-                        bezier: seg.type === 'bezier' ? {
-                            control1: seg.controlPoint1,
-                            control2: seg.controlPoint2
-                        } : undefined
-                    }
-                });
-
-                currentStart = endPoint;
-            }
-        }
-
-        // Add branch segments (branches are just like trunks but start at a knot)
-        for (const branch of branches) {
-            const parentKnot = knotMap.get(branch.parentKnotId);
-            if (!parentKnot || branch.segments.length === 0) continue;
-
-            let currentStart = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
-
-            for (const seg of branch.segments) {
-                let endPoint: THREE.Vector3;
-
-                if (seg.topJoint) {
-                    endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                } else if (branch.contactCone) {
-                    const socketPos = getSocketPosition(
-                        branch.contactCone.pos,
-                        branch.contactCone.normal,
-                        branch.contactCone.profile
-                    );
-                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-                } else {
-                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
-                }
-
-                targets.push({
-                    // Use the segment id directly so GPU picking can resolve it.
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                        end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                        radius: seg.diameter / 2,
-                        bezier: seg.type === 'bezier' ? {
-                            control1: seg.controlPoint1,
-                            control2: seg.controlPoint2
-                        } : undefined
-                    }
-                });
-
-                currentStart = endPoint;
-            }
-        }
-
-        // Add twig segments (twig segments always have both joints)
-        for (const twig of twigs) {
-            if (twig.segments.length === 0) continue;
-            for (const seg of twig.segments) {
-                if (!seg.bottomJoint || !seg.topJoint) continue;
-                const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-                const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: { x: start.x, y: start.y, z: start.z },
-                        end: { x: end.x, y: end.y, z: end.z },
-                        radius: seg.diameter / 2,
-                        bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
-                    }
-                });
-            }
-        }
-
-        // Add stick segments (stick segments always have both joints)
-        for (const stick of sticks) {
-            if (stick.segments.length === 0) continue;
-            for (const seg of stick.segments) {
-                if (!seg.bottomJoint || !seg.topJoint) continue;
-                const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-                const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: { x: start.x, y: start.y, z: start.z },
-                        end: { x: end.x, y: end.y, z: end.z },
-                        radius: seg.diameter / 2,
-                        bezier: seg.type === 'bezier' ? { control1: seg.controlPoint1, control2: seg.controlPoint2 } : undefined,
-                    }
-                });
-            }
-        }
-
-        return targets;
-    }, [isActive, supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.roots, supportState.knots]);
+    const targetById = useMemo(() => {
+        return buildPrimarySnapTargetIndex(allTargets);
+    }, [allTargets]);
 
     // Helper to resolve targets for snapping manager
     const getTarget = useCallback((id: string): SnapTarget | null => {
-        return allTargets.find(t => t.id === id) || null;
-    }, [allTargets]);
+        return targetById.get(id) ?? null;
+    }, [targetById]);
 
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
-    const { updateSnapping, resetSnapping } = useSnapping(getTarget, getPotentialTargets);
+    const { updateSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
 
     // Continuous update loop
     useFrame(() => {
-        if (!isActive) return;
+        if (!isActive) {
+            if (preview !== null) setPreview(null);
+            if (target !== null) setTarget(null);
+            return;
+        }
 
         const result = updateSnapping();
         
@@ -199,7 +58,7 @@ export function useJointCreation() {
              const diameter = (target?.pathSegment?.radius ? target.pathSegment.radius * 2 : 1.0);
 
              // Calculate segment direction (normal)
-             let normal = new THREE.Vector3(0, 0, 1);
+             const normal = new THREE.Vector3(0, 0, 1);
              if (target && target.pathSegment) {
                  const start = new THREE.Vector3(target.pathSegment.start.x, target.pathSegment.start.y, target.pathSegment.start.z);
                  const end = new THREE.Vector3(target.pathSegment.end.x, target.pathSegment.end.y, target.pathSegment.end.z);

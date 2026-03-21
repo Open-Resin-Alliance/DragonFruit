@@ -3,11 +3,8 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
-import { getBezierPointAtT } from '../../Curves/BezierUtils';
-import { addKnot, addRoot, subscribe, getSnapshot, setSelectedId } from '../../state';
-import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints } from '../../SupportPrimitives/Knot/knotUtils';
+import { addKnot, addRoot, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import { useSnapping } from '../../interaction/useSnapping';
 import { getGridSettings } from '../../Settings';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
 import { addKickstand, getKickstandSnapshot } from './kickstandStore';
@@ -15,21 +12,13 @@ import { clampKickstandHostT } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
-import type { KickstandHostKind } from './types';
 import type { Vec3 } from '../../types';
 import { clearSelection } from '../../interaction/SupportSelection';
-import { snappingSessionStore } from '../../interaction/shared/placement/snapping/snappingSession';
+import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
+import { buildKickstandSnapTargetMetaIndex, type KickstandSnapTargetMeta } from '../../interaction/shared/placement/snapping/kickstandSnapTargets';
+import { getSnapPathPointAtT, projectPointToSnapPath } from '../../interaction/shared/placement/snapping/pathProjection';
 
 type DesiredBand = 'left' | 'right' | 'front';
-
-interface KickstandTargetMeta {
-    segmentId: string;
-    supportKind: KickstandHostKind;
-    modelId: string;
-    diameterMm: number;
-    minT: number;
-    target: SnapTarget;
-}
 
 interface ShaftClickDetail {
     segmentId?: string;
@@ -46,66 +35,6 @@ interface IntersectionWithCtrl {
 
 function toVector3(v: Vec3): THREE.Vector3 {
     return new THREE.Vector3(v.x, v.y, v.z);
-}
-
-function getPathPointAtT(path: NonNullable<SnapTarget['pathSegment']>, t: number): Vec3 {
-    const clampedT = THREE.MathUtils.clamp(t, 0, 1);
-
-    if (path.bezier) {
-        return getBezierPointAtT(path.start, path.bezier.control1, path.bezier.control2, path.end, clampedT);
-    }
-
-    const start = toVector3(path.start);
-    const end = toVector3(path.end);
-    const point = start.lerp(end, clampedT);
-
-    return { x: point.x, y: point.y, z: point.z };
-}
-
-function projectPointToPath(point: Vec3, path: NonNullable<SnapTarget['pathSegment']>): { t: number; pos: Vec3 } {
-    const p = toVector3(point);
-
-    if (path.bezier) {
-        let bestT = 0;
-        let bestDistSq = Number.POSITIVE_INFINITY;
-        const steps = 60;
-
-        for (let i = 0; i <= steps; i += 1) {
-            const t = i / steps;
-            const sample = getBezierPointAtT(path.start, path.bezier.control1, path.bezier.control2, path.end, t);
-            const sampleVec = toVector3(sample);
-            const distSq = sampleVec.distanceToSquared(p);
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                bestT = t;
-            }
-        }
-
-        return {
-            t: bestT,
-            pos: getPathPointAtT(path, bestT),
-        };
-    }
-
-    const start = toVector3(path.start);
-    const end = toVector3(path.end);
-    const segment = end.clone().sub(start);
-    const segmentLenSq = segment.lengthSq();
-
-    if (segmentLenSq < 1e-8) {
-        return {
-            t: 0,
-            pos: path.start,
-        };
-    }
-
-    const projectedT = THREE.MathUtils.clamp(p.clone().sub(start).dot(segment) / segmentLenSq, 0, 1);
-    const projectedPoint = start.clone().add(segment.multiplyScalar(projectedT));
-
-    return {
-        t: projectedT,
-        pos: { x: projectedPoint.x, y: projectedPoint.y, z: projectedPoint.z },
-    };
 }
 
 function perpendicularDirection(
@@ -356,72 +285,8 @@ export function KickstandPlacementController() {
     const lastPreviewSegmentIdRef = useRef<string | null>(null);
 
     const targetMetaById = useMemo(() => {
-        const map = new Map<string, KickstandTargetMeta>();
-        const rootsById = new Map(Object.values(supportState.roots).map((root) => [root.id, root]));
-        const knotsById = new Map(Object.values(supportState.knots).map((knot) => [knot.id, knot]));
-
-        for (const trunk of Object.values(supportState.trunks)) {
-            const root = rootsById.get(trunk.rootId);
-            if (!root) continue;
-
-            trunk.segments.forEach((segment, index) => {
-                const endpoints = getTrunkSegmentEndpoints(trunk, segment, index, root);
-                if (!endpoints) return;
-
-                map.set(segment.id, {
-                    segmentId: segment.id,
-                    supportKind: 'trunk',
-                    modelId: trunk.modelId,
-                    diameterMm: segment.diameter,
-                    minT: 0,
-                    target: {
-                        id: segment.id,
-                        type: 'path',
-                        pathSegment: {
-                            start: endpoints.start,
-                            end: endpoints.end,
-                            radius: segment.diameter / 2,
-                            bezier: segment.type === 'bezier'
-                                ? { control1: segment.controlPoint1, control2: segment.controlPoint2 }
-                                : undefined,
-                        },
-                    },
-                });
-            });
-        }
-
-        for (const branch of Object.values(supportState.branches)) {
-            const parentKnot = knotsById.get(branch.parentKnotId);
-            if (!parentKnot) continue;
-
-            branch.segments.forEach((segment, index) => {
-                const endpoints = getBranchSegmentEndpoints(branch, segment, index, parentKnot);
-                if (!endpoints) return;
-
-                map.set(segment.id, {
-                    segmentId: segment.id,
-                    supportKind: 'branch',
-                    modelId: branch.modelId,
-                    diameterMm: segment.diameter,
-                    minT: 0,
-                    target: {
-                        id: segment.id,
-                        type: 'path',
-                        pathSegment: {
-                            start: endpoints.start,
-                            end: endpoints.end,
-                            radius: segment.diameter / 2,
-                            bezier: segment.type === 'bezier'
-                                ? { control1: segment.controlPoint1, control2: segment.controlPoint2 }
-                                : undefined,
-                        },
-                    },
-                });
-            });
-        }
-
-        return map;
-    }, [supportState.branches, supportState.knots, supportState.roots, supportState.trunks]);
+        return buildKickstandSnapTargetMetaIndex(supportState);
+    }, [supportState]);
 
     const snapTargets = useMemo(() => {
         return Array.from(targetMetaById.values()).map((meta) => meta.target);
@@ -434,9 +299,9 @@ export function KickstandPlacementController() {
 
     const getPotentialTargets = useCallback(() => snapTargets, [snapTargets]);
 
-    const { updateSnapping, resetSnapping } = useSnapping(getTarget, getPotentialTargets);
+    const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
 
-    const buildPlacementFromSnap = useCallback((meta: KickstandTargetMeta, t: number, snappedPos: Vec3, rootPos: Vec3): {
+    const buildPlacementFromSnap = useCallback((meta: KickstandSnapTargetMeta, t: number, snappedPos: Vec3, rootPos: Vec3): {
         target: KickstandPlacementTarget;
         build: ReturnType<typeof buildKickstandData>;
     } => {
@@ -531,8 +396,7 @@ export function KickstandPlacementController() {
             return;
         }
 
-        updateSnapping();
-        const resolvedSnap = snappingSessionStore.getSnapshot();
+        const resolvedSnap = updateAndGetResolvedSnap();
 
         if (resolvedSnap.state !== 'locked' || !resolvedSnap.targetId || resolvedSnap.t === null || !resolvedSnap.snappedPos) {
             kickstandPlacementStore.clearPreview();
@@ -556,7 +420,7 @@ export function KickstandPlacementController() {
         }
 
         const clampedT = clampKickstandHostT(resolvedSnap.t, meta.minT);
-        const snappedPos = clampedT === resolvedSnap.t ? resolvedSnap.snappedPos : getPathPointAtT(path, clampedT);
+        const snappedPos = clampedT === resolvedSnap.t ? resolvedSnap.snappedPos : getSnapPathPointAtT(path, clampedT);
         const hoveredPoint = hoverPointBySegmentRef.current.get(meta.segmentId);
         const preferredPoint = hoveredPoint
             ?? getPreferredPointFromPointerRay(snappedPos, camera, pointer, raycaster);
@@ -605,7 +469,7 @@ export function KickstandPlacementController() {
             let projectedPos: Vec3;
 
             if (detail.point) {
-                const projected = projectPointToPath(detail.point, path);
+                const projected = projectPointToSnapPath(detail.point, path);
                 projectedT = projected.t;
                 projectedPos = projected.pos;
             } else {
@@ -617,7 +481,7 @@ export function KickstandPlacementController() {
 
             const clampedT = clampKickstandHostT(projectedT, meta.minT);
             if (clampedT !== projectedT) {
-                projectedPos = getPathPointAtT(path, clampedT);
+                projectedPos = getSnapPathPointAtT(path, clampedT);
             }
 
             const preferredPoint = detail.point

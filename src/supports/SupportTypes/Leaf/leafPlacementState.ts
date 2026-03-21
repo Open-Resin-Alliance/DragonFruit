@@ -125,7 +125,21 @@ export const leafPlacementStore = {
     },
 
     reset() {
-        state = { ...initialState, hotkeyActive: state.hotkeyActive };
+        const nextState = { ...initialState, hotkeyActive: state.hotkeyActive };
+        if (
+            state.stage === nextState.stage
+            && state.tipPosition === nextState.tipPosition
+            && state.surfaceNormal === nextState.surfaceNormal
+            && state.modelId === nextState.modelId
+            && state.previewData === nextState.previewData
+            && state.hoverPosition === nextState.hoverPosition
+            && state.snapTarget === nextState.snapTarget
+            && state.justFinalized === nextState.justFinalized
+        ) {
+            return;
+        }
+
+        state = nextState;
         notify();
     },
 

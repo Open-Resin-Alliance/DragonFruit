@@ -2534,11 +2534,15 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         if (supportSelectionAndHoverSuppressed) {
+            const point = event?.point
+                ? { x: (event.point as any).x, y: (event.point as any).y, z: (event.point as any).z }
+                : null;
+
             window.dispatchEvent(new CustomEvent('shaft-hover', {
                 detail: {
                     segmentId: shaft.id,
-                    point: null,
-                    intersection: null,
+                    point,
+                    intersection: event,
                 },
             }));
             setSceneHoveredSupportId((prev) => (prev === null ? prev : null));

@@ -15,6 +15,37 @@ export function useLeafPlacement() {
     const state = useLeafPlacementState();
 
     useEffect(() => {
+        const requiredModifiers = (LEAF_MODIFIER ?? '')
+            .split('+')
+            .map((part) => part.trim().toLowerCase())
+            .filter(Boolean);
+
+        const keyLower = LEAF_KEY.toLowerCase();
+        if (keyLower === 'alt') requiredModifiers.push('alt');
+        if (keyLower === 'control' || keyLower === 'ctrl') requiredModifiers.push('ctrl');
+        if (keyLower === 'shift') requiredModifiers.push('shift');
+        if (keyLower === 'meta') requiredModifiers.push('meta');
+
+        const expectsCtrl = requiredModifiers.includes('ctrl');
+        const expectsAlt = requiredModifiers.includes('alt');
+        const expectsShift = requiredModifiers.includes('shift');
+        const expectsMeta = requiredModifiers.includes('meta');
+
+        const isLeafComboHeld = (event: { ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }) => {
+            if (expectsCtrl && !event.ctrlKey) return false;
+            if (expectsAlt && !event.altKey) return false;
+            if (expectsShift && !event.shiftKey) return false;
+            if (expectsMeta && !event.metaKey) return false;
+            return true;
+        };
+
+        const cancelLeafMode = () => {
+            const snapshot = leafPlacementStore.getSnapshot();
+            if (!snapshot.hotkeyActive && snapshot.stage === 'idle') return;
+            leafPlacementStore.setHotkeyActive(false);
+            leafPlacementStore.reset();
+        };
+
         const down = (e: KeyboardEvent) => {
             const isLeafHotkey = matchesConfiguredHotkeyDown(e, {
                 key: LEAF_KEY,
@@ -30,16 +61,32 @@ export function useLeafPlacement() {
         const up = (e: KeyboardEvent) => {
             if (matchesConfiguredHotkeyUp(e, { key: LEAF_KEY, modifier: LEAF_MODIFIER })) {
                 e.preventDefault();
-                leafPlacementStore.setHotkeyActive(false);
-                leafPlacementStore.reset();
+                cancelLeafMode();
             }
         };
 
-        window.addEventListener('keydown', down);
-        window.addEventListener('keyup', up);
+        const blur = () => {
+            cancelLeafMode();
+        };
+
+        const pointerMove = (e: PointerEvent) => {
+            const snapshot = leafPlacementStore.getSnapshot();
+            if (!snapshot.hotkeyActive && snapshot.stage !== 'awaitingBase') return;
+            if (isLeafComboHeld(e)) return;
+            cancelLeafMode();
+        };
+
+        window.addEventListener('keydown', down, true);
+        window.addEventListener('keyup', up, true);
+        document.addEventListener('keyup', up, true);
+        window.addEventListener('blur', blur);
+        window.addEventListener('pointermove', pointerMove, true);
         return () => {
-            window.removeEventListener('keydown', down);
-            window.removeEventListener('keyup', up);
+            window.removeEventListener('keydown', down, true);
+            window.removeEventListener('keyup', up, true);
+            document.removeEventListener('keyup', up, true);
+            window.removeEventListener('blur', blur);
+            window.removeEventListener('pointermove', pointerMove, true);
         };
     }, [LEAF_KEY, LEAF_MODIFIER]);
 

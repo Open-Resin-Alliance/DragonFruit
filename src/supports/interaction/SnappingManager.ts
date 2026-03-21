@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { PickingResult } from '../../components/picking/types';
-import { getBezierPointAtT, toVector3 } from '../Curves/BezierUtils';
+import { getBezierPointAtT } from '../Curves/BezierUtils';
 
 // --- Types ---
 
@@ -95,17 +95,15 @@ export class SnappingManager {
         potentialTargets: SnapTarget[] = []
     ): SnapResult {
         const now = Date.now();
-        const { snapDistanceMm, unlockRatio, switchDwellMs } = this.config;
-        const releaseDistance = snapDistanceMm * unlockRatio;
+        const { switchDwellMs } = this.config;
 
         // 1. Calculate distance to current locked target (if any)
-        let distToCurrent = Infinity;
         let currentTargetGeo: SnapTarget | null = null;
 
         if (this.lockedTargetId) {
-            currentTargetGeo = getTargetCallback(this.lockedTargetId);
+            currentTargetGeo = this.resolveTargetById(ray, this.lockedTargetId, getTargetCallback, potentialTargets);
             if (currentTargetGeo) {
-                distToCurrent = this.getDistanceToTarget(ray, currentTargetGeo);
+                this.state = 'locked';
             } else {
                 // Target disappeared (deleted?), force unlock
                 this.state = 'seeking';
@@ -114,42 +112,13 @@ export class SnappingManager {
         }
 
         // 2. Find Best Candidate
-        // Priority 1: GPU Picking (Visual hit)
-        // Priority 2: 3D Proximity (Ray distance)
+        // Strict mode: snapping candidates only come from authoritative GPU picking hits.
+        // Spatial proximity is used only to disambiguate duplicate IDs and to validate that
+        // the pick hit is actually on/near the snap geometry.
         
-        let candidateId: string | null = null;
-        let bestDist = Infinity;
-
-        // Check GPU Pick first
-        if (pickResult.category !== 'none' && pickResult.objectId) {
-            // Verify if this object ID resolves to a target.
-            // If not (e.g. picking returns trunk ID, but we need segment ID), we should discard it
-            // and fallback to spatial search.
-            const resolved = getTargetCallback(pickResult.objectId);
-            if (resolved) {
-                candidateId = pickResult.objectId;
-                bestDist = 0; 
-            } else {
-            }
-        } 
-        
-        // If no visual hit (or to find better proximity match if we want to override?), 
-        // check spatial targets if provided.
-        // Only check if we don't have a hard visual hit? 
-        // Or if visual hit is not a valid snap target?
-        
-        // Let's allow spatial snapping to override empty space, but not necessarily occlusion.
-        // If candidateId is set, we stick with it.
-        // If not, we search potentialTargets.
-        if (!candidateId) {
-            for (const target of potentialTargets) {
-                const dist = this.getDistanceToTarget(ray, target);
-                if (dist < snapDistanceMm && dist < bestDist) {
-                    bestDist = dist;
-                    candidateId = target.id;
-                }
-            }
-        }
+        const pickedCandidate = this.resolvePickedCandidate(ray, pickResult, getTargetCallback, potentialTargets);
+        const candidateId = pickedCandidate?.id ?? null;
+        const candidateGeo = pickedCandidate?.target ?? null;
 
         // 3. State Machine Transitions
 
@@ -163,59 +132,34 @@ export class SnappingManager {
                 // Transition: Seeking -> Locked
                 // If we found a candidate via GPU picking (it's visually under cursor)
                 // AND it resolves to a valid SnapTarget
-                if (candidateId) {
-                    const candidateGeo = getTargetCallback(candidateId);
-                    if (candidateGeo) {
-                        // GPU pick implies we are "hitting" it.
-                        this.state = 'locked';
-                        this.lockedTargetId = candidateId;
-                        this.lastSwitchTime = now;
-                        currentTargetGeo = candidateGeo; // Update for result calculation
-                    }
+                if (candidateId && candidateGeo) {
+                    this.state = 'locked';
+                    this.lockedTargetId = candidateId;
+                    this.lastSwitchTime = now;
+                    currentTargetGeo = candidateGeo;
                 }
                 break;
 
             case 'locked':
-                // Transition: Locked -> Locked (new)
-                // If we pick a DIFFERENT candidate, and we are allowed to switch
-                if (candidateId && candidateId !== this.lockedTargetId) {
-                    const candidateGeo = getTargetCallback(candidateId);
-                    
-                    if (candidateGeo) {
-                        // Check dwell time to prevent flicker
-                        if (now - this.lastSwitchTime > switchDwellMs) {
-                            // Hysteresis Logic:
-                            // "Stay on the current target while the pointer is within releaseDistance."
-                            
-                            const isOutsideRelease = distToCurrent > releaseDistance;
-                            
-                            // But if GPU picking says we are hitting something else, it means visual occlusion.
-                            // GPU picking solves occlusion. Visual = Truth.
-                            
-                            // Hybrid approach:
-                            // If GPU pick changes, we respect it, BUT we check if we are actually close to the new thing.
-                            const distToCandidate = this.getDistanceToTarget(ray, candidateGeo);
-                            
-                            if (distToCandidate < snapDistanceMm) {
-                                // Close enough to snap to new target
-                                this.lockedTargetId = candidateId;
-                                this.lastSwitchTime = now;
-                                currentTargetGeo = candidateGeo;
-                            } else if (isOutsideRelease) {
-                                // We drifted too far from current, and found a new valid candidate (even if slightly far)
-                                this.lockedTargetId = candidateId;
-                                this.lastSwitchTime = now;
-                                currentTargetGeo = candidateGeo;
-                            }
-                        }
-                    }
-                }
-                // Transition: Locked -> Seeking
-                // If we drifted too far and have no new candidate
-                else if (!candidateId && distToCurrent > releaseDistance) {
+                // No direct pick -> unlock immediately.
+                if (!candidateId || !candidateGeo) {
                     this.state = 'seeking';
                     this.lockedTargetId = null;
                     currentTargetGeo = null;
+                    break;
+                }
+
+                // Keep current lock when hovering same picked target.
+                if (candidateId === this.lockedTargetId) {
+                    currentTargetGeo = candidateGeo;
+                    break;
+                }
+
+                // Switch only after dwell to prevent flicker while still enforcing a single target.
+                if (now - this.lastSwitchTime >= switchDwellMs) {
+                    this.lockedTargetId = candidateId;
+                    this.lastSwitchTime = now;
+                    currentTargetGeo = candidateGeo;
                 }
                 break;
         }
@@ -311,6 +255,55 @@ export class SnappingManager {
         this.lockedTargetId = null;
     }
 
+    private resolvePickedCandidate(
+        ray: THREE.Ray,
+        pickResult: PickingResult,
+        getTargetCallback: (id: string) => SnapTarget | null,
+        potentialTargets: SnapTarget[]
+    ): { id: string; target: SnapTarget } | null {
+        if (pickResult.category === 'none' || !pickResult.objectId) return null;
+
+        const target = this.resolveTargetById(ray, pickResult.objectId, getTargetCallback, potentialTargets);
+        if (!target) return null;
+
+        const distance = this.getDistanceToTarget(ray, target);
+        if (!Number.isFinite(distance) || distance > this.config.snapDistanceMm) {
+            return null;
+        }
+
+        return { id: pickResult.objectId, target };
+    }
+
+    private resolveTargetById(
+        ray: THREE.Ray,
+        targetId: string,
+        getTargetCallback: (id: string) => SnapTarget | null,
+        potentialTargets: SnapTarget[]
+    ): SnapTarget | null {
+        const candidates = potentialTargets.filter((target) => target.id === targetId);
+
+        if (candidates.length === 1) {
+            return candidates[0];
+        }
+
+        if (candidates.length > 1) {
+            let bestTarget: SnapTarget | null = null;
+            let bestDistance = Infinity;
+
+            for (const candidate of candidates) {
+                const distance = this.getDistanceToTarget(ray, candidate);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestTarget = candidate;
+                }
+            }
+
+            if (bestTarget) return bestTarget;
+        }
+
+        return getTargetCallback(targetId);
+    }
+
     // --- Math Helpers ---
 
     private projectRayToBezier(ray: THREE.Ray, start: Vec3, end: Vec3, c1: Vec3, c2: Vec3) {
@@ -361,14 +354,12 @@ export class SnappingManager {
 
         const denom = a * c - b * b;
         
-        let sc, tc;
+        let tc;
 
         if (denom < 1e-8) {
             // Parallel
-            sc = 0;
             tc = (b > c ? d / b : e / c);
         } else {
-            sc = (b * e - c * d) / denom;
             tc = (a * e - b * d) / denom;
         }
 

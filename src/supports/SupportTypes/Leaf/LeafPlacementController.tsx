@@ -1,12 +1,10 @@
-import { useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { subscribe, getSnapshot, addKnot, addLeaf } from '../../state';
 import { pushHistory } from '@/history/historyStore';
-import { useSnapping } from '../../interaction/useSnapping';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Vec3, Knot } from '../../types';
-import { getSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
 import { buildLeafData } from './leafBuilder';
 import { getSettings } from '../../Settings';
@@ -16,14 +14,22 @@ import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSelection } from '../../interaction/SupportSelection';
-import { snappingSessionStore } from '../../interaction/shared/placement/snapping/snappingSession';
+import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
+import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+
+interface ShaftHoverDetail {
+    segmentId?: string | null;
+    point?: Vec3 | null;
+}
 
 export function LeafPlacementController() {
     const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
 
     const { raycaster, camera, pointer, scene } = useThree();
-    const modelMeshesRef = useMemo(() => ({ current: [] as THREE.Object3D[] }), []);
+    const modelMeshesRef = useRef<THREE.Object3D[]>([]);
+    const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
 
     useEffect(() => {
         if (!isActive && stage === 'idle') {
@@ -38,139 +44,20 @@ export function LeafPlacementController() {
             if (modelId === 'unknown' || objModelId === modelId) meshes.push(obj);
         });
         modelMeshesRef.current = meshes;
-    }, [scene, modelId, isActive, stage, modelMeshesRef]);
+    }, [scene, modelId, isActive, stage]);
 
     const allTargets = useMemo(() => {
         if (stage !== 'awaitingBase') return [];
 
-        const trunks = Object.values(supportState.trunks);
-        const branches = Object.values(supportState.branches);
-        const braces = Object.values(supportState.braces);
-        const roots = Object.values(supportState.roots);
-        const knots = Object.values(supportState.knots);
-        const rootMap = new Map(roots.map(r => [r.id, r]));
-        const knotMap = new Map(knots.map(k => [k.id, k]));
-        const targets: SnapTarget[] = [];
-
-        for (const trunk of trunks) {
-            const root = rootMap.get(trunk.rootId);
-            if (!root || trunk.segments.length === 0) continue;
-
-            const diskHeight = 0.5;
-            const coneHeight = root.coneHeight || 1.5;
-            const startZOffset = diskHeight + coneHeight;
-
-            const rootPos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
-            let currentStart = rootPos.clone().add(new THREE.Vector3(0, 0, startZOffset));
-
-            for (const seg of trunk.segments) {
-                let endPoint: THREE.Vector3;
-
-                if (seg.topJoint) {
-                    endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                } else if (trunk.contactCone) {
-                    const socketPos = getSocketPosition(
-                        trunk.contactCone.pos,
-                        trunk.contactCone.normal,
-                        trunk.contactCone.profile
-                    );
-                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-                } else {
-                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
-                }
-
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                        end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                        radius: seg.diameter / 2,
-                        bezier: seg.type === 'bezier' ? {
-                            control1: seg.controlPoint1,
-                            control2: seg.controlPoint2,
-                        } : undefined,
-                    },
-                });
-
-                currentStart = endPoint;
-            }
-        }
-
-        for (const branch of branches) {
-            const parentKnot = knotMap.get(branch.parentKnotId);
-            if (!parentKnot || branch.segments.length === 0) continue;
-
-            let currentStart = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
-
-            for (const seg of branch.segments) {
-                let endPoint: THREE.Vector3;
-
-                if (seg.topJoint) {
-                    endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-                } else if (branch.contactCone) {
-                    const socketPos = getSocketPosition(
-                        branch.contactCone.pos,
-                        branch.contactCone.normal,
-                        branch.contactCone.profile
-                    );
-                    endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-                } else {
-                    endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
-                }
-
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
-                        end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
-                        radius: seg.diameter / 2,
-                    },
-                });
-
-                currentStart = endPoint;
-            }
-        }
-
-        // Add brace shafts (tapered)
-        for (const brace of braces) {
-            const startKnot = knotMap.get(brace.startKnotId);
-            const endKnot = knotMap.get(brace.endKnotId);
-            if (!startKnot || !endKnot) continue;
-
-            const startHostDia = Math.max(
-                0.001,
-                (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
-            );
-            const endHostDia = Math.max(
-                0.001,
-                (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
-            );
-            const radius = Math.max(startHostDia, endHostDia) / 2;
-
-            targets.push({
-                id: `braceSegment:${brace.id}`,
-                type: 'path',
-                pathSegment: {
-                    start: startKnot.pos,
-                    end: endKnot.pos,
-                    radius,
-                    bezier: brace.curve?.type === 'bezier' ? {
-                        control1: brace.curve.controlPoint1,
-                        control2: brace.curve.controlPoint2,
-                    } : undefined,
-                },
-            });
-        }
-
-        return targets;
-    }, [stage, supportState.trunks, supportState.branches, supportState.braces, supportState.roots, supportState.knots]);
+        return buildSupportPathSnapTargets(supportState, {
+            includeTrunks: true,
+            includeBranches: true,
+            includeBraces: true,
+        });
+    }, [stage, supportState]);
 
     const targetById = useMemo(() => {
-        const map = new Map<string, SnapTarget>();
-        for (const t of allTargets) map.set(t.id, t);
-        return map;
+        return buildPrimarySnapTargetIndex(allTargets);
     }, [allTargets]);
 
     const getTarget = useCallback((id: string): SnapTarget | null => {
@@ -179,7 +66,39 @@ export function LeafPlacementController() {
 
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
-    const { updateSnapping, resetSnapping } = useSnapping(getTarget, getPotentialTargets);
+    const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+
+    useEffect(() => {
+        const handleShaftHover = (event: Event) => {
+            const detail = (event as CustomEvent<ShaftHoverDetail>).detail;
+            if (!detail?.segmentId) return;
+            hoveredShaftRef.current = {
+                segmentId: detail.segmentId,
+                point: detail.point ?? null,
+            };
+        };
+
+        const handleShaftLeave = (event: Event) => {
+            const detail = (event as CustomEvent<{ segmentId?: string | null }>).detail;
+            if (!detail?.segmentId) {
+                hoveredShaftRef.current = null;
+                return;
+            }
+
+            if (hoveredShaftRef.current?.segmentId === detail.segmentId) {
+                hoveredShaftRef.current = null;
+            }
+        };
+
+        window.addEventListener('shaft-hover', handleShaftHover as EventListener);
+        window.addEventListener('shaft-leave', handleShaftLeave as EventListener);
+
+        return () => {
+            window.removeEventListener('shaft-hover', handleShaftHover as EventListener);
+            window.removeEventListener('shaft-leave', handleShaftLeave as EventListener);
+            hoveredShaftRef.current = null;
+        };
+    }, []);
 
     useFrame(() => {
         if (isContactDiskHudInteractionActive() || shouldSuppressContactDiskHudPlacementCommit()) {
@@ -212,8 +131,7 @@ export function LeafPlacementController() {
 
         raycaster.setFromCamera(pointer, camera);
 
-        updateSnapping();
-        const resolvedSnap = snappingSessionStore.getSnapshot();
+        const resolvedSnap = updateAndGetResolvedSnap();
 
         let knotPos: Vec3 | null = null;
         let segmentId = 'free';
@@ -259,31 +177,84 @@ export function LeafPlacementController() {
                 hostSegmentId: segmentId,
             });
         } else {
-            const modelMeshes = modelMeshesRef.current;
+            let hoveredSnapResolved = false;
+            const hoveredShaft = hoveredShaftRef.current;
 
-            if (modelMeshes.length > 0) {
-                const intersects = raycaster.intersectObjects(modelMeshes, true);
-                if (intersects.length > 0) {
-                    const hit = intersects[0];
-                    knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
+            if (hoveredShaft?.segmentId) {
+                const pathCandidates = allTargets.filter((target) => target.id === hoveredShaft.segmentId && !!target.pathSegment);
+                const hoveredTarget = (hoveredShaft.point && pathCandidates.length > 1)
+                    ? selectNearestPathTarget(hoveredShaft.point, pathCandidates) ?? pathCandidates[0]
+                    : pathCandidates[0] ?? getTarget(hoveredShaft.segmentId);
+
+                const projected = hoveredTarget
+                    ? (hoveredShaft.point
+                        ? projectPointToSnapTargetPath(hoveredTarget, hoveredShaft.point)
+                        : projectRayToSnapTargetPath(raycaster.ray, hoveredTarget))
+                    : null;
+
+                if (hoveredTarget?.pathSegment && projected) {
+                    hoveredSnapResolved = true;
+                    segmentId = hoveredShaft.segmentId;
+                    knotPos = projected.pos;
+                    t = projected.t;
+                    hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
+
+                    if (segmentId.startsWith('braceSegment:')) {
+                        const braceId = segmentId.slice('braceSegment:'.length);
+                        const brace = supportState.braces[braceId];
+                        const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
+                        const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
+
+                        if (brace && startKnot && endKnot) {
+                            const startDia = Math.max(
+                                0.001,
+                                (startKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
+                            );
+                            const endDia = Math.max(
+                                0.001,
+                                (endKnot.diameter ?? brace.profile.diameter) - JOINT_DIAMETER_OFFSET_MM
+                            );
+                            hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, projected.t);
+                        }
+                    }
+
+                    leafPlacementStore.setSnapTarget({
+                        targetId: segmentId,
+                        snappedPos: knotPos,
+                        t,
+                        hostDiameterMm,
+                        hostSegmentId: segmentId,
+                    });
                 }
             }
 
-            if (!knotPos) {
-                const buildPlate = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-                const intersection = new THREE.Vector3();
-                if (raycaster.ray.intersectPlane(buildPlate, intersection)) {
-                    const dist = Math.sqrt(
-                        Math.pow(intersection.x - tipPosition.x, 2) +
-                        Math.pow(intersection.y - tipPosition.y, 2)
-                    );
-                    if (dist < 100) {
-                        knotPos = { x: intersection.x, y: intersection.y, z: 0 };
+            if (!hoveredSnapResolved) {
+                const modelMeshes = modelMeshesRef.current;
+
+                if (modelMeshes.length > 0) {
+                    const intersects = raycaster.intersectObjects(modelMeshes, true);
+                    if (intersects.length > 0) {
+                        const hit = intersects[0];
+                        knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
                     }
                 }
-            }
 
-            leafPlacementStore.setSnapTarget(null);
+                if (!knotPos) {
+                    const buildPlate = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+                    const intersection = new THREE.Vector3();
+                    if (raycaster.ray.intersectPlane(buildPlate, intersection)) {
+                        const dist = Math.sqrt(
+                            Math.pow(intersection.x - tipPosition.x, 2) +
+                            Math.pow(intersection.y - tipPosition.y, 2)
+                        );
+                        if (dist < 100) {
+                            knotPos = { x: intersection.x, y: intersection.y, z: 0 };
+                        }
+                    }
+                }
+
+                leafPlacementStore.setSnapTarget(null);
+            }
         }
 
         if (knotPos) {
