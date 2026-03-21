@@ -1315,10 +1315,16 @@ export function updatePrinterNetworkConnectionStatus(
     const activeIndex = fleet.findIndex((device) => device.id === activeDeviceId);
 
     if (activeIndex >= 0) {
+      const resolvedDisplayName = (
+        next.connected && next.hostName.trim().length > 0
+          ? next.hostName
+          : fleet[activeIndex].displayName || next.hostName || next.ipAddress || 'Printer'
+      );
+
       fleet[activeIndex] = {
         ...fleet[activeIndex],
         ...next,
-        displayName: fleet[activeIndex].displayName || next.hostName || next.ipAddress || 'Printer',
+        displayName: resolvedDisplayName,
       };
     } else if (hasMeaningfulPrinterNetworkConnection(next)) {
       fleet.push({
