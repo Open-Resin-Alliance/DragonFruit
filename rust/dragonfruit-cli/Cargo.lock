@@ -291,13 +291,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dragonfruit-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dragonfruit-islands",
+ "dragonfruit-slicer-v3",
+ "proptest",
+ "serde",
+ "serde_json",
+ "zip",
+]
+
+[[package]]
 name = "dragonfruit-islands"
 version = "0.1.0"
 dependencies = [
  "clap",
  "dragonfruit-slicer-v3",
  "indexmap",
- "proptest",
  "rayon",
  "serde",
  "serde_json",
