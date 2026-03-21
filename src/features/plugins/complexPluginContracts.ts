@@ -63,6 +63,11 @@ export type PluginNetworkUiAdapterContract = {
   pluginId: string;
   displayName: string;
   operationNamespace: string;
+  /**
+   * Whether this backend exposes on-device remote material/profile listing and editing.
+   * Defaults to true for existing backends when omitted.
+   */
+  supportsRemoteMaterialProfiles?: boolean;
   operations: {
     connect: string;
     discover: string;

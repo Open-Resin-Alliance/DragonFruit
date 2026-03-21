@@ -3,6 +3,7 @@
  */
 import type { PluginUploadHandler } from '@/features/plugins/pluginUploadBridge';
 import { uploadPrintJobWithProgress as athena_upload_handler } from '../../../plugins/athena/network';
+import { uploadPrintJobWithProgress as sdcp_v3_upload_handler } from '../../../plugins/sdcp-v3/network';
 
 export type GeneratedBuiltinComplexPluginUploadHandler = {
   pluginId: string;
@@ -10,5 +11,6 @@ export type GeneratedBuiltinComplexPluginUploadHandler = {
 };
 
 export const GENERATED_BUILTIN_COMPLEX_PLUGIN_UPLOAD_HANDLERS: GeneratedBuiltinComplexPluginUploadHandler[] = [
-  { pluginId: 'athena', handler: athena_upload_handler }
+  { pluginId: 'athena', handler: athena_upload_handler },
+  { pluginId: 'sdcp-v3', handler: sdcp_v3_upload_handler }
 ];
