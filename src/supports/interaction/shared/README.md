@@ -5,9 +5,12 @@ This directory is the migration foundation for support interaction refactoring.
 ## Ownership boundaries
 
 ### Shared hover layer owns
-- Translating raw support/model hover signals into one resolved hover snapshot.
-- Suppression and stale-hover resolution rules.
+- Translating raw support/model hover signals into resolved hover state and support-owner meaning.
+- Suppression, stale-hover resolution, and selected-primitive hover suppression rules.
 - Shared hover source + intent state for selection and placement.
+- Marquee-hover event/state ownership and scene-hover state ownership.
+- Scene-hover commit/clear controller decisions and deferred-clear scheduling.
+- Visually hovered-support resolution consumed by renderers.
 
 ### Shared selection layer owns
 - Single-select, shift-toggle multi-select, and marquee-select state.
@@ -45,6 +48,10 @@ This directory is the migration foundation for support interaction refactoring.
 ### Kickstand keeps
 - Kickstand placement rules and geometry building.
 - Kickstand-specific preview details.
+
+### SupportRenderer keeps
+- Renderer-specific hover event side effects such as `shaft-hover` and `shaft-leave` dispatches.
+- Overlay interpretation and drawing for hovered and marquee-hovered supports.
 
 ## Migration rules
 

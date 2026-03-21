@@ -13,12 +13,19 @@ import {
 
 const listeners = new Set<() => void>();
 
+const EMPTY_SERVER_RESOLVED_SELECTION_STATE: ResolvedSelectionState = {
+    ...EMPTY_RESOLVED_SELECTION_STATE,
+    selectedIds: getEmptySelectedSupportIdsSnapshot() as string[],
+};
+
 let initialized = false;
 let unsubscribeState: (() => void) | null = null;
 let unsubscribeMultiSelection: (() => void) | null = null;
 
 let marqueeActive = false;
 let marqueeCandidateIds: string[] = [];
+
+let resolvedSelectionSnapshot: ResolvedSelectionState = EMPTY_RESOLVED_SELECTION_STATE;
 
 function notify() {
     listeners.forEach((listener) => listener());
@@ -57,6 +64,26 @@ function resolveSelectionMode(selectedIds: string[], selectedId: string | null, 
     return 'none';
 }
 
+function areStringArraysEqual(a: string[], b: string[]) {
+    if (a === b) return true;
+    if (a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index += 1) {
+        if (a[index] !== b[index]) return false;
+    }
+    return true;
+}
+
+function areResolvedSelectionStatesEqual(a: ResolvedSelectionState, b: ResolvedSelectionState) {
+    return (
+        a.mode === b.mode
+        && a.selectedId === b.selectedId
+        && a.selectedCategory === b.selectedCategory
+        && a.blockedReason === b.blockedReason
+        && areStringArraysEqual(a.selectedIds, b.selectedIds)
+        && areStringArraysEqual(a.marqueeCandidateIds, b.marqueeCandidateIds)
+    );
+}
+
 export function getResolvedSelectionSnapshot(): ResolvedSelectionState {
     ensureInitialized();
 
@@ -64,7 +91,7 @@ export function getResolvedSelectionSnapshot(): ResolvedSelectionState {
     const selectedCategory = getSelectedCategory() ?? null;
     const selectedIds = Array.from(getSelectedSupportIds());
 
-    return {
+    const nextSnapshot: ResolvedSelectionState = {
         mode: resolveSelectionMode(selectedIds, selectedId, marqueeActive),
         selectedId,
         selectedIds,
@@ -72,6 +99,13 @@ export function getResolvedSelectionSnapshot(): ResolvedSelectionState {
         marqueeCandidateIds,
         blockedReason: null,
     };
+
+    if (areResolvedSelectionStatesEqual(resolvedSelectionSnapshot, nextSnapshot)) {
+        return resolvedSelectionSnapshot;
+    }
+
+    resolvedSelectionSnapshot = nextSnapshot;
+    return resolvedSelectionSnapshot;
 }
 
 export function subscribeResolvedSelection(listener: () => void) {
@@ -84,6 +118,9 @@ export function subscribeResolvedSelection(listener: () => void) {
         unsubscribeState = null;
         unsubscribeMultiSelection?.();
         unsubscribeMultiSelection = null;
+        marqueeActive = false;
+        marqueeCandidateIds = [];
+        resolvedSelectionSnapshot = EMPTY_RESOLVED_SELECTION_STATE;
         initialized = false;
     };
 }
@@ -92,9 +129,6 @@ export function useResolvedSelectionState() {
     return useSyncExternalStore(
         subscribeResolvedSelection,
         getResolvedSelectionSnapshot,
-        () => ({
-            ...EMPTY_RESOLVED_SELECTION_STATE,
-            selectedIds: getEmptySelectedSupportIdsSnapshot() as string[],
-        }),
+        () => EMPTY_SERVER_RESOLVED_SELECTION_STATE,
     );
 }

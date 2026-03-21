@@ -1,12 +1,10 @@
-import { applySupportSelectionClick, selectJointById } from './shared/selection/selectionController';
-import { selectContactDisk } from './SupportSelection';
-import { setSelectedId } from '../state';
+import { applySupportSelectionClick, selectJointById, selectPrimitiveById } from './shared/selection/selectionController';
+import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
 let shiftModifierActive = false;
 let lastDispatchedHoverModelId: string | null = null;
-import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 function initializeHoverGuards() {
     if (hoverGuardInitialized || typeof window === 'undefined') return;
@@ -173,7 +171,7 @@ export function handleKnotClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    setSelectedId(id);
+    selectPrimitiveById(id);
     if (onSelect) onSelect(id);
 }
 
@@ -198,6 +196,6 @@ export function handleContactDiskClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    selectContactDisk(id);
+    selectPrimitiveById(id);
     if (onSelect) onSelect(id);
 }

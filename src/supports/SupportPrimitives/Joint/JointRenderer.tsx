@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { Joint } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { subscribe, getSnapshot, setSelectedId } from '../../state';
+import { subscribe, getSnapshot } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface JointRendererProps {
@@ -152,7 +153,7 @@ export function JointRenderer({
         
         // Select this joint if not already selected
         if (!isSelected) {
-            setSelectedId(joint.id);
+            selectPrimitiveById(joint.id);
         }
         
         // Start drag operation

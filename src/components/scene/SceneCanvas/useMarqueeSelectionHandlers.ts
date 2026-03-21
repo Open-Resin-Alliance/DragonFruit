@@ -1,10 +1,8 @@
 import React from 'react';
-import { selectAllSupports } from '@/supports/interaction/SupportSelection';
 import {
   beginSupportMarqueeSelection,
   clearSupportMarqueeSelection,
   commitSupportMarqueeSelection,
-  endSupportMarqueeSelection,
   updateSupportMarqueeCandidates,
 } from '@/supports/interaction/shared/selection/marqueeSelectionController';
 
@@ -220,8 +218,6 @@ export function useMarqueeSelectionHandlers({
     } else if (mode === 'support') {
       const selectedSupportIds = resolveMarqueeSelectedSupportIds(currentSelection);
       commitSupportMarqueeSelection(selectedSupportIds);
-      selectAllSupports(selectedSupportIds);
-      endSupportMarqueeSelection();
     }
 
     e.preventDefault();

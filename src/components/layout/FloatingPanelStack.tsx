@@ -688,6 +688,8 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
 
   const panelEntries = React.useMemo(() => flattenPanelChildren(children), [children]);
   const panelIds = React.useMemo(() => panelEntries.map((entry) => entry.id), [panelEntries]);
+  const panelIdsSignature = React.useMemo(() => panelIds.join('\u001f'), [panelIds]);
+  const stablePanelIds = React.useMemo(() => panelIds, [panelIdsSignature]);
   const panelWidthScale = React.useMemo(() => {
     const width = containerSize.width;
     const height = containerSize.height;
@@ -731,8 +733,9 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     return panelSizesRef.current[panelId] ?? { width: getPanelWidth(panelId), height: DEFAULT_PANEL_HEIGHT };
   }, [getPanelWidth]);
 
-  const layoutProfile = React.useMemo(() => resolveLayoutProfile(panelIds), [panelIds]);
-  const orderedPanelIds = React.useMemo(() => buildOrderedPanelIds(panelIds, layoutProfile), [layoutProfile, panelIds]);
+  const layoutProfile = React.useMemo(() => resolveLayoutProfile(stablePanelIds), [stablePanelIds]);
+  const orderedPanelIds = React.useMemo(() => buildOrderedPanelIds(stablePanelIds, layoutProfile), [layoutProfile, stablePanelIds]);
+  const orderedPanelIdsSignature = React.useMemo(() => orderedPanelIds.join('\u001f'), [orderedPanelIds]);
   const seededPositions = React.useMemo(
     () => buildSeededPositions(orderedPanelIds, layoutProfile, containerSize, getPanelSize, panelGap),
     [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap],
@@ -759,8 +762,8 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
   }, [layoutProfile]);
 
   React.useEffect(() => {
-    panelIdsRef.current = panelIds;
-  }, [panelIds]);
+    panelIdsRef.current = stablePanelIds;
+  }, [stablePanelIds]);
 
   React.useEffect(() => {
     panelPositionsRef.current = panelPositions;
@@ -779,9 +782,17 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     if (!element) return;
 
     const updateContainerSize = () => {
-      setContainerSize({
-        width: element.clientWidth,
-        height: element.clientHeight,
+      const nextWidth = element.clientWidth;
+      const nextHeight = element.clientHeight;
+      setContainerSize((previous) => {
+        if (previous.width === nextWidth && previous.height === nextHeight) {
+          return previous;
+        }
+
+        return {
+          width: nextWidth,
+          height: nextHeight,
+        };
       });
     };
 
@@ -831,7 +842,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
       }
 
       const restored: Record<string, PanelPosition> = {};
-      for (const panelId of panelIds) {
+      for (const panelId of stablePanelIds) {
         if (LOCKED_PANEL_IDS.has(panelId)) continue;
         const pos = saved[panelId];
         if (!pos) continue;
@@ -870,7 +881,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     } finally {
       layoutHydratedRef.current = true;
     }
-  }, [getPanelSize, panelGap, panelIds, persistLayout]);
+  }, [getPanelSize, panelGap, persistLayout, stablePanelIds]);
 
   React.useEffect(() => {
     if (!layoutHydratedRef.current) return;
@@ -889,7 +900,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     } catch {
       // Ignore storage write failures
     }
-  }, [panelIds, panelPositions, persistLayout]);
+  }, [panelIdsSignature, panelPositions, persistLayout]);
 
   React.useEffect(() => {
     setPanelPositions((previous) => {
@@ -993,9 +1004,9 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
         occupied.push({ ...freePosition, ...size });
       });
 
-      return positionsEqual(previous, next, panelIds) ? previous : next;
+      return positionsEqual(previous, next, stablePanelIds) ? previous : next;
     });
-  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIds, panelGap, panelIds, panelSizeVersion]);
+  }, [containerSize, getPanelSize, layoutProfile, orderedPanelIdsSignature, panelGap, panelIdsSignature, panelSizeVersion, stablePanelIds, orderedPanelIds]);
 
   const handlePanelSizeChange = React.useCallback((panelId: string, size: PanelSize) => {
     const prev = panelSizesRef.current[panelId];
@@ -1090,7 +1101,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     const size = getPanelSize(panelId);
     const clamped = clampPosition(position, size, containerSize);
 
-    const otherPanels = panelIds
+    const otherPanels = stablePanelIds
       .filter((id) => id !== panelId)
       .map((id) => {
         const otherPos = panelPositions[id] ?? { x: PANEL_MARGIN, y: PANEL_MARGIN };
@@ -1121,7 +1132,7 @@ export function FloatingPanelStack({ children }: { children: React.ReactNode }) 
     };
 
     return findNearestFreePosition(snapped, size, otherPanels, containerSize, panelGap);
-  }, [containerSize, getPanelSize, panelGap, panelIds, panelPositions]);
+  }, [containerSize, getPanelSize, panelGap, panelPositions, stablePanelIds]);
 
   React.useEffect(() => {
     if (!activeDragPanelId) return;

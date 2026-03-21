@@ -22,9 +22,13 @@ function isSupportCategory(category: string | null | undefined) {
     return SUPPORT_SELECTION_CATEGORIES.has(category);
 }
 
-export function selectJointById(id: string) {
+export function selectPrimitiveById(id: string) {
     if (!id) return;
     setSelectedId(id);
+}
+
+export function selectJointById(id: string) {
+    selectPrimitiveById(id);
 }
 
 export function clearSupportSelection() {

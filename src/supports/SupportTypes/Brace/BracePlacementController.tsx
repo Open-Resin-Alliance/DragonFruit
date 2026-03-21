@@ -12,7 +12,7 @@ import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { generateUuid } from '@/utils/uuid';
-import { clearSelection } from '../../interaction/SupportSelection';
+import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import {
     buildKickstandPathSnapTargets,
@@ -647,7 +647,7 @@ export function BracePlacementController() {
 
                 bracePlacementStore.finalize();
                 bracePlacementStore.reset();
-                clearSelection();
+                clearSupportSelection();
                 return;
             }
 
@@ -715,7 +715,7 @@ export function BracePlacementController() {
 
             bracePlacementStore.finalize();
             bracePlacementStore.reset();
-            clearSelection();
+            clearSupportSelection();
         };
 
         window.addEventListener('shaft-click', handleShaftClick as EventListener, true);

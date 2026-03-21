@@ -13,7 +13,7 @@ import { SUPPORT_ADD_LEAF } from '../../history/actionTypes';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
-import { clearSelection } from '../../interaction/SupportSelection';
+import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
@@ -364,7 +364,7 @@ export function LeafPlacementController() {
 
             leafPlacementStore.finalize();
             leafPlacementStore.reset();
-            clearSelection();
+            clearSupportSelection();
 
             e.stopPropagation();
             e.preventDefault();

@@ -39,7 +39,7 @@ import {
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_KICKSTAND } from '@/supports/history/actionTypes';
-import { clearSelection, getMultiSelectedSupportIds, selectAllSupports } from '@/supports/interaction/SupportSelection';
+import { clearSupportSelection, getResolvedPrimarySelection, selectSupportIds } from '@/supports/interaction/shared/selection/selectionController';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 
 interface SupportInteractionOptions {
@@ -539,7 +539,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     };
 
     const canDeleteSelection = () => {
-      const multiSelectedIds = getMultiSelectedSupportIds();
+      const multiSelectedIds = getResolvedPrimarySelection().selectedIds;
       if (multiSelectedIds.length > 0) return true;
 
       const category = getSelectedCategory();
@@ -571,7 +571,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     };
 
     const performDeleteSelection = () => {
-      const multiSelectedIds = Array.from(new Set(getMultiSelectedSupportIds()));
+      const multiSelectedIds = Array.from(new Set(getResolvedPrimarySelection().selectedIds));
       if (multiSelectedIds.length > 0) {
         const beforeSupportSnapshot = structuredClone(getSnapshot());
         const beforeKickstandSnapshot = structuredClone(getKickstandSnapshot());
@@ -599,7 +599,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           });
         }
 
-        clearSelection();
+        clearSupportSelection();
         setHoveredId(null);
         setHoveredCategory('none');
         if (anyDeleted) return;
@@ -627,10 +627,10 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       }
 
       if (e.key === 'Escape') {
-        if (getSelectedId() || getMultiSelectedSupportIds().length > 0) {
+        if (getSelectedId() || getResolvedPrimarySelection().selectedIds.length > 0) {
           e.preventDefault();
           e.stopPropagation();
-          clearSelection();
+          clearSupportSelection();
           setHoveredId(null);
           setHoveredCategory('none');
         }
@@ -641,7 +641,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         e.preventDefault();
         e.stopPropagation();
         const allSupportIds = collectAllSupportIds();
-        selectAllSupports(allSupportIds);
+        selectSupportIds(allSupportIds);
         return;
       }
 

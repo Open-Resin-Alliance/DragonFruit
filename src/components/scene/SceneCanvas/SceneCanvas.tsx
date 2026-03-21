@@ -40,7 +40,7 @@ import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacem
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
 import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/KickstandPlacementController';
 import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
-import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
@@ -2802,7 +2802,7 @@ export function SceneCanvas({
 
     if (mode === 'support') {
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
-      clearSelection();
+      clearSupportSelection();
     }
   }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
 

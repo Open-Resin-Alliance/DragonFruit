@@ -31,7 +31,7 @@ import { buildStick } from '../Stick/stickBuilder';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { generateUuid } from '@/utils/uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
-import { clearSelection } from '../../interaction/SupportSelection';
+import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
@@ -490,7 +490,7 @@ export function BranchPlacementController() {
                 meshHoverRef.current = null;
                 meshKindRef.current = null;
                 resetSnapping();
-                clearSelection();
+                clearSupportSelection();
                 return;
             }
 
@@ -534,7 +534,7 @@ export function BranchPlacementController() {
             // This prevents useFrame from re-setting preview before React re-renders
             branchPlacementStore.finalize();
             branchPlacementStore.reset();
-            clearSelection();
+            clearSupportSelection();
         };
 
         window.addEventListener('click', handleClick, true);

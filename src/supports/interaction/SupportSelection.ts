@@ -3,11 +3,11 @@ import {
     clearSupportSelection,
     getResolvedPrimarySelection,
     selectJointById,
+    selectPrimitiveById,
     selectSupportById,
     selectSupportIds,
 } from './shared/selection/selectionController';
 import { useResolvedSelectionState } from './shared/selection/resolvedSelectionStore';
-import { setSelectedId } from '../state';
 
 /**
  * Interaction module for V2 support selection.
@@ -51,7 +51,7 @@ export function selectJoint(id: string) {
 }
 
 export function selectContactDisk(id: string) {
-    setSelectedId(id);
+    selectPrimitiveById(id);
 }
 
 /**

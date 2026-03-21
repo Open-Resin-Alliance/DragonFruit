@@ -622,7 +622,7 @@ import {
   pasteModelSupportsFromClipboard,
   type SupportClipboardPayload,
 } from '@/supports/PlacementLogic/supportClipboard';
-import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
 import { computeRaftOuterBoundary } from '@/supports/Rafts/Crenelated/geometry/computeRaftOuterBoundary';
@@ -921,15 +921,14 @@ export function useSceneCollectionManager() {
   const [materialRoughness, setMaterialRoughness] = useState<number>(DEFAULT_MATERIAL_ROUGHNESS);
 
   // Shader-specific settings (Global)
-  const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
-  const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
-  const [heatmapBlend, setHeatmapBlend] = useState<number>(DEFAULT_HEATMAP_BLEND);
-  const [heatmapContrast, setHeatmapContrast] = useState<number>(DEFAULT_HEATMAP_CONTRAST);
-
   const [shaderType, setShaderType] = useState<MeshShaderType>(DEFAULT_SHADER_TYPE);
   const [matcapVariant, setMatcapVariant] = useState<MatcapVariant>(DEFAULT_MATCAP_VARIANT);
   const [flatUseVertexColors, setFlatUseVertexColors] = useState<boolean>(DEFAULT_FLAT_USE_VERTEX_COLORS);
   const [toonSteps, setToonSteps] = useState<number>(DEFAULT_TOON_STEPS);
+  const [wireframeThicknessPx, setWireframeThicknessPx] = useState<number>(DEFAULT_WIREFRAME_THICKNESS_PX);
+  const [xrayOpacity, setXrayOpacity] = useState<number>(DEFAULT_XRAY_OPACITY);
+  const [heatmapBlend, setHeatmapBlend] = useState<number>(DEFAULT_HEATMAP_BLEND);
+  const [heatmapContrast, setHeatmapContrast] = useState<number>(DEFAULT_HEATMAP_CONTRAST);
   const [heatmapColors, setHeatmapColors] = useState<string[]>(DEFAULT_HEATMAP_COLORS);
   const [preferredMeshColor, setPreferredMeshColor] = useState<string>(DEFAULT_MESH_COLOR);
   const [selectionColor, setSelectionColor] = useState<string>(DEFAULT_SELECTION_COLOR);
@@ -1206,54 +1205,18 @@ export function useSceneCollectionManager() {
     return assignedCenters;
   }, [buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
-  useEffect(() => {
-    const prev = readMeshAppearanceFromLocalStorage();
-
-    const persistedShaderType = clampPersistedMeshShaderType(shaderType, prev?.shaderType ?? DEFAULT_SHADER_TYPE);
-
-    writeMeshAppearanceToLocalStorage({
-      v: 1,
-      shaderType: persistedShaderType,
-      matcapVariant,
-      flatUseVertexColors,
-      toonSteps: clampInt(toonSteps, 2, 16, DEFAULT_TOON_STEPS),
-      ambientIntensity: clampNumber(ambientIntensity, 0, 4, DEFAULT_AMBIENT_INTENSITY),
-      directionalIntensity: clampNumber(directionalIntensity, 0, 4, DEFAULT_DIRECTIONAL_INTENSITY),
-      materialRoughness: clampNumber(materialRoughness, 0, 1, DEFAULT_MATERIAL_ROUGHNESS),
-      wireframeThicknessPx: clampNumber(wireframeThicknessPx, 0.5, 6, DEFAULT_WIREFRAME_THICKNESS_PX),
-      xrayOpacity: clampNumber(xrayOpacity, 0.02, 0.85, DEFAULT_XRAY_OPACITY),
-      heatmapBlend: clampNumber(heatmapBlend, 0, 1, DEFAULT_HEATMAP_BLEND),
-      heatmapContrast: clampNumber(heatmapContrast, 0.1, 5, DEFAULT_HEATMAP_CONTRAST),
-      heatmapColors: heatmapColors,
-      meshColor: prev?.meshColor ?? DEFAULT_MESH_COLOR,
-      selectionColor: clampHexColor(selectionColor, DEFAULT_SELECTION_COLOR),
-      hoverColor: clampHexColor(hoverColor, DEFAULT_HOVER_COLOR),
-      hoverTintStrength: clampNumber(hoverTintStrength, 0, 1, DEFAULT_HOVER_TINT_STRENGTH),
-      selectedTintStrength: clampNumber(selectedTintStrength, 0, 1, DEFAULT_SELECTED_TINT_STRENGTH),
-      selectionHighlightMode,
-    });
-  }, [ambientIntensity, directionalIntensity, flatUseVertexColors, hoverColor, hoverTintStrength, materialRoughness, matcapVariant, selectedTintStrength, selectionColor, selectionHighlightMode, shaderType, toonSteps, wireframeThicknessPx, xrayOpacity, heatmapBlend, heatmapContrast, heatmapColors]);
-
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
-    if (snapshot.supportState && snapshot.kickstandState) {
-      setSupportSnapshot(clonePlainObject(snapshot.supportState));
-      setKickstandSnapshot(clonePlainObject(snapshot.kickstandState));
-    } else {
-      const currentModels = modelsRef.current;
-      const nextById = new Map(snapshot.models.map((model) => [model.id, model] as const));
-
-      for (const currentModel of currentModels) {
-        const nextModel = nextById.get(currentModel.id);
-        if (!nextModel) continue;
-        if (transformsEqual(currentModel.transform, nextModel.transform)) continue;
-
-        transformSupportsForModel(currentModel.id, currentModel.transform, nextModel.transform);
-      }
-    }
-
     setModels(snapshot.models.map(cloneLoadedModel));
     setActiveModelId(snapshot.activeModelId);
     setSelectedModelIds([...snapshot.selectedModelIds]);
+
+    if (snapshot.supportState) {
+      setSupportSnapshot(clonePlainObject(snapshot.supportState));
+    }
+
+    if (snapshot.kickstandState) {
+      setKickstandSnapshot(clonePlainObject(snapshot.kickstandState));
+    }
   }, []);
 
   useEffect(() => {
@@ -1541,7 +1504,7 @@ export function useSceneCollectionManager() {
   // Clear support selection when switching away from support mode
   useEffect(() => {
     if (mode !== 'support') {
-      clearSelection();
+      clearSupportSelection();
     }
   }, [mode]);
 

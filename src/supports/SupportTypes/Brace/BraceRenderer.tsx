@@ -3,11 +3,11 @@ import * as THREE from 'three';
 import type { Brace, Knot } from '../../types';
 import { useHighlight } from '../../interaction/useHighlight';
 import { handleSupportClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import { setSelectedId } from '../../state';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
     initial: '#00ff00',
@@ -113,7 +113,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                 e.nativeEvent.stopPropagation();
                 e.nativeEvent.stopImmediatePropagation();
             }
-            setSelectedId(segmentId);
+            selectPrimitiveById(segmentId);
             return;
         }
 
@@ -157,7 +157,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
                             isSelected={false}
-                            onClick={() => setSelectedId(segmentId)}
+                            onClick={() => selectPrimitiveById(segmentId)}
                         />
                     ) : isSelected ? (
                         <ShaftRenderer
@@ -173,7 +173,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
                             isSelected={false}
-                            onClick={() => setSelectedId(segmentId)}
+                            onClick={() => selectPrimitiveById(segmentId)}
                         />
                     ) : null}
                 </group>
