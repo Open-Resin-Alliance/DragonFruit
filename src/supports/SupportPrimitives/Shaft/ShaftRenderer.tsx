@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Vec3 } from '../../types';
 import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementState';
+import { useKickstandPlacementState } from '../../SupportTypes/Kickstand/kickstandPlacementState';
 import { emitImmediateModelHover } from '../../interaction/pointerOcclusion';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
@@ -58,7 +59,8 @@ export function ShaftRenderer({
     const pickRadiusEnd = visualRadiusEnd;
 
     const { altActive: braceAltActive } = useBracePlacementState();
-    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
+    const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
+    const enableSegmentInteraction = (isParentSelected || braceAltActive || kickstandHotkeyActive) === true;
 
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
         category: 'segment',

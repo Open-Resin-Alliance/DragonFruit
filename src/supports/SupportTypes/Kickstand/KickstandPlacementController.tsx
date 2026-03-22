@@ -272,6 +272,7 @@ export function KickstandPlacementController() {
     const { camera, gl, pointer, raycaster } = useThree();
     const { getHotkey } = useHotkeyConfig();
     const hoverPointBySegmentRef = useRef<Map<string, Vec3>>(new Map());
+    const hoveredSegmentIdRef = useRef<string | null>(null);
     const desiredBandRef = useRef<DesiredBand>('front');
     const lastPreviewSegmentIdRef = useRef<string | null>(null);
     const placementBindings = useMemo(() => resolveSupportPlacementHotkeyBindings(getHotkey), [getHotkey]);
@@ -361,6 +362,7 @@ export function KickstandPlacementController() {
         const handleShaftHover = (event: Event) => {
             const detail = (event as CustomEvent<ShaftClickDetail>).detail;
             if (!detail?.segmentId) return;
+            hoveredSegmentIdRef.current = detail.segmentId;
             if (!detail.point) {
                 hoverPoints.delete(detail.segmentId);
                 return;
@@ -371,6 +373,9 @@ export function KickstandPlacementController() {
         const handleShaftLeave = (event: Event) => {
             const detail = (event as CustomEvent<{ segmentId?: string }>).detail;
             if (!detail?.segmentId) return;
+            if (hoveredSegmentIdRef.current === detail.segmentId) {
+                hoveredSegmentIdRef.current = null;
+            }
             hoverPoints.delete(detail.segmentId);
         };
 
@@ -381,6 +386,7 @@ export function KickstandPlacementController() {
             window.removeEventListener('shaft-hover', handleShaftHover);
             window.removeEventListener('shaft-leave', handleShaftLeave);
             hoverPoints.clear();
+            hoveredSegmentIdRef.current = null;
         };
     }, []);
 
@@ -394,16 +400,35 @@ export function KickstandPlacementController() {
 
         const resolvedSnap = updateAndGetResolvedSnap();
 
-        if (resolvedSnap.state !== 'locked' || !resolvedSnap.targetId || resolvedSnap.t === null || !resolvedSnap.snappedPos) {
+        // Determine meta and snapped position — prefer GPU pick, fall back to shaft-hover event.
+        let meta = resolvedSnap.state === 'locked' && resolvedSnap.targetId
+            ? targetMetaById.get(resolvedSnap.targetId) ?? null
+            : null;
+        let snapT = resolvedSnap.t ?? null;
+        let snapPos = resolvedSnap.snappedPos ?? null;
+
+        if (!meta || snapT === null || !snapPos) {
+            // GPU pick did not lock — try the most recently hovered segment from Three.js raycasting.
+            const hoveredSegId = hoveredSegmentIdRef.current;
+            const hoveredPoint = hoveredSegId ? hoverPointBySegmentRef.current.get(hoveredSegId) : null;
+            const hoveredMeta = hoveredSegId ? targetMetaById.get(hoveredSegId) ?? null : null;
+            if (hoveredMeta && hoveredMeta.target.pathSegment && hoveredPoint) {
+                const projected = projectPointToSnapPath(hoveredPoint, hoveredMeta.target.pathSegment);
+                meta = hoveredMeta;
+                snapT = projected.t;
+                snapPos = projected.pos;
+            }
+        }
+
+        if (!meta || snapT === null || !snapPos) {
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
             return;
         }
 
-        const meta = targetMetaById.get(resolvedSnap.targetId);
-        const path = meta?.target.pathSegment;
-        if (!meta || !path) {
+        const path = meta.target.pathSegment;
+        if (!path) {
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -415,8 +440,8 @@ export function KickstandPlacementController() {
             lastPreviewSegmentIdRef.current = meta.segmentId;
         }
 
-        const clampedT = clampKickstandHostT(resolvedSnap.t, meta.minT);
-        const snappedPos = clampedT === resolvedSnap.t ? resolvedSnap.snappedPos : getSnapPathPointAtT(path, clampedT);
+        const clampedT = clampKickstandHostT(snapT, meta.minT);
+        const snappedPos = clampedT === snapT ? snapPos : getSnapPathPointAtT(path, clampedT);
         const hoveredPoint = hoverPointBySegmentRef.current.get(meta.segmentId);
         const preferredPoint = hoveredPoint
             ?? getPreferredPointFromPointerRay(snappedPos, camera, pointer, raycaster);

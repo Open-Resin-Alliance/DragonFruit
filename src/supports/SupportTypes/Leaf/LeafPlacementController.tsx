@@ -38,11 +38,6 @@ export function LeafPlacementController() {
     const rearmFrameRef = useRef<number | null>(null);
 
     useEffect(() => {
-        if (!isActive && stage === 'idle') {
-            modelMeshesRef.current = [];
-            return;
-        }
-
         const meshes: THREE.Object3D[] = [];
         scene.traverse((obj) => {
             const objModelId = obj.userData?.modelId;
@@ -50,7 +45,10 @@ export function LeafPlacementController() {
             if (modelId === 'unknown' || objModelId === modelId) meshes.push(obj);
         });
         modelMeshesRef.current = meshes;
-    }, [scene, modelId, isActive, stage]);
+        return () => {
+            modelMeshesRef.current = [];
+        };
+    }, [scene, modelId]);
 
     const allTargets = useMemo(() => {
         if (stage !== 'awaitingBase') return [];
@@ -123,7 +121,12 @@ export function LeafPlacementController() {
             return;
         }
 
-        if (isActive && stage === 'idle') {
+        // Read directly from the store to avoid stale closure during rearm.
+        const snap = leafPlacementStore.getSnapshot();
+        const liveActive = snap.hotkeyActive || snap.stage === 'awaitingBase';
+        const liveStage = snap.stage;
+
+        if (liveActive && liveStage === 'idle') {
             raycaster.setFromCamera(pointer, camera);
             const modelMeshes = modelMeshesRef.current;
             if (modelMeshes.length > 0) {
@@ -140,7 +143,7 @@ export function LeafPlacementController() {
             return;
         }
 
-        if (!isActive || stage !== 'awaitingBase' || !tipPosition || !surfaceNormal) {
+        if (!liveActive || liveStage !== 'awaitingBase' || !tipPosition || !surfaceNormal) {
             return;
         }
 
