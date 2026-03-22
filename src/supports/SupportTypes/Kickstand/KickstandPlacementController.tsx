@@ -118,9 +118,7 @@ function pickDesiredBand(
     pointer: THREE.Vector2,
     previousBand: DesiredBand,
     diameterMm: number,
-    isOnShaftSurface: boolean,
 ): DesiredBand {
-    if (isOnShaftSurface) return 'front';
 
     const axisNdc = toVector3(axisPoint).project(camera);
     const horizontalDelta = pointer.x - axisNdc.x;
@@ -130,11 +128,13 @@ function pickDesiredBand(
     const shaftEdgeNdc = toVector3(axisPoint)
         .add(cameraRight.multiplyScalar(shaftRadiusMm))
         .project(camera);
-    const shaftHalfWidthNdc = Math.max(0.008, Math.abs(shaftEdgeNdc.x - axisNdc.x));
+    // Use the shaft's screen-space half-width as the zone unit, with a
+    // comfortable minimum so thin shafts still have a usable zone.
+    const shaftHalfWidthNdc = Math.max(0.02, Math.abs(shaftEdgeNdc.x - axisNdc.x));
 
-    // Side zones start outside the visible shaft edge.
-    const enterSideBoundaryNdc = shaftHalfWidthNdc + 0.006;
-    const exitSideBoundaryNdc = shaftHalfWidthNdc + 0.002;
+    // Divide the hover zone into thirds: outer thirds = left/right, center = front.
+    const enterSideBoundaryNdc = shaftHalfWidthNdc * 0.33;
+    const exitSideBoundaryNdc = shaftHalfWidthNdc * 0.2;
 
     if (previousBand === 'left' && horizontalDelta <= -exitSideBoundaryNdc) return 'left';
     if (previousBand === 'right' && horizontalDelta >= exitSideBoundaryNdc) return 'right';
@@ -152,7 +152,6 @@ function snapRootPosToGrid(
     pointer: THREE.Vector2,
     previousBand: DesiredBand,
     diameterMm?: number,
-    isOnShaftSurface = false,
 ): { rootPos: Vec3; band: DesiredBand } {
     const grid = getGridSettings();
     if (!grid.enabled || grid.spacingMm <= 0) return { rootPos, band: previousBand };
@@ -175,7 +174,6 @@ function snapRootPosToGrid(
         pointer,
         previousBand,
         diameterMm ?? grid.spacingMm,
-        isOnShaftSurface,
     );
 
     if (!towardCamera || !right) {
@@ -453,7 +451,6 @@ export function KickstandPlacementController() {
             pointer,
             desiredBandRef.current,
             meta.diameterMm,
-            Boolean(hoveredPoint),
         );
         desiredBandRef.current = snapDecision.band;
         const rootPos = snapDecision.rootPos;
@@ -519,7 +516,6 @@ export function KickstandPlacementController() {
                 pointer,
                 desiredBandRef.current,
                 meta.diameterMm,
-                Boolean(detail.point),
             );
             desiredBandRef.current = snapDecision.band;
             const rootPos = snapDecision.rootPos;
