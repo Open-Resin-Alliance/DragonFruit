@@ -66,10 +66,22 @@ export const leafPlacementStore = {
     },
 
     setHotkeyActive(active: boolean) {
-        if (state.hotkeyActive !== active) {
-            state = { ...state, hotkeyActive: active };
+        if (active) {
+            if (state.hotkeyActive) return;
+            state = { ...initialState, hotkeyActive: true };
             notify();
+            return;
         }
+
+        if (!state.hotkeyActive && state.stage === 'idle' && state.previewData === null && state.snapTarget === null && state.hoverPosition === null) {
+            return;
+        }
+
+        state = {
+            ...initialState,
+            hotkeyActive: false,
+        };
+        notify();
     },
 
     setTip(tipPosition: Vec3, surfaceNormal: Vec3, modelId: string) {

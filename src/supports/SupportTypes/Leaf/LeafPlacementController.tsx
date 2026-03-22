@@ -376,6 +376,10 @@ export function LeafPlacementController() {
 
     useEffect(() => {
         if (!isActive) {
+            hoveredShaftRef.current = null;
+            leafPlacementStore.setHoverPosition(null);
+            leafPlacementStore.setPreviewData(null);
+            leafPlacementStore.setSnapTarget(null);
             resetSnapping();
         }
     }, [isActive, resetSnapping]);

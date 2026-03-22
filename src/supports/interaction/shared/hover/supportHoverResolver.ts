@@ -9,6 +9,7 @@ export const SUPPORT_HOVER_CATEGORIES: readonly SupportHoverCategory[] = [
     'segment',
     'joint',
     'knot',
+    'contactDisk',
     'raft',
 ] as const;
 
@@ -17,6 +18,7 @@ export const SUPPORT_TARGET_HOVER_CATEGORIES = [
     'segment',
     'joint',
     'knot',
+    'contactDisk',
 ] as const;
 
 type SupportTargetHoverCategory = (typeof SUPPORT_TARGET_HOVER_CATEGORIES)[number];

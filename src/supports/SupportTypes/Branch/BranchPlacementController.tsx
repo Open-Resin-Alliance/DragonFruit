@@ -53,6 +53,7 @@ export function BranchPlacementController() {
     const meshHoverRef = useRef<{ pos: Vec3; normal: Vec3; modelId: string } | null>(null);
     const meshKindRef = useRef<'twig' | 'stick' | null>(null);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
+    const pointerFreshSinceIdleActivationRef = useRef(false);
 
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
 
@@ -65,6 +66,40 @@ export function BranchPlacementController() {
             el.focus();
         }
     }, [altActive, gl]);
+
+    useEffect(() => {
+        if (!altActive) {
+            pointerFreshSinceIdleActivationRef.current = false;
+            hoveredShaftRef.current = null;
+            meshHoverRef.current = null;
+            meshKindRef.current = null;
+            return;
+        }
+
+        if (stage === 'idle') {
+            pointerFreshSinceIdleActivationRef.current = false;
+            hoveredShaftRef.current = null;
+            meshHoverRef.current = null;
+            meshKindRef.current = null;
+        }
+    }, [altActive, stage]);
+
+    useEffect(() => {
+        const el = gl.domElement;
+
+        const markFreshPointer = () => {
+            if (!altActive || stage !== 'idle') return;
+            pointerFreshSinceIdleActivationRef.current = true;
+        };
+
+        el.addEventListener('pointermove', markFreshPointer, true);
+        el.addEventListener('pointerdown', markFreshPointer, true);
+
+        return () => {
+            el.removeEventListener('pointermove', markFreshPointer, true);
+            el.removeEventListener('pointerdown', markFreshPointer, true);
+        };
+    }, [gl, altActive, stage]);
 
     useEffect(() => {
         if (!altActive && stage === 'idle') {
@@ -214,6 +249,11 @@ export function BranchPlacementController() {
         }
 
         if (altActive && stage === 'idle') {
+            if (!pointerFreshSinceIdleActivationRef.current) {
+                branchPlacementStore.setHoverPosition(null);
+                return;
+            }
+
             if (isHoveringSupportTarget) {
                 branchPlacementStore.setHoverPosition(null);
                 return;

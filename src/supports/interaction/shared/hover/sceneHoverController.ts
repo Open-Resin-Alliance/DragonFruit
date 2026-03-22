@@ -34,16 +34,25 @@ interface SceneBatchedShaftHoverDecisionInput extends SceneBatchedSupportHoverDe
     primitiveHoverSuppressesSceneShaftHover: boolean;
 }
 
-export function resolveSceneBatchedSupportHoverWriteDecision(
-    input: SceneBatchedSupportHoverDecisionInput,
-): SceneHoverWriteDecision {
-    const suppressForOtherSupport = shouldSuppressSceneBatchedSupportHover(
+function shouldClearSceneBatchedHoverForOtherSupport(
+    input: Pick<
+        SceneBatchedSupportHoverDecisionInput,
+        'supportId' | 'selectedCategory' | 'selectedPrimitiveHoverActive' | 'primitiveHoverOnSelectedSupport' | 'selectedSupportIdSet'
+    >,
+) {
+    return shouldSuppressSceneBatchedSupportHover(
         input.supportId,
         input.selectedCategory,
         input.selectedPrimitiveHoverActive,
         input.primitiveHoverOnSelectedSupport,
         input.selectedSupportIdSet,
     );
+}
+
+export function resolveSceneBatchedSupportHoverWriteDecision(
+    input: SceneBatchedSupportHoverDecisionInput,
+): SceneHoverWriteDecision {
+    const suppressForOtherSupport = shouldClearSceneBatchedHoverForOtherSupport(input);
 
     if (suppressForOtherSupport) {
         return { type: 'clear', reason: 'suppressed-for-other-support' };
@@ -63,13 +72,7 @@ export function resolveSceneBatchedSupportHoverWriteDecision(
 export function resolveSceneBatchedShaftHoverWriteDecision(
     input: SceneBatchedShaftHoverDecisionInput,
 ): SceneHoverWriteDecision {
-    const suppressForOtherSupport = shouldSuppressSceneBatchedSupportHover(
-        input.supportId,
-        input.selectedCategory,
-        input.selectedPrimitiveHoverActive,
-        input.primitiveHoverOnSelectedSupport,
-        input.selectedSupportIdSet,
-    );
+    const suppressForOtherSupport = shouldClearSceneBatchedHoverForOtherSupport(input);
 
     if (suppressForOtherSupport) {
         return { type: 'clear', reason: 'suppressed-for-other-support' };

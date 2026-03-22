@@ -172,6 +172,11 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
+    const nativeEvent = (hit as any)?.nativeEvent;
+    const altDown = !!(nativeEvent?.altKey ?? (hit as any)?.altKey);
+    const ctrlDown = !!(nativeEvent?.ctrlKey ?? (hit as any)?.ctrlKey);
+    const leafComboDown = altDown && ctrlDown;
+
     if (isContactDiskHudInteractionActive()) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
@@ -200,6 +205,13 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    if (leafComboDown || leafPlacement.isActive) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(hit);
+      return;
+    }
+
     if (kickstandPlacement.isActive) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
@@ -207,11 +219,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
-    if (leafPlacement.isActive) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(hit);
-    } else if (branchPlacement.isActive) {
+    if (branchPlacement.isActive) {
       trunkPlacementV2.onSupportHover(null);
       leafPlacement.onModelHover(null);
       branchPlacement.onModelHover(hit);
@@ -223,6 +231,11 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
   // Handler for MODEL click (trunk placement, or branch tip placement)
   const onModelClick = useCallback((hit: THREE.Intersection) => {
+    const nativeEvent = (hit as any)?.nativeEvent;
+    const altDown = !!(nativeEvent?.altKey ?? (hit as any)?.altKey);
+    const ctrlDown = !!(nativeEvent?.ctrlKey ?? (hit as any)?.ctrlKey);
+    const leafComboDown = altDown && ctrlDown;
+
     if (jointCreationState.isActive) {
       return;
     }
@@ -231,17 +244,16 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
+    if (leafComboDown || leafPlacement.isActive) {
+      leafPlacement.onModelClick(hit);
+      return;
+    }
+
     if (kickstandPlacement.isActive) {
       return;
     }
 
-    const nativeEvent = (hit as any)?.nativeEvent;
-    const altDown = !!(nativeEvent?.altKey ?? (hit as any)?.altKey);
-    const ctrlDown = !!(nativeEvent?.ctrlKey ?? (hit as any)?.ctrlKey);
-
-    if ((altDown && ctrlDown) || leafPlacement.isActive) {
-      leafPlacement.onModelClick(hit);
-    } else if (altDown || branchPlacement.isActive) {
+    if (altDown || branchPlacement.isActive) {
       branchPlacement.onModelClick(hit);
     } else {
       // Normal trunk placement

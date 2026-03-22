@@ -12,6 +12,7 @@ import { clampKickstandHostT } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
+import { leafPlacementStore } from '../Leaf/leafPlacementState';
 import type { Vec3 } from '../../types';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
@@ -27,8 +28,10 @@ interface ShaftClickDetail {
 }
 
 interface IntersectionWithCtrl {
+    altKey?: boolean;
     ctrlKey?: boolean;
     nativeEvent?: {
+        altKey?: boolean;
         ctrlKey?: boolean;
     };
 }
@@ -276,6 +279,12 @@ function hasCtrlModifier(intersection: unknown): boolean {
     return Boolean(candidate.ctrlKey ?? candidate.nativeEvent?.ctrlKey);
 }
 
+function hasAltModifier(intersection: unknown): boolean {
+    if (!intersection || typeof intersection !== 'object') return false;
+    const candidate = intersection as IntersectionWithCtrl;
+    return Boolean(candidate.altKey ?? candidate.nativeEvent?.altKey);
+}
+
 export function KickstandPlacementController() {
     const { hotkeyActive } = useKickstandPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
@@ -457,6 +466,10 @@ export function KickstandPlacementController() {
         const handleShaftClick = (event: Event) => {
             const detail = (event as CustomEvent<ShaftClickDetail>).detail;
             if (!detail?.segmentId) return;
+
+            const leafActive = leafPlacementStore.isActive();
+            const altDown = hasAltModifier(detail.intersection);
+            if (leafActive || altDown) return;
 
             const ctrlDown = hasCtrlModifier(detail.intersection) || kickstandPlacementStore.getSnapshot().hotkeyActive;
             if (!ctrlDown) return;

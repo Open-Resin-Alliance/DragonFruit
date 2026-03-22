@@ -39,6 +39,25 @@ export function useLeafPlacement() {
             return true;
         };
 
+        const pressedKeyMatchesLeafBinding = (eventKey: string) => {
+            const key = eventKey.toLowerCase();
+            const bindingKey = LEAF_KEY.toLowerCase();
+            if (bindingKey === 'alt') return key === 'alt' || key === 'altgraph';
+            if (bindingKey === 'control' || bindingKey === 'ctrl') return key === 'control';
+            if (bindingKey === 'shift') return key === 'shift';
+            if (bindingKey === 'meta') return key === 'meta';
+            return key === bindingKey;
+        };
+
+        const pressedKeyIsLeafModifier = (eventKey: string) => {
+            const key = eventKey.toLowerCase();
+            if (expectsCtrl && key === 'control') return true;
+            if (expectsAlt && (key === 'alt' || key === 'altgraph')) return true;
+            if (expectsShift && key === 'shift') return true;
+            if (expectsMeta && key === 'meta') return true;
+            return false;
+        };
+
         const cancelLeafMode = () => {
             const snapshot = leafPlacementStore.getSnapshot();
             if (!snapshot.hotkeyActive && snapshot.stage === 'idle') return;
@@ -52,7 +71,10 @@ export function useLeafPlacement() {
                 modifier: LEAF_MODIFIER,
             });
 
-            if (isLeafHotkey) {
+            const completingLeafCombo = isLeafComboHeld(e)
+                && (pressedKeyMatchesLeafBinding(e.key) || pressedKeyIsLeafModifier(e.key));
+
+            if (isLeafHotkey || completingLeafCombo) {
                 e.preventDefault();
                 leafPlacementStore.setHotkeyActive(true);
             }

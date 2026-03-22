@@ -3,7 +3,7 @@ import type { Vec3 } from '@/supports/types';
 export type HoverSource = 'model' | 'support' | 'contactDisk' | 'gizmo' | 'none';
 export type HoverIntent = 'selection' | 'placement' | 'suppressed' | 'none';
 
-export type SupportHoverCategory = 'support' | 'segment' | 'joint' | 'knot' | 'raft';
+export type SupportHoverCategory = 'support' | 'segment' | 'joint' | 'knot' | 'contactDisk' | 'raft';
 
 export type HoverSuppressionReason =
     | 'gizmo-active'
