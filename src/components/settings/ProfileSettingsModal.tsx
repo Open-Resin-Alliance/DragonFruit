@@ -93,6 +93,81 @@ const RESIN_FAMILY_OPTIONS: Array<{ value: MaterialProfile['resinFamily']; label
 
 const CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CNY'];
 
+function normalizeNetworkDiscoveryName(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeNetworkDiscoveryToken(value: unknown): string {
+  return normalizeNetworkDiscoveryName(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function looksLikeGenericNetworkDiscoveryName(
+  value: unknown,
+  options?: {
+    modeLabel?: string;
+    networkSupport?: string | null;
+    printerModel?: string;
+  },
+): boolean {
+  const normalized = normalizeNetworkDiscoveryToken(value);
+  if (!normalized) return true;
+
+  const modeLabel = normalizeNetworkDiscoveryToken(options?.modeLabel);
+  const networkSupport = normalizeNetworkDiscoveryToken(options?.networkSupport);
+  const printerModel = normalizeNetworkDiscoveryToken(options?.printerModel);
+
+  const genericCandidates = new Set<string>([
+    'printer',
+    networkSupport,
+    networkSupport ? `${networkSupport} printer` : '',
+    modeLabel,
+    modeLabel ? `${modeLabel} printer` : '',
+    printerModel,
+  ].filter((candidate) => candidate.length > 0));
+
+  if (genericCandidates.has(normalized)) return true;
+
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  if (tokens.length <= 2 && normalized.endsWith(' printer')) return true;
+
+  return false;
+}
+
+function resolveNetworkDiscoveryDisplayName(options: {
+  printerName?: unknown;
+  hostName?: unknown;
+  printerModel?: unknown;
+  modeLabel?: string;
+  networkSupport?: string | null;
+  fallbackName: string;
+}): string {
+  const printerName = normalizeNetworkDiscoveryName(options.printerName);
+  const hostName = normalizeNetworkDiscoveryName(options.hostName);
+  const printerModel = normalizeNetworkDiscoveryName(options.printerModel);
+
+  const genericContext = {
+    modeLabel: options.modeLabel,
+    networkSupport: options.networkSupport,
+    printerModel,
+  };
+
+  const preferredPrinterName = printerName && !looksLikeGenericNetworkDiscoveryName(printerName, genericContext)
+    ? printerName
+    : '';
+  if (preferredPrinterName) return preferredPrinterName;
+
+  const preferredHostName = hostName && !looksLikeGenericNetworkDiscoveryName(hostName, genericContext)
+    ? hostName
+    : '';
+  if (preferredHostName) return preferredHostName;
+
+  return printerName || hostName || options.fallbackName;
+}
+
 function resolveOfficialPresetIdFromProfile(profile: PrinterProfile): string | null {
   if (profile.officialPresetId && profile.officialPresetId.trim().length > 0) {
     return profile.officialPresetId.trim();
@@ -1233,8 +1308,16 @@ export function ProfileSettingsModal({
           statusText: connectPayload?.statusText,
         });
         if (connectPayload?.connected === true && typeof connectPayload?.ipAddress === 'string') {
-          const resolvedName = [connectPayload.printerName, connectPayload.hostName, connectPayload.ipAddress]
-            .find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() ?? configuredHost;
+          const resolvedName = resolveNetworkDiscoveryDisplayName({
+            printerName: connectPayload.printerName,
+            hostName: connectPayload.hostName,
+            printerModel: connectPayload.printerModel,
+            modeLabel: selectedNetworkModeLabel,
+            networkSupport: selectedPrinter.networkSupport,
+            fallbackName: typeof connectPayload.ipAddress === 'string' && connectPayload.ipAddress.trim().length > 0
+              ? connectPayload.ipAddress.trim()
+              : configuredHost,
+          });
 
           seedDevices.push({
             id: `${selectedPrinter.id}-configured-host`,
@@ -1286,11 +1369,19 @@ export function ProfileSettingsModal({
       const localDiscovered = localDevices.map((device, index) => {
         const hostName = typeof device?.hostName === 'string' ? device.hostName.trim() : '';
         const printerName = typeof device?.printerName === 'string' ? device.printerName.trim() : '';
+        const printerModel = typeof device?.printerModel === 'string' ? device.printerModel.trim() : '';
         const ipAddress = typeof device?.ipAddress === 'string' ? device.ipAddress.trim() : '';
 
         return {
           id: `${selectedPrinter.id}-local-scan-${index}`,
-          name: printerName || hostName || `${selectedNetworkModeLabel} Printer`,
+          name: resolveNetworkDiscoveryDisplayName({
+            printerName,
+            hostName,
+            printerModel,
+            modeLabel: selectedNetworkModeLabel,
+            networkSupport: selectedPrinter.networkSupport,
+            fallbackName: `${selectedNetworkModeLabel} Printer`,
+          }),
           ipAddress,
           status: 'online' as const,
         };
@@ -1407,11 +1498,19 @@ export function ProfileSettingsModal({
         const discoveredBatch = devices.map((device, index) => {
           const hostName = typeof device?.hostName === 'string' ? device.hostName.trim() : '';
           const printerName = typeof device?.printerName === 'string' ? device.printerName.trim() : '';
+          const printerModel = typeof device?.printerModel === 'string' ? device.printerModel.trim() : '';
           const ipAddress = typeof device?.ipAddress === 'string' ? device.ipAddress.trim() : '';
 
           return {
             id: `${selectedPrinter.id}-scan-batch-${subnetBatchStart}-${index}`,
-            name: printerName || hostName || `${selectedNetworkModeLabel} Printer`,
+            name: resolveNetworkDiscoveryDisplayName({
+              printerName,
+              hostName,
+              printerModel,
+              modeLabel: selectedNetworkModeLabel,
+              networkSupport: selectedPrinter.networkSupport,
+              fallbackName: `${selectedNetworkModeLabel} Printer`,
+            }),
             ipAddress,
             status: 'online' as const,
           };
@@ -1526,26 +1625,7 @@ export function ProfileSettingsModal({
 
     const host = (options?.host ?? networkIpAddress).trim();
     const normalizeAddress = (value: unknown): string => (typeof value === 'string' ? value.trim().toLowerCase() : '');
-    const normalizeName = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
-    const looksLikeGenericDiscoveryName = (value: string): boolean => {
-      const normalized = value.trim().toLowerCase();
-      if (!normalized) return true;
-      const modeLabel = selectedNetworkModeLabel.trim().toLowerCase();
-      const networkSupport = (selectedPrinter.networkSupport || '').trim().toLowerCase();
-      const genericCandidates = new Set([
-        'printer',
-        networkSupport ? `${networkSupport} printer` : '',
-        modeLabel ? `${modeLabel} printer` : '',
-      ]);
-      if (genericCandidates.has(normalized)) return true;
-
-      // Keep this mode-agnostic: simple two-token "<something> printer" labels
-      // are typically protocol defaults rather than user-meaningful device names.
-      const tokens = normalized.split(/\s+/).filter(Boolean);
-      if (tokens.length <= 2 && normalized.endsWith(' printer')) return true;
-
-      return false;
-    };
+    const normalizeName = normalizeNetworkDiscoveryName;
 
     const normalizedHost = host.toLowerCase();
     const preferredOptionName = normalizeName(options?.preferredName);
@@ -1648,24 +1728,43 @@ export function ProfileSettingsModal({
           normalizeName(knownDevice?.displayName),
           normalizeName(knownDevice?.hostName),
           normalizeName((discoveredDevice as any)?.name),
-        ].find((value) => value.length > 0 && !looksLikeGenericDiscoveryName(value));
+        ].find((value) => value.length > 0 && !looksLikeGenericNetworkDiscoveryName(value, {
+          modeLabel: selectedNetworkModeLabel,
+          networkSupport: selectedPrinter.networkSupport,
+          printerModel: normalizeName(payload.printerModel),
+        }));
 
         const preferredPayloadName = [
           normalizeName(payload.printerName),
           normalizeName(payload.hostName),
         ].find((value) => {
           if (!value) return false;
-          if (looksLikeGenericDiscoveryName(value)) return false;
+          if (looksLikeGenericNetworkDiscoveryName(value, {
+            modeLabel: selectedNetworkModeLabel,
+            networkSupport: selectedPrinter.networkSupport,
+            printerModel: normalizeName(payload.printerModel),
+          })) return false;
           const normalizedValue = normalizeAddress(value);
           return normalizedValue !== normalizedRequestedHost && normalizedValue !== normalizedResolvedIp;
         });
 
+        const fallbackPayloadName = resolveNetworkDiscoveryDisplayName({
+          printerName: payload.printerName,
+          hostName: payload.hostName,
+          printerModel: payload.printerModel,
+          modeLabel: selectedNetworkModeLabel,
+          networkSupport: selectedPrinter.networkSupport,
+          fallbackName: resolvedIpAddress,
+        });
+
         const resolvedHostName = preferredPayloadName
-          || (preferredOptionName && !looksLikeGenericDiscoveryName(preferredOptionName) ? preferredOptionName : '')
+          || (preferredOptionName && !looksLikeGenericNetworkDiscoveryName(preferredOptionName, {
+            modeLabel: selectedNetworkModeLabel,
+            networkSupport: selectedPrinter.networkSupport,
+            printerModel: normalizeName(payload.printerModel),
+          }) ? preferredOptionName : '')
           || preferredKnownName
-          || normalizeName(payload.printerName)
-          || normalizeName(payload.hostName)
-          || resolvedIpAddress
+          || fallbackPayloadName
           || host;
 
         upsertPrinterNetworkDevice(selectedPrinter.id, {
