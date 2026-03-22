@@ -42,6 +42,7 @@ import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/
 import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
+import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
@@ -396,6 +397,7 @@ export function SceneCanvas({
     getSupportSnapshot,
     getSupportSnapshot,
   );
+  const sceneHoveredSupportId = useSceneHoveredSupportId();
   const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
 
   React.useEffect(() => {
@@ -1206,7 +1208,7 @@ export function SceneCanvas({
   const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
   const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
-  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive;
+  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive || supportHoverTargetActive || sceneHoveredSupportId !== null;
 
   const branchHoverDotVisible = Boolean(
     branchHoverPosition

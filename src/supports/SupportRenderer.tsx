@@ -22,7 +22,8 @@ import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationMan
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { ContactDisk, SupportMode } from './types';
+import { ContactDisk, SupportMode, BezierSegment } from './types';
+import { bezierToLineSegments } from './Curves/BezierUtils';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
@@ -62,6 +63,31 @@ interface SupportRendererProps {
     disableSelectionAndHover?: boolean;
     ghostOpacity?: number;
     ghostRenderOrder?: number;
+}
+
+/** Tessellate a bezier segment into multiple straight InstancedShaft entries for batched rendering. */
+function tesselllateBezierToShafts(
+    segment: BezierSegment,
+    startPos: { x: number; y: number; z: number },
+    endPos: { x: number; y: number; z: number },
+    supportId: string,
+    modelId?: string,
+): InstancedShaft[] {
+    const BATCHED_BEZIER_RESOLUTION = 8;
+    const res = Math.max(2, segment.resolution ?? BATCHED_BEZIER_RESOLUTION);
+    const points = bezierToLineSegments(startPos, segment.controlPoint1, segment.controlPoint2, endPos, res);
+    const shafts: InstancedShaft[] = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        shafts.push({
+            id: segment.id,
+            start: points[i],
+            end: points[i + 1],
+            diameter: segment.diameter,
+            supportId,
+            modelId,
+        });
+    }
+    return shafts;
 }
 
 interface SupportShaftSet {
@@ -897,23 +923,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             let currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
 
             for (const segment of trunk.segments) {
-                if (segment.type === 'bezier') {
-                    if (segment.bottomJoint) {
-                        currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
-                    }
-                    if (segment.topJoint) {
-                        currentStart = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-                    } else if (trunk.contactCone) {
-                        const socketPos = getFinalSocketPosition(trunk.contactCone);
-                        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
-                    }
-                    continue;
-                }
-
-                let endPoint: THREE.Vector3;
                 if (segment.bottomJoint) {
                     currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
                 }
+
+                let endPoint: THREE.Vector3;
                 if (segment.topJoint) {
                     endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
                 } else if (trunk.contactCone) {
@@ -921,6 +935,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
                 } else {
                     endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
+                }
+
+                if (segment.type === 'bezier') {
+                    shafts.push(...tesselllateBezierToShafts(segment, currentStart, endPoint, trunk.id, trunk.modelId));
+                    currentStart = endPoint;
+                    continue;
                 }
 
                 shafts.push({
@@ -959,13 +979,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             let currentStart = new THREE.Vector3(parentKnot.pos.x, parentKnot.pos.y, parentKnot.pos.z);
 
             for (const segment of branch.segments) {
-                if (segment.type === 'bezier') {
-                    if (segment.topJoint) {
-                        currentStart = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
-                    }
-                    continue;
-                }
-
                 let endPoint: THREE.Vector3;
                 if (segment.topJoint) {
                     endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
@@ -974,6 +987,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
                 } else {
                     endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
+                }
+
+                if (segment.type === 'bezier') {
+                    shafts.push(...tesselllateBezierToShafts(segment, currentStart, endPoint, branch.id, branch.modelId));
+                    currentStart = endPoint;
+                    continue;
                 }
 
                 shafts.push({
@@ -1074,11 +1093,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 }
 
                 const isUniformDiameter = Math.abs(diameterStart - diameterEnd) < 1e-6;
-                if (segment.type === 'bezier' || !isUniformDiameter) {
+                if (!isUniformDiameter) {
                     fullyBatchable = false;
                 }
 
-                if (segment.type !== 'bezier' && isUniformDiameter) {
+                if (segment.type === 'bezier') {
+                    shafts.push(...tesselllateBezierToShafts(segment, startPoint, endPoint, twig.id, twig.modelId));
+                } else if (isUniformDiameter) {
                     shafts.push({
                         id: segment.id,
                         start: { x: startPoint.x, y: startPoint.y, z: startPoint.z },
@@ -1109,7 +1130,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(stick.modelId, stick.id)) continue;
 
             const shafts: InstancedShaft[] = [];
-            let fullyBatchable = true;
 
             for (const segment of stick.segments) {
                 const startPoint = segment.bottomJoint
@@ -1127,7 +1147,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     })();
 
                 if (segment.type === 'bezier') {
-                    fullyBatchable = false;
+                    shafts.push(...tesselllateBezierToShafts(segment, startPoint, endPoint, stick.id, stick.modelId));
                 } else {
                     shafts.push({
                         id: segment.id,
@@ -1140,7 +1160,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 }
             }
 
-            if (fullyBatchable && shafts.length > 0) {
+            if (shafts.length > 0) {
                 result.set(stick.id, {
                     supportId: stick.id,
                     modelId: stick.modelId,
@@ -1184,9 +1204,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                 const isUniformDiameter = (diameterStart == null && diameterEnd == null)
                     || (diameterStart != null && diameterEnd != null && Math.abs(diameterStart - diameterEnd) < 1e-6);
 
-                if (segment.type === 'bezier' || !isUniformDiameter) {
+                if (!isUniformDiameter) {
                     fullyBatchable = false;
-                } else {
+                }
+
+                if (segment.type === 'bezier') {
+                    shafts.push(...tesselllateBezierToShafts(segment, currentStart, endPoint, kickstand.id, kickstand.modelId));
+                } else if (isUniformDiameter) {
                     shafts.push({
                         id: segment.id,
                         start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
