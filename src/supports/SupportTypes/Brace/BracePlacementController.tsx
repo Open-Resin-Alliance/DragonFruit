@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addBrace } from '../../state';
 import { pushHistory } from '@/history/historyStore';
 import type { SnapTarget } from '../../interaction/SnappingManager';
@@ -23,6 +24,7 @@ import {
     buildSupportPathSnapTargets,
     resolveBracePathDiameterAtT,
 } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 
 interface ShaftHoverDetail {
@@ -53,6 +55,8 @@ export function BracePlacementController() {
     const { altActive, stage, start } = useBracePlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
+    const { getHotkey } = useHotkeyConfig();
+    const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
 
     const { raycaster, camera, pointer } = useThree();
     const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
@@ -553,11 +557,9 @@ export function BracePlacementController() {
     useEffect(() => {
         const handleShaftClick = (evt: Event) => {
             const detail = (evt as CustomEvent<ShaftClickDetail>).detail;
-            const altDown =
-                !!altActive ||
-                !!detail?.intersection?.altKey ||
-                !!detail?.intersection?.nativeEvent?.altKey;
-            if (!altDown) return;
+            const branchFamilyHeld = !!altActive
+                || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(detail?.intersection));
+            if (!branchFamilyHeld) return;
 
             // If Branch placement is awaiting a base click, do not steal the segment click.
             // (Branch uses Alt+click model first, then click on a segment to place the base.)
@@ -720,13 +722,14 @@ export function BracePlacementController() {
 
         window.addEventListener('shaft-click', handleShaftClick as EventListener, true);
         return () => window.removeEventListener('shaft-click', handleShaftClick as EventListener, true);
-    }, [altActive, stage, start, resolveSnapFromClick, isValidEndSegment, segmentMeta]);
+    }, [altActive, stage, start, branchFamilyBinding, resolveSnapFromClick, isValidEndSegment, segmentMeta]);
 
     useEffect(() => {
         const handleLeafClick = (evt: Event) => {
             const detail = (evt as CustomEvent<LeafClickDetail>).detail;
-            const altDown = !!altActive || !!detail?.intersection?.altKey || !!detail?.intersection?.nativeEvent?.altKey;
-            if (!altDown) return;
+            const branchFamilyHeld = !!altActive
+                || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(detail?.intersection));
+            if (!branchFamilyHeld) return;
 
             if (branchPlacementStore.getSnapshot().stage === 'awaitingBase') {
                 return;
@@ -882,7 +885,7 @@ export function BracePlacementController() {
 
         window.addEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
         return () => window.removeEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
-    }, [altActive, stage, start, resolveLeafSnapFromClick, resolveSnapFromClick]);
+    }, [altActive, stage, start, branchFamilyBinding, resolveLeafSnapFromClick, resolveSnapFromClick]);
 
     return null;
 }

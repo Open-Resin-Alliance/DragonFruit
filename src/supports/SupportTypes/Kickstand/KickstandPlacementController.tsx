@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
 import { addKnot, addRoot, subscribe, getSnapshot } from '../../state';
@@ -15,6 +16,7 @@ import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlac
 import { leafPlacementStore } from '../Leaf/leafPlacementState';
 import type { Vec3 } from '../../types';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
+import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState, resolveSupportPlacementHotkeyBindings, resolveSupportPlacementHotkeyIntent } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildKickstandSnapTargetMetaIndex, type KickstandSnapTargetMeta } from '../../interaction/shared/placement/snapping/kickstandSnapTargets';
 import { getSnapPathPointAtT, projectPointToSnapPath } from '../../interaction/shared/placement/snapping/pathProjection';
@@ -25,15 +27,6 @@ interface ShaftClickDetail {
     segmentId?: string;
     point?: Vec3 | null;
     intersection?: unknown;
-}
-
-interface IntersectionWithCtrl {
-    altKey?: boolean;
-    ctrlKey?: boolean;
-    nativeEvent?: {
-        altKey?: boolean;
-        ctrlKey?: boolean;
-    };
 }
 
 function toVector3(v: Vec3): THREE.Vector3 {
@@ -273,25 +266,15 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string): boolean {
     return false;
 }
 
-function hasCtrlModifier(intersection: unknown): boolean {
-    if (!intersection || typeof intersection !== 'object') return false;
-    const candidate = intersection as IntersectionWithCtrl;
-    return Boolean(candidate.ctrlKey ?? candidate.nativeEvent?.ctrlKey);
-}
-
-function hasAltModifier(intersection: unknown): boolean {
-    if (!intersection || typeof intersection !== 'object') return false;
-    const candidate = intersection as IntersectionWithCtrl;
-    return Boolean(candidate.altKey ?? candidate.nativeEvent?.altKey);
-}
-
 export function KickstandPlacementController() {
     const { hotkeyActive } = useKickstandPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const { camera, gl, pointer, raycaster } = useThree();
+    const { getHotkey } = useHotkeyConfig();
     const hoverPointBySegmentRef = useRef<Map<string, Vec3>>(new Map());
     const desiredBandRef = useRef<DesiredBand>('front');
     const lastPreviewSegmentIdRef = useRef<string | null>(null);
+    const placementBindings = useMemo(() => resolveSupportPlacementHotkeyBindings(getHotkey), [getHotkey]);
 
     const targetMetaById = useMemo(() => {
         return buildKickstandSnapTargetMetaIndex(supportState);
@@ -346,27 +329,31 @@ export function KickstandPlacementController() {
 
     useEffect(() => {
         const el = gl.domElement;
+        const kickstandBinding = placementBindings.kickstand;
+        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(kickstandBinding);
 
-        const cancelIfCtrlReleased = (event: PointerEvent) => {
-            if (event.ctrlKey) return;
+        const cancelIfBindingReleased = (event: PointerEvent) => {
+            if (modifierResolvable && isSupportPlacementBindingSatisfiedByModifierState(kickstandBinding, getSupportPlacementModifierState(event))) {
+                return;
+            }
 
             const snapshot = kickstandPlacementStore.getSnapshot();
-            if (snapshot.hotkeyActive) {
+            if (modifierResolvable && snapshot.hotkeyActive) {
                 kickstandPlacementStore.setHotkeyActive(false);
                 resetSnapping();
             }
         };
 
-        el.addEventListener('pointermove', cancelIfCtrlReleased, true);
-        el.addEventListener('pointerdown', cancelIfCtrlReleased, true);
-        el.addEventListener('pointerup', cancelIfCtrlReleased, true);
+        el.addEventListener('pointermove', cancelIfBindingReleased, true);
+        el.addEventListener('pointerdown', cancelIfBindingReleased, true);
+        el.addEventListener('pointerup', cancelIfBindingReleased, true);
 
         return () => {
-            el.removeEventListener('pointermove', cancelIfCtrlReleased, true);
-            el.removeEventListener('pointerdown', cancelIfCtrlReleased, true);
-            el.removeEventListener('pointerup', cancelIfCtrlReleased, true);
+            el.removeEventListener('pointermove', cancelIfBindingReleased, true);
+            el.removeEventListener('pointerdown', cancelIfBindingReleased, true);
+            el.removeEventListener('pointerup', cancelIfBindingReleased, true);
         };
-    }, [gl, resetSnapping]);
+    }, [gl, placementBindings, resetSnapping]);
 
     useEffect(() => {
         const hoverPoints = hoverPointBySegmentRef.current;
@@ -467,12 +454,12 @@ export function KickstandPlacementController() {
             const detail = (event as CustomEvent<ShaftClickDetail>).detail;
             if (!detail?.segmentId) return;
 
-            const leafActive = leafPlacementStore.isActive();
-            const altDown = hasAltModifier(detail.intersection);
-            if (leafActive || altDown) return;
+            const intent = resolveSupportPlacementHotkeyIntent(placementBindings, getSupportPlacementModifierState(detail.intersection));
+            const leafActive = leafPlacementStore.isActive() || intent.family === 'leaf';
+            if (leafActive) return;
 
-            const ctrlDown = hasCtrlModifier(detail.intersection) || kickstandPlacementStore.getSnapshot().hotkeyActive;
-            if (!ctrlDown) return;
+            const kickstandIntentActive = kickstandPlacementStore.getSnapshot().hotkeyActive || intent.family === 'kickstand';
+            if (!kickstandIntentActive) return;
 
             const meta = targetMetaById.get(detail.segmentId);
             const path = meta?.target.pathSegment;
@@ -539,7 +526,7 @@ export function KickstandPlacementController() {
         return () => {
             window.removeEventListener('shaft-click', handleShaftClick);
         };
-    }, [buildPlacementFromSnap, hotkeyActive, resetSnapping, camera, pointer, raycaster, targetMetaById]);
+    }, [buildPlacementFromSnap, hotkeyActive, placementBindings, resetSnapping, camera, pointer, raycaster, targetMetaById]);
 
     return null;
 }

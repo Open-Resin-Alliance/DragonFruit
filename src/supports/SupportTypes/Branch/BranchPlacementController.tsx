@@ -16,6 +16,8 @@
 import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { subscribe, getSnapshot, addBranch, addKnot, addTwig, addStick } from '../../state';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_ADD_BRANCH, SUPPORT_ADD_TWIG, SUPPORT_ADD_STICK } from '../../history/actionTypes';
@@ -33,6 +35,7 @@ import { generateUuid } from '@/utils/uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
+import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/supportHoverResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
@@ -47,6 +50,8 @@ export function BranchPlacementController() {
     const { isActive, altActive, stage, tipPosition, tipNormal, modelId } = useBranchPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const immediateModelHoverId = useImmediateModelHoverId();
+    const { getHotkey } = useHotkeyConfig();
+    const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
     const rawHoveringSupportTarget = isSupportTargetHoverCategory(supportState.hoveredCategory);
     const isHoveringSupportTarget = rawHoveringSupportTarget && immediateModelHoverId === null;
 
@@ -143,9 +148,11 @@ export function BranchPlacementController() {
     // If Alt is released but keyup is missed, pointer events still report modifier state.
     useEffect(() => {
         const el = gl.domElement;
+        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(branchFamilyBinding);
 
         const checkAlt = (e: PointerEvent) => {
-            if (e.altKey) return;
+            if (!modifierResolvable) return;
+            if (isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e))) return;
 
             const snapshot = branchPlacementStore.getSnapshot();
             if (snapshot.altActive || snapshot.stage === 'awaitingBase') {
@@ -158,8 +165,7 @@ export function BranchPlacementController() {
         };
 
         const keyUp = (e: KeyboardEvent) => {
-            const releasedAlt = e.key === 'Alt' || e.key === 'AltGraph' || e.code === 'AltLeft' || e.code === 'AltRight';
-            if (!releasedAlt) return;
+            if (!matchesConfiguredHotkeyUp(e, branchFamilyBinding)) return;
 
             const snapshot = branchPlacementStore.getSnapshot();
             if (snapshot.altActive || snapshot.stage === 'awaitingBase') {
@@ -182,14 +188,13 @@ export function BranchPlacementController() {
             el.removeEventListener('pointerup', checkAlt, true);
             el.removeEventListener('keyup', keyUp, true);
         };
-    }, [gl, resetSnapping]);
+    }, [gl, branchFamilyBinding, resetSnapping]);
 
     // Fallback: some environments can miss Alt keyup while hovering interactive canvas content.
     // Ensure we cancel immediately on any observed Alt release.
     useEffect(() => {
         const handleKeyUp = (e: KeyboardEvent) => {
-            const releasedAlt = e.key === 'Alt' || e.key === 'AltGraph' || e.code === 'AltLeft' || e.code === 'AltRight';
-            if (!releasedAlt) return;
+            if (!matchesConfiguredHotkeyUp(e, branchFamilyBinding)) return;
 
             const snapshot = branchPlacementStore.getSnapshot();
             if (snapshot.altActive || snapshot.stage === 'awaitingBase') {
@@ -203,7 +208,7 @@ export function BranchPlacementController() {
 
         window.addEventListener('keyup', handleKeyUp, true);
         return () => window.removeEventListener('keyup', handleKeyUp, true);
-    }, [resetSnapping]);
+    }, [branchFamilyBinding, resetSnapping]);
 
     useEffect(() => {
         const handleShaftHover = (event: Event) => {
