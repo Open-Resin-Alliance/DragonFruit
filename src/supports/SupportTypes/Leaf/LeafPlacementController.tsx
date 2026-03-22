@@ -1,11 +1,13 @@
 import { useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addLeaf } from '../../state';
 import { pushHistory } from '@/history/historyStore';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Vec3, Knot } from '../../types';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
+import { LEAF_HOTKEY_REARM_EVENT } from './useLeafPlacement';
 import { buildLeafData } from './leafBuilder';
 import { getSettings } from '../../Settings';
 import type { SupportData } from '../../rendering/SupportBuilder';
@@ -14,6 +16,7 @@ import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { generateUuid } from '@/utils/uuid';
 import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacementCommit } from '../../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
+import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
@@ -26,10 +29,13 @@ interface ShaftHoverDetail {
 export function LeafPlacementController() {
     const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
+    const { getHotkey } = useHotkeyConfig();
+    const leafBinding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
 
     const { raycaster, camera, pointer, scene } = useThree();
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
+    const rearmFrameRef = useRef<number | null>(null);
 
     useEffect(() => {
         if (!isActive && stage === 'idle') {
@@ -97,6 +103,15 @@ export function LeafPlacementController() {
             window.removeEventListener('shaft-hover', handleShaftHover as EventListener);
             window.removeEventListener('shaft-leave', handleShaftLeave as EventListener);
             hoveredShaftRef.current = null;
+        };
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (rearmFrameRef.current !== null) {
+                cancelAnimationFrame(rearmFrameRef.current);
+                rearmFrameRef.current = null;
+            }
         };
     }, []);
 
@@ -364,6 +379,19 @@ export function LeafPlacementController() {
 
             leafPlacementStore.finalize();
             leafPlacementStore.reset();
+            if (
+                canResolveSupportPlacementBindingFromModifierState(leafBinding)
+                && isSupportPlacementBindingSatisfiedByModifierState(leafBinding, getSupportPlacementModifierState(e))
+            ) {
+                leafPlacementStore.setHotkeyActive(false);
+                if (rearmFrameRef.current !== null) {
+                    cancelAnimationFrame(rearmFrameRef.current);
+                }
+                rearmFrameRef.current = requestAnimationFrame(() => {
+                    rearmFrameRef.current = null;
+                    window.dispatchEvent(new Event(LEAF_HOTKEY_REARM_EVENT));
+                });
+            }
             clearSupportSelection();
 
             e.stopPropagation();
@@ -372,7 +400,7 @@ export function LeafPlacementController() {
 
         window.addEventListener('click', handleClick, true);
         return () => window.removeEventListener('click', handleClick, true);
-    }, [isActive, stage, tipPosition, surfaceNormal, modelId]);
+    }, [isActive, stage, tipPosition, surfaceNormal, modelId, leafBinding]);
 
     useEffect(() => {
         if (!isActive) {

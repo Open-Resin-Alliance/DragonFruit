@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
@@ -7,6 +7,8 @@ import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkey
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 
+export const LEAF_HOTKEY_REARM_EVENT = 'support-leaf-hotkey-rearm';
+
 export function useLeafPlacement() {
     const { getHotkey } = useHotkeyConfig();
     const binding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
@@ -14,6 +16,7 @@ export function useLeafPlacement() {
     const LEAF_MODIFIER = binding.modifier;
     const { isPlacementDisabled } = useInteractionStatus();
     const state = useLeafPlacementState();
+    const bindingHeldRef = useRef(false);
 
     useEffect(() => {
         const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(binding);
@@ -71,6 +74,7 @@ export function useLeafPlacement() {
         };
 
         const down = (e: KeyboardEvent) => {
+            if (e.repeat) return;
             const isLeafHotkey = matchesConfiguredHotkeyDown(e, binding);
 
             const completingLeafCombo = isLeafComboHeld(e)
@@ -78,6 +82,7 @@ export function useLeafPlacement() {
 
             if (isLeafHotkey || completingLeafCombo) {
                 e.preventDefault();
+                bindingHeldRef.current = true;
                 leafPlacementStore.setHotkeyActive(true);
             }
         };
@@ -85,18 +90,25 @@ export function useLeafPlacement() {
         const up = (e: KeyboardEvent) => {
             if (matchesConfiguredHotkeyUp(e, binding)) {
                 e.preventDefault();
+                bindingHeldRef.current = false;
                 cancelLeafMode();
             }
         };
 
         const blur = () => {
+            bindingHeldRef.current = false;
             cancelLeafMode();
+        };
+
+        const rearm = () => {
+            bindingHeldRef.current = true;
+            leafPlacementStore.setHotkeyActive(true);
         };
 
         const pointerMove = (e: PointerEvent) => {
             const snapshot = leafPlacementStore.getSnapshot();
             if (!snapshot.hotkeyActive && snapshot.stage !== 'awaitingBase') return;
-            if (isLeafComboHeld(e)) return;
+            if (bindingHeldRef.current || isLeafComboHeld(e)) return;
             cancelLeafMode();
         };
 
@@ -105,12 +117,15 @@ export function useLeafPlacement() {
         document.addEventListener('keyup', up, true);
         window.addEventListener('blur', blur);
         window.addEventListener('pointermove', pointerMove, true);
+        window.addEventListener(LEAF_HOTKEY_REARM_EVENT, rearm as EventListener);
         return () => {
             window.removeEventListener('keydown', down, true);
             window.removeEventListener('keyup', up, true);
             document.removeEventListener('keyup', up, true);
             window.removeEventListener('blur', blur);
             window.removeEventListener('pointermove', pointerMove, true);
+            window.removeEventListener(LEAF_HOTKEY_REARM_EVENT, rearm as EventListener);
+            bindingHeldRef.current = false;
         };
     }, [binding, LEAF_KEY, LEAF_MODIFIER]);
 
@@ -125,23 +140,30 @@ export function useLeafPlacement() {
     }, [state.stage]);
 
     const onModelHover = useCallback((hit: THREE.Intersection | null) => {
-        if (state.hotkeyActive && state.stage === 'idle' && hit) {
+        const bindingHeld = hit
+            && canResolveSupportPlacementBindingFromModifierState(binding)
+            && isSupportPlacementBindingSatisfiedByModifierState(binding, getSupportPlacementModifierState(hit));
+        const leafReady = state.hotkeyActive || bindingHeld;
+        if (leafReady && state.stage === 'idle' && hit) {
             const pos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
             leafPlacementStore.setHoverPosition(pos);
-        } else if (!state.hotkeyActive || state.stage !== 'idle') {
+        } else if (!leafReady || state.stage !== 'idle') {
             leafPlacementStore.setHoverPosition(null);
         }
-    }, [state.hotkeyActive, state.stage]);
+    }, [binding, state.hotkeyActive, state.stage]);
 
     const onModelClick = useCallback((hit: THREE.Intersection | null) => {
-        if (!state.hotkeyActive || isPlacementDisabled || !hit) return;
+        const bindingHeld = hit
+            && canResolveSupportPlacementBindingFromModifierState(binding)
+            && isSupportPlacementBindingSatisfiedByModifierState(binding, getSupportPlacementModifierState(hit));
+        if ((!state.hotkeyActive && !bindingHeld) || isPlacementDisabled || !hit) return;
 
         const surfaceNormal = calculateSmoothedNormal(hit);
         const pos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
         const modelId = hit.object.userData?.modelId || 'unknown';
 
         leafPlacementStore.setTip(pos, surfaceNormal, modelId);
-    }, [state.hotkeyActive, isPlacementDisabled]);
+    }, [binding, state.hotkeyActive, isPlacementDisabled]);
 
     const onSupportHover = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
     const onSupportClick = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
