@@ -205,6 +205,9 @@ type PrintingMonitorDebugState = {
   plates: PrintingMonitorDebugChannelState;
 };
 
+const PRINTING_MONITOR_DEBUG_CHANNELS = ['status', 'webcam', 'plates'] as const;
+type PrintingMonitorDebugChannel = (typeof PRINTING_MONITOR_DEBUG_CHANNELS)[number];
+
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
 
 type HomeSupportSnapshot = ReturnType<typeof getSupportSnapshot>;
@@ -6597,7 +6600,7 @@ export default function Home() {
   const printingMonitorDebugBundle = React.useMemo(() => {
     const selectedDeviceSummary = monitoringDevice
       ? {
-          id: monitoringDevice?.id,
+          id: monitoringDevice.id,
           displayName: monitoringDevice.displayName,
           hostName: monitoringDevice.hostName,
           ipAddress: monitoringDevice.ipAddress,
@@ -6607,7 +6610,7 @@ export default function Home() {
         }
       : null;
 
-    const channelSummary = (channel: keyof PrintingMonitorDebugState) => {
+    const channelSummary = (channel: PrintingMonitorDebugChannel) => {
       const debug = printingMonitorDebugState[channel];
       return {
         requestedAt: debug.requestedAtEpochMs
@@ -6622,7 +6625,6 @@ export default function Home() {
     };
 
     return {
-      generatedAt: new Date().toISOString(),
       selectedDevice: selectedDeviceSummary,
       offlineGate: {
         isPrintingMonitorSelectedPrinterOffline,
@@ -6644,12 +6646,64 @@ export default function Home() {
     printingMonitorSnapshot?.stateText,
   ]);
 
+  const printingMonitorDebugPanels = React.useMemo(() => {
+    if (!isPrintingMonitorDebugOpen) return [] as Array<{
+      channel: PrintingMonitorDebugChannel;
+      statusText: string;
+      requestedAt: string | null;
+      json: string;
+      hasError: boolean;
+    }>;
+
+    return PRINTING_MONITOR_DEBUG_CHANNELS.map((channel) => {
+      const selectedChannel = printingMonitorDebugBundle.channels[channel];
+      const payload = {
+        channel,
+        requestedAt: selectedChannel.requestedAt,
+        httpStatus: selectedChannel.httpStatus,
+        request: selectedChannel.request,
+        error: selectedChannel.error,
+        rawPayload: selectedChannel.rawPayload,
+        parsedPayload: selectedChannel.parsedPayload,
+      };
+
+      let serialized = '';
+      try {
+        serialized = JSON.stringify(payload, null, 2);
+      } catch {
+        serialized = JSON.stringify({
+          ...payload,
+          rawPayload: '<unserializable>',
+          parsedPayload: '<unserializable>',
+        }, null, 2);
+      }
+
+      const hasError = Boolean(selectedChannel.error);
+      const statusText = hasError
+        ? 'error'
+        : selectedChannel.httpStatus == null
+          ? 'pending'
+          : `HTTP ${selectedChannel.httpStatus}`;
+
+      return {
+        channel,
+        statusText,
+        requestedAt: selectedChannel.requestedAt,
+        json: serialized,
+        hasError,
+      };
+    });
+  }, [isPrintingMonitorDebugOpen, printingMonitorDebugBundle.channels]);
+
   const handleCopyPrintingMonitorDebugBundle = React.useCallback(async () => {
     try {
       if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
         throw new Error('Clipboard API unavailable');
       }
-      await navigator.clipboard.writeText(JSON.stringify(printingMonitorDebugBundle, null, 2));
+      await navigator.clipboard.writeText(JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        ...printingMonitorDebugBundle,
+      }, null, 2));
       setPrintingMonitorDebugCopyState('copied');
     } catch {
       setPrintingMonitorDebugCopyState('failed');
@@ -12578,20 +12632,24 @@ export default function Home() {
 
             {isPrintingMonitorDebugOpen && (
               <div className="pointer-events-none fixed right-4 top-[5.25rem] z-[170] w-[min(760px,94vw)]">
-                <div className="pointer-events-auto rounded-md border shadow-2xl" style={{ borderColor: 'color-mix(in srgb, #baf72e, var(--border-subtle) 52%)', background: 'color-mix(in srgb, var(--surface-1), #000 8%)' }}>
-                  <div className="flex items-center justify-between gap-2 border-b px-3 py-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div>
-                      <div className="text-[11px] font-semibold" style={{ color: '#d9ff8f' }}>
-                        Monitor Debug Overlay (Ctrl+Shift+N)
-                      </div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        Live payload trace
-                      </div>
+                <div
+                  className="pointer-events-auto rounded-lg border p-2.5 font-mono text-[10px] leading-tight shadow-xl"
+                  style={{
+                    borderColor: 'var(--border-subtle)',
+                    color: 'var(--text-strong)',
+                    background: 'color-mix(in srgb, var(--surface-0), black 14%)',
+                    fontSize: '10px',
+                  }}
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="text-xs font-semibold" style={{ fontFamily: 'var(--font-geist-mono)' }}>
+                      Monitor Debug Overlay (Ctrl+Shift+N)
                     </div>
                     <div className="inline-flex items-center gap-1.5">
                       <button
                         type="button"
-                        className="ui-button ui-button-secondary !h-7 px-2 text-[10px]"
+                        className="rounded border px-2 py-0.5 text-[10px]"
+                        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
                         onClick={() => {
                           void handleCopyPrintingMonitorDebugBundle();
                         }}
@@ -12601,42 +12659,83 @@ export default function Home() {
                           ? 'Copied'
                           : printingMonitorDebugCopyState === 'failed'
                             ? 'Copy Failed'
-                            : 'Copy Debug JSON'}
+                            : 'Copy JSON'}
                       </button>
                       <button
                         type="button"
-                        className="ui-button ui-button-secondary inline-flex items-center justify-center leading-none !h-7 !w-7 !p-0"
+                        className="rounded border px-2 py-0.5 text-[10px]"
+                        style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
                         onClick={() => setIsPrintingMonitorDebugOpen(false)}
-                        aria-label="Close monitor debug overlay"
-                        title="Close debug overlay"
                       >
-                        <X className="h-3.5 w-3.5" />
+                        Close
                       </button>
                     </div>
                   </div>
 
-                  <div className="grid gap-2 p-2 lg:grid-cols-3">
-                    {(['status', 'webcam', 'plates'] as const).map((channel) => {
-                      const summary = {
-                        ...printingMonitorDebugBundle,
-                        channel,
-                        selectedChannel: printingMonitorDebugBundle.channels[channel],
-                      };
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                    <div style={{ color: 'var(--text-muted)' }}>Printer</div>
+                    <div className="truncate" title={printingMonitorHeaderBottomLabel}>
+                      {printingMonitorHeaderBottomLabel}
+                    </div>
 
-                      return (
-                        <div key={channel} className="rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), #000 8%)' }}>
-                          <div className="border-b px-2 py-1 text-[10px] uppercase tracking-[0.08em]" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
-                            {channel}
+                    <div style={{ color: 'var(--text-muted)' }}>Device host</div>
+                    <div className="truncate" title={printingMonitorDebugBundle.selectedDevice?.ipAddress ?? 'n/a'}>
+                      {printingMonitorDebugBundle.selectedDevice?.ipAddress ?? 'n/a'}
+                    </div>
+
+                    <div style={{ color: 'var(--text-muted)' }}>Reachability</div>
+                    <div>
+                      {printingMonitorDebugBundle.selectedDevice?.reachability == null
+                        ? 'unknown'
+                        : (printingMonitorDebugBundle.selectedDevice.reachability ? 'online' : 'offline')}
+                    </div>
+
+                    <div style={{ color: 'var(--text-muted)' }}>Offline gate</div>
+                    <div>{printingMonitorDebugBundle.offlineGate.isPrintingMonitorSelectedPrinterOffline ? 'true' : 'false'}</div>
+                  </div>
+
+                  <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                      Channel payloads
+                    </div>
+                    <div className="grid gap-2 lg:grid-cols-3">
+                      {printingMonitorDebugPanels.map((panel) => (
+                        <div
+                          key={panel.channel}
+                          className="rounded-md border overflow-hidden"
+                          style={{
+                            borderColor: 'var(--border-subtle)',
+                            background: 'color-mix(in srgb, var(--surface-2), #000 8%)',
+                          }}
+                        >
+                          <div
+                            className="border-b px-2 py-1 text-[10px] uppercase tracking-[0.08em] flex items-center justify-between gap-2"
+                            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                          >
+                            <span>{panel.channel}</span>
+                            <span style={{ color: panel.hasError ? '#fca5a5' : 'var(--text-muted)' }}>
+                              {panel.statusText}
+                            </span>
                           </div>
                           <pre
                             className="max-h-56 overflow-auto custom-scrollbar p-2 text-[10px] leading-[1.35]"
                             style={{ color: 'var(--text-strong)' }}
                           >
-                            {JSON.stringify(summary, null, 2)}
+                            {panel.json}
                           </pre>
+                          <div
+                            className="border-t px-2 py-1 text-[10px]"
+                            style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}
+                          >
+                            {panel.requestedAt ?? 'not requested'}
+                          </div>
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Toggle: Ctrl+Shift+N
                   </div>
                 </div>
               </div>
