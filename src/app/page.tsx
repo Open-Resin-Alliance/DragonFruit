@@ -11650,12 +11650,15 @@ export default function Home() {
                         : 'Select monitored printer'}
                       title={printingMonitorHeaderTitle}
                     >
-                      <div className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                      <div
+                        className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0"
+                        style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
+                      >
                         {printingMonitorPrinterThumbnailSrc ? (
                           <img
                             src={printingMonitorPrinterThumbnailSrc}
                             alt={activePrinterProfile?.name ?? 'Selected printer'}
-                            className="h-full w-full object-cover"
+                            className="h-full w-full object-contain"
                             draggable={false}
                             onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
                           />
@@ -11681,12 +11684,15 @@ export default function Home() {
                     </button>
                   ) : (
                     <div className="inline-flex items-center gap-2 px-1.5 py-1">
-                      <div className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                      <div
+                        className="inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-sm shrink-0"
+                        style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
+                      >
                         {printingMonitorPrinterThumbnailSrc ? (
                           <img
                             src={printingMonitorPrinterThumbnailSrc}
                             alt={activePrinterProfile?.name ?? 'Selected printer'}
-                            className="h-full w-full object-cover"
+                            className="h-full w-full object-contain"
                             draggable={false}
                             onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
                           />
@@ -11752,12 +11758,15 @@ export default function Home() {
                               }}
                             >
                               <div className="flex items-center gap-2">
-                                <div className="inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm shrink-0">
+                                <div
+                                  className="inline-flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm shrink-0"
+                                  style={{ background: 'color-mix(in srgb, var(--surface-1), transparent 6%)' }}
+                                >
                                   {printingMonitorPrinterThumbnailSrc ? (
                                     <img
                                       src={printingMonitorPrinterThumbnailSrc}
                                       alt={activePrinterProfile?.name ?? display}
-                                      className="h-full w-full object-cover"
+                                      className="h-full w-full object-contain"
                                       draggable={false}
                                       onError={() => setIsPrintingMonitorPrinterThumbnailFailed(true)}
                                     />
@@ -11894,7 +11903,7 @@ export default function Home() {
                               <img
                                 src={device.imageDataUrl}
                                 alt={display}
-                                className="h-full w-full object-cover"
+                                className="h-full w-full object-contain p-1"
                                 style={isOffline ? { filter: 'grayscale(100%) sepia(0.25) brightness(0.94)' } : undefined}
                                 onError={(e) => {
                                   e.currentTarget.style.display = 'none';
