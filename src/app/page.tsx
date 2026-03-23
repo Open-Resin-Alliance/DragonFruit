@@ -840,6 +840,7 @@ export default function Home() {
   const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
   const [printingMonitorWebcamRefreshNonce, setPrintingMonitorWebcamRefreshNonce] = React.useState(0);
   const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
+  const [isPrintingMonitorWebcamSnapshotSaving, setIsPrintingMonitorWebcamSnapshotSaving] = React.useState(false);
   const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
   const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
@@ -893,11 +894,14 @@ export default function Home() {
   });
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const printingMonitorWebcamViewportRef = React.useRef<HTMLDivElement | null>(null);
   const printingMonitorThumbnailCacheRef = React.useRef<Map<string, string>>(new Map());
   const printingMonitorWebcamRequestInFlightRef = React.useRef(false);
   const printingMonitorWebcamBusyUntilEpochMsRef = React.useRef(0);
   const printingMonitorWebcamAutoPollBlockedRef = React.useRef(false);
   const printingMonitorWebcamConsecutiveTimeoutsRef = React.useRef(0);
+  const printingMonitorWebcamReadinessTokenRef = React.useRef(0);
+  const printingMonitorWebcamReadinessTimeoutRef = React.useRef<number | null>(null);
   const printingMonitorStartFocusDeviceIdRef = React.useRef<string | null>(null);
   const monitorReachabilityInconclusiveCountsRef = React.useRef<Record<string, number>>({});
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
@@ -4475,6 +4479,11 @@ export default function Home() {
   }, [printingMonitorHasActivePrint, printingMonitorThumbnailCacheKey, printingMonitorThumbnailUrl]);
 
   React.useEffect(() => {
+    printingMonitorWebcamReadinessTokenRef.current += 1;
+    if (printingMonitorWebcamReadinessTimeoutRef.current != null) {
+      window.clearTimeout(printingMonitorWebcamReadinessTimeoutRef.current);
+      printingMonitorWebcamReadinessTimeoutRef.current = null;
+    }
     setIsPrintingMonitorWebcamLoaded(false);
     setPrintingMonitorWebcamLoadError(null);
   }, [printingMonitorWebcamUrl]);
@@ -4482,6 +4491,93 @@ export default function Home() {
   React.useEffect(() => {
     setPrintingMonitorWebcamAspectRatio(null);
   }, [printingMonitorWebcamUrl]);
+
+  const cancelPrintingMonitorWebcamReadinessCheck = React.useCallback(() => {
+    printingMonitorWebcamReadinessTokenRef.current += 1;
+    if (printingMonitorWebcamReadinessTimeoutRef.current != null) {
+      window.clearTimeout(printingMonitorWebcamReadinessTimeoutRef.current);
+      printingMonitorWebcamReadinessTimeoutRef.current = null;
+    }
+  }, []);
+
+  const schedulePrintingMonitorMjpegReadinessCheck = React.useCallback((target: HTMLImageElement) => {
+    cancelPrintingMonitorWebcamReadinessCheck();
+
+    const readinessToken = printingMonitorWebcamReadinessTokenRef.current;
+    const sampleIntervalMs = 120;
+    const maxSamples = 36;
+    const minFrameDimensionPx = 64;
+    const minRenderedDimensionPx = 16;
+    let sampleCount = 0;
+    let stableDimensionSamples = 0;
+    let previousDimensionSignature: string | null = null;
+
+    const evaluateReadiness = () => {
+      if (printingMonitorWebcamReadinessTokenRef.current !== readinessToken) return;
+
+      const naturalW = Math.round(target.naturalWidth || 0);
+      const naturalH = Math.round(target.naturalHeight || 0);
+      const hasDimensions = Number.isFinite(naturalW)
+        && Number.isFinite(naturalH)
+        && naturalW > 0
+        && naturalH > 0;
+
+      let normalizedRatio: number | null = null;
+      if (hasDimensions) {
+        normalizedRatio = normalizePrintingMonitorWebcamAspectRatio(naturalW / naturalH);
+        if (normalizedRatio != null) {
+          setPrintingMonitorWebcamAspectRatio((previous) => {
+            if (previous != null && Math.abs(previous - normalizedRatio!) < 0.001) return previous;
+            return normalizedRatio;
+          });
+        }
+
+        const signature = `${naturalW}x${naturalH}`;
+        if (signature === previousDimensionSignature) {
+          stableDimensionSamples += 1;
+        } else {
+          previousDimensionSignature = signature;
+          stableDimensionSamples = 0;
+        }
+      }
+
+      const hasUsableFrameDimensions = hasDimensions
+        && naturalW >= minFrameDimensionPx
+        && naturalH >= minFrameDimensionPx;
+      const hasRenderableViewport = target.clientWidth >= minRenderedDimensionPx
+        && target.clientHeight >= minRenderedDimensionPx;
+      const ready = normalizedRatio != null
+        && hasRenderableViewport
+        && (hasUsableFrameDimensions ? stableDimensionSamples >= 1 : stableDimensionSamples >= 2);
+
+      if (ready) {
+        setIsPrintingMonitorWebcamLoaded(true);
+        setPrintingMonitorWebcamLoadError(null);
+        printingMonitorWebcamReadinessTimeoutRef.current = null;
+        return;
+      }
+
+      sampleCount += 1;
+      if (sampleCount >= maxSamples) {
+        if (normalizedRatio != null && hasDimensions && hasRenderableViewport) {
+          setIsPrintingMonitorWebcamLoaded(true);
+          setPrintingMonitorWebcamLoadError(null);
+        }
+        printingMonitorWebcamReadinessTimeoutRef.current = null;
+        return;
+      }
+
+      printingMonitorWebcamReadinessTimeoutRef.current = window.setTimeout(evaluateReadiness, sampleIntervalMs);
+    };
+
+    evaluateReadiness();
+  }, [cancelPrintingMonitorWebcamReadinessCheck]);
+
+  React.useEffect(() => {
+    return () => {
+      cancelPrintingMonitorWebcamReadinessCheck();
+    };
+  }, [cancelPrintingMonitorWebcamReadinessCheck]);
 
   React.useLayoutEffect(() => {
     if (!printingMonitorModalOpen) return;
@@ -4533,16 +4629,110 @@ export default function Home() {
   }, [activePrinterProfile?.activeNetworkDeviceId, monitorSelectableDevices, printingMonitorModalOpen, printingTargetDevice?.id]);
 
   const triggerPrintingMonitorWebcamRetry = React.useCallback(() => {
+    cancelPrintingMonitorWebcamReadinessCheck();
     printingMonitorWebcamAutoPollBlockedRef.current = false;
     printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
     printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
     setPrintingMonitorWebcamLoadError(null);
     setIsPrintingMonitorWebcamLoaded(false);
     setPrintingMonitorWebcamRefreshNonce((previous) => previous + 1);
-  }, []);
+  }, [cancelPrintingMonitorWebcamReadinessCheck]);
+
+  const handleSavePrintingMonitorWebcamSnapshot = React.useCallback(async () => {
+    if (isPrintingMonitorWebcamSnapshotSaving) return;
+
+    const viewport = printingMonitorWebcamViewportRef.current;
+    if (!viewport) {
+      setPrintingMonitorError('Webcam view is not ready for snapshot capture.');
+      return;
+    }
+
+    const renderedCanvas = viewport.querySelector('canvas');
+    const renderedImage = viewport.querySelector('img');
+    if (!renderedCanvas && !renderedImage) {
+      setPrintingMonitorError('No webcam frame is available to capture.');
+      return;
+    }
+
+    setIsPrintingMonitorWebcamSnapshotSaving(true);
+
+    try {
+      let blob: Blob | null = null;
+
+      if (renderedCanvas) {
+        blob = await new Promise<Blob | null>((resolve) => {
+          renderedCanvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
+        });
+      } else if (renderedImage) {
+        const width = renderedImage.naturalWidth || renderedImage.clientWidth;
+        const height = renderedImage.naturalHeight || renderedImage.clientHeight;
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+          throw new Error('Webcam image dimensions are unavailable for snapshot capture.');
+        }
+
+        const scratchCanvas = document.createElement('canvas');
+        scratchCanvas.width = Math.max(1, Math.round(width));
+        scratchCanvas.height = Math.max(1, Math.round(height));
+
+        const context = scratchCanvas.getContext('2d');
+        if (!context) {
+          throw new Error('Unable to create a canvas context for webcam snapshot.');
+        }
+
+        context.drawImage(renderedImage, 0, 0, scratchCanvas.width, scratchCanvas.height);
+        blob = await new Promise<Blob | null>((resolve) => {
+          scratchCanvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
+        });
+      }
+
+      if (!blob) {
+        throw new Error('Failed to encode webcam snapshot image.');
+      }
+
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const baseNameRaw = (
+        monitoringDevice?.displayName
+        || monitoringDevice?.hostName
+        || monitoringDevice?.ipAddress
+        || 'printer'
+      ).trim();
+      const baseName = baseNameRaw.replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '') || 'printer';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `webcam_${baseName}_${stamp}.png`;
+
+      try {
+        await savePrintArtifactWithNativeDialog(bytes, filename);
+      } catch {
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = filename;
+        anchor.rel = 'noopener';
+        anchor.style.display = 'none';
+        document.body?.appendChild(anchor);
+        anchor.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      }
+
+      setPrintingMonitorActionStatus('Webcam snapshot saved.');
+      setPrintingMonitorError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save webcam snapshot.';
+      setPrintingMonitorError(message);
+    } finally {
+      setIsPrintingMonitorWebcamSnapshotSaving(false);
+    }
+  }, [
+    isPrintingMonitorWebcamSnapshotSaving,
+    monitoringDevice?.displayName,
+    monitoringDevice?.hostName,
+    monitoringDevice?.ipAddress,
+  ]);
 
   // Flush webcam polling/circuit-breaker state on monitor close.
   const flushMonitors = React.useCallback(async () => {
+    cancelPrintingMonitorWebcamReadinessCheck();
     // Reset webcam polling state
     printingMonitorWebcamAutoPollBlockedRef.current = false;
     printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
@@ -4552,7 +4742,7 @@ export default function Home() {
     setIsPrintingMonitorWebcamLoaded(false);
     setPrintingMonitorWebcamAspectRatio(null);
     setPrintingMonitorWebcamRefreshNonce((previous) => previous + 1);
-  }, []);
+  }, [cancelPrintingMonitorWebcamReadinessCheck]);
 
   const handleResetPrintingMonitorWebcamStreamSlot = React.useCallback(async () => {
     if (isPrintingMonitorWebcamResetBusy) return;
@@ -12251,12 +12441,12 @@ export default function Home() {
               <div className={`p-4 grid items-start gap-3 ${printingMonitorUsesTwoColumnDetailLayout ? 'lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]' : 'grid-cols-1'}`}>
                 <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
-                  <div className="flex items-center justify-between gap-2 px-1">
-                    <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                  <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
+                    <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                       Print Files
                     </div>
                     <div
-                      className="inline-flex items-center rounded-lg border p-1"
+                      className="inline-flex items-center rounded-lg border p-1 justify-self-center"
                       style={{
                         borderColor: 'var(--border-subtle)',
                         background: 'color-mix(in srgb, var(--surface-1), #000 12%)',
@@ -12310,7 +12500,7 @@ export default function Home() {
                         void refreshPrintingMonitorRecentPlates();
                       }}
                       disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
-                      className="!p-1.5"
+                      className="!p-1.5 justify-self-end"
                       title="Refresh print files"
                       aria-label="Refresh print files"
                     >
@@ -12589,8 +12779,24 @@ export default function Home() {
                     height: printingMonitorLeftColumnHeight != null ? `${printingMonitorLeftColumnHeight}px` : 'min(62vh, 520px)',
                   }}
                 >
-                <div className="text-[10px] uppercase tracking-wide px-1" style={{ color: 'var(--text-muted)' }}>
-                  Webcam
+                <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
+                  <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Webcam
+                  </div>
+                  <div className="justify-self-center" />
+                  <IconButton
+                    onClick={() => {
+                      void handleSavePrintingMonitorWebcamSnapshot();
+                    }}
+                    disabled={isPrintingMonitorWebcamSnapshotSaving || !printingMonitorWebcamUrl || !isPrintingMonitorWebcamLoaded}
+                    className="!p-1.5 justify-self-end"
+                    title="Save webcam snapshot"
+                    aria-label="Save webcam snapshot"
+                  >
+                    {isPrintingMonitorWebcamSnapshotSaving
+                      ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      : <Download className="w-3.5 h-3.5" />}
+                  </IconButton>
                 </div>
                 {printingMonitorWebcamUrl ? (
                   <div className="mt-1.5 flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
@@ -12644,10 +12850,13 @@ export default function Home() {
                       </div>
                     ) : (
                       <div
+                        ref={printingMonitorWebcamViewportRef}
                         className="relative rounded-md border overflow-hidden h-full max-h-full max-w-full"
                         style={{
                           borderColor: 'var(--border-subtle)',
                           background: 'color-mix(in srgb, var(--surface-1), #000 6%)',
+                          width: isPrintingMonitorWebcamLoaded ? undefined : '100%',
+                          minWidth: isPrintingMonitorWebcamLoaded ? undefined : 'min(100%, 220px)',
                         }}
                       >
                         {!isPrintingMonitorWebcamLoaded && (
@@ -12696,6 +12905,7 @@ export default function Home() {
                                 transformOrigin: 'center center',
                               }}
                               onLoaded={(ratio) => {
+                                cancelPrintingMonitorWebcamReadinessCheck();
                                 const normalizedRatio = normalizePrintingMonitorWebcamAspectRatio(ratio);
                                 if (normalizedRatio != null) {
                                   setPrintingMonitorWebcamAspectRatio((previous) => {
@@ -12707,6 +12917,7 @@ export default function Home() {
                                 setPrintingMonitorWebcamLoadError(null);
                               }}
                               onError={(message) => {
+                                cancelPrintingMonitorWebcamReadinessCheck();
                                 console.warn('[Monitor/Webcam] rtsp-relay playback issue', { url: printingMonitorWebcamUrl, message });
                                 setIsPrintingMonitorWebcamLoaded(false);
                                 setPrintingMonitorWebcamLoadError(message);
@@ -12725,20 +12936,10 @@ export default function Home() {
                                 transformOrigin: 'center center',
                               }}
                               onLoad={(event) => {
-                                const target = event.currentTarget;
-                                const naturalW = target.naturalWidth;
-                                const naturalH = target.naturalHeight;
-                                if (!Number.isFinite(naturalW) || !Number.isFinite(naturalH) || naturalW <= 0 || naturalH <= 0) return;
-                                const ratio = normalizePrintingMonitorWebcamAspectRatio(naturalW / naturalH);
-                                if (ratio == null) return;
-                                setPrintingMonitorWebcamAspectRatio((previous) => {
-                                  if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
-                                  return ratio;
-                                });
-                                setIsPrintingMonitorWebcamLoaded(true);
-                                setPrintingMonitorWebcamLoadError(null);
+                                schedulePrintingMonitorMjpegReadinessCheck(event.currentTarget);
                               }}
                               onError={() => {
+                                cancelPrintingMonitorWebcamReadinessCheck();
                                 setIsPrintingMonitorWebcamLoaded(false);
                                 setPrintingMonitorWebcamLoadError('The webcam image could not be loaded.');
                               }}
