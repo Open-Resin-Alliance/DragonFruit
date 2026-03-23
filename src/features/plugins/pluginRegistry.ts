@@ -275,6 +275,14 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
   const resolutionX = Math.round(sanitizeNumber((value as any).display?.resolutionX, 2560, 1, 200000));
   const resolutionY = Math.round(sanitizeNumber((value as any).display?.resolutionY, 1620, 1, 200000));
   const pixelSize = sanitizePixelSize((value as any).pixelSize);
+  const explicitBuildWidth = sanitizeOptionalPositiveNumber((value as any).buildVolumeMm?.width);
+  const explicitBuildDepth = sanitizeOptionalPositiveNumber((value as any).buildVolumeMm?.depth);
+  const buildDimensionMode: PrinterPreset['buildDimensionMode'] =
+    explicitBuildWidth == null
+      && explicitBuildDepth == null
+      && pixelSize != null
+      ? 'auto'
+      : 'manual';
 
   return {
     presetId,
@@ -291,6 +299,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),
     pixelSize,
     bitDepth: sanitizeBitDepth((value as any).bitDepth),
+    buildDimensionMode,
     buildVolumeMm: {
       width: resolveBuildDimensionMm((value as any).buildVolumeMm?.width, resolutionX, pixelSize?.x, 143),
       depth: resolveBuildDimensionMm((value as any).buildVolumeMm?.depth, resolutionY, pixelSize?.y, 89),

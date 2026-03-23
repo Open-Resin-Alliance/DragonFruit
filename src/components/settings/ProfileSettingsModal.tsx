@@ -317,7 +317,6 @@ export function ProfileSettingsModal({
   const [showPresetPicker, setShowPresetPicker] = React.useState(false);
   const [presetSearch, setPresetSearch] = React.useState('');
   const [selectedPresetManufacturer, setSelectedPresetManufacturer] = React.useState<string>('');
-  const [buildDimensionModeByPrinterId, setBuildDimensionModeByPrinterId] = React.useState<Record<string, BuildDimensionEditMode>>({});
   const [manualBuildDimensionsByPrinterId, setManualBuildDimensionsByPrinterId] = React.useState<Record<string, ManualBuildDimensions>>({});
   const [printerRailViewMode, setPrinterRailViewMode] = React.useState<PrinterRailViewMode>('profiles');
   const [isEditFleetUnitModalOpen, setIsEditFleetUnitModalOpen] = React.useState(false);
@@ -446,8 +445,8 @@ export function ProfileSettingsModal({
 
   const selectedBuildDimensionMode: BuildDimensionEditMode = React.useMemo(() => {
     if (!selectedPrinter) return 'manual';
-    return buildDimensionModeByPrinterId[selectedPrinter.id] ?? 'manual';
-  }, [buildDimensionModeByPrinterId, selectedPrinter]);
+    return selectedPrinter.buildDimensionMode === 'auto' ? 'auto' : 'manual';
+  }, [selectedPrinter]);
 
   const applyAutoBuildDimensions = React.useCallback((printer: PrinterProfile, overrides?: {
     resolutionX?: number;
@@ -483,13 +482,9 @@ export function ProfileSettingsModal({
       }));
     }
 
-    setBuildDimensionModeByPrinterId((prev) => ({
-      ...prev,
-      [selectedPrinter.id]: mode,
-    }));
-
     if (mode === 'auto') {
       updatePrinterProfile(selectedPrinter.id, {
+        buildDimensionMode: 'auto',
         buildVolumeMm: applyAutoBuildDimensions(selectedPrinter),
       });
     }
@@ -498,13 +493,19 @@ export function ProfileSettingsModal({
       const remembered = manualBuildDimensionsByPrinterId[selectedPrinter.id];
       if (remembered) {
         updatePrinterProfile(selectedPrinter.id, {
+          buildDimensionMode: 'manual',
           buildVolumeMm: {
             ...selectedPrinter.buildVolumeMm,
             width: remembered.width,
             depth: remembered.depth,
           },
         });
+        return;
       }
+
+      updatePrinterProfile(selectedPrinter.id, {
+        buildDimensionMode: 'manual',
+      });
     }
   }, [applyAutoBuildDimensions, manualBuildDimensionsByPrinterId, selectedBuildDimensionMode, selectedPrinter]);
 
@@ -640,6 +641,7 @@ export function ProfileSettingsModal({
     if (!selectedPrinter) return null;
     return officialPrinterUpdates.find((update) => update.printerProfileId === selectedPrinter.id) ?? null;
   }, [officialPrinterUpdates, selectedPrinter]);
+  const isSelectedPrinterOfficial = selectedPrinter?.isOfficial === true;
 
   const selectedMaterialUpdate = React.useMemo(() => {
     if (!selectedMaterial) return null;
@@ -1055,7 +1057,7 @@ export function ProfileSettingsModal({
   }, [selectedPrinter]);
 
   React.useEffect(() => {
-    if (!selectedPrinter || selectedPrinter.isOfficial) {
+    if (!selectedPrinter) {
       setIsEditingPrinter(false);
     }
   }, [selectedPrinter]);
@@ -2130,6 +2132,13 @@ export function ProfileSettingsModal({
     setOfficialUpdateStatusMessage('Unable to apply material update (profile is no longer linked to an official template).');
   }, [selectedMaterialUpdate]);
 
+  const handleDuplicateSelectedPrinterAsCustom = React.useCallback(() => {
+    if (!selectedPrinter) return;
+    const newId = duplicatePrinterProfileAsCustom(selectedPrinter.id);
+    handlePickPrinter(newId);
+    setIsEditingPrinter(true);
+  }, [handlePickPrinter, selectedPrinter]);
+
   const showOfficialProfileDialog = React.useCallback((profileId: string) => {
     setOfficialLockedProfileId(profileId);
     setShowOfficialLockDialog(true);
@@ -2841,10 +2850,6 @@ export function ProfileSettingsModal({
                         type="button"
                         onClick={() => {
                           if (!selectedPrinter || !hasPrinters) return;
-                          if (selectedPrinter.isOfficial) {
-                            showOfficialProfileDialog(selectedPrinter.id);
-                            return;
-                          }
                           setIsEditingPrinter(true);
                         }}
                         disabled={!hasPrinters}
@@ -3601,19 +3606,51 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
+                {isSelectedPrinterOfficial && (
+                  <div className="rounded-xl border p-3" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 36%)', background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 92%)' }}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold inline-flex items-center gap-1.5" style={{ color: 'var(--text-strong)' }}>
+                          <AlertTriangle className="w-4 h-4" style={{ color: '#f59e0b' }} />
+                          Official Profile — Edits Limited!
+                        </div>
+                        <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                          You can change Output Format, Network Support, Format Version, and Webcam Support here. Everything else stays locked unless you make a custom copy.
+                        </div>
+                        <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                          <strong style={{ color: 'var(--text-strong)' }}>Warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleDuplicateSelectedPrinterAsCustom();
+                        }}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                        style={{ color: 'var(--accent-secondary)' }}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Create Custom Copy
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Identity</div>
                   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-3 md:items-stretch">
                     <div className="space-y-3">
                       <LabeledInput
-                        label="Printer name"
+                        label="Printer Name"
                         value={selectedPrinter.name}
+                        disabled={isSelectedPrinterOfficial}
                         onChange={(value) => updatePrinterProfile(selectedPrinter.id, { name: value })}
                       />
 
                       <LabeledInput
                         label="Manufacturer"
                         value={selectedPrinter.manufacturer ?? ''}
+                        disabled={isSelectedPrinterOfficial}
                         onChange={(value) => updatePrinterProfile(selectedPrinter.id, { manufacturer: value })}
                       />
 
@@ -3623,8 +3660,9 @@ export function ProfileSettingsModal({
                           <button
                             type="button"
                             onClick={() => triggerImageUpload(selectedPrinter.id)}
+                            disabled={isSelectedPrinterOfficial}
                             className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
-                            style={{ color: 'var(--text-strong)' }}
+                            style={{ color: isSelectedPrinterOfficial ? 'var(--text-muted)' : 'var(--text-strong)' }}
                           >
                             <Upload className="w-3.5 h-3.5" />
                             Upload Image
@@ -3635,7 +3673,7 @@ export function ProfileSettingsModal({
                               if (!selectedPrinter.imageDataUrl) return;
                               updatePrinterProfile(selectedPrinter.id, { imageDataUrl: undefined });
                             }}
-                            disabled={!selectedPrinter.imageDataUrl}
+                            disabled={isSelectedPrinterOfficial || !selectedPrinter.imageDataUrl}
                             className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                             style={{ color: selectedPrinter.imageDataUrl ? '#fca5a5' : 'var(--text-muted)' }}
                           >
@@ -3675,10 +3713,10 @@ export function ProfileSettingsModal({
                   >
                     <div>
                       <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
-                        Auto-calculate width/depth
+                        Auto-Calculate Width/Depth
                       </div>
                       <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        Uses resolution × pixel size. Non-destructive: switching back restores previous manual width/depth.
+                        Uses Resolution × Pixel Size. Non-destructive: switching back restores previous manual width/depth.
                       </div>
                     </div>
                     <button
@@ -3686,7 +3724,8 @@ export function ProfileSettingsModal({
                       role="switch"
                       aria-checked={selectedBuildDimensionMode === 'auto'}
                       onClick={() => setBuildDimensionMode(selectedBuildDimensionMode === 'auto' ? 'manual' : 'auto')}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                      disabled={isSelectedPrinterOfficial}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md disabled:opacity-55 disabled:cursor-not-allowed"
                       style={selectedBuildDimensionMode === 'auto'
                         ? {
                             color: 'var(--accent-secondary)',
@@ -3701,8 +3740,8 @@ export function ProfileSettingsModal({
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledNumberInput
-                      label="Build width (mm)"
-                      disabled={selectedBuildDimensionMode === 'auto'}
+                      label="Build Width (mm)"
+                      disabled={selectedBuildDimensionMode === 'auto' || isSelectedPrinterOfficial}
                       value={selectedPrinter.buildVolumeMm.width}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         buildVolumeMm: {
@@ -3712,8 +3751,8 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Build depth (mm)"
-                      disabled={selectedBuildDimensionMode === 'auto'}
+                      label="Build Depth (mm)"
+                      disabled={selectedBuildDimensionMode === 'auto' || isSelectedPrinterOfficial}
                       value={selectedPrinter.buildVolumeMm.depth}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         buildVolumeMm: {
@@ -3723,7 +3762,8 @@ export function ProfileSettingsModal({
                       })}
                     />
                     <LabeledNumberInput
-                      label="Build height (mm)"
+                      label="Build Height (mm)"
+                      disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.buildVolumeMm.height}
                       onChange={(value) => updatePrinterProfile(selectedPrinter.id, {
                         buildVolumeMm: {
@@ -3740,6 +3780,7 @@ export function ProfileSettingsModal({
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledNumberInput
                       label="Resolution X (px)"
+                      disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.display.resolutionX}
                       onChange={(value) => handlePrinterDisplayChange({
                         resolutionX: Math.max(1, Math.round(value)),
@@ -3747,30 +3788,35 @@ export function ProfileSettingsModal({
                     />
                     <LabeledNumberInput
                       label="Resolution Y (px)"
+                      disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.display.resolutionY}
                       onChange={(value) => handlePrinterDisplayChange({
                         resolutionY: Math.max(1, Math.round(value)),
                       })}
                     />
                     <LabeledNumberInput
-                      label="Bit depth"
+                      label="Bit Depth"
+                      disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.bitDepth?.bits ?? 8}
                       onChange={handlePrinterBitDepthChange}
                     />
 
                     <LabeledNumberInput
-                      label="Pixel size X (μm)"
+                      label="Pixel Size X (μm)"
+                      disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.pixelSize?.x ?? 1}
                       onChange={(value) => handlePrinterPixelSizeChange('x', value)}
                     />
                     <LabeledNumberInput
-                      label="Pixel size Y (μm)"
+                      label="Pixel Size Y (μm)"
+                      disabled={isSelectedPrinterOfficial}
                       value={selectedPrinter.pixelSize?.y ?? 1}
                       onChange={(value) => handlePrinterPixelSizeChange('y', value)}
                     />
 
                     <LabeledToggleInput
                       label="Anti-Aliasing"
+                      disabled={isSelectedPrinterOfficial}
                       checked={selectedPrinter.antiAliasing === true}
                       onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { antiAliasing: checked })}
                     />
@@ -3781,14 +3827,14 @@ export function ProfileSettingsModal({
                   <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Output</div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                     <LabeledSelectInput
-                      label="Output format"
+                      label="Output Format"
                       value={selectedPrinter.display.outputFormat}
                       options={OUTPUT_FORMAT_OPTIONS}
                       onChange={(value) => handlePrinterDisplayChange({ outputFormat: value })}
                     />
 
                     <LabeledSelectInput
-                      label="Network support"
+                      label="Network Support"
                       value={selectedPrinter.networkSupport ?? ''}
                       options={selectedPrinterNetworkModeOptions}
                       onChange={(value) => {
@@ -3802,9 +3848,15 @@ export function ProfileSettingsModal({
                       }}
                     />
 
+                    <LabeledToggleInput
+                      label="Webcam Support"
+                      checked={selectedPrinter.hasCamera !== false}
+                      onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { hasCamera: checked })}
+                    />
+
                     {selectedFormatVersionOptions.length > 0 && (
                       <SelectDropdown
-                        label="Format version"
+                        label="Format Version"
                         value={selectedResolvedFormatVersion ?? selectedFormatVersionOptions[0].value}
                         options={selectedFormatVersionOptions}
                         onChange={(value) => handlePrinterDisplayChange({ formatVersion: value })}
@@ -3813,21 +3865,24 @@ export function ProfileSettingsModal({
 
                     {selectedSettingsModeOptions.length > 0 && (
                       <SelectDropdown
-                        label="Settings mode"
+                        label="Settings Mode"
                         value={selectedResolvedSettingsMode ?? selectedSettingsModeOptions[0].value}
                         options={selectedSettingsModeOptions}
+                        disabled={isSelectedPrinterOfficial}
                         onChange={(value) => handlePrinterDisplayChange({ settingsMode: value })}
                       />
                     )}
 
                     <LabeledToggleInput
                       label="Mirror X"
+                      disabled={isSelectedPrinterOfficial}
                       checked={selectedPrinter.display.mirrorX === true}
                       onChange={(checked) => handlePrinterDisplayChange({ mirrorX: checked })}
                     />
 
                     <LabeledToggleInput
                       label="Mirror Y"
+                      disabled={isSelectedPrinterOfficial}
                       checked={selectedPrinter.display.mirrorY === true}
                       onChange={(checked) => handlePrinterDisplayChange({ mirrorY: checked })}
                     />
@@ -4865,9 +4920,10 @@ type LabeledSelectInputProps = {
   value: PrinterOutputFormat;
   options: Array<{ value: PrinterOutputFormat; label: string }>;
   onChange: (value: PrinterOutputFormat) => void;
+  disabled?: boolean;
 };
 
-function LabeledSelectInput({ label, value, options, onChange }: LabeledSelectInputProps) {
+function LabeledSelectInput({ label, value, options, onChange, disabled = false }: LabeledSelectInputProps) {
   return (
     <label className="space-y-1 block">
       <span className="ui-label font-medium inline-flex items-center">
@@ -4877,7 +4933,15 @@ function LabeledSelectInput({ label, value, options, onChange }: LabeledSelectIn
         <select
           value={value}
           onChange={(event) => onChange(event.target.value as PrinterOutputFormat)}
-          className="ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none"
+          disabled={disabled}
+          className={`ui-input w-full h-[36px] px-2.5 pr-10 leading-tight text-sm appearance-none ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+          style={disabled
+            ? {
+                borderColor: 'var(--border-subtle)',
+                background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+                color: 'var(--text-muted)',
+              }
+            : undefined}
         >
           {options.map((option) => (
             <option key={option.value} value={option.value}>
@@ -4898,9 +4962,10 @@ type LabeledToggleInputProps = {
   label: string;
   checked: boolean;
   onChange: (value: boolean) => void;
+  disabled?: boolean;
 };
 
-function LabeledToggleInput({ label, checked, onChange }: LabeledToggleInputProps) {
+function LabeledToggleInput({ label, checked, onChange, disabled = false }: LabeledToggleInputProps) {
   return (
     <label className="space-y-1 block">
       <span className="ui-label font-medium inline-flex items-center">
@@ -4910,22 +4975,34 @@ function LabeledToggleInput({ label, checked, onChange }: LabeledToggleInputProp
         type="button"
         role="switch"
         aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className="ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between"
-        style={{
-          borderColor: checked
-            ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
-            : 'var(--border-subtle)',
-          background: checked
-            ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
-            : 'var(--surface-1)',
-          color: checked ? 'var(--text-strong)' : 'var(--text-muted)',
+        onClick={() => {
+          if (disabled) return;
+          onChange(!checked);
         }}
+        disabled={disabled}
+        className={`ui-input w-full h-[36px] px-2.5 leading-tight text-sm inline-flex items-center justify-between ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+        style={disabled
+          ? {
+              borderColor: 'var(--border-subtle)',
+              background: 'color-mix(in srgb, var(--surface-2), black 8%)',
+              color: 'var(--text-muted)',
+            }
+          : {
+              borderColor: checked
+                ? 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 36%)'
+                : 'var(--border-subtle)',
+              background: checked
+                ? 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 90%)'
+                : 'var(--surface-1)',
+              color: checked ? 'var(--text-strong)' : 'var(--text-muted)',
+            }}
       >
         <span>{checked ? 'Enabled' : 'Disabled'}</span>
         <span
           className="inline-flex h-5 w-9 rounded-full p-0.5 transition-colors"
-          style={{ background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
+          style={disabled
+            ? { background: 'color-mix(in srgb, var(--surface-2), black 8%)' }
+            : { background: checked ? 'var(--accent-secondary)' : 'var(--surface-2)' }}
         >
           <span
             className={`h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0'}`}

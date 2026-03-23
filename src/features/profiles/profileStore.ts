@@ -62,6 +62,8 @@ export type PrinterBitDepth = {
   description?: string;
 };
 
+export type PrinterBuildDimensionMode = 'manual' | 'auto';
+
 export type PrinterPreset = {
   presetId: string;
   profileVersion?: number;
@@ -71,10 +73,12 @@ export type PrinterPreset = {
   imageAssetPath?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  hasCamera?: boolean;
   networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
+  buildDimensionMode?: PrinterBuildDimensionMode;
   buildVolumeMm: {
     width: number;
     depth: number;
@@ -98,10 +102,12 @@ export type PrinterProfile = {
   imageDataUrl?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  hasCamera?: boolean;
   networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
+  buildDimensionMode?: PrinterBuildDimensionMode;
   officialPresetId?: string;
   officialPresetVersion?: number;
   isOfficial?: boolean;
@@ -294,6 +300,16 @@ const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
 };
 
 function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  return undefined;
+}
+
+function normalizeBuildDimensionMode(value: unknown): PrinterBuildDimensionMode | undefined {
+  if (value === 'auto' || value === 'manual') return value;
+  return undefined;
+}
+
+function normalizeCameraSupport(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
   return undefined;
 }
@@ -529,10 +545,12 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   imageDataUrl: preset.imageAssetPath,
   antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
   networkSupport: normalizeNetworkSupport(preset.networkSupport),
+  hasCamera: normalizeCameraSupport((preset as any).hasCamera),
   networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
   platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
   pixelSize: sanitizePixelSize((preset as any).pixelSize),
   bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+  buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode),
   officialPresetId: preset.presetId,
   officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
   isOfficial: true,
@@ -659,6 +677,16 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
         const fallbackBuildVolume = matchedPreset?.buildVolumeMm;
         const fallbackDisplay = matchedPreset?.display;
         const fallbackOfficialPresetVersion = normalizeProfileVersion((matchedPreset as any)?.profileVersion, 1);
+        const resolvedPixelSize = sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize);
+        const explicitBuildDimensionMode = normalizeBuildDimensionMode((profile as any).buildDimensionMode)
+          ?? normalizeBuildDimensionMode((matchedPreset as any)?.buildDimensionMode);
+        const inferAutoBuildDimensionMode = explicitBuildDimensionMode == null
+          && rawBuildVolume != null
+          && (rawBuildVolume as any).width == null
+          && (rawBuildVolume as any).depth == null
+          && resolvedPixelSize != null;
+        const resolvedBuildDimensionMode: PrinterBuildDimensionMode = explicitBuildDimensionMode
+          ?? (inferAutoBuildDimensionMode ? 'auto' : 'manual');
         const networkSupport = resolveNetworkSupport(profile);
         const networkProfileState = networkSupport
           ? deriveNetworkProfileState(profile, networkSupport)
@@ -677,10 +705,13 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
             ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
           networkSupport,
+          hasCamera: normalizeCameraSupport((profile as any).hasCamera)
+            ?? normalizeCameraSupport((matchedPreset as any)?.hasCamera),
           networkFilter: sanitizeNetworkFilter((profile as any).networkFilter) ?? sanitizeNetworkFilter((matchedPreset as any)?.networkFilter),
           platformBadge: sanitizePlatformBadge((profile as any).platformBadge) ?? sanitizePlatformBadge((matchedPreset as any)?.platformBadge),
-          pixelSize: sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize),
+          pixelSize: resolvedPixelSize,
           bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
+          buildDimensionMode: resolvedBuildDimensionMode,
           officialPresetId,
           officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
           isOfficial: isOfficialProfileByHeuristic(profile),
@@ -996,10 +1027,12 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     imageDataUrl: partial?.imageDataUrl,
     antiAliasing: normalizeAntiAliasingSupport(partial?.antiAliasing),
     networkSupport,
+    hasCamera: normalizeCameraSupport(partial?.hasCamera),
     networkFilter: sanitizeNetworkFilter(partial?.networkFilter),
     platformBadge: sanitizePlatformBadge(partial?.platformBadge),
     pixelSize: sanitizePixelSize(partial?.pixelSize),
     bitDepth: sanitizeBitDepth(partial?.bitDepth),
+    buildDimensionMode: normalizeBuildDimensionMode((partial as any)?.buildDimensionMode) ?? 'manual',
     officialPresetId: partial?.officialPresetId?.trim(),
     officialPresetVersion: Number.isFinite(Number((partial as any)?.officialPresetVersion))
       ? normalizeProfileVersion((partial as any).officialPresetVersion, 1)
@@ -1062,10 +1095,12 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     imageDataUrl: preset.imageAssetPath,
     antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
     networkSupport: normalizeNetworkSupport(preset.networkSupport),
+    hasCamera: normalizeCameraSupport((preset as any).hasCamera),
     networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
     platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+    buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode) ?? 'manual',
     officialPresetId: preset.presetId,
     officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
     isOfficial: true,
@@ -1136,24 +1171,62 @@ export function addMaterialProfile(
 export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterProfile, 'id'>>): void {
   ensureHydrated();
   let changed = false;
-  const hasNetworkSupportUpdate = Object.prototype.hasOwnProperty.call(updates, 'networkSupport');
+
+  const filterOfficialPrinterProfileUpdates = (
+    sourceUpdates: Partial<Omit<PrinterProfile, 'id'>>,
+  ): Partial<Omit<PrinterProfile, 'id'>> => {
+    const nextUpdates: Partial<Omit<PrinterProfile, 'id'>> = {};
+
+    if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'networkSupport')) {
+      nextUpdates.networkSupport = sourceUpdates.networkSupport;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'hasCamera')) {
+      nextUpdates.hasCamera = sourceUpdates.hasCamera;
+    }
+
+    if (sourceUpdates.display) {
+      const nextDisplay: Partial<PrinterProfile['display']> = {};
+      if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'outputFormat')) {
+        nextDisplay.outputFormat = sourceUpdates.display.outputFormat;
+      }
+      if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'formatVersion')) {
+        nextDisplay.formatVersion = sourceUpdates.display.formatVersion;
+      }
+      if (Object.keys(nextDisplay).length > 0) {
+        nextUpdates.display = nextDisplay as PrinterProfile['display'];
+      }
+    }
+
+    return nextUpdates;
+  };
+
+  const targetProfile = state.printerProfiles.find((profile) => profile.id === id);
+  const appliedUpdates = targetProfile?.isOfficial === true
+    ? filterOfficialPrinterProfileUpdates(updates)
+    : updates;
+  const hasNetworkSupportUpdate = Object.prototype.hasOwnProperty.call(appliedUpdates, 'networkSupport');
+  const hasBuildDimensionModeUpdate = Object.prototype.hasOwnProperty.call(appliedUpdates, 'buildDimensionMode');
+
+  if (targetProfile?.isOfficial === true && Object.keys(appliedUpdates).length === 0) {
+    return;
+  }
 
   const printerProfiles = state.printerProfiles.map((profile) => {
     if (profile.id !== id) return profile;
-    if (profile.isOfficial) return profile;
     changed = true;
 
     const nextNetworkSupport = hasNetworkSupportUpdate
-      ? normalizeNetworkSupport(updates.networkSupport)
+      ? normalizeNetworkSupport(appliedUpdates.networkSupport)
       : profile.networkSupport;
-    const nextNetwork = updates.network !== undefined
-      ? sanitizePrinterNetworkSettings(updates.network)
+    const nextNetwork = appliedUpdates.network !== undefined
+      ? sanitizePrinterNetworkSettings(appliedUpdates.network)
       : sanitizePrinterNetworkSettings(profile.network);
-    const nextNetworkConnection = updates.networkConnection !== undefined
+    const nextNetworkConnection = appliedUpdates.networkConnection !== undefined
       ? (
         nextNetworkSupport
           ? sanitizePrinterNetworkConnectionState(
-            updates.networkConnection,
+            appliedUpdates.networkConnection,
             nextNetworkSupport,
             nextNetwork.ipAddress,
           )
@@ -1166,8 +1239,8 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
           ...profile,
           networkSupport: nextNetworkSupport,
           network: nextNetwork,
-          networkFleet: updates.networkFleet !== undefined ? updates.networkFleet : profile.networkFleet,
-          activeNetworkDeviceId: updates.activeNetworkDeviceId !== undefined ? updates.activeNetworkDeviceId : profile.activeNetworkDeviceId,
+          networkFleet: appliedUpdates.networkFleet !== undefined ? appliedUpdates.networkFleet : profile.networkFleet,
+          activeNetworkDeviceId: appliedUpdates.activeNetworkDeviceId !== undefined ? appliedUpdates.activeNetworkDeviceId : profile.activeNetworkDeviceId,
           networkConnection: nextNetworkConnection,
         },
         nextNetworkSupport,
@@ -1181,37 +1254,43 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
 
     return {
       ...profile,
-      ...updates,
-      name: updates.name !== undefined ? updates.name : profile.name,
-      manufacturer: updates.manufacturer !== undefined ? updates.manufacturer : profile.manufacturer,
-      antiAliasing: updates.antiAliasing !== undefined
-        ? normalizeAntiAliasingSupport(updates.antiAliasing)
+      ...appliedUpdates,
+      name: appliedUpdates.name !== undefined ? appliedUpdates.name : profile.name,
+      manufacturer: appliedUpdates.manufacturer !== undefined ? appliedUpdates.manufacturer : profile.manufacturer,
+      antiAliasing: appliedUpdates.antiAliasing !== undefined
+        ? normalizeAntiAliasingSupport(appliedUpdates.antiAliasing)
         : profile.antiAliasing,
       networkSupport: nextNetworkSupport,
-      networkFilter: updates.networkFilter !== undefined
-        ? sanitizeNetworkFilter(updates.networkFilter)
+      hasCamera: appliedUpdates.hasCamera !== undefined
+        ? normalizeCameraSupport(appliedUpdates.hasCamera)
+        : profile.hasCamera,
+      networkFilter: appliedUpdates.networkFilter !== undefined
+        ? sanitizeNetworkFilter(appliedUpdates.networkFilter)
         : profile.networkFilter,
-      platformBadge: updates.platformBadge !== undefined
-        ? sanitizePlatformBadge(updates.platformBadge)
+      platformBadge: appliedUpdates.platformBadge !== undefined
+        ? sanitizePlatformBadge(appliedUpdates.platformBadge)
         : profile.platformBadge,
-      pixelSize: updates.pixelSize !== undefined
-        ? sanitizePixelSize(updates.pixelSize)
+      pixelSize: appliedUpdates.pixelSize !== undefined
+        ? sanitizePixelSize(appliedUpdates.pixelSize)
         : profile.pixelSize,
-      bitDepth: updates.bitDepth !== undefined
-        ? sanitizeBitDepth(updates.bitDepth)
+      bitDepth: appliedUpdates.bitDepth !== undefined
+        ? sanitizeBitDepth(appliedUpdates.bitDepth)
         : profile.bitDepth,
+      buildDimensionMode: hasBuildDimensionModeUpdate
+        ? (normalizeBuildDimensionMode((appliedUpdates as any).buildDimensionMode) ?? 'manual')
+        : (profile.buildDimensionMode ?? 'manual'),
       isOfficial: profile.isOfficial,
       isCustom: profile.isCustom,
-      buildVolumeMm: updates.buildVolumeMm ?? profile.buildVolumeMm,
-      display: updates.display
+      buildVolumeMm: appliedUpdates.buildVolumeMm ?? profile.buildVolumeMm,
+      display: appliedUpdates.display
         ? {
-          resolutionX: Number(updates.display.resolutionX) || profile.display.resolutionX,
-          resolutionY: Number(updates.display.resolutionY) || profile.display.resolutionY,
-          outputFormat: normalizeOutputFormat(updates.display.outputFormat ?? profile.display.outputFormat),
-          formatVersion: normalizeFormatVersion(updates.display.formatVersion ?? profile.display.formatVersion),
-          settingsMode: normalizeSettingsMode(updates.display.settingsMode ?? profile.display.settingsMode),
-          mirrorX: normalizeMirrorFlag(updates.display.mirrorX, profile.display.mirrorX === true),
-          mirrorY: normalizeMirrorFlag(updates.display.mirrorY, profile.display.mirrorY === true),
+          resolutionX: Number(appliedUpdates.display.resolutionX) || profile.display.resolutionX,
+          resolutionY: Number(appliedUpdates.display.resolutionY) || profile.display.resolutionY,
+          outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat ?? profile.display.outputFormat),
+          formatVersion: normalizeFormatVersion(appliedUpdates.display.formatVersion ?? profile.display.formatVersion),
+          settingsMode: normalizeSettingsMode(appliedUpdates.display.settingsMode ?? profile.display.settingsMode),
+          mirrorX: normalizeMirrorFlag(appliedUpdates.display.mirrorX, profile.display.mirrorX === true),
+          mirrorY: normalizeMirrorFlag(appliedUpdates.display.mirrorY, profile.display.mirrorY === true),
         }
         : profile.display,
       network: nextNetworkProfileState.network,
@@ -1776,10 +1855,12 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
             : item.imageDataUrl,
           antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
           networkSupport: normalizeNetworkSupport(preset.networkSupport),
+          hasCamera: normalizeCameraSupport((preset as any).hasCamera),
           networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
           platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
           pixelSize: sanitizePixelSize((preset as any).pixelSize),
           bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+          buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode) ?? 'manual',
           officialPresetId: preset.presetId,
           officialPresetVersion: latestVersion,
           isOfficial: true,

@@ -3030,6 +3030,11 @@ export default function Home() {
     const candidate = (printingMonitorWebcamUrl ?? '').trim();
     return /^wss?:\/\//i.test(candidate);
   }, [printingMonitorWebcamUrl]);
+  const printingMonitorHasCamera = activePrinterProfile?.hasCamera !== false;
+  const printingMonitorUsesTwoColumnDetailLayout = printingMonitorHasCamera;
+  const printingMonitorModalWidthClass = printingMonitorViewMode === 'detail' && !printingMonitorUsesTwoColumnDetailLayout
+    ? 'w-[min(760px,94vw)]'
+    : 'w-[min(1120px,94vw)]';
   const printingMonitorWebcamStatusPresentation = React.useMemo(() => {
     const rawMessage = (printingMonitorWebcamInfo?.message ?? 'No webcam feed reported yet.').trim();
     const messageLower = rawMessage.toLowerCase();
@@ -4186,6 +4191,14 @@ export default function Home() {
   }, [printingMonitorPlateId]);
 
   React.useEffect(() => {
+    if (!printingMonitorHasCamera) {
+      setPrintingMonitorWebcamInfo(null);
+      setPrintingMonitorWebcamLoadError(null);
+      setIsPrintingMonitorWebcamLoaded(false);
+      setPrintingMonitorWebcamAspectRatio(null);
+      return;
+    }
+
     const canResolveWebcam = Boolean(
       printingMonitorModalOpen
       && monitoringDeviceId
@@ -4390,6 +4403,7 @@ export default function Home() {
     monitoringDeviceId,
     monitoringDeviceMainboardId,
     monitoringDevicePort,
+    printingMonitorHasCamera,
     printingMonitoringAdapter,
     printingMonitorModalOpen,
     printingMonitorWebcamRefreshNonce,
@@ -11534,7 +11548,7 @@ export default function Home() {
           />
 
           <div
-            className="relative z-[1] w-[min(1120px,94vw)] max-h-[88vh] overflow-auto rounded-xl border shadow-2xl"
+            className={`relative z-[1] ${printingMonitorModalWidthClass} max-h-[88vh] overflow-auto rounded-xl border shadow-2xl`}
             style={{
               borderColor: 'var(--border-subtle)',
               background: 'color-mix(in srgb, var(--surface-0), #000 10%)',
@@ -12048,7 +12062,7 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <div className="p-4 grid items-start gap-3 lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]">
+              <div className={`p-4 grid items-start gap-3 ${printingMonitorUsesTwoColumnDetailLayout ? 'lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]' : 'grid-cols-1'}`}>
                 <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="flex items-center justify-between gap-2 px-1">
@@ -12330,6 +12344,7 @@ export default function Home() {
                 </div>
                 </section>
 
+                {printingMonitorHasCamera && (
                 <section
                   className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden self-stretch"
                   style={{
@@ -12557,6 +12572,7 @@ export default function Home() {
                   </div>
                 )}
                 </section>
+                )}
               </div>
             )}
 
