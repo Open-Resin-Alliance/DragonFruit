@@ -843,7 +843,6 @@ export default function Home() {
   const [printingMonitorWebcamRefreshNonce, setPrintingMonitorWebcamRefreshNonce] = React.useState(0);
   const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
   const [isPrintingMonitorWebcamSnapshotSaving, setIsPrintingMonitorWebcamSnapshotSaving] = React.useState(false);
-  const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
   const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
   const [printingMonitorRecentPlatesError, setPrintingMonitorRecentPlatesError] = React.useState<string | null>(null);
@@ -965,7 +964,6 @@ export default function Home() {
     };
   }, [clearPrintingMonitorErrorToastTimeouts]);
 
-  const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
   const printingMonitorWebcamViewportRef = React.useRef<HTMLDivElement | null>(null);
   const printingMonitorThumbnailCacheRef = React.useRef<Map<string, string>>(new Map());
@@ -5023,7 +5021,6 @@ export default function Home() {
 
   React.useEffect(() => {
     if (!printingMonitorModalOpen) {
-      setPrintingMonitorLeftColumnHeight(null);
       setPrintingMonitorLastStatusSuccessAtMs(null);
       setIsPrintingMonitorStatusRequestInFlight(false);
       setPrintingMonitorActionBusy(null);
@@ -5033,31 +5030,7 @@ export default function Home() {
       setIsPrintingMonitorDebugOpen(false);
       setPrintingMonitorDebugCopyState('idle');
       setPrintingMonitorError(null);
-      return;
     }
-
-    const column = printingMonitorLeftColumnRef.current;
-    if (!column) return;
-
-    const updateHeight = () => {
-      const measured = Math.max(0, Math.round(column.getBoundingClientRect().height));
-      setPrintingMonitorLeftColumnHeight((previous) => {
-        if (previous != null && Math.abs(previous - measured) <= 1) return previous;
-        return measured > 0 ? measured : previous;
-      });
-    };
-
-    updateHeight();
-    const resizeObserver = new ResizeObserver(() => {
-      updateHeight();
-    });
-    resizeObserver.observe(column);
-    window.addEventListener('resize', updateHeight);
-
-    return () => {
-      resizeObserver.disconnect();
-      window.removeEventListener('resize', updateHeight);
-    };
   }, [printingMonitorModalOpen, setPrintingMonitorError]);
 
   React.useEffect(() => {
@@ -12558,8 +12531,8 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <div className={`p-4 grid items-start gap-3 ${printingMonitorUsesTwoColumnDetailLayout ? 'lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)]' : 'grid-cols-1'}`}>
-                <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
+              <div className={`p-4 grid gap-3 ${printingMonitorUsesTwoColumnDetailLayout ? 'grid-cols-1 items-start lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)] lg:items-stretch' : 'grid-cols-1 items-start'}`}>
+                <section className="grid gap-3 grid-rows-[auto_1fr]">
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
                     <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -12887,11 +12860,10 @@ export default function Home() {
 
                 {printingMonitorHasCamera && (
                 <section
-                  className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden self-stretch"
+                  className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden self-stretch h-[min(62vh,520px)] lg:h-full"
                   style={{
                     borderColor: 'var(--border-subtle)',
                     background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
-                    height: printingMonitorLeftColumnHeight != null ? `${printingMonitorLeftColumnHeight}px` : 'min(62vh, 520px)',
                   }}
                 >
                 <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
