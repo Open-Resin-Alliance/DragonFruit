@@ -728,6 +728,8 @@ export default function Home() {
   const historyTransformResyncTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastFadeTimeoutRef = React.useRef<number | null>(null);
   const historyActionToastClearTimeoutRef = React.useRef<number | null>(null);
+  const printingMonitorErrorToastFadeTimeoutRef = React.useRef<number | null>(null);
+  const printingMonitorErrorToastClearTimeoutRef = React.useRef<number | null>(null);
   const sceneImportToastFadeTimeoutRef = React.useRef<number | null>(null);
 
   const [sessionShaderOverride, setSessionShaderOverride] = React.useState<MeshShaderType | null>(null);
@@ -851,7 +853,8 @@ export default function Home() {
   const [isPrintingMonitorStatusRequestInFlight, setIsPrintingMonitorStatusRequestInFlight] = React.useState(false);
   const [printingMonitorLastStatusSuccessAtMs, setPrintingMonitorLastStatusSuccessAtMs] = React.useState<number | null>(null);
   const [printingMonitorNowEpochMs, setPrintingMonitorNowEpochMs] = React.useState(() => Date.now());
-  const [printingMonitorError, setPrintingMonitorError] = React.useState<string | null>(null);
+  const [printingMonitorErrorToast, setPrintingMonitorErrorToast] = React.useState<{ id: number; text: string } | null>(null);
+  const [isPrintingMonitorErrorToastVisible, setIsPrintingMonitorErrorToastVisible] = React.useState(false);
   const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop' | 'webcam-enable' | 'webcam-disable' | 'timelapse-enable' | 'timelapse-disable'>(null);
   const [printingMonitorControlPendingAction, setPrintingMonitorControlPendingAction] = React.useState<null | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
   const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
@@ -892,6 +895,76 @@ export default function Home() {
       error: null,
     },
   });
+  const lastPrintingMonitorErrorToastRef = React.useRef<{ message: string; atEpochMs: number } | null>(null);
+  const clearPrintingMonitorErrorToastTimeouts = React.useCallback(() => {
+    if (printingMonitorErrorToastFadeTimeoutRef.current !== null) {
+      window.clearTimeout(printingMonitorErrorToastFadeTimeoutRef.current);
+      printingMonitorErrorToastFadeTimeoutRef.current = null;
+    }
+    if (printingMonitorErrorToastClearTimeoutRef.current !== null) {
+      window.clearTimeout(printingMonitorErrorToastClearTimeoutRef.current);
+      printingMonitorErrorToastClearTimeoutRef.current = null;
+    }
+  }, []);
+
+  const normalizePrintingMonitorErrorMessage = React.useCallback((message: string) => {
+    const normalized = message.trim();
+    if (!normalized) return '';
+
+    const lower = normalized.toLowerCase();
+    if (lower.includes('tainted canvases may not be exported')) {
+      return 'Unable to export this webcam frame directly. Retrying through the secure snapshot proxy.';
+    }
+
+    return normalized;
+  }, []);
+
+  const setPrintingMonitorError = React.useCallback((nextError: string | null) => {
+    const normalized = typeof nextError === 'string' ? normalizePrintingMonitorErrorMessage(nextError) : '';
+
+    if (!normalized) {
+      clearPrintingMonitorErrorToastTimeouts();
+      setIsPrintingMonitorErrorToastVisible(false);
+      setPrintingMonitorErrorToast(null);
+      return;
+    }
+
+    const now = Date.now();
+    const previous = lastPrintingMonitorErrorToastRef.current;
+    if (
+      previous
+      && previous.message === normalized
+      && (now - previous.atEpochMs) < 1500
+    ) {
+      return;
+    }
+
+    lastPrintingMonitorErrorToastRef.current = {
+      message: normalized,
+      atEpochMs: now,
+    };
+
+    setPrintingMonitorErrorToast({ id: now, text: normalized });
+    setIsPrintingMonitorErrorToastVisible(true);
+
+    clearPrintingMonitorErrorToastTimeouts();
+    printingMonitorErrorToastFadeTimeoutRef.current = window.setTimeout(() => {
+      setIsPrintingMonitorErrorToastVisible(false);
+      printingMonitorErrorToastFadeTimeoutRef.current = null;
+    }, 2200);
+
+    printingMonitorErrorToastClearTimeoutRef.current = window.setTimeout(() => {
+      setPrintingMonitorErrorToast(null);
+      printingMonitorErrorToastClearTimeoutRef.current = null;
+    }, 2600);
+  }, [clearPrintingMonitorErrorToastTimeouts, normalizePrintingMonitorErrorMessage]);
+
+  React.useEffect(() => {
+    return () => {
+      clearPrintingMonitorErrorToastTimeouts();
+    };
+  }, [clearPrintingMonitorErrorToastTimeouts]);
+
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorPrinterMenuRef = React.useRef<HTMLDivElement | null>(null);
   const printingMonitorWebcamViewportRef = React.useRef<HTMLDivElement | null>(null);
@@ -4658,35 +4731,78 @@ export default function Home() {
 
     try {
       let blob: Blob | null = null;
+      const snapshotSourceCandidates = Array.from(new Set([
+        renderedImage?.currentSrc,
+        renderedImage?.src,
+        printingMonitorWebcamInfo?.snapshotUrl,
+        printingMonitorWebcamInfo?.streamUrl,
+        printingMonitorWebcamUrl,
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => value.trim())));
 
       if (renderedCanvas) {
-        blob = await new Promise<Blob | null>((resolve) => {
-          renderedCanvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
-        });
-      } else if (renderedImage) {
-        const width = renderedImage.naturalWidth || renderedImage.clientWidth;
-        const height = renderedImage.naturalHeight || renderedImage.clientHeight;
-        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-          throw new Error('Webcam image dimensions are unavailable for snapshot capture.');
+        try {
+          blob = await new Promise<Blob | null>((resolve, reject) => {
+            try {
+              renderedCanvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
+            } catch (canvasError) {
+              reject(canvasError);
+            }
+          });
+        } catch (canvasError) {
+          const message = canvasError instanceof Error ? canvasError.message : String(canvasError ?? '');
+          if (!/tainted canvases may not be exported/i.test(message)) {
+            throw canvasError;
+          }
         }
-
-        const scratchCanvas = document.createElement('canvas');
-        scratchCanvas.width = Math.max(1, Math.round(width));
-        scratchCanvas.height = Math.max(1, Math.round(height));
-
-        const context = scratchCanvas.getContext('2d');
-        if (!context) {
-          throw new Error('Unable to create a canvas context for webcam snapshot.');
-        }
-
-        context.drawImage(renderedImage, 0, 0, scratchCanvas.width, scratchCanvas.height);
-        blob = await new Promise<Blob | null>((resolve) => {
-          scratchCanvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
-        });
       }
 
       if (!blob) {
-        throw new Error('Failed to encode webcam snapshot image.');
+        let snapshotFetchError: unknown = null;
+
+        for (const sourceUrl of snapshotSourceCandidates) {
+          const isDataOrBlobUrl = /^data:|^blob:/i.test(sourceUrl);
+          const isHttpUrl = /^https?:\/\//i.test(sourceUrl);
+          if (!isDataOrBlobUrl && !isHttpUrl) continue;
+
+          const requestUrl = isDataOrBlobUrl
+            ? sourceUrl
+            : `/api/webcam-snapshot?url=${encodeURIComponent(sourceUrl)}`;
+
+          try {
+            const response = await fetch(requestUrl, {
+              method: 'GET',
+              cache: 'no-store',
+            });
+
+            if (!response.ok) {
+              const payload = await response.json().catch(() => null) as { error?: unknown } | null;
+              const reason = typeof payload?.error === 'string' && payload.error.trim().length > 0
+                ? payload.error.trim()
+                : `HTTP ${response.status}`;
+              throw new Error(reason);
+            }
+
+            const nextBlob = await response.blob();
+            if (nextBlob.size <= 0) {
+              throw new Error('Snapshot source returned empty image data.');
+            }
+
+            blob = nextBlob;
+            break;
+          } catch (fetchError) {
+            snapshotFetchError = fetchError;
+          }
+        }
+
+        if (!blob && snapshotFetchError) {
+          throw snapshotFetchError;
+        }
+      }
+
+      if (!blob) {
+        throw new Error('Unable to capture webcam snapshot from the current feed.');
       }
 
       const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -4728,6 +4844,9 @@ export default function Home() {
     monitoringDevice?.displayName,
     monitoringDevice?.hostName,
     monitoringDevice?.ipAddress,
+    printingMonitorWebcamInfo?.snapshotUrl,
+    printingMonitorWebcamInfo?.streamUrl,
+    printingMonitorWebcamUrl,
   ]);
 
   // Flush webcam polling/circuit-breaker state on monitor close.
@@ -4913,6 +5032,7 @@ export default function Home() {
       setPrintingMonitorPendingConfirmation(null);
       setIsPrintingMonitorDebugOpen(false);
       setPrintingMonitorDebugCopyState('idle');
+      setPrintingMonitorError(null);
       return;
     }
 
@@ -4938,7 +5058,7 @@ export default function Home() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateHeight);
     };
-  }, [printingMonitorModalOpen]);
+  }, [printingMonitorModalOpen, setPrintingMonitorError]);
 
   React.useEffect(() => {
     if (!printingMonitorControlPendingAction) return;
@@ -12216,7 +12336,7 @@ export default function Home() {
                               <img
                                 src={device.imageDataUrl}
                                 alt={display}
-                                className="h-full w-full object-contain p-1"
+                                className="h-full w-full object-cover"
                                 style={isOffline ? { filter: 'grayscale(100%) sepia(0.25) brightness(0.94)' } : undefined}
                                 onError={(e) => {
                                   e.currentTarget.style.display = 'none';
@@ -12762,11 +12882,6 @@ export default function Home() {
                     </button>
                   </div>
 
-                  {printingMonitorError && (
-                    <div className="text-[11px] rounded-md border px-2.5 py-2" style={{ color: '#fca5a5', borderColor: 'color-mix(in srgb, #fca5a5, var(--border-subtle) 60%)' }}>
-                      {printingMonitorError}
-                    </div>
-                  )}
                 </div>
                 </section>
 
@@ -13315,6 +13430,28 @@ export default function Home() {
               <Redo2 className="h-4 w-4 motion-safe:animate-pulse" />
             )}
             {historyActionToast.text}
+          </div>
+        </div>
+      )}
+
+      {printingMonitorErrorToast && (
+        <div
+          className="pointer-events-none fixed inset-x-0 z-[126] flex justify-center px-3"
+          style={{ bottom: (historyActionToast || scene.sceneImportReport) ? '4.5rem' : '1.25rem' }}
+        >
+          <div
+            className="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold shadow-lg"
+            style={{
+              borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 50%)',
+              background: 'color-mix(in srgb, #ef4444, var(--surface-0) 90%)',
+              color: 'var(--text-strong)',
+              opacity: isPrintingMonitorErrorToastVisible ? 1 : 0,
+              transform: `translateY(${isPrintingMonitorErrorToastVisible ? '0px' : '8px'})`,
+              transition: 'opacity 220ms ease, transform 220ms ease',
+            }}
+          >
+            <AlertTriangle className="h-4 w-4 motion-safe:animate-pulse" />
+            {printingMonitorErrorToast.text}
           </div>
         </div>
       )}
