@@ -12255,15 +12255,29 @@ export default function Home() {
                     <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                       Print Files
                     </div>
-                    <div className="inline-flex items-center gap-1 rounded-md border p-0.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
+                    <div
+                      className="inline-flex items-center rounded-lg border p-1"
+                      style={{
+                        borderColor: 'var(--border-subtle)',
+                        background: 'color-mix(in srgb, var(--surface-1), #000 12%)',
+                        boxShadow: 'inset 0 1px 0 color-mix(in srgb, #ffffff, transparent 94%)',
+                      }}
+                      aria-label="Print file source"
+                    >
                       <button
                         type="button"
-                        className="rounded px-2 py-0.5 text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'transparent',
-                          color: printingMonitorPlatesStoragePath === '/local/' ? 'var(--text-strong)' : 'var(--text-muted)',
-                          background: printingMonitorPlatesStoragePath === '/local/' ? 'color-mix(in srgb, var(--accent), transparent 84%)' : 'transparent',
-                        }}
+                        className="inline-flex h-7 min-w-[58px] items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors"
+                        style={printingMonitorPlatesStoragePath === '/local/'
+                          ? {
+                              color: 'var(--text-strong)',
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
+                            }
+                          : {
+                              color: 'var(--text-muted)',
+                              borderColor: 'transparent',
+                              background: 'transparent',
+                            }}
                         onClick={() => setPrintingMonitorPlatesStoragePath('/local/')}
                         disabled={isPrintingMonitorRecentPlatesLoading}
                         title="Show print files from local storage"
@@ -12272,12 +12286,18 @@ export default function Home() {
                       </button>
                       <button
                         type="button"
-                        className="rounded px-2 py-0.5 text-[10px] transition-colors"
-                        style={{
-                          borderColor: 'transparent',
-                          color: printingMonitorPlatesStoragePath === '/usb/' ? 'var(--text-strong)' : 'var(--text-muted)',
-                          background: printingMonitorPlatesStoragePath === '/usb/' ? 'color-mix(in srgb, var(--accent), transparent 84%)' : 'transparent',
-                        }}
+                        className="inline-flex h-7 min-w-[58px] items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors"
+                        style={printingMonitorPlatesStoragePath === '/usb/'
+                          ? {
+                              color: 'var(--text-strong)',
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
+                            }
+                          : {
+                              color: 'var(--text-muted)',
+                              borderColor: 'transparent',
+                              background: 'transparent',
+                            }}
                         onClick={() => setPrintingMonitorPlatesStoragePath('/usb/')}
                         disabled={isPrintingMonitorRecentPlatesLoading}
                         title="Show print files from USB storage"
