@@ -205,6 +205,16 @@ type PrintingMonitorDebugState = {
   plates: PrintingMonitorDebugChannelState;
 };
 
+type PrintingMonitorFeatureToggleResponse = {
+  operation: string;
+  httpStatus: number | null;
+  httpOk: boolean | null;
+  commandOk: boolean | null;
+  payload: unknown;
+  error: string | null;
+  requestedAtEpochMs: number;
+};
+
 const PRINTING_MONITOR_DEBUG_CHANNELS = ['status', 'webcam', 'plates'] as const;
 type PrintingMonitorDebugChannel = (typeof PRINTING_MONITOR_DEBUG_CHANNELS)[number];
 
@@ -581,6 +591,13 @@ function parsePrintingMonitorMaterialMl(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizePrintingMonitorWebcamAspectRatio(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
+  // Keep practical camera bounds and reject pathological stream metadata.
+  if (value < 0.45 || value > 2.4) return null;
+  return value;
+}
+
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
@@ -827,13 +844,14 @@ export default function Home() {
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
   const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
   const [printingMonitorRecentPlatesError, setPrintingMonitorRecentPlatesError] = React.useState<string | null>(null);
+  const [printingMonitorPlatesStoragePath, setPrintingMonitorPlatesStoragePath] = React.useState<'/local/' | '/usb/'>('/local/');
   const [printingMonitorSelectedPlateId, setPrintingMonitorSelectedPlateId] = React.useState<number | null>(null);
   const [isPrintingMonitorPolling, setIsPrintingMonitorPolling] = React.useState(false);
   const [isPrintingMonitorStatusRequestInFlight, setIsPrintingMonitorStatusRequestInFlight] = React.useState(false);
   const [printingMonitorLastStatusSuccessAtMs, setPrintingMonitorLastStatusSuccessAtMs] = React.useState<number | null>(null);
   const [printingMonitorNowEpochMs, setPrintingMonitorNowEpochMs] = React.useState(() => Date.now());
   const [printingMonitorError, setPrintingMonitorError] = React.useState<string | null>(null);
-  const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
+  const [printingMonitorActionBusy, setPrintingMonitorActionBusy] = React.useState<null | 'start' | 'delete' | 'pause' | 'resume' | 'cancel' | 'emergency-stop' | 'webcam-enable' | 'webcam-disable' | 'timelapse-enable' | 'timelapse-disable'>(null);
   const [printingMonitorControlPendingAction, setPrintingMonitorControlPendingAction] = React.useState<null | 'pause' | 'resume' | 'cancel' | 'emergency-stop'>(null);
   const [printingMonitorActionStatus, setPrintingMonitorActionStatus] = React.useState<string | null>(null);
   const [printingMonitorPendingConfirmation, setPrintingMonitorPendingConfirmation] = React.useState<PrintingMonitorPendingConfirmation | null>(null);
@@ -846,6 +864,7 @@ export default function Home() {
   const [printingMonitorModalOpen, setPrintingMonitorModalOpen] = React.useState(false);
   const [isPrintingMonitorDebugOpen, setIsPrintingMonitorDebugOpen] = React.useState(false);
   const [printingMonitorDebugCopyState, setPrintingMonitorDebugCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
+  const [printingMonitorLastFeatureToggleResponse, setPrintingMonitorLastFeatureToggleResponse] = React.useState<PrintingMonitorFeatureToggleResponse | null>(null);
   const [printingMonitorDebugState, setPrintingMonitorDebugState] = React.useState<PrintingMonitorDebugState>({
     status: {
       requestedAtEpochMs: null,
@@ -3118,12 +3137,13 @@ export default function Home() {
     printingMonitoringAdapter.pluginId,
   ]);
   const monitorWebcamDisplayAspectRatio = React.useMemo(() => {
-    if (printingMonitorWebcamAspectRatio == null || !Number.isFinite(printingMonitorWebcamAspectRatio) || printingMonitorWebcamAspectRatio <= 0) {
+    const normalizedAspect = normalizePrintingMonitorWebcamAspectRatio(printingMonitorWebcamAspectRatio);
+    if (normalizedAspect == null) {
       return null;
     }
     return shouldRotateMonitorWebcam
-      ? (1 / printingMonitorWebcamAspectRatio)
-      : printingMonitorWebcamAspectRatio;
+      ? (1 / normalizedAspect)
+      : normalizedAspect;
   }, [printingMonitorWebcamAspectRatio, shouldRotateMonitorWebcam]);
   const printingMonitorStateTextNormalized = React.useMemo(() => {
     return String(printingMonitorSnapshot?.stateText ?? '').trim().toLowerCase();
@@ -4000,6 +4020,9 @@ export default function Home() {
       operation: printingMonitoringAdapter.operations!.platesList,
       ipAddress: host,
       port,
+      storagePath: printingMonitorPlatesStoragePath,
+      source: printingMonitorPlatesStoragePath,
+      url: printingMonitorPlatesStoragePath,
     };
 
     try {
@@ -4161,6 +4184,7 @@ export default function Home() {
     monitoringDevice,
     printingMonitorModalOpen,
     printingMonitorPlateId,
+    printingMonitorPlatesStoragePath,
     printingMonitoringAdapter,
   ]);
 
@@ -5624,6 +5648,105 @@ export default function Home() {
       setPrintingMonitorActionBusy(null);
     }
   }, [monitoringDevice?.ipAddress, monitoringDevice?.port, printingMonitorPlateId, printingMonitoringAdapter]);
+
+  const executePrintingMonitorFeatureToggle = React.useCallback(async (
+    feature: 'webcam' | 'timelapse',
+    enabled: boolean,
+  ) => {
+    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations) return;
+
+    const operation = feature === 'webcam'
+      ? (enabled ? printingMonitoringAdapter.operations.webcamEnable : printingMonitoringAdapter.operations.webcamDisable)
+      : (enabled ? printingMonitoringAdapter.operations.timelapseEnable : printingMonitoringAdapter.operations.timelapseDisable);
+    if (!operation) {
+      setPrintingMonitorError(`This monitor plugin does not expose ${feature} ${enabled ? 'enable' : 'disable'} commands.`);
+      return;
+    }
+
+    const host = (monitoringDevice?.ipAddress || '').trim();
+    const port = monitoringDevice?.port || 80;
+    if (!host) {
+      setPrintingMonitorError(`No printer IP available for ${feature} command.`);
+      return;
+    }
+
+    const busyKey = feature === 'webcam'
+      ? (enabled ? 'webcam-enable' : 'webcam-disable')
+      : (enabled ? 'timelapse-enable' : 'timelapse-disable');
+
+    const statusRawPayload = printingMonitorDebugState.status.rawPayload;
+    const statusPayloadRecord = (statusRawPayload && typeof statusRawPayload === 'object' && !Array.isArray(statusRawPayload))
+      ? statusRawPayload as Record<string, unknown>
+      : null;
+    const rawMainboardId = statusPayloadRecord?.mainboardId ?? statusPayloadRecord?.MainboardID;
+    const resolvedMainboardId = typeof rawMainboardId === 'string' && rawMainboardId.trim().length > 0
+      ? rawMainboardId.trim()
+      : monitoringDeviceMainboardId;
+
+    setPrintingMonitorActionBusy(busyKey);
+    setPrintingMonitorActionStatus(null);
+    let recordedResponse = false;
+
+    try {
+      const response = await pluginNetworkFetch({
+        pluginId: printingMonitoringAdapter.pluginId,
+        operation,
+        ipAddress: host,
+        port,
+        mainboardId: resolvedMainboardId,
+      });
+
+      const payload = await response.json().catch(() => ({} as any));
+      const commandOk = typeof payload?.ok === 'boolean' ? payload.ok : (response.ok ? true : false);
+      setPrintingMonitorLastFeatureToggleResponse({
+        operation,
+        httpStatus: response.status,
+        httpOk: response.ok,
+        commandOk,
+        payload,
+        error: payload?.ok === false || !response.ok
+          ? (typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
+          : null,
+        requestedAtEpochMs: Date.now(),
+      });
+      recordedResponse = true;
+      if (!response.ok || payload?.ok === false) {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        throw new Error(reason);
+      }
+
+      const featureLabel = feature === 'webcam' ? 'Video stream' : 'Timelapse';
+      setPrintingMonitorActionStatus(
+        typeof payload?.message === 'string' && payload.message.trim().length > 0
+          ? payload.message.trim()
+          : `${featureLabel} ${enabled ? 'enabled' : 'disabled'}.`,
+      );
+      setPrintingMonitorError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Failed to send ${feature} command.`;
+      setPrintingMonitorError(message);
+      setPrintingMonitorActionStatus(null);
+      if (!recordedResponse) {
+        setPrintingMonitorLastFeatureToggleResponse({
+          operation,
+          httpStatus: null,
+          httpOk: false,
+          commandOk: false,
+          payload: null,
+          error: message,
+          requestedAtEpochMs: Date.now(),
+        });
+      }
+    } finally {
+      setPrintingMonitorActionBusy(null);
+    }
+  }, [
+    monitoringDevice?.ipAddress,
+    monitoringDevice?.port,
+    monitoringDeviceMainboardId,
+    printingMonitorDebugState.status.rawPayload,
+    printingMonitoringAdapter,
+  ]);
 
   const handlePrintingMonitorControlAction = React.useCallback((
     action: 'pause' | 'resume' | 'cancel' | 'emergency-stop',
@@ -12130,7 +12253,37 @@ export default function Home() {
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="flex items-center justify-between gap-2 px-1">
                     <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-                      Print Preview
+                      Print Files
+                    </div>
+                    <div className="inline-flex items-center gap-1 rounded-md border p-0.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
+                      <button
+                        type="button"
+                        className="rounded px-2 py-0.5 text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'transparent',
+                          color: printingMonitorPlatesStoragePath === '/local/' ? 'var(--text-strong)' : 'var(--text-muted)',
+                          background: printingMonitorPlatesStoragePath === '/local/' ? 'color-mix(in srgb, var(--accent), transparent 84%)' : 'transparent',
+                        }}
+                        onClick={() => setPrintingMonitorPlatesStoragePath('/local/')}
+                        disabled={isPrintingMonitorRecentPlatesLoading}
+                        title="Show print files from local storage"
+                      >
+                        Local
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded px-2 py-0.5 text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'transparent',
+                          color: printingMonitorPlatesStoragePath === '/usb/' ? 'var(--text-strong)' : 'var(--text-muted)',
+                          background: printingMonitorPlatesStoragePath === '/usb/' ? 'color-mix(in srgb, var(--accent), transparent 84%)' : 'transparent',
+                        }}
+                        onClick={() => setPrintingMonitorPlatesStoragePath('/usb/')}
+                        disabled={isPrintingMonitorRecentPlatesLoading}
+                        title="Show print files from USB storage"
+                      >
+                        USB
+                      </button>
                     </div>
                     <IconButton
                       onClick={() => {
@@ -12138,8 +12291,8 @@ export default function Home() {
                       }}
                       disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
                       className="!p-1.5"
-                      title="Refresh recent print files"
-                      aria-label="Refresh recent print files"
+                      title="Refresh print files"
+                      aria-label="Refresh print files"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isPrintingMonitorRecentPlatesLoading ? 'animate-spin' : ''}`} />
                     </IconButton>
@@ -12493,21 +12646,28 @@ export default function Home() {
                             </div>
                           </div>
                         )}
+                        <div className="h-full w-full min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
                         <div
-                          className="h-full"
+                          className="max-h-full max-w-full"
                           style={monitorWebcamDisplayAspectRatio != null
                             ? {
-                                width: 'auto',
+                                width: '100%',
+                                height: 'auto',
+                                maxWidth: '100%',
+                                maxHeight: '100%',
                                 aspectRatio: String(monitorWebcamDisplayAspectRatio),
                               }
                             : {
-                                width: 'fit-content',
+                                width: '100%',
+                                height: '100%',
+                                maxWidth: '100%',
+                                maxHeight: '100%',
                               }}
                         >
                           {printingMonitorWebcamUsesRelayWs ? (
                             <RtspRelayCanvasPlayer
                               url={printingMonitorWebcamUrl}
-                              className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
+                              className="block h-full w-full object-contain transition-opacity duration-150"
                               style={{
                                 opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
                                 transform: shouldRotateMonitorWebcam
@@ -12516,10 +12676,11 @@ export default function Home() {
                                 transformOrigin: 'center center',
                               }}
                               onLoaded={(ratio) => {
-                                if (ratio != null) {
+                                const normalizedRatio = normalizePrintingMonitorWebcamAspectRatio(ratio);
+                                if (normalizedRatio != null) {
                                   setPrintingMonitorWebcamAspectRatio((previous) => {
-                                    if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
-                                    return ratio;
+                                    if (previous != null && Math.abs(previous - normalizedRatio) < 0.001) return previous;
+                                    return normalizedRatio;
                                   });
                                 }
                                 setIsPrintingMonitorWebcamLoaded(true);
@@ -12535,7 +12696,7 @@ export default function Home() {
                             <img
                               src={printingMonitorWebcamUrl}
                               alt="Printer webcam preview"
-                              className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
+                              className="block h-full w-full object-contain transition-opacity duration-150"
                               style={{
                                 opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
                                 transform: shouldRotateMonitorWebcam
@@ -12548,7 +12709,8 @@ export default function Home() {
                                 const naturalW = target.naturalWidth;
                                 const naturalH = target.naturalHeight;
                                 if (!Number.isFinite(naturalW) || !Number.isFinite(naturalH) || naturalW <= 0 || naturalH <= 0) return;
-                                const ratio = naturalW / naturalH;
+                                const ratio = normalizePrintingMonitorWebcamAspectRatio(naturalW / naturalH);
+                                if (ratio == null) return;
                                 setPrintingMonitorWebcamAspectRatio((previous) => {
                                   if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
                                   return ratio;
@@ -12565,6 +12727,7 @@ export default function Home() {
                               fetchPriority="high"
                             />
                           )}
+                        </div>
                         </div>
                       </div>
                     )}
@@ -12740,6 +12903,120 @@ export default function Home() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                      Manual SDCP commands
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                      <button
+                        type="button"
+                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
+                          color: 'var(--text-strong)',
+                        }}
+                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.webcamEnable}
+                        onClick={() => {
+                          void executePrintingMonitorFeatureToggle('webcam', true);
+                        }}
+                      >
+                        <div className="font-semibold uppercase tracking-wide">Cmd 386</div>
+                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Enable video stream</div>
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
+                          color: 'var(--text-strong)',
+                        }}
+                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.webcamDisable}
+                        onClick={() => {
+                          void executePrintingMonitorFeatureToggle('webcam', false);
+                        }}
+                      >
+                        <div className="font-semibold uppercase tracking-wide">Cmd 386</div>
+                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Disable video stream</div>
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
+                          color: 'var(--text-strong)',
+                        }}
+                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.timelapseEnable}
+                        onClick={() => {
+                          void executePrintingMonitorFeatureToggle('timelapse', true);
+                        }}
+                      >
+                        <div className="font-semibold uppercase tracking-wide">Cmd 387</div>
+                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Enable timelapse</div>
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
+                          color: 'var(--text-strong)',
+                        }}
+                        disabled={printingMonitorAnyActionBusy || !printingMonitoringAdapter.operations?.timelapseDisable}
+                        onClick={() => {
+                          void executePrintingMonitorFeatureToggle('timelapse', false);
+                        }}
+                      >
+                        <div className="font-semibold uppercase tracking-wide">Cmd 387</div>
+                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Disable timelapse</div>
+                      </button>
+                    </div>
+                    <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      {printingMonitorActionStatus ?? 'Use these commands to manually toggle SDCP device features.'}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 border-t pt-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                    <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                      Last SDCP response JSON
+                    </div>
+                    <div
+                      className="rounded-md border px-2 py-1"
+                      style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-2), #000 8%)' }}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        <span className="truncate" title={printingMonitorLastFeatureToggleResponse?.operation ?? 'n/a'}>
+                          {printingMonitorLastFeatureToggleResponse?.operation ?? 'No response yet'}
+                        </span>
+                        <span>
+                          {printingMonitorLastFeatureToggleResponse
+                            ? `HTTP ${printingMonitorLastFeatureToggleResponse.httpStatus ?? 'n/a'}${printingMonitorLastFeatureToggleResponse.httpOk === true ? ' • transport-ok' : printingMonitorLastFeatureToggleResponse.httpOk === false ? ' • transport-error' : ''}${printingMonitorLastFeatureToggleResponse.commandOk === true ? ' • command-ok' : printingMonitorLastFeatureToggleResponse.commandOk === false ? ' • command-error' : ''}`
+                            : 'waiting'}
+                        </span>
+                      </div>
+                      <pre
+                        className="mt-1 max-h-40 overflow-auto custom-scrollbar whitespace-pre-wrap break-words rounded-sm border px-2 py-1 text-[10px] leading-[1.35]"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'var(--surface-1)',
+                          color: 'var(--text-strong)',
+                        }}
+                      >
+                        {printingMonitorLastFeatureToggleResponse
+                          ? JSON.stringify({
+                            httpStatus: printingMonitorLastFeatureToggleResponse.httpStatus,
+                            httpOk: printingMonitorLastFeatureToggleResponse.httpOk,
+                            commandOk: printingMonitorLastFeatureToggleResponse.commandOk,
+                            error: printingMonitorLastFeatureToggleResponse.error,
+                            payload: printingMonitorLastFeatureToggleResponse.payload,
+                          }, null, 2)
+                          : 'Click a command to inspect the response JSON.'}
+                      </pre>
                     </div>
                   </div>
 

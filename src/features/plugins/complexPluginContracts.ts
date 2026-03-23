@@ -123,6 +123,10 @@ export type PluginMonitoringUiAdapterContract = {
   operations: {
     status: string;
     webcamInfo: string;
+    webcamEnable?: string;
+    webcamDisable?: string;
+    timelapseEnable?: string;
+    timelapseDisable?: string;
     platesList: string;
     start: string;
     deletePlate: string;
