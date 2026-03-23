@@ -37,6 +37,7 @@ import { SliceMetricsDebugModal } from '@/features/slicing/components/SliceMetri
 import { MeshSmoothingSettingsPanel } from '@/features/mesh-smoothing/MeshSmoothingSettingsPanel';
 import { MeshSmoothingBrushCursor } from '@/features/mesh-smoothing/MeshSmoothingBrushCursor';
 import { PlaceOnFaceTool } from '@/features/placeOnFace/PlaceOnFaceTool';
+import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
 import { IconButton } from '@/components/ui/primitives';
 import { EditorContextMenu, type EditorMenuAction } from '@/components/ui/EditorContextMenu';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
@@ -810,15 +811,13 @@ export default function Home() {
   const printingTargetMaterialsCacheRef = React.useRef<Map<string, FleetUploadMaterialOption[]>>(new Map());
   const [printingMonitorSnapshot, setPrintingMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const [printingMonitorWebcamInfo, setPrintingMonitorWebcamInfo] = React.useState<PrinterMonitoringWebcamInfo | null>(null);
+  const [printingMonitorRelayBaseWsUrl, setPrintingMonitorRelayBaseWsUrl] = React.useState<string | null>(null);
   const [isPrintingMonitorThumbnailLoaded, setIsPrintingMonitorThumbnailLoaded] = React.useState(false);
   const [printingMonitorThumbnailDisplayUrl, setPrintingMonitorThumbnailDisplayUrl] = React.useState<string | null>(null);
   const [isPrintingMonitorWebcamLoaded, setIsPrintingMonitorWebcamLoaded] = React.useState(false);
   const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
-  const [printingMonitorWebcamProxyUrl, setPrintingMonitorWebcamProxyUrl] = React.useState<string | null>(null);
   const [printingMonitorWebcamRefreshNonce, setPrintingMonitorWebcamRefreshNonce] = React.useState(0);
-  const [isPrintingMonitorFfmpegInstallBusy, setIsPrintingMonitorFfmpegInstallBusy] = React.useState(false);
   const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
-  const [printingMonitorFfmpegInstallStatus, setPrintingMonitorFfmpegInstallStatus] = React.useState<string | null>(null);
   const [printingMonitorLeftColumnHeight, setPrintingMonitorLeftColumnHeight] = React.useState<number | null>(null);
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
   const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
@@ -2962,59 +2961,75 @@ export default function Home() {
     const port = monitoringDevice.port || 80;
     return `${host}:${port}|${printingMonitorPlateId}`;
   }, [monitoringDevice, printingMonitorPlateId]);
-  const printingMonitorWebcamUrl = React.useMemo(() => {
-    if (printingMonitorWebcamProxyUrl && printingMonitorWebcamProxyUrl.trim().length > 0) {
-      return printingMonitorWebcamProxyUrl;
+  const printingMonitorInlineWebcamUrl = React.useMemo(() => {
+    const candidates = [
+      printingMonitorWebcamInfo?.streamUrl,
+      printingMonitorWebcamInfo?.snapshotUrl,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+    return candidates.find((value) => /^https?:\/\//i.test(value)
+      || /^wss?:\/\//i.test(value)
+      || /^data:/i.test(value)
+      || /^blob:/i.test(value));
+  }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl]);
+
+  const printingMonitorRtspSourceUrl = React.useMemo(() => {
+    const candidates = [
+      printingMonitorWebcamInfo?.streamUrl,
+      printingMonitorWebcamInfo?.snapshotUrl,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+    return candidates.find((value) => /^rtsps?:\/\//i.test(value)) ?? null;
+  }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl]);
+
+  React.useEffect(() => {
+    if (!printingMonitorRtspSourceUrl) {
+      setPrintingMonitorRelayBaseWsUrl(null);
+      return;
     }
 
-    const candidates = [
-      printingMonitorWebcamInfo?.streamUrl,
-      printingMonitorWebcamInfo?.snapshotUrl,
-    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    let cancelled = false;
+    void fetch('/api/rtsp-relay', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({} as any));
+        if (cancelled) return;
 
-    return candidates.find((value) => /^https?:\/\//i.test(value) || /^data:/i.test(value) || /^blob:/i.test(value))
-      ?? null;
-  }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl, printingMonitorWebcamProxyUrl]);
-  const printingMonitorWebcamExternalUrl = React.useMemo(() => {
-    const candidates = [
-      printingMonitorWebcamInfo?.streamUrl,
-      printingMonitorWebcamInfo?.snapshotUrl,
-    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
-    return candidates[0] ?? null;
-  }, [printingMonitorWebcamInfo?.snapshotUrl, printingMonitorWebcamInfo?.streamUrl]);
-  const printingMonitorWebcamNeedsFfmpegInstall = React.useMemo(() => {
-    const externalUrl = (printingMonitorWebcamExternalUrl ?? '').trim();
-    if (!/^rtsps?:\/\//i.test(externalUrl)) return false;
-    if (printingMonitorWebcamUrl) return false;
+        const wsBaseUrl = typeof payload?.wsBaseUrl === 'string'
+          ? payload.wsBaseUrl.trim()
+          : '';
+        if (response.ok && /^wss?:\/\//i.test(wsBaseUrl)) {
+          setPrintingMonitorRelayBaseWsUrl(wsBaseUrl);
+          return;
+        }
 
-    const message = String(printingMonitorWebcamInfo?.message ?? '').toLowerCase();
-    if (!message) return true;
+        setPrintingMonitorRelayBaseWsUrl(null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPrintingMonitorRelayBaseWsUrl(null);
+        }
+      });
 
-    return (
-      message.includes('ffmpeg')
-      || message.includes('proxy failed')
-      || message.includes('rtsp')
-    );
-  }, [printingMonitorWebcamExternalUrl, printingMonitorWebcamInfo?.message, printingMonitorWebcamUrl]);
+    return () => {
+      cancelled = true;
+    };
+  }, [printingMonitorRtspSourceUrl]);
+
+  const printingMonitorWebcamUrl = React.useMemo(() => {
+    if (printingMonitorInlineWebcamUrl) return printingMonitorInlineWebcamUrl;
+
+    if (!printingMonitorRtspSourceUrl || !printingMonitorRelayBaseWsUrl) return null;
+
+    const relayQueryUrl = encodeURIComponent(printingMonitorRtspSourceUrl);
+    return `${printingMonitorRelayBaseWsUrl}?url=${relayQueryUrl}`;
+  }, [printingMonitorInlineWebcamUrl, printingMonitorRelayBaseWsUrl, printingMonitorRtspSourceUrl]);
+  const printingMonitorWebcamUsesRelayWs = React.useMemo(() => {
+    const candidate = (printingMonitorWebcamUrl ?? '').trim();
+    return /^wss?:\/\//i.test(candidate);
+  }, [printingMonitorWebcamUrl]);
   const printingMonitorWebcamStatusPresentation = React.useMemo(() => {
     const rawMessage = (printingMonitorWebcamInfo?.message ?? 'No webcam feed reported yet.').trim();
     const messageLower = rawMessage.toLowerCase();
-
-    if (isPrintingMonitorFfmpegInstallBusy) {
-      return {
-        tone: 'install' as const,
-        title: 'Installing FFmpeg',
-        description: 'Setting up local RTSP proxy dependencies for inline webcam preview…',
-      };
-    }
-
-    if (printingMonitorWebcamNeedsFfmpegInstall) {
-      return {
-        tone: 'install' as const,
-        title: 'Download FFmpeg',
-        description: rawMessage,
-      };
-    }
 
     if (messageLower.includes('stream limit') || messageLower.includes('simultaneous')) {
       return {
@@ -3037,7 +3052,7 @@ export default function Home() {
       title: 'Webcam Not Ready',
       description: rawMessage,
     };
-  }, [isPrintingMonitorFfmpegInstallBusy, printingMonitorWebcamInfo?.message, printingMonitorWebcamNeedsFfmpegInstall]);
+  }, [printingMonitorWebcamInfo?.message]);
   const printingMonitorWebcamCanResetStreamSlot = React.useMemo(() => {
     if (printingMonitoringAdapter.pluginId !== 'sdcp-v3') return false;
     const messageLower = String(printingMonitorWebcamInfo?.message ?? '').toLowerCase();
@@ -3314,12 +3329,29 @@ export default function Home() {
   const shouldShowPrintingMonitorSlowResponseCard = React.useMemo(() => {
     return isPrintingMonitorSelectedPrinterOfflineRaw && isPrintingMonitorWithinSlowResponseGrace;
   }, [isPrintingMonitorSelectedPrinterOfflineRaw, isPrintingMonitorWithinSlowResponseGrace]);
+  const isPrintingMonitorInInitialStatusProbe = React.useMemo(() => {
+    if (!printingMonitorModalOpen || !isPrintingMonitorSdcpAdapter) return false;
+    if (printingMonitorLastStatusSuccessAtMs != null) return false;
+    return isPrintingMonitorStatusRequestInFlight;
+  }, [
+    isPrintingMonitorSdcpAdapter,
+    isPrintingMonitorStatusRequestInFlight,
+    printingMonitorLastStatusSuccessAtMs,
+    printingMonitorModalOpen,
+  ]);
   const isPrintingMonitorSelectedPrinterOffline = React.useMemo(() => {
+    if (isPrintingMonitorInInitialStatusProbe) {
+      return false;
+    }
     if (isPrintingMonitorSelectedPrinterOfflineRaw && isPrintingMonitorWithinSlowResponseGrace) {
       return false;
     }
     return isPrintingMonitorSelectedPrinterOfflineRaw;
-  }, [isPrintingMonitorSelectedPrinterOfflineRaw, isPrintingMonitorWithinSlowResponseGrace]);
+  }, [
+    isPrintingMonitorInInitialStatusProbe,
+    isPrintingMonitorSelectedPrinterOfflineRaw,
+    isPrintingMonitorWithinSlowResponseGrace,
+  ]);
   const hasMonitorSelectableTarget = monitorSelectableDevices.length > 0;
   const hasPrintingMonitorFleet = monitorSelectableDevices.length > 1;
   const printingMonitorPrinterThumbnailSrc = React.useMemo(() => {
@@ -3403,7 +3435,7 @@ export default function Home() {
 
     let cancelled = false;
 
-    const probeWithTimeout = async (device: PrinterNetworkDevice): Promise<boolean> => {
+    const probeWithTimeout = async (device: PrinterNetworkDevice): Promise<boolean | null> => {
       const host = (device.ipAddress || '').trim();
       const port = device.port || 80;
       if (!host) return false;
@@ -3419,21 +3451,23 @@ export default function Home() {
       }
 
       try {
-        const result = await Promise.race([
+        const result = await Promise.race<boolean | null>([
           pluginNetworkFetch({
             pluginId: printingMonitoringAdapter.pluginId!,
             operation: printingMonitoringAdapter.operations!.status,
             ipAddress: host,
             port,
-          }).then((response) => response.ok),
-          new Promise<boolean>((resolve) => {
-            window.setTimeout(() => resolve(false), 4000);
+          })
+            .then((response) => (response.ok ? true : false))
+            .catch(() => null),
+          new Promise<null>((resolve) => {
+            window.setTimeout(() => resolve(null), 9000);
           }),
         ]);
 
-        return result === true;
+        return result;
       } catch {
-        return false;
+        return null;
       }
     };
 
@@ -3447,9 +3481,12 @@ export default function Home() {
 
       if (cancelled) return;
 
+      const previousReachability = getPrinterReachabilitySnapshot();
       const nextMap: Record<string, boolean | null> = {};
       for (const [id, reachable] of entries) {
-        nextMap[id] = reachable;
+        nextMap[id] = reachable == null
+          ? (previousReachability[id] ?? null)
+          : reachable;
       }
       setPrinterReachabilityMap(nextMap);
     };
@@ -4315,75 +4352,6 @@ export default function Home() {
   ]);
 
   React.useEffect(() => {
-    const isDesktopRuntime = typeof window !== 'undefined'
-      && typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
-    const canProxyRtsp = Boolean(
-      isDesktopRuntime
-      && printingMonitorModalOpen
-      && monitoringDevice
-      && printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId === 'sdcp-v3'
-      && printingMonitoringAdapter.operations?.webcamInfo,
-    );
-
-    const externalUrl = (printingMonitorWebcamExternalUrl ?? '').trim();
-    const isRtspExternal = /^rtsps?:\/\//i.test(externalUrl);
-
-    if (!canProxyRtsp || !isRtspExternal) {
-      setPrintingMonitorWebcamProxyUrl(null);
-      return;
-    }
-
-    let cancelled = false;
-    setPrintingMonitorWebcamProxyUrl(null);
-
-    void (async () => {
-      try {
-        const response = await pluginNetworkFetch({
-          pluginId: 'sdcp-v3',
-          operation: 'sdcp/rtsp/proxy/start',
-          rtspUrl: externalUrl,
-          ipAddress: (monitoringDevice?.ipAddress || '').trim(),
-          port: monitoringDevice?.port || 80,
-        });
-        const payload = await response.json().catch(() => ({} as any));
-        if (cancelled) return;
-
-        const proxyUrl = typeof payload?.proxyUrl === 'string'
-          ? payload.proxyUrl.trim()
-          : '';
-
-        if (response.ok && proxyUrl.length > 0) {
-          setPrintingMonitorWebcamProxyUrl(proxyUrl);
-          return;
-        }
-
-        setPrintingMonitorWebcamProxyUrl(null);
-      } catch {
-        if (!cancelled) {
-          setPrintingMonitorWebcamProxyUrl(null);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      void pluginNetworkFetch({
-        pluginId: 'sdcp-v3',
-        operation: 'sdcp/rtsp/proxy/stop',
-        rtspUrl: externalUrl,
-      }).catch(() => undefined);
-    };
-  }, [
-    monitoringDevice,
-    printingMonitorModalOpen,
-    printingMonitorWebcamExternalUrl,
-    printingMonitoringAdapter.available,
-    printingMonitoringAdapter.operations?.webcamInfo,
-    printingMonitoringAdapter.pluginId,
-  ]);
-
-  React.useEffect(() => {
     if (!printingMonitorHasActivePrint || !printingMonitorThumbnailUrl || !printingMonitorThumbnailCacheKey) {
       setPrintingMonitorThumbnailDisplayUrl(null);
       setIsPrintingMonitorThumbnailLoaded(false);
@@ -4447,8 +4415,6 @@ export default function Home() {
       setPrintingMonitorViewMode('detail');
       setPrintingMonitorDashboardSnapshots({});
       setIsPrintingMonitorDashboardRefreshing(false);
-      setPrintingMonitorFfmpegInstallStatus(null);
-      setIsPrintingMonitorFfmpegInstallBusy(false);
       setIsPrintingMonitorWebcamResetBusy(false);
       return;
     }
@@ -4484,21 +4450,11 @@ export default function Home() {
     printingMonitorWebcamAutoPollBlockedRef.current = false;
     printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
     printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-    setPrintingMonitorWebcamProxyUrl(null);
     setPrintingMonitorWebcamRefreshNonce((previous) => previous + 1);
   }, []);
 
-  // Flush all monitors: stop RTSP proxy and cleanup on app shutdown or monitor close.
+  // Flush webcam polling/circuit-breaker state on monitor close.
   const flushMonitors = React.useCallback(async () => {
-    try {
-      await pluginNetworkFetch({
-        pluginId: 'sdcp-v3',
-        operation: 'sdcp/rtsp/proxy/stop',
-      });
-    } catch {
-      // Best-effort cleanup; ignore errors
-    }
-
     // Reset webcam polling state
     printingMonitorWebcamAutoPollBlockedRef.current = false;
     printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
@@ -4525,12 +4481,6 @@ export default function Home() {
     setIsPrintingMonitorWebcamResetBusy(true);
 
     try {
-      // Stop the existing RTSP proxy and refresh
-      void pluginNetworkFetch({
-        pluginId: 'sdcp-v3',
-        operation: 'sdcp/rtsp/proxy/stop',
-      }).catch(() => undefined);
-
       triggerPrintingMonitorWebcamRetry();
     } catch (error) {
       const message = error instanceof Error
@@ -4549,8 +4499,6 @@ export default function Home() {
     isPrintingMonitorWebcamResetBusy,
     monitoringDeviceHost,
     monitoringDeviceId,
-    monitoringDeviceMainboardId,
-    monitoringDevicePort,
     printingMonitorModalOpen,
     triggerPrintingMonitorWebcamRetry,
   ]);
@@ -4568,40 +4516,6 @@ export default function Home() {
       void flushMonitors();
     };
   }, [printingMonitorModalOpen, monitoringDeviceId, flushMonitors]);
-
-  const handleInstallPrintingMonitorFfmpeg = React.useCallback(async () => {
-    if (isPrintingMonitorFfmpegInstallBusy) return;
-
-    setIsPrintingMonitorFfmpegInstallBusy(true);
-    setPrintingMonitorFfmpegInstallStatus('Installing FFmpeg… this may take a minute.');
-
-    try {
-      const response = await pluginNetworkFetch({
-        pluginId: 'sdcp-v3',
-        operation: 'sdcp/ffmpeg/install',
-      });
-
-      const payload = await response.json().catch(() => ({} as any));
-      if (!response.ok || payload?.ok === false) {
-        const reason = typeof payload?.error === 'string'
-          ? payload.error
-          : `FFmpeg installation failed (HTTP ${response.status}).`;
-        throw new Error(reason);
-      }
-
-      const message = typeof payload?.message === 'string' && payload.message.trim().length > 0
-        ? payload.message.trim()
-        : 'FFmpeg installed successfully. Refreshing webcam preview…';
-
-      setPrintingMonitorFfmpegInstallStatus(message);
-      triggerPrintingMonitorWebcamRetry();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to install FFmpeg.';
-      setPrintingMonitorFfmpegInstallStatus(message);
-    } finally {
-      setIsPrintingMonitorFfmpegInstallBusy(false);
-    }
-  }, [isPrintingMonitorFfmpegInstallBusy, triggerPrintingMonitorWebcamRetry]);
 
   React.useEffect(() => {
     const canPollDashboard = Boolean(
@@ -6615,25 +6529,6 @@ export default function Home() {
       window.removeEventListener('keydown', handlePrintingMonitorDebugHotkey, true);
     };
   }, [printingMonitorModalOpen, printingSlicingBenchmark]);
-
-  // Flush monitors on app unload/close (beforeunload). Best-effort cleanup to stop RTSP proxy.
-  React.useEffect(() => {
-    const handleBeforeUnload = () => {
-      try {
-        void pluginNetworkFetch({
-          pluginId: 'sdcp-v3',
-          operation: 'sdcp/rtsp/proxy/stop',
-        }).catch(() => undefined);
-      } catch {
-        // Ignore errors during unload
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, []);
 
   const printingMonitorDebugBundle = React.useMemo(() => {
     const selectedDeviceSummary = monitoringDevice
@@ -12432,34 +12327,61 @@ export default function Home() {
                               width: 'fit-content',
                             }}
                       >
-                        <img
-                          src={printingMonitorWebcamUrl}
-                          alt="Printer webcam preview"
-                          className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
-                          style={{
-                            opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
-                            transform: shouldRotateMonitorWebcam
-                              ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
-                              : undefined,
-                            transformOrigin: 'center center',
-                          }}
-                          onLoad={(event) => {
-                            const target = event.currentTarget;
-                            const naturalW = target.naturalWidth;
-                            const naturalH = target.naturalHeight;
-                            if (!Number.isFinite(naturalW) || !Number.isFinite(naturalH) || naturalW <= 0 || naturalH <= 0) return;
-                            const ratio = naturalW / naturalH;
-                            setPrintingMonitorWebcamAspectRatio((previous) => {
-                              if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
-                              return ratio;
-                            });
-                            setIsPrintingMonitorWebcamLoaded(true);
-                          }}
-                          onError={() => setIsPrintingMonitorWebcamLoaded(true)}
-                          loading="eager"
-                          decoding="async"
-                          fetchPriority="high"
-                        />
+                        {printingMonitorWebcamUsesRelayWs ? (
+                          <RtspRelayCanvasPlayer
+                            url={printingMonitorWebcamUrl}
+                            className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
+                            style={{
+                              opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
+                              transform: shouldRotateMonitorWebcam
+                                ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
+                                : undefined,
+                              transformOrigin: 'center center',
+                            }}
+                            onLoaded={(ratio) => {
+                              if (ratio != null) {
+                                setPrintingMonitorWebcamAspectRatio((previous) => {
+                                  if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
+                                  return ratio;
+                                });
+                              }
+                              setIsPrintingMonitorWebcamLoaded(true);
+                            }}
+                            onError={(message) => {
+                              console.warn('[Monitor/Webcam] rtsp-relay playback issue', { url: printingMonitorWebcamUrl, message });
+                              setIsPrintingMonitorWebcamLoaded(true);
+                            }}
+                          />
+                        ) : (
+                          <img
+                            src={printingMonitorWebcamUrl}
+                            alt="Printer webcam preview"
+                            className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
+                            style={{
+                              opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
+                              transform: shouldRotateMonitorWebcam
+                                ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
+                                : undefined,
+                              transformOrigin: 'center center',
+                            }}
+                            onLoad={(event) => {
+                              const target = event.currentTarget;
+                              const naturalW = target.naturalWidth;
+                              const naturalH = target.naturalHeight;
+                              if (!Number.isFinite(naturalW) || !Number.isFinite(naturalH) || naturalW <= 0 || naturalH <= 0) return;
+                              const ratio = naturalW / naturalH;
+                              setPrintingMonitorWebcamAspectRatio((previous) => {
+                                if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
+                                return ratio;
+                              });
+                              setIsPrintingMonitorWebcamLoaded(true);
+                            }}
+                            onError={() => setIsPrintingMonitorWebcamLoaded(true)}
+                            loading="eager"
+                            decoding="async"
+                            fetchPriority="high"
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -12468,12 +12390,7 @@ export default function Home() {
                     <div className="text-center max-w-[520px] w-full">
                       <div
                         className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3"
-                        style={printingMonitorWebcamStatusPresentation.tone === 'install'
-                          ? {
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 30%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
-                            }
-                          : printingMonitorWebcamStatusPresentation.tone === 'warning'
+                        style={printingMonitorWebcamStatusPresentation.tone === 'warning'
                             ? {
                                 borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)',
                                 background: 'color-mix(in srgb, #f59e0b, var(--surface-1) 90%)',
@@ -12488,9 +12405,7 @@ export default function Home() {
                                   background: 'var(--surface-1)',
                                 }}
                       >
-                        {printingMonitorWebcamStatusPresentation.tone === 'install' ? (
-                          <Download className={`w-5 h-5 ${isPrintingMonitorFfmpegInstallBusy ? 'animate-pulse' : ''}`} style={{ color: 'var(--accent)' }} />
-                        ) : printingMonitorWebcamStatusPresentation.tone === 'warning' ? (
+                        {printingMonitorWebcamStatusPresentation.tone === 'warning' ? (
                           <AlertTriangle className="w-5 h-5" style={{ color: '#f59e0b' }} />
                         ) : printingMonitorWebcamStatusPresentation.tone === 'error' ? (
                           <AlertTriangle className="w-5 h-5" style={{ color: 'var(--danger)' }} />
@@ -12507,20 +12422,6 @@ export default function Home() {
                       </p>
 
                       <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-                      {printingMonitorWebcamNeedsFfmpegInstall && (
-                        <button
-                          type="button"
-                          className="ui-button ui-button-accent !h-8 px-2.5 text-[10px]"
-                          onClick={() => {
-                            void handleInstallPrintingMonitorFfmpeg();
-                          }}
-                          disabled={isPrintingMonitorFfmpegInstallBusy || isPrintingMonitorWebcamResetBusy}
-                          title="Install LGPL FFmpeg for inline RTSP webcam preview"
-                        >
-                          {isPrintingMonitorFfmpegInstallBusy ? 'Installing FFmpeg…' : 'Install FFmpeg now'}
-                        </button>
-                      )}
-
                       {printingMonitorWebcamCanResetStreamSlot && (
                         <button
                           type="button"
@@ -12528,7 +12429,7 @@ export default function Home() {
                           onClick={() => {
                             void handleResetPrintingMonitorWebcamStreamSlot();
                           }}
-                          disabled={isPrintingMonitorFfmpegInstallBusy || isPrintingMonitorWebcamResetBusy}
+                          disabled={isPrintingMonitorWebcamResetBusy}
                           title="Ask the printer to disable any stale SDCP webcam stream before retrying"
                         >
                           {isPrintingMonitorWebcamResetBusy ? 'Resetting stream…' : 'Reset stream slot'}
@@ -12541,17 +12442,11 @@ export default function Home() {
                         onClick={() => {
                           triggerPrintingMonitorWebcamRetry();
                         }}
-                        disabled={isPrintingMonitorFfmpegInstallBusy || isPrintingMonitorWebcamResetBusy}
+                        disabled={isPrintingMonitorWebcamResetBusy}
                       >
                         Retry
                       </button>
                     </div>
-
-                    {printingMonitorFfmpegInstallStatus && (
-                      <div className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        {printingMonitorFfmpegInstallStatus}
-                      </div>
-                    )}
                     </div>
                   </div>
                 )}
