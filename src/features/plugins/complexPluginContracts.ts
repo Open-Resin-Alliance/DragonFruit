@@ -100,6 +100,21 @@ export type PluginMonitoringWebcamInfoContract = {
   message: string;
 };
 
+export type PluginMonitoringUiPolicy = {
+  /** How long the monitor can keep showing stale online state after the last successful status poll. */
+  busyResponseGraceMs?: number;
+  /** How many inconclusive reachability polls are allowed before the UI treats a device as offline. */
+  inconclusiveReachabilityMaxPolls?: number;
+  /** Whether the UI should surface a manual stale-webcam-stream reset action. */
+  supportsWebcamStreamSlotReset?: boolean;
+  /** How many consecutive webcam failures should trigger a cooldown. */
+  webcamMaxConsecutiveTimeouts?: number;
+  /** Cooldown after repeated webcam timeouts. */
+  webcamTimeoutCooldownMs?: number;
+  /** Cooldown after an immediate webcam request failure. */
+  webcamFailureCooldownMs?: number;
+};
+
 export type PluginMonitoringUiAdapterContract = {
   mode: string;
   pluginId: string | null;
@@ -118,6 +133,7 @@ export type PluginMonitoringUiAdapterContract = {
   } | null;
   parseStatusPayload: (payload: unknown, contextKey?: string) => PluginMonitoringSnapshotContract;
   parseWebcamInfoPayload: (payload: unknown, host: string, port: number) => PluginMonitoringWebcamInfoContract;
+  getMonitoringUiPolicy?: () => PluginMonitoringUiPolicy;
 };
 
 export type PluginNetworkOperationHandlerContract = (

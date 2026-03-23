@@ -164,7 +164,7 @@ async function ensureRtspRelayReady(): Promise<void> {
       const urlCandidate = Array.isArray(rawQueryUrl)
         ? String(rawQueryUrl[0] ?? '')
         : String(rawQueryUrl ?? '');
-      const shouldDumpRtspTraffic = process.env.NODE_ENV !== 'production' || process.env.RTSP_RELAY_DUMP === '1';
+      const shouldDebugRtspTraffic = process.env.RTSP_RELAY_DEBUG === '1';
 
       if (!isSafeRtspUrl(urlCandidate)) {
         try {
@@ -176,12 +176,12 @@ async function ensureRtspRelayReady(): Promise<void> {
       }
 
       try {
-        const relayTargetUrl = shouldDumpRtspTraffic
+        const relayTargetUrl = shouldDebugRtspTraffic
           ? await ensureDumpingRtspProxyUrl(urlCandidate.trim())
           : urlCandidate.trim();
         const handler = relay.proxy({
           url: relayTargetUrl,
-          verbose: process.env.NODE_ENV !== 'production',
+          verbose: shouldDebugRtspTraffic,
           transport: 'udp',
           additionalFlags: [
             '-analyzeduration', '0',

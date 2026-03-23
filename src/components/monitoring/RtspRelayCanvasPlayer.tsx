@@ -1,7 +1,6 @@
 'use client';
 
 import React from 'react';
-import { loadPlayer } from 'rtsp-relay/browser';
 
 let jsmpegBundleLoadPromise: Promise<void> | null = null;
 
@@ -120,6 +119,10 @@ export function RtspRelayCanvasPlayer({
     let disposed = false;
     let destroyed = false;
     let player: { destroy?: () => void } | null = null;
+    let hasReceivedFirstFrame = false;
+    let lastVideoFrameAt = Date.now();
+    let startupTimeoutId: number | null = null;
+    let disconnectCheckIntervalId: number | null = null;
 
     const normalizePlayerErrorMessage = (error: unknown): string => {
       if (error instanceof Error) {
@@ -137,9 +140,34 @@ export function RtspRelayCanvasPlayer({
       return 'RTSP relay player failed to initialize. The relay websocket opened but no decodable stream data was available.';
     };
 
+    const onFirstVideoFrame = () => {
+      lastVideoFrameAt = Date.now();
+
+      if (hasReceivedFirstFrame) return;
+      hasReceivedFirstFrame = true;
+
+      if (startupTimeoutId != null) {
+        window.clearTimeout(startupTimeoutId);
+        startupTimeoutId = null;
+      }
+
+      onLoadedRef.current?.(readCanvasAspectRatio(canvas));
+    };
+
     const safeDestroyPlayer = () => {
       if (destroyed) return;
       destroyed = true;
+
+      if (startupTimeoutId != null) {
+        window.clearTimeout(startupTimeoutId);
+        startupTimeoutId = null;
+      }
+
+      if (disconnectCheckIntervalId != null) {
+        window.clearInterval(disconnectCheckIntervalId);
+        disconnectCheckIntervalId = null;
+      }
+
       const target = player;
       player = null;
       if (!target || typeof target.destroy !== 'function') return;
@@ -155,13 +183,21 @@ export function RtspRelayCanvasPlayer({
         await ensureJsmpegBundleLoaded();
         if (disposed) return;
 
-        const createdPlayer = await loadPlayer({
-          url: normalizedUrl,
-          disconnectThreshold: 15_000,
+        startupTimeoutId = window.setTimeout(() => {
+          if (disposed || hasReceivedFirstFrame) return;
+          emitError('The webcam stream did not deliver any video data in time.');
+          safeDestroyPlayer();
+        }, 15_000);
+
+        const createdPlayer = new window.JSMpeg.Player(normalizedUrl, {
           canvas,
-          onDisconnect: () => {
+          onVideoDecode: () => {
             if (disposed) return;
-            emitError('RTSP relay websocket disconnected.');
+            onFirstVideoFrame();
+          },
+          onSourceEstablished: () => {
+            if (disposed) return;
+            lastVideoFrameAt = Date.now();
           },
         });
 
@@ -177,7 +213,14 @@ export function RtspRelayCanvasPlayer({
         }
 
         player = createdPlayer as { destroy?: () => void };
-        onLoadedRef.current?.(readCanvasAspectRatio(canvas));
+
+        disconnectCheckIntervalId = window.setInterval(() => {
+          if (disposed || !hasReceivedFirstFrame) return;
+          if ((Date.now() - lastVideoFrameAt) <= 15_000) return;
+
+          emitError('RTSP relay websocket disconnected.');
+          safeDestroyPlayer();
+        }, 7_500);
       } catch (error: unknown) {
         if (disposed) return;
         const message = normalizePlayerErrorMessage(error);

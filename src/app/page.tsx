@@ -357,10 +357,11 @@ const DEFAULT_EXPORT_THUMBNAIL_RENDER_OPTIONS: ExportThumbnailRenderOptions = {
 
 const PREPARE_DROP_EXTENSIONS = new Set(['.stl', '.3mf', '.lys', '.voxl']);
 const SUPPORT_DRAG_HOLD_FALLBACK_MS = 320;
-const SDCP_MONITOR_BUSY_GRACE_MS = 30_000;
-const SDCP_WEBCAM_TIMEOUT_COOLDOWN_MS = 20_000;
-const SDCP_WEBCAM_FAILURE_COOLDOWN_MS = 8_000;
-const SDCP_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS = 3;
+const DEFAULT_MONITOR_BUSY_GRACE_MS = 30_000;
+const REACHABILITY_PROBE_TIMEOUT_MS = 7_500;
+const DEFAULT_WEBCAM_TIMEOUT_COOLDOWN_MS = 20_000;
+const DEFAULT_WEBCAM_FAILURE_COOLDOWN_MS = 8_000;
+const DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS = 3;
 
 type TransformStoreCommitResult = {
   updated: boolean;
@@ -815,6 +816,7 @@ export default function Home() {
   const [isPrintingMonitorThumbnailLoaded, setIsPrintingMonitorThumbnailLoaded] = React.useState(false);
   const [printingMonitorThumbnailDisplayUrl, setPrintingMonitorThumbnailDisplayUrl] = React.useState<string | null>(null);
   const [isPrintingMonitorWebcamLoaded, setIsPrintingMonitorWebcamLoaded] = React.useState(false);
+  const [printingMonitorWebcamLoadError, setPrintingMonitorWebcamLoadError] = React.useState<string | null>(null);
   const [printingMonitorWebcamAspectRatio, setPrintingMonitorWebcamAspectRatio] = React.useState<number | null>(null);
   const [printingMonitorWebcamRefreshNonce, setPrintingMonitorWebcamRefreshNonce] = React.useState(0);
   const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
@@ -875,6 +877,7 @@ export default function Home() {
   const printingMonitorWebcamAutoPollBlockedRef = React.useRef(false);
   const printingMonitorWebcamConsecutiveTimeoutsRef = React.useRef(0);
   const printingMonitorStartFocusDeviceIdRef = React.useRef<string | null>(null);
+  const monitorReachabilityInconclusiveCountsRef = React.useRef<Record<string, number>>({});
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
     subscribeToPrinterReachability,
@@ -3053,12 +3056,32 @@ export default function Home() {
       description: rawMessage,
     };
   }, [printingMonitorWebcamInfo?.message]);
+  const printingMonitorWebcamDisplayPresentation = React.useMemo(() => {
+    if (printingMonitorWebcamLoadError) {
+      return {
+        tone: 'error' as const,
+        title: 'Webcam Unavailable',
+        description: printingMonitorWebcamLoadError,
+      };
+    }
+
+    return printingMonitorWebcamStatusPresentation;
+  }, [printingMonitorWebcamLoadError, printingMonitorWebcamStatusPresentation]);
+  const printingMonitorUiPolicy = React.useMemo(() => {
+    return printingMonitoringAdapter.getMonitoringUiPolicy?.() ?? null;
+  }, [printingMonitoringAdapter]);
+  const printingMonitorBusyGraceMs = printingMonitorUiPolicy?.busyResponseGraceMs ?? DEFAULT_MONITOR_BUSY_GRACE_MS;
+  const printingMonitorReachabilityMaxInconclusivePolls = printingMonitorUiPolicy?.inconclusiveReachabilityMaxPolls ?? null;
+  const printingMonitorSupportsWebcamStreamSlotReset = Boolean(printingMonitorUiPolicy?.supportsWebcamStreamSlotReset);
+  const printingMonitorWebcamMaxConsecutiveTimeouts = printingMonitorUiPolicy?.webcamMaxConsecutiveTimeouts ?? DEFAULT_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS;
+  const printingMonitorWebcamTimeoutCooldownMs = printingMonitorUiPolicy?.webcamTimeoutCooldownMs ?? DEFAULT_WEBCAM_TIMEOUT_COOLDOWN_MS;
+  const printingMonitorWebcamFailureCooldownMs = printingMonitorUiPolicy?.webcamFailureCooldownMs ?? DEFAULT_WEBCAM_FAILURE_COOLDOWN_MS;
   const printingMonitorWebcamCanResetStreamSlot = React.useMemo(() => {
-    if (printingMonitoringAdapter.pluginId !== 'sdcp-v3') return false;
+    if (!printingMonitorSupportsWebcamStreamSlotReset) return false;
     const messageLower = String(printingMonitorWebcamInfo?.message ?? '').toLowerCase();
     if (!messageLower) return false;
     return messageLower.includes('stream limit') || messageLower.includes('simultaneous');
-  }, [printingMonitorWebcamInfo?.message, printingMonitoringAdapter.pluginId]);
+  }, [printingMonitorSupportsWebcamStreamSlotReset, printingMonitorWebcamInfo?.message]);
   const shouldRotateMonitorWebcam = React.useMemo(() => {
     const fingerprint = [
       activePrinterProfile?.manufacturer,
@@ -3267,9 +3290,6 @@ export default function Home() {
       || selectedPrinterIsPauseTransition,
     );
   }, [selectedPrinterIsPauseTransition, selectedPrinterMonitorSnapshot?.isPaused]);
-  const isPrintingMonitorSdcpAdapter = React.useMemo(() => {
-    return printingMonitoringAdapter.pluginId === 'sdcp-v3';
-  }, [printingMonitoringAdapter.pluginId]);
   const isTopbarSelectedPrinterOffline = React.useMemo(() => {
     const selectedHost = (selectedKnownPrinterDevice?.ipAddress || activePrinterProfile?.network?.ipAddress || '').trim();
     if (!selectedHost) return false;
@@ -3308,33 +3328,33 @@ export default function Home() {
     printerReachabilityByDeviceId,
   ]);
   const isPrintingMonitorWithinSlowResponseGrace = React.useMemo(() => {
-    if (!printingMonitorModalOpen || !isPrintingMonitorSdcpAdapter) return false;
+    if (!printingMonitorModalOpen) return false;
     if (printingMonitorLastStatusSuccessAtMs == null) return false;
-    return (printingMonitorNowEpochMs - printingMonitorLastStatusSuccessAtMs) <= SDCP_MONITOR_BUSY_GRACE_MS;
+    return (printingMonitorNowEpochMs - printingMonitorLastStatusSuccessAtMs) <= printingMonitorBusyGraceMs;
   }, [
-    isPrintingMonitorSdcpAdapter,
     printingMonitorLastStatusSuccessAtMs,
     printingMonitorModalOpen,
     printingMonitorNowEpochMs,
+    printingMonitorBusyGraceMs,
   ]);
   const printingMonitorSlowResponseGraceRemainingSec = React.useMemo(() => {
     if (!isPrintingMonitorWithinSlowResponseGrace || printingMonitorLastStatusSuccessAtMs == null) return 0;
-    const remainingMs = Math.max(0, SDCP_MONITOR_BUSY_GRACE_MS - (printingMonitorNowEpochMs - printingMonitorLastStatusSuccessAtMs));
+    const remainingMs = Math.max(0, printingMonitorBusyGraceMs - (printingMonitorNowEpochMs - printingMonitorLastStatusSuccessAtMs));
     return Math.ceil(remainingMs / 1000);
   }, [
     isPrintingMonitorWithinSlowResponseGrace,
     printingMonitorLastStatusSuccessAtMs,
     printingMonitorNowEpochMs,
+    printingMonitorBusyGraceMs,
   ]);
   const shouldShowPrintingMonitorSlowResponseCard = React.useMemo(() => {
     return isPrintingMonitorSelectedPrinterOfflineRaw && isPrintingMonitorWithinSlowResponseGrace;
   }, [isPrintingMonitorSelectedPrinterOfflineRaw, isPrintingMonitorWithinSlowResponseGrace]);
   const isPrintingMonitorInInitialStatusProbe = React.useMemo(() => {
-    if (!printingMonitorModalOpen || !isPrintingMonitorSdcpAdapter) return false;
+    if (!printingMonitorModalOpen) return false;
     if (printingMonitorLastStatusSuccessAtMs != null) return false;
     return isPrintingMonitorStatusRequestInFlight;
   }, [
-    isPrintingMonitorSdcpAdapter,
     isPrintingMonitorStatusRequestInFlight,
     printingMonitorLastStatusSuccessAtMs,
     printingMonitorModalOpen,
@@ -3419,6 +3439,7 @@ export default function Home() {
     );
 
     if (!shouldProbeFleetReachability) {
+      monitorReachabilityInconclusiveCountsRef.current = {};
       setPrinterReachabilityMap({});
       return;
     }
@@ -3429,6 +3450,7 @@ export default function Home() {
     });
 
     if (connectedFleet.length === 0) {
+      monitorReachabilityInconclusiveCountsRef.current = {};
       setPrinterReachabilityMap({});
       return;
     }
@@ -3461,7 +3483,7 @@ export default function Home() {
             .then((response) => (response.ok ? true : false))
             .catch(() => null),
           new Promise<null>((resolve) => {
-            window.setTimeout(() => resolve(null), 9000);
+            window.setTimeout(() => resolve(null), REACHABILITY_PROBE_TIMEOUT_MS);
           }),
         ]);
 
@@ -3482,12 +3504,34 @@ export default function Home() {
       if (cancelled) return;
 
       const previousReachability = getPrinterReachabilitySnapshot();
+      const previousInconclusiveCounts = monitorReachabilityInconclusiveCountsRef.current;
+      const nextInconclusiveCounts: Record<string, number> = {};
       const nextMap: Record<string, boolean | null> = {};
       for (const [id, reachable] of entries) {
-        nextMap[id] = reachable == null
-          ? (previousReachability[id] ?? null)
-          : reachable;
+        if (reachable === true) {
+          nextMap[id] = true;
+          nextInconclusiveCounts[id] = 0;
+          continue;
+        }
+
+        if (reachable === false) {
+          nextMap[id] = false;
+          nextInconclusiveCounts[id] = 0;
+          continue;
+        }
+
+        const unknownCount = (previousInconclusiveCounts[id] ?? 0) + 1;
+        nextInconclusiveCounts[id] = unknownCount;
+
+        if (printingMonitorReachabilityMaxInconclusivePolls != null && unknownCount >= printingMonitorReachabilityMaxInconclusivePolls) {
+          nextMap[id] = false;
+          continue;
+        }
+
+        nextMap[id] = previousReachability[id] ?? null;
       }
+
+      monitorReachabilityInconclusiveCountsRef.current = nextInconclusiveCounts;
       setPrinterReachabilityMap(nextMap);
     };
 
@@ -4233,16 +4277,16 @@ export default function Home() {
           timeoutCount += 1;
           printingMonitorWebcamConsecutiveTimeoutsRef.current = timeoutCount;
 
-          if (timeoutCount >= SDCP_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS) {
+          if (timeoutCount >= printingMonitorWebcamMaxConsecutiveTimeouts) {
             timeoutCircuitBreakerTripped = true;
             printingMonitorWebcamAutoPollBlockedRef.current = true;
             printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
           } else {
-            printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + SDCP_WEBCAM_TIMEOUT_COOLDOWN_MS;
+            printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + printingMonitorWebcamTimeoutCooldownMs;
           }
         } else if (pluginFailure) {
           printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
-          printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + SDCP_WEBCAM_FAILURE_COOLDOWN_MS;
+          printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + printingMonitorWebcamFailureCooldownMs;
         } else {
           printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
           printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
@@ -4290,12 +4334,12 @@ export default function Home() {
         let timeoutCount = printingMonitorWebcamConsecutiveTimeoutsRef.current + 1;
         printingMonitorWebcamConsecutiveTimeoutsRef.current = timeoutCount;
 
-        const timeoutCircuitBreakerTripped = timeoutCount >= SDCP_WEBCAM_MAX_CONSECUTIVE_TIMEOUTS;
+        const timeoutCircuitBreakerTripped = timeoutCount >= printingMonitorWebcamMaxConsecutiveTimeouts;
         if (timeoutCircuitBreakerTripped) {
           printingMonitorWebcamAutoPollBlockedRef.current = true;
           printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
         } else {
-          printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + SDCP_WEBCAM_TIMEOUT_COOLDOWN_MS;
+          printingMonitorWebcamBusyUntilEpochMsRef.current = Date.now() + printingMonitorWebcamTimeoutCooldownMs;
         }
 
         const message = timeoutCircuitBreakerTripped
@@ -4391,6 +4435,7 @@ export default function Home() {
 
   React.useEffect(() => {
     setIsPrintingMonitorWebcamLoaded(false);
+    setPrintingMonitorWebcamLoadError(null);
   }, [printingMonitorWebcamUrl]);
 
   React.useEffect(() => {
@@ -4450,6 +4495,8 @@ export default function Home() {
     printingMonitorWebcamAutoPollBlockedRef.current = false;
     printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
     printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
+    setPrintingMonitorWebcamLoadError(null);
+    setIsPrintingMonitorWebcamLoaded(false);
     setPrintingMonitorWebcamRefreshNonce((previous) => previous + 1);
   }, []);
 
@@ -4460,6 +4507,9 @@ export default function Home() {
     printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
     printingMonitorWebcamRequestInFlightRef.current = false;
     printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
+    setPrintingMonitorWebcamLoadError(null);
+    setIsPrintingMonitorWebcamLoaded(false);
+    setPrintingMonitorWebcamAspectRatio(null);
     setPrintingMonitorWebcamRefreshNonce((previous) => previous + 1);
   }, []);
 
@@ -11937,7 +11987,7 @@ export default function Home() {
                         Printer is responding slowly
                       </h3>
                       <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                        Keeping this SDCP printer online while it catches up. We’ll only mark it offline if it stays unresponsive for about {printingMonitorSlowResponseGraceRemainingSec}s.
+                        Keeping this printer online while it catches up. We’ll only mark it offline if it stays unresponsive for about {printingMonitorSlowResponseGraceRemainingSec}s.
                       </p>
                       <div className="mt-4 mx-auto w-[78%]">
                         <div
@@ -12293,97 +12343,153 @@ export default function Home() {
                 </div>
                 {printingMonitorWebcamUrl ? (
                   <div className="mt-1.5 flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
-                    <div
-                      className="relative rounded-md border overflow-hidden h-full max-h-full max-w-full"
-                      style={{
-                        borderColor: 'var(--border-subtle)',
-                        background: 'color-mix(in srgb, var(--surface-1), #000 6%)',
-                      }}
-                    >
-                      {!isPrintingMonitorWebcamLoaded && (
-                        <div className="absolute inset-0 z-[1] flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                          <div className="w-[74%]">
-                            <div
-                              className="ui-loading-track h-2.5 w-full rounded-full"
-                              style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+                    {printingMonitorWebcamLoadError ? (
+                      <div className="w-full max-w-full rounded-md border p-4 flex items-center justify-center h-full" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 7%)' }}>
+                        <div className="text-center max-w-[520px] w-full">
+                          <div
+                            className="inline-flex h-12 w-12 items-center justify-center rounded-full border mb-3"
+                            style={{
+                              borderColor: 'color-mix(in srgb, var(--danger), var(--border-subtle) 30%)',
+                              background: 'color-mix(in srgb, var(--danger), var(--surface-1) 90%)',
+                            }}
+                          >
+                            <AlertTriangle className="w-5 h-5" style={{ color: 'var(--danger)' }} />
+                          </div>
+
+                          <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                            {printingMonitorWebcamDisplayPresentation.title}
+                          </h4>
+                          <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                            {printingMonitorWebcamDisplayPresentation.description}
+                          </p>
+
+                          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                            {printingMonitorWebcamCanResetStreamSlot && (
+                              <button
+                                type="button"
+                                className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
+                                onClick={() => {
+                                  void handleResetPrintingMonitorWebcamStreamSlot();
+                                }}
+                                disabled={isPrintingMonitorWebcamResetBusy}
+                                title="Ask the printer to disable any stale webcam stream before retrying"
+                              >
+                                {isPrintingMonitorWebcamResetBusy ? 'Resetting stream…' : 'Reset stream slot'}
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              className="ui-button ui-button-secondary !h-8 px-2.5 text-[10px]"
+                              onClick={() => {
+                                triggerPrintingMonitorWebcamRetry();
+                              }}
+                              disabled={isPrintingMonitorWebcamResetBusy}
                             >
-                              <div
-                                className="ui-loading-indicator"
-                                style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
-                              />
-                            </div>
-                            <div className="mt-2 text-center">Loading camera feed…</div>
+                              Retry
+                            </button>
                           </div>
                         </div>
-                      )}
+                      </div>
+                    ) : (
                       <div
-                        className="h-full"
-                        style={monitorWebcamDisplayAspectRatio != null
-                          ? {
-                              width: 'auto',
-                              aspectRatio: String(monitorWebcamDisplayAspectRatio),
-                            }
-                          : {
-                              width: 'fit-content',
-                            }}
+                        className="relative rounded-md border overflow-hidden h-full max-h-full max-w-full"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-1), #000 6%)',
+                        }}
                       >
-                        {printingMonitorWebcamUsesRelayWs ? (
-                          <RtspRelayCanvasPlayer
-                            url={printingMonitorWebcamUrl}
-                            className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
-                            style={{
-                              opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
-                              transform: shouldRotateMonitorWebcam
-                                ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
-                                : undefined,
-                              transformOrigin: 'center center',
-                            }}
-                            onLoaded={(ratio) => {
-                              if (ratio != null) {
+                        {!isPrintingMonitorWebcamLoaded && (
+                          <div className="absolute inset-0 z-[1] flex items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            <div className="w-[74%]">
+                              <div
+                                className="ui-loading-track h-2.5 w-full rounded-full"
+                                style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
+                              >
+                                <div
+                                  className="ui-loading-indicator"
+                                  style={{ background: 'linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent), #ffffff 28%))' }}
+                                />
+                              </div>
+                              <div className="mt-2 text-center">Loading camera feed…</div>
+                            </div>
+                          </div>
+                        )}
+                        <div
+                          className="h-full"
+                          style={monitorWebcamDisplayAspectRatio != null
+                            ? {
+                                width: 'auto',
+                                aspectRatio: String(monitorWebcamDisplayAspectRatio),
+                              }
+                            : {
+                                width: 'fit-content',
+                              }}
+                        >
+                          {printingMonitorWebcamUsesRelayWs ? (
+                            <RtspRelayCanvasPlayer
+                              url={printingMonitorWebcamUrl}
+                              className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
+                              style={{
+                                opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
+                                transform: shouldRotateMonitorWebcam
+                                  ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
+                                  : undefined,
+                                transformOrigin: 'center center',
+                              }}
+                              onLoaded={(ratio) => {
+                                if (ratio != null) {
+                                  setPrintingMonitorWebcamAspectRatio((previous) => {
+                                    if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
+                                    return ratio;
+                                  });
+                                }
+                                setIsPrintingMonitorWebcamLoaded(true);
+                                setPrintingMonitorWebcamLoadError(null);
+                              }}
+                              onError={(message) => {
+                                console.warn('[Monitor/Webcam] rtsp-relay playback issue', { url: printingMonitorWebcamUrl, message });
+                                setIsPrintingMonitorWebcamLoaded(false);
+                                setPrintingMonitorWebcamLoadError(message);
+                              }}
+                            />
+                          ) : (
+                            <img
+                              src={printingMonitorWebcamUrl}
+                              alt="Printer webcam preview"
+                              className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
+                              style={{
+                                opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
+                                transform: shouldRotateMonitorWebcam
+                                  ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
+                                  : undefined,
+                                transformOrigin: 'center center',
+                              }}
+                              onLoad={(event) => {
+                                const target = event.currentTarget;
+                                const naturalW = target.naturalWidth;
+                                const naturalH = target.naturalHeight;
+                                if (!Number.isFinite(naturalW) || !Number.isFinite(naturalH) || naturalW <= 0 || naturalH <= 0) return;
+                                const ratio = naturalW / naturalH;
                                 setPrintingMonitorWebcamAspectRatio((previous) => {
                                   if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
                                   return ratio;
                                 });
-                              }
-                              setIsPrintingMonitorWebcamLoaded(true);
-                            }}
-                            onError={(message) => {
-                              console.warn('[Monitor/Webcam] rtsp-relay playback issue', { url: printingMonitorWebcamUrl, message });
-                              setIsPrintingMonitorWebcamLoaded(true);
-                            }}
-                          />
-                        ) : (
-                          <img
-                            src={printingMonitorWebcamUrl}
-                            alt="Printer webcam preview"
-                            className="block h-full w-auto max-w-full object-contain transition-opacity duration-150"
-                            style={{
-                              opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
-                              transform: shouldRotateMonitorWebcam
-                                ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
-                                : undefined,
-                              transformOrigin: 'center center',
-                            }}
-                            onLoad={(event) => {
-                              const target = event.currentTarget;
-                              const naturalW = target.naturalWidth;
-                              const naturalH = target.naturalHeight;
-                              if (!Number.isFinite(naturalW) || !Number.isFinite(naturalH) || naturalW <= 0 || naturalH <= 0) return;
-                              const ratio = naturalW / naturalH;
-                              setPrintingMonitorWebcamAspectRatio((previous) => {
-                                if (previous != null && Math.abs(previous - ratio) < 0.001) return previous;
-                                return ratio;
-                              });
-                              setIsPrintingMonitorWebcamLoaded(true);
-                            }}
-                            onError={() => setIsPrintingMonitorWebcamLoaded(true)}
-                            loading="eager"
-                            decoding="async"
-                            fetchPriority="high"
-                          />
-                        )}
+                                setIsPrintingMonitorWebcamLoaded(true);
+                                setPrintingMonitorWebcamLoadError(null);
+                              }}
+                              onError={() => {
+                                setIsPrintingMonitorWebcamLoaded(false);
+                                setPrintingMonitorWebcamLoadError('The webcam image could not be loaded.');
+                              }}
+                              loading="eager"
+                              decoding="async"
+                              fetchPriority="high"
+                            />
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 ) : (
                   <div className="mt-1.5 flex-1 min-h-0 rounded-md border p-4 flex items-center justify-center" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 7%)' }}>
@@ -12430,7 +12536,7 @@ export default function Home() {
                             void handleResetPrintingMonitorWebcamStreamSlot();
                           }}
                           disabled={isPrintingMonitorWebcamResetBusy}
-                          title="Ask the printer to disable any stale SDCP webcam stream before retrying"
+                          title="Ask the printer to disable any stale webcam stream before retrying"
                         >
                           {isPrintingMonitorWebcamResetBusy ? 'Resetting stream…' : 'Reset stream slot'}
                         </button>
