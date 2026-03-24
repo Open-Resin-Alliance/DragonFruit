@@ -9,6 +9,7 @@ import type {
   RemoteMaterialSettingsAdapter,
 } from '@/features/plugins/complexPluginContracts';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
+import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
 import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
 
 export type PluginSource = 'builtin' | 'github';
@@ -252,6 +253,13 @@ function sanitizeOutputFormat(value: unknown): PrinterPreset['display']['outputF
   return normalizeOutputFormat(value);
 }
 
+function sanitizeNetworkSupport(value: unknown): PrinterPreset['networkSupport'] {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return normalized;
+}
+
 function sanitizeImageAssetPath(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -335,9 +343,8 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
     family: family || undefined,
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
     antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
-    // External (GitHub-installed) manifest plugins are intentionally data-only.
-    // Complex capabilities such as live network control are compile-time only.
-    networkSupport: undefined,
+    hasCamera: typeof value.hasCamera === 'boolean' ? value.hasCamera : undefined,
+    networkSupport: sanitizeNetworkSupport(value.networkSupport),
     networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),
     pixelSize,
@@ -455,6 +462,17 @@ function sanitizeManifest(input: unknown): PluginManifest | null {
   };
 }
 
+const BUILTIN_SIMPLE_PLUGINS: InstalledProfilePlugin[] = BUILTIN_SIMPLE_PLUGIN_MANIFESTS
+  .map((manifest) => sanitizeManifest(manifest))
+  .filter((manifest): manifest is PluginManifest => manifest !== null)
+  .map((manifest) => ({
+    manifest,
+    enabled: true,
+    source: 'builtin' as const,
+    sourceUrl: `builtin://plugins/${manifest.id}`,
+    installedAt: new Date(0).toISOString(),
+  }));
+
 function sanitizeInstalledPlugin(input: unknown): InstalledProfilePlugin | null {
   const value = (input ?? {}) as any;
   const manifest = sanitizeManifest(value.manifest);
@@ -520,7 +538,7 @@ export function hydratePluginRegistry() {
 
 export function getInstalledProfilePlugins(): InstalledProfilePlugin[] {
   hydratePluginRegistry();
-  return [...BUILTIN_COMPLEX_PLUGINS, ...externalPlugins];
+  return [...BUILTIN_COMPLEX_PLUGINS, ...BUILTIN_SIMPLE_PLUGINS, ...externalPlugins];
 }
 
 export function installExternalProfilePlugin(

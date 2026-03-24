@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "builtinSimplePlugins": [
+    {
+      "id": "elegoo-printer-profiles",
+      "folder": "elegoo",
+      "manifestPath": "dragonfruit-plugin.json"
+    }
+  ]
+}

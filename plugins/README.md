@@ -50,6 +50,13 @@ Simple plugins are a safe extension mechanism for printer/material content.
 3. Metadata is persisted
 4. Presets/templates merge into runtime lists
 
+### Built-in simple plugins (core-owned wiring)
+
+- Built-in simple plugin enrollment is declared in `src/config/builtin-simple-plugin-allowlist.json`.
+- A generator (`scripts/generate-builtin-simple-plugins.mjs`) produces `src/features/plugins/generatedBuiltinSimplePlugins.ts`.
+- Core runtime consumes generated manifests only (`src/features/plugins/builtinSimplePlugins.ts`).
+- Result: plugin folders remain data-only (`dragonfruit-plugin.json`, preset JSON, assets) with no plugin-specific TS wiring in core files.
+
 ### Runtime safety controls
 
 - GitHub repository allowlist (`DRAGONFRUIT_PLUGIN_GITHUB_ALLOWLIST`)
