@@ -974,6 +974,9 @@ export default function Home() {
   const printingMonitorWebcamReadinessTokenRef = React.useRef(0);
   const printingMonitorWebcamReadinessTimeoutRef = React.useRef<number | null>(null);
   const printingMonitorStartFocusDeviceIdRef = React.useRef<string | null>(null);
+  const printingMonitorRecentPlatesRequestIdRef = React.useRef(0);
+  const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
+  const printingMonitorWebcamSectionRef = React.useRef<HTMLElement | null>(null);
   const monitorReachabilityInconclusiveCountsRef = React.useRef<Record<string, number>>({});
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
@@ -4066,6 +4069,8 @@ export default function Home() {
   ]);
 
   const refreshPrintingMonitorRecentPlates = React.useCallback(async () => {
+    const requestId = ++printingMonitorRecentPlatesRequestIdRef.current;
+
     const canLoadRecentPlates = Boolean(
       printingMonitorModalOpen
       && monitoringDevice
@@ -4074,6 +4079,7 @@ export default function Home() {
       && printingMonitoringAdapter.operations?.platesList,
     );
     if (!canLoadRecentPlates) {
+      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       setPrintingMonitorRecentPlates([]);
       setPrintingMonitorRecentPlatesError(null);
       return;
@@ -4082,6 +4088,7 @@ export default function Home() {
     const host = (monitoringDevice?.ipAddress || '').trim();
     const port = monitoringDevice?.port || 80;
     if (!host) {
+      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       setPrintingMonitorRecentPlates([]);
       setPrintingMonitorRecentPlatesError('No printer IP available for recent print files.');
       return;
@@ -4104,6 +4111,7 @@ export default function Home() {
       const response = await pluginNetworkFetch(requestPayload);
 
       const payload = await response.json().catch(() => ({} as any));
+      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       if (!response.ok || payload?.ok === false) {
         const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(reason);
@@ -4239,6 +4247,7 @@ export default function Home() {
       });
       setPrintingMonitorRecentPlatesError(null);
     } catch (error) {
+      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       const message = error instanceof Error ? error.message : 'Failed to load recent print files.';
       setPrintingMonitorRecentPlatesError(message);
       setPrintingMonitorDebugState((previous) => ({
@@ -4253,6 +4262,7 @@ export default function Home() {
         },
       }));
     } finally {
+      if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       setIsPrintingMonitorRecentPlatesLoading(false);
     }
   }, [
@@ -4263,8 +4273,21 @@ export default function Home() {
     printingMonitoringAdapter,
   ]);
 
+  const handlePrintingMonitorStoragePathChange = React.useCallback((nextPath: '/local/' | '/usb/') => {
+    if (nextPath === printingMonitorPlatesStoragePath) return;
+
+    // Immediately flush stale rows so the panel never shows Local data while USB is loading (or vice versa).
+    printingMonitorRecentPlatesRequestIdRef.current += 1;
+    setPrintingMonitorRecentPlates([]);
+    setPrintingMonitorRecentPlatesError(null);
+    setPrintingMonitorSelectedPlateId(null);
+    setIsPrintingMonitorRecentPlatesLoading(true);
+    setPrintingMonitorPlatesStoragePath(nextPath);
+  }, [printingMonitorPlatesStoragePath]);
+
   React.useEffect(() => {
     if (!printingMonitorModalOpen) {
+      printingMonitorRecentPlatesRequestIdRef.current += 1;
       setPrintingMonitorRecentPlates([]);
       setPrintingMonitorRecentPlatesError(null);
       setPrintingMonitorSelectedPlateId(null);
@@ -4286,6 +4309,65 @@ export default function Home() {
       window.clearInterval(intervalId);
     };
   }, [printingMonitorModalOpen, refreshPrintingMonitorRecentPlates]);
+
+  React.useLayoutEffect(() => {
+    const webcamSection = printingMonitorWebcamSectionRef.current;
+    const clearSizing = () => {
+      webcamSection?.style.removeProperty('height');
+      webcamSection?.style.removeProperty('max-height');
+    };
+
+    if (!printingMonitorModalOpen || printingMonitorViewMode !== 'detail' || !printingMonitorUsesTwoColumnDetailLayout || !printingMonitorHasCamera) {
+      clearSizing();
+      return;
+    }
+
+    let resizeObserver: ResizeObserver | null = null;
+    let rafId: number | null = null;
+
+    const applyFollowerHeight = () => {
+      const leftColumn = printingMonitorLeftColumnRef.current;
+      const rightColumn = printingMonitorWebcamSectionRef.current;
+      if (!leftColumn || !rightColumn) return;
+
+      const measured = Math.max(0, Math.round(leftColumn.getBoundingClientRect().height));
+      if (measured <= 0) return;
+
+      rightColumn.style.height = `${measured}px`;
+      rightColumn.style.maxHeight = `${measured}px`;
+    };
+
+    const bind = () => {
+      const leftColumn = printingMonitorLeftColumnRef.current;
+      if (!leftColumn) {
+        rafId = window.requestAnimationFrame(bind);
+        return;
+      }
+
+      applyFollowerHeight();
+      resizeObserver = new ResizeObserver(() => {
+        applyFollowerHeight();
+      });
+      resizeObserver.observe(leftColumn);
+      window.addEventListener('resize', applyFollowerHeight);
+    };
+
+    bind();
+
+    return () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', applyFollowerHeight);
+      clearSizing();
+    };
+  }, [
+    printingMonitorHasCamera,
+    printingMonitorModalOpen,
+    printingMonitorUsesTwoColumnDetailLayout,
+    printingMonitorViewMode,
+  ]);
 
   React.useEffect(() => {
     if (printingMonitorPlateId == null) return;
@@ -12532,14 +12614,14 @@ export default function Home() {
               </div>
             ) : (
               <div className={`p-4 grid gap-3 ${printingMonitorUsesTwoColumnDetailLayout ? 'grid-cols-1 items-start lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)] lg:items-stretch' : 'grid-cols-1 items-start'}`}>
-                <section className="grid gap-3 grid-rows-[auto_1fr]">
+                <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
                     <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                       Print Files
                     </div>
                     <div
-                      className="inline-flex items-center rounded-lg border p-1 justify-self-center"
+                      className="relative inline-flex h-9 w-[132px] items-center rounded-lg border p-1 justify-self-center overflow-hidden"
                       style={{
                         borderColor: 'var(--border-subtle)',
                         background: 'color-mix(in srgb, var(--surface-1), #000 12%)',
@@ -12547,42 +12629,34 @@ export default function Home() {
                       }}
                       aria-label="Print file source"
                     >
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute bottom-1 left-1 top-1 rounded-md border transition-transform duration-200 ease-out"
+                        style={{
+                          width: 'calc(50% - 4px)',
+                          transform: printingMonitorPlatesStoragePath === '/usb/' ? 'translateX(100%)' : 'translateX(0)',
+                          borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
+                          background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
+                        }}
+                      />
                       <button
                         type="button"
-                        className="inline-flex h-7 min-w-[58px] items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors"
-                        style={printingMonitorPlatesStoragePath === '/local/'
-                          ? {
-                              color: 'var(--text-strong)',
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
-                            }
-                          : {
-                              color: 'var(--text-muted)',
-                              borderColor: 'transparent',
-                              background: 'transparent',
-                            }}
-                        onClick={() => setPrintingMonitorPlatesStoragePath('/local/')}
-                        disabled={isPrintingMonitorRecentPlatesLoading}
+                        className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
+                        style={{
+                          color: printingMonitorPlatesStoragePath === '/local/' ? 'var(--text-strong)' : 'var(--text-muted)',
+                        }}
+                        onClick={() => handlePrintingMonitorStoragePathChange('/local/')}
                         title="Show print files from local storage"
                       >
                         Local
                       </button>
                       <button
                         type="button"
-                        className="inline-flex h-7 min-w-[58px] items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors"
-                        style={printingMonitorPlatesStoragePath === '/usb/'
-                          ? {
-                              color: 'var(--text-strong)',
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 32%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 78%)',
-                            }
-                          : {
-                              color: 'var(--text-muted)',
-                              borderColor: 'transparent',
-                              background: 'transparent',
-                            }}
-                        onClick={() => setPrintingMonitorPlatesStoragePath('/usb/')}
-                        disabled={isPrintingMonitorRecentPlatesLoading}
+                        className="relative z-[1] inline-flex h-7 min-w-0 flex-1 items-center justify-center rounded-md px-2.5 text-[11px] font-semibold tracking-[0.02em] transition-colors duration-200"
+                        style={{
+                          color: printingMonitorPlatesStoragePath === '/usb/' ? 'var(--text-strong)' : 'var(--text-muted)',
+                        }}
+                        onClick={() => handlePrintingMonitorStoragePathChange('/usb/')}
                         title="Show print files from USB storage"
                       >
                         USB
@@ -12860,6 +12934,7 @@ export default function Home() {
 
                 {printingMonitorHasCamera && (
                 <section
+                  ref={printingMonitorWebcamSectionRef}
                   className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden self-stretch h-[min(62vh,520px)] lg:h-full"
                   style={{
                     borderColor: 'var(--border-subtle)',
