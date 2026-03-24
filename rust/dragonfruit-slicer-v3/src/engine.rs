@@ -7,9 +7,11 @@ use crate::metrics::SlicingPerfV3;
 use crate::pipeline::render_layers_bounded;
 use crate::types::{
     LayerAreaStatsV3, ProgressCallbackV3, RenderedLayersV3, SliceArtifactV3, SliceJobV3,
+    SliceProgressPhaseV3, SliceProgressUpdateV3,
 };
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -95,18 +97,110 @@ pub fn slice_with_progress_v3(
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
 
+    if !requires_png_layers && requires_raw_mask_layers {
+        if let Some(mut stream_encoder) = encoder.create_raw_mask_stream_encoder(job)? {
+            let total_start = std::time::Instant::now();
+            let job_total_layers = job.total_layers;
+            let progress_total = job_total_layers.saturating_add(1);
+            let mut raw_mask_sink = |layer_index: u32, raw_mask: Vec<u8>| {
+                stream_encoder.consume_raw_mask_layer(layer_index, raw_mask)
+            };
+
+            let slicing_progress = on_progress.as_ref().map(|cb| {
+                let cb = cb.clone();
+                Arc::new(move |update: SliceProgressUpdateV3| {
+                    cb(SliceProgressUpdateV3 {
+                        done: update.done.min(job_total_layers),
+                        total: progress_total,
+                        phase: SliceProgressPhaseV3::Slicing,
+                    });
+                }) as ProgressCallbackV3
+            });
+
+            let (_rendered_layers, _layer_area_stats, mut perf) = slice_and_rasterize_v3(
+                job,
+                false,
+                requires_png_layers,
+                false,
+                Some(&mut raw_mask_sink),
+                slicing_progress,
+                cancel_flag,
+            )?;
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: job_total_layers,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            let encode_start = std::time::Instant::now();
+            let bytes = stream_encoder.finalize_to_bytes()?;
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: progress_total,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
+            perf.total_ns = total_start.elapsed().as_nanos() as u64;
+            perf.layers = job.total_layers;
+
+            return Ok(SliceArtifactV3 { bytes, perf });
+        }
+    }
+
     let total_start = std::time::Instant::now();
     let (rendered_layers, layer_area_stats, mut perf) = slice_and_rasterize_v3(
         job,
         requires_area_stats,
         requires_png_layers,
         requires_raw_mask_layers,
-        on_progress,
+        None,
+        on_progress.clone(),
         cancel_flag,
     )?;
 
+    let encode_units = encoder
+        .estimate_encode_progress_units(&rendered_layers)
+        .max(1);
+    let progress_total = job.total_layers.saturating_add(encode_units);
+
+    let encode_progress = on_progress.as_ref().map(|cb| {
+        let cb = cb.clone();
+        move |done: u32, total: u32| {
+            let safe_total = total.max(1);
+            let clamped_done = done.min(safe_total);
+            let normalized =
+                ((clamped_done as u64) * (encode_units as u64) / (safe_total as u64)) as u32;
+            cb(SliceProgressUpdateV3 {
+                done: job.total_layers.saturating_add(normalized),
+                total: progress_total,
+                phase: SliceProgressPhaseV3::Encoding,
+            });
+        }
+    });
+
     let encode_start = std::time::Instant::now();
-    let bytes = dispatch_encode_by_format(job, &rendered_layers, &layer_area_stats)?;
+    let bytes = dispatch_encode_by_format(
+        job,
+        &rendered_layers,
+        &layer_area_stats,
+        encode_progress.as_ref().map(|cb| cb as &dyn Fn(u32, u32)),
+    )?;
+
+    if let Some(cb) = on_progress.as_ref() {
+        cb(SliceProgressUpdateV3 {
+            done: progress_total,
+            total: progress_total,
+            phase: SliceProgressPhaseV3::Finalizing,
+        });
+    }
+
     perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
     perf.total_ns = total_start.elapsed().as_nanos() as u64;
     perf.layers = job.total_layers;
@@ -120,6 +214,7 @@ pub fn slice_and_rasterize_v3(
     requires_area_stats: bool,
     emit_png_layers: bool,
     emit_raw_mask_layers: bool,
+    on_raw_mask_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -137,6 +232,7 @@ pub fn slice_and_rasterize_v3(
         requires_area_stats,
         emit_png_layers,
         emit_raw_mask_layers,
+        on_raw_mask_layer,
         on_progress,
         cancel_flag,
     )?;
@@ -150,6 +246,7 @@ pub fn dispatch_encode_by_format(
     job: &SliceJobV3,
     rendered_layers: &RenderedLayersV3,
     layer_area_stats: &[LayerAreaStatsV3],
+    on_encode_progress: Option<&dyn Fn(u32, u32)>,
 ) -> Result<Vec<u8>, SlicerV3Error> {
     let Some(encoder) = find_encoder(&job.output_format) else {
         return Err(SlicerV3Error::UnsupportedOutput(format!(
@@ -158,7 +255,12 @@ pub fn dispatch_encode_by_format(
             supported_output_formats().join(", ")
         )));
     };
-    encoder.encode_container_from_rendered_layers(job, rendered_layers, layer_area_stats)
+    encoder.encode_container_from_rendered_layers_with_progress(
+        job,
+        rendered_layers,
+        layer_area_stats,
+        on_encode_progress,
+    )
 }
 
 /// Encode rendered layers through a registered format encoder directly to disk.
@@ -167,6 +269,7 @@ pub fn dispatch_encode_by_format_to_path(
     rendered_layers: &RenderedLayersV3,
     layer_area_stats: &[LayerAreaStatsV3],
     output_path: &Path,
+    on_encode_progress: Option<&dyn Fn(u32, u32)>,
 ) -> Result<(), SlicerV3Error> {
     let Some(encoder) = find_encoder(&job.output_format) else {
         return Err(SlicerV3Error::UnsupportedOutput(format!(
@@ -175,7 +278,13 @@ pub fn dispatch_encode_by_format_to_path(
             supported_output_formats().join(", ")
         )));
     };
-    encoder.encode_container_to_path(job, rendered_layers, layer_area_stats, output_path)
+    encoder.encode_container_to_path_with_progress(
+        job,
+        rendered_layers,
+        layer_area_stats,
+        output_path,
+        on_encode_progress,
+    )
 }
 
 /// Path-oriented entrypoint that writes final archive bytes directly to disk.
@@ -199,18 +308,111 @@ pub fn slice_with_progress_v3_to_path(
     let requires_png_layers = encoder.requires_png_layers();
     let requires_raw_mask_layers = encoder.requires_raw_mask_layers();
 
+    if !requires_png_layers && requires_raw_mask_layers {
+        if let Some(mut stream_encoder) = encoder.create_raw_mask_stream_encoder(job)? {
+            let total_start = std::time::Instant::now();
+            let job_total_layers = job.total_layers;
+            let progress_total = job_total_layers.saturating_add(1);
+            let mut raw_mask_sink = |layer_index: u32, raw_mask: Vec<u8>| {
+                stream_encoder.consume_raw_mask_layer(layer_index, raw_mask)
+            };
+
+            let slicing_progress = on_progress.as_ref().map(|cb| {
+                let cb = cb.clone();
+                Arc::new(move |update: SliceProgressUpdateV3| {
+                    cb(SliceProgressUpdateV3 {
+                        done: update.done.min(job_total_layers),
+                        total: progress_total,
+                        phase: SliceProgressPhaseV3::Slicing,
+                    });
+                }) as ProgressCallbackV3
+            });
+
+            let (_rendered_layers, _layer_area_stats, mut perf) = slice_and_rasterize_v3(
+                job,
+                false,
+                requires_png_layers,
+                false,
+                Some(&mut raw_mask_sink),
+                slicing_progress,
+                cancel_flag,
+            )?;
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: job_total_layers,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            let encode_start = std::time::Instant::now();
+            stream_encoder.finalize_to_path(output_path)?;
+
+            if let Some(cb) = on_progress.as_ref() {
+                cb(SliceProgressUpdateV3 {
+                    done: progress_total,
+                    total: progress_total,
+                    phase: SliceProgressPhaseV3::Finalizing,
+                });
+            }
+
+            perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
+            perf.total_ns = total_start.elapsed().as_nanos() as u64;
+            perf.layers = job.total_layers;
+
+            return Ok(perf);
+        }
+    }
+
     let total_start = std::time::Instant::now();
     let (rendered_layers, layer_area_stats, mut perf) = slice_and_rasterize_v3(
         job,
         requires_area_stats,
         requires_png_layers,
         requires_raw_mask_layers,
-        on_progress,
+        None,
+        on_progress.clone(),
         cancel_flag,
     )?;
 
+    let encode_units = encoder
+        .estimate_encode_progress_units(&rendered_layers)
+        .max(1);
+    let progress_total = job.total_layers.saturating_add(encode_units);
+
+    let encode_progress = on_progress.as_ref().map(|cb| {
+        let cb = cb.clone();
+        move |done: u32, total: u32| {
+            let safe_total = total.max(1);
+            let clamped_done = done.min(safe_total);
+            let normalized =
+                ((clamped_done as u64) * (encode_units as u64) / (safe_total as u64)) as u32;
+            cb(SliceProgressUpdateV3 {
+                done: job.total_layers.saturating_add(normalized),
+                total: progress_total,
+                phase: SliceProgressPhaseV3::Encoding,
+            });
+        }
+    });
+
     let encode_start = std::time::Instant::now();
-    dispatch_encode_by_format_to_path(job, &rendered_layers, &layer_area_stats, output_path)?;
+    dispatch_encode_by_format_to_path(
+        job,
+        &rendered_layers,
+        &layer_area_stats,
+        output_path,
+        encode_progress.as_ref().map(|cb| cb as &dyn Fn(u32, u32)),
+    )?;
+
+    if let Some(cb) = on_progress.as_ref() {
+        cb(SliceProgressUpdateV3 {
+            done: progress_total,
+            total: progress_total,
+            phase: SliceProgressPhaseV3::Finalizing,
+        });
+    }
+
     perf.archive_encode_ns = encode_start.elapsed().as_nanos() as u64;
     perf.total_ns = total_start.elapsed().as_nanos() as u64;
     perf.layers = job.total_layers;

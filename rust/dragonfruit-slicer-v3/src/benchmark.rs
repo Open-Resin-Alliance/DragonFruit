@@ -124,6 +124,7 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
 
     let job = SliceJobV3 {
         output_format: output_format.to_string(),
+        format_version: None,
         source_width_px: cfg.source_width_px,
         source_height_px: cfg.source_height_px,
         width_px: cfg.output_width_px,
@@ -137,6 +138,7 @@ pub fn run_benchmark_v3(cfg: BenchmarkConfigV3) -> Result<BenchmarkResultV3, Sli
         container_compression_level: 2,
         anti_aliasing_level: "Off".to_string(),
         aa_on_supports: false,
+        minimum_aa_alpha_percent: 35.0,
         mirror_x: false,
         mirror_y: false,
         triangles_xyz: triangles,

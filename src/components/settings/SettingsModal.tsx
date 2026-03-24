@@ -65,6 +65,7 @@ import {
   saveSlicingPerformanceSettings,
   type SlicingPerformanceSettings,
 } from '@/components/settings/performancePreferences';
+import { outputFormatUsesPngLayers } from '@/features/slicing/formats/registry';
 import type { SelectionHighlightMode } from '@/components/selection';
 import {
   clearSavedFloatingLayout,
@@ -130,6 +131,7 @@ type SettingsModalProps = {
   onDebugPrimitivesPanelVisibleChange: (value: boolean) => void;
   view3dSettings: View3DSettings;
   onView3dSettingsChange: (settings: View3DSettings) => void;
+  activeOutputFormat?: string | null;
 };
 
 type SettingsTabKey = 'general' | 'camera' | 'workspaces' | 'mesh' | 'performance' | 'spacemouse' | 'plugins' | 'backups' | 'ui' | 'hotkeys' | 'about';
@@ -176,6 +178,7 @@ export function SettingsModal({
   onDebugPrimitivesPanelVisibleChange,
   view3dSettings,
   onView3dSettingsChange,
+  activeOutputFormat,
 }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<SettingsTabKey>('general');
 
@@ -208,6 +211,7 @@ export function SettingsModal({
   const [draftWorkspaceCameraDefaults, setDraftWorkspaceCameraDefaults] = useState<WorkspaceCameraDefaults>(() => getSavedWorkspaceCameraSettings().defaults);
   const [draftView3dSettings, setDraftView3dSettings] = useState<View3DSettings>(() => view3dSettings ?? getSavedView3DSettings());
   const [draftSlicingPerformanceSettings, setDraftSlicingPerformanceSettings] = useState<SlicingPerformanceSettings>(() => getSavedSlicingPerformanceSettings());
+  const showPngCompressionControls = outputFormatUsesPngLayers(activeOutputFormat ?? undefined);
 
   const resetDraftFromProps = React.useCallback(() => {
     setDraftMeshColor(meshColor);
@@ -753,6 +757,7 @@ export function SettingsModal({
                 <PerformanceSettingsTab
                   settings={draftSlicingPerformanceSettings}
                   onChange={setDraftSlicingPerformanceSettings}
+                  showPngCompressionControls={showPngCompressionControls}
                 />
               )}
               {activeTab === 'ui' && (

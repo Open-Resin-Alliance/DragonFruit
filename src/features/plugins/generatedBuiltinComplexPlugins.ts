@@ -3,13 +3,19 @@
  */
 import type { ComplexPluginDefinition } from '@/features/plugins/complexPluginContracts';
 import athenaDefinition from '../../../plugins/athena/pluginDefinition';
+import ctbDefinition from '../../../plugins/ctb/pluginDefinition';
+import sdcp_v3Definition from '../../../plugins/sdcp-v3/pluginDefinition';
 
 export const GENERATED_BUILTIN_COMPLEX_PLUGIN_ID_ALLOWLIST = Object.freeze([
-  'athena'
+  'athena',
+  'ctb',
+  'sdcp-v3'
 ]) as readonly string[];
 
-export const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256 = 'ce36f29e59f3e7776bd0e87b363c61874a07b74da1eeee186a213e07906acd8b' as const;
+export const GENERATED_COMPLEX_PLUGIN_ALLOWLIST_SHA256 = '35e5acebbafdb1d054e3b59789b9e7690b22893e8c7f911dc1710efb776c1dee' as const;
 
 export const GENERATED_BUILTIN_COMPLEX_PLUGIN_DEFINITIONS: ComplexPluginDefinition[] = [
-  athenaDefinition
+  athenaDefinition,
+  ctbDefinition,
+  sdcp_v3Definition
 ];

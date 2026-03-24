@@ -3,6 +3,7 @@
  */
 import type { PluginNetworkOperationHandler } from '@/features/plugins/networkPluginRegistry';
 import { handlePluginNetworkOperation as athena_network_handler } from '../../../plugins/athena/network/networkHandlers';
+import { handlePluginNetworkOperation as sdcp_v3_network_handler } from '../../../plugins/sdcp-v3/network/networkHandlers';
 
 export type GeneratedBuiltinComplexPluginNetworkHandler = {
   pluginId: string;
@@ -10,5 +11,6 @@ export type GeneratedBuiltinComplexPluginNetworkHandler = {
 };
 
 export const GENERATED_BUILTIN_COMPLEX_PLUGIN_NETWORK_HANDLERS: GeneratedBuiltinComplexPluginNetworkHandler[] = [
-  { pluginId: 'athena', handler: athena_network_handler }
+  { pluginId: 'athena', handler: athena_network_handler },
+  { pluginId: 'sdcp-v3', handler: sdcp_v3_network_handler }
 ];

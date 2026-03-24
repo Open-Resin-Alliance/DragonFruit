@@ -1,4 +1,5 @@
-import type { NanoDlpAdvancedSectionDef } from './types';
+import nanoDlpMaterialSettings from './materialSettings.json';
+import type { NanoDlpAdvancedSectionDef, NanoDlpRemoteMaterialSettingsSchema } from './types';
 
 /**
  * Athena NanoDLP advanced-field classification module.
@@ -15,89 +16,19 @@ import type { NanoDlpAdvancedSectionDef } from './types';
  * Purpose: avoid exposing noisy metadata keys as editable controls while still
  * admitting printer-specific advanced tuning parameters.
  */
-const NANODLP_ADVANCED_ALLOWED_KEYWORDS = [
-  'slowlift',
-  'slowretract',
-  'liftspeed',
-  'retractspeed',
-  'antialias',
-  'elephant',
-  'middle',
-  'multicure',
-  'adapt',
-  'peel',
-  'crash',
-  'dynamicwait',
-  'resinlevel',
-  'heater',
-  'temperature',
-  'pw',
-  'pwm',
-  'detect',
-  'slope',
-  'threshold',
-  'mode',
-  'gap',
-  'pass',
-  'fss',
-  'hatch',
-  'erode',
-  'autolevel',
-  'flow',
-  'cd',
-  'efm',
-];
+const schema = nanoDlpMaterialSettings as NanoDlpRemoteMaterialSettingsSchema;
+
+const NANODLP_ADVANCED_ALLOWED_KEYWORDS = schema.advancedAllowedKeywords;
 
 /**
  * Metadata keys that should never appear as editable controls.
  */
-const NANODLP_NON_EDITABLE_META_KEYS = new Set([
-  'id',
-  'profileid',
-  'profile_id',
-  'name',
-  'resinname',
-  'title',
-  'desc',
-  'description',
-  'path',
-  'file',
-  'price',
-  'brand',
-  'type',
-  'locked',
-]);
+const NANODLP_NON_EDITABLE_META_KEYS = new Set(schema.nonEditableMetaKeys);
 
 /**
  * Named section buckets for organizing advanced controls in the modal UI.
  */
-export const NANODLP_ADVANCED_SECTIONS: NanoDlpAdvancedSectionDef[] = [
-  {
-    id: 'speed',
-    title: 'Lift / Retract Speeds',
-    keywords: ['lift', 'retract', 'speed', 'slow', 'full'],
-  },
-  {
-    id: 'detection',
-    title: 'Detection & Safety',
-    keywords: ['detect', 'crash', 'peel', 'resinlevel', 'threshold', 'slope', 'mode', 'fss', 'autolevel'],
-  },
-  {
-    id: 'slicer',
-    title: 'Slicer & Quality',
-    keywords: ['antialias', 'adapt', 'multicure', 'gap', 'pass', 'middle', 'hatch', 'elephant', 'erode'],
-  },
-  {
-    id: 'timing',
-    title: 'Advanced Timing',
-    keywords: ['dynamicwait', 'wait', 'time', 'exposure', 'flow'],
-  },
-  {
-    id: 'thermal',
-    title: 'Thermal / Heater',
-    keywords: ['heater', 'temperature', 'temp'],
-  },
-];
+export const NANODLP_ADVANCED_SECTIONS: NanoDlpAdvancedSectionDef[] = schema.advancedSections;
 
 /**
  * Decide whether a raw profile key should be treated as an editable advanced
