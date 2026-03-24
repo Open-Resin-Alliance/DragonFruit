@@ -933,6 +933,8 @@ export function ProfileSettingsModal({
   const selectedPrinterFleetCount = managedNetworkPrinters.length;
   const canShowFleetRailMode = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
   const shouldRenderFleetRail = selectedPrinterSupportsNetworkSettings && printerRailViewMode === 'fleet';
+  const printerRailEntryCount = shouldRenderFleetRail ? managedNetworkPrinters.length : profileState.printerProfiles.length;
+  const shouldConstrainPrinterRailHeight = printerRailEntryCount > 8;
   const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 1 ? 'Manage Fleet' : 'Network Settings';
   const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
   const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
@@ -2563,7 +2565,9 @@ export function ProfileSettingsModal({
             </div>
 
             <div className="p-3">
-              <div className="flex gap-2 overflow-x-auto pb-1">
+              <div
+                className={`grid grid-cols-5 gap-2.5 pb-1 ${shouldConstrainPrinterRailHeight ? 'max-h-[392px] overflow-y-auto pr-1' : ''}`}
+              >
                 {shouldRenderFleetRail
                   ? managedNetworkPrinters.map((device) => {
                     const active = selectedPrinter?.activeNetworkDeviceId === device.id;
@@ -2587,7 +2591,7 @@ export function ProfileSettingsModal({
                           handleSelectManagedPrinter(device);
                           setIsEditingPrinter(true);
                         }}
-                        className="shrink-0 w-[236px] rounded-xl border p-2.5 text-left transition-all duration-150"
+                        className="min-w-0 w-full rounded-xl border p-2 text-left transition-all duration-150"
                         style={active
                           ? {
                               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
@@ -2599,7 +2603,7 @@ export function ProfileSettingsModal({
                             }}
                       >
                         <div
-                          className="h-[148px] rounded-lg border p-2.5 relative flex flex-col justify-between"
+                          className="h-[120px] rounded-lg border p-2 relative flex flex-col justify-between"
                           style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}
                         >
                           {device.imageDataUrl && (
@@ -2694,13 +2698,12 @@ export function ProfileSettingsModal({
                   const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
                     ? `${bitDepthBits} Bit`
                     : null;
-                  const cardWidth = 'w-[236px]';
-                  const imageHeight = 'h-[148px]';
+                  const imageHeight = 'h-[120px]';
 
                   return (
                     <div
                       key={printer.id}
-                      className={`shrink-0 ${cardWidth} rounded-xl border p-2.5 transition-all duration-150`}
+                      className="min-w-0 w-full rounded-xl border p-2 transition-all duration-150"
                       onDoubleClick={() => {
                         handlePickPrinter(printer.id);
                         setIsEditingPrinter(true);
@@ -2772,14 +2775,14 @@ export function ProfileSettingsModal({
                         </div>
                       </button>
 
-                      <div className="mt-2.5 flex items-center justify-between gap-1.5">
+                      <div className="mt-2 flex items-center justify-between gap-1.5">
                         <button
                           type="button"
                           onClick={() => handlePickPrinter(printer.id)}
                           className="min-w-0 flex-1 text-left"
                         >
                           <div className="flex items-center gap-1.5">
-                            <div className="text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
+                            <div className="text-[11px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
                               {printer.name}
                             </div>
                             {bitDepthLabel && (
