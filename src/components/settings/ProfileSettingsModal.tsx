@@ -2583,6 +2583,10 @@ export function ProfileSettingsModal({
                         key={device.id}
                         type="button"
                         onClick={() => handleSelectManagedPrinter(device)}
+                        onDoubleClick={() => {
+                          handleSelectManagedPrinter(device);
+                          setIsEditingPrinter(true);
+                        }}
                         className="shrink-0 w-[236px] rounded-xl border p-2.5 text-left transition-all duration-150"
                         style={active
                           ? {
@@ -2697,6 +2701,10 @@ export function ProfileSettingsModal({
                     <div
                       key={printer.id}
                       className={`shrink-0 ${cardWidth} rounded-xl border p-2.5 transition-all duration-150`}
+                      onDoubleClick={() => {
+                        handlePickPrinter(printer.id);
+                        setIsEditingPrinter(true);
+                      }}
                       style={active
                         ? {
                             borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
