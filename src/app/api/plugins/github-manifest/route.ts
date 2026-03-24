@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
-import { normalizeOutputFormat } from '@/features/profiles/outputFormatUtils';
+import { normalizeFormatVersion, normalizeOutputFormat, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
 
 type GithubRepoRef = {
   owner: string;
@@ -43,6 +43,13 @@ function parseOutputFormat(value: unknown): string {
   return normalizeOutputFormat(value);
 }
 
+function parseNetworkSupport(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return normalized;
+}
+
 function sanitizeNumber(value: unknown, fallback: number, min: number, max: number): number {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -59,9 +66,15 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
 
   return {
     presetId,
+    profileVersion: Number.isFinite(Number((value as any).profileVersion))
+      ? Math.max(1, Math.round(Number((value as any).profileVersion)))
+      : undefined,
     manufacturer,
+    family: boundedString(value.family, 80) || undefined,
     name,
     imageAssetPath: resolveAssetPath(baseRawDir, typeof value.imageAssetPath === 'string' ? value.imageAssetPath : undefined),
+    antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
+    hasCamera: typeof value.hasCamera === 'boolean' ? value.hasCamera : undefined,
     buildVolumeMm: {
       width: sanitizeNumber((value as any).buildVolumeMm?.width, 143, 1, 10000),
       depth: sanitizeNumber((value as any).buildVolumeMm?.depth, 89, 1, 10000),
@@ -71,6 +84,8 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
       resolutionX: Math.round(sanitizeNumber((value as any).display?.resolutionX, 2560, 1, 200000)),
       resolutionY: Math.round(sanitizeNumber((value as any).display?.resolutionY, 1620, 1, 200000)),
       outputFormat: parseOutputFormat((value as any).display?.outputFormat),
+      formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
+      settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,
@@ -78,9 +93,8 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
         ? (value as any).display.mirrorY
         : undefined,
     },
-    // GitHub-installed plugins are simple/data-only manifests.
-    // Complex runtime network capabilities are compile-time only.
-    networkSupport: undefined,
+    networkSupport: parseNetworkSupport(value.networkSupport),
+    networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
   };
 }
 
@@ -350,6 +364,14 @@ function toRawGithubUrl(owner: string, repo: string, branch: string, path: strin
   return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
 }
 
+function sanitizeRelativeManifestPath(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
+  const normalized = input.trim().replace(/^\/+/, '');
+  if (!normalized) return null;
+  if (normalized.includes('..') || normalized.includes('\\') || normalized.length > 240) return null;
+  return normalized;
+}
+
 function resolveAssetPath(baseRawDir: string, inputPath?: string): string | undefined {
   if (!inputPath) return undefined;
   const trimmed = inputPath.trim();
@@ -433,10 +455,59 @@ async function inlinePrinterPresetAssets<T extends { imageAssetPath?: string }>(
 async function sanitizeManifest(manifest: any, baseRawDir: string) {
   const value = (manifest ?? {}) as any;
 
-  const sanitizedPrinterPresets = Array.isArray(value.printerPresets)
-    ? value.printerPresets
+  const inlinePrinterPresetEntries: Array<{ preset: unknown; baseRawDir: string }> = Array.isArray(value.printerPresets)
+    ? value.printerPresets.map((preset: unknown) => ({ preset, baseRawDir }))
+    : [];
+
+  const presetPathEntries = Array.isArray(value.printerPresetPaths)
+    ? value.printerPresetPaths
+        .map((entry: unknown) => sanitizeRelativeManifestPath(entry))
+        .filter((entry: string | null): entry is string => entry !== null)
+        .slice(0, 64)
+    : [];
+
+  const fetchedPrinterPresetEntries = await Promise.all(
+    presetPathEntries.map(async (relativePath) => {
+      const rawUrl = `${baseRawDir}/${relativePath}`;
+      const sourceBaseRawDir = rawUrl.includes('/')
+        ? rawUrl.slice(0, rawUrl.lastIndexOf('/'))
+        : baseRawDir;
+      try {
+        const response = await fetch(rawUrl, {
+          headers: {
+            Accept: 'application/json',
+          },
+          cache: 'no-store',
+          signal: AbortSignal.timeout(9000),
+        });
+
+        if (!response.ok) return [] as Array<{ preset: unknown; baseRawDir: string }>;
+        const payload = await response.json().catch(() => null) as unknown;
+
+        if (Array.isArray(payload)) {
+          return payload.map((preset: unknown) => ({ preset, baseRawDir: sourceBaseRawDir }));
+        }
+        if (payload && typeof payload === 'object' && Array.isArray((payload as any).printerPresets)) {
+          return ((payload as any).printerPresets as unknown[])
+            .map((preset: unknown) => ({ preset, baseRawDir: sourceBaseRawDir }));
+        }
+      } catch {
+        // Ignore preset-source fetch failures and continue with remaining sources.
+      }
+
+      return [] as Array<{ preset: unknown; baseRawDir: string }>;
+    }),
+  );
+
+  const combinedPrinterPresetEntries = [
+    ...inlinePrinterPresetEntries,
+    ...fetchedPrinterPresetEntries.flat(),
+  ];
+
+  const sanitizedPrinterPresets = Array.isArray(combinedPrinterPresetEntries)
+    ? combinedPrinterPresetEntries
       .slice(0, MAX_PRINTER_PRESETS)
-      .map((preset: unknown) => sanitizePrinterPreset(preset, baseRawDir))
+      .map((entry) => sanitizePrinterPreset(entry.preset, entry.baseRawDir))
       .filter((preset: ReturnType<typeof sanitizePrinterPreset>): preset is NonNullable<ReturnType<typeof sanitizePrinterPreset>> => preset !== null)
     : [];
 
