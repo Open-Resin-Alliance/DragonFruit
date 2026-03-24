@@ -978,6 +978,7 @@ export default function Home() {
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorWebcamSectionRef = React.useRef<HTMLElement | null>(null);
   const monitorReachabilityInconclusiveCountsRef = React.useRef<Record<string, number>>({});
+  const topbarPrinterOfflineCacheByDeviceIdRef = React.useRef<Record<string, boolean>>({});
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
     subscribeToPrinterReachability,
@@ -3396,13 +3397,30 @@ export default function Home() {
       || selectedPrinterIsPauseTransition,
     );
   }, [selectedPrinterIsPauseTransition, selectedPrinterMonitorSnapshot?.isPaused]);
+  React.useEffect(() => {
+    const selectedDeviceId = selectedKnownPrinterDevice?.id;
+    if (!selectedDeviceId) return;
+
+    const selectedReachability = printerReachabilityByDeviceId[selectedDeviceId];
+    if (selectedReachability === false || selectedKnownPrinterDevice.connected !== true) {
+      topbarPrinterOfflineCacheByDeviceIdRef.current[selectedDeviceId] = true;
+      return;
+    }
+
+    if (selectedReachability === true && selectedKnownPrinterDevice.connected === true) {
+      topbarPrinterOfflineCacheByDeviceIdRef.current[selectedDeviceId] = false;
+    }
+  }, [printerReachabilityByDeviceId, selectedKnownPrinterDevice]);
   const isTopbarSelectedPrinterOffline = React.useMemo(() => {
     const selectedHost = (selectedKnownPrinterDevice?.ipAddress || activePrinterProfile?.network?.ipAddress || '').trim();
     if (!selectedHost) return false;
 
     if (selectedKnownPrinterDevice) {
-      if (printerReachabilityByDeviceId[selectedKnownPrinterDevice.id] === false) return true;
-      return selectedKnownPrinterDevice.connected !== true;
+      const selectedReachability = printerReachabilityByDeviceId[selectedKnownPrinterDevice.id];
+      if (selectedReachability === false) return true;
+      if (selectedKnownPrinterDevice.connected !== true) return true;
+      if (selectedReachability === true) return false;
+      return topbarPrinterOfflineCacheByDeviceIdRef.current[selectedKnownPrinterDevice.id] === true;
     }
 
     return activePrinterProfile?.networkConnection?.connected === false;
@@ -3638,7 +3656,11 @@ export default function Home() {
       }
 
       monitorReachabilityInconclusiveCountsRef.current = nextInconclusiveCounts;
-      setPrinterReachabilityMap(nextMap);
+      const mergedMap: Record<string, boolean | null> = {
+        ...previousReachability,
+        ...nextMap,
+      };
+      setPrinterReachabilityMap(mergedMap);
     };
 
     void probeAll();
