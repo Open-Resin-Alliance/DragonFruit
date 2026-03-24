@@ -3421,7 +3421,7 @@ export default function Home() {
     }
 
     if (monitoringDevice) {
-      if (printerReachabilityByDeviceId[monitoringDevice.id] === false) return true;
+      if (printerReachabilityByDeviceId[monitoringDevice.id] !== true) return true;
       return monitoringDevice.connected !== true;
     }
 
@@ -3550,12 +3550,12 @@ export default function Home() {
       return;
     }
 
-    const connectedFleet = (activePrinterProfile?.networkFleet ?? []).filter((device) => {
+    const probeFleet = (activePrinterProfile?.networkFleet ?? []).filter((device) => {
       const host = (device.ipAddress || '').trim();
-      return device.connected && host.length > 0;
+      return host.length > 0;
     });
 
-    if (connectedFleet.length === 0) {
+    if (probeFleet.length === 0) {
       monitorReachabilityInconclusiveCountsRef.current = {};
       setPrinterReachabilityMap({});
       return;
@@ -3586,7 +3586,25 @@ export default function Home() {
             ipAddress: host,
             port,
           })
-            .then((response) => (response.ok ? true : false))
+            .then(async (response) => {
+              if (!response.ok) return false;
+
+              const payload = await response.json().catch(() => null) as any;
+              if (payload && typeof payload.ok === 'boolean') {
+                return payload.ok === true;
+              }
+
+              try {
+                const parsed = printingMonitoringAdapter.parseStatusPayload(payload, `reachability:${host}:${port}`);
+                if (parsed && typeof parsed.connected === 'boolean') {
+                  return parsed.connected;
+                }
+              } catch {
+                // Ignore parse errors and fall back to HTTP success semantics.
+              }
+
+              return true;
+            })
             .catch(() => null),
           new Promise<null>((resolve) => {
             window.setTimeout(() => resolve(null), REACHABILITY_PROBE_TIMEOUT_MS);
@@ -3601,7 +3619,7 @@ export default function Home() {
 
     const probeAll = async () => {
       const entries = await Promise.all(
-        connectedFleet.map(async (device) => {
+        probeFleet.map(async (device) => {
           const reachable = await probeWithTimeout(device);
           return [device.id, reachable] as const;
         }),
@@ -3613,6 +3631,7 @@ export default function Home() {
       const previousInconclusiveCounts = monitorReachabilityInconclusiveCountsRef.current;
       const nextInconclusiveCounts: Record<string, number> = {};
       const nextMap: Record<string, boolean | null> = {};
+      const maxUnknownPolls = Math.max(1, printingMonitorReachabilityMaxInconclusivePolls ?? 1);
       for (const [id, reachable] of entries) {
         if (reachable === true) {
           nextMap[id] = true;
@@ -3629,12 +3648,8 @@ export default function Home() {
         const unknownCount = (previousInconclusiveCounts[id] ?? 0) + 1;
         nextInconclusiveCounts[id] = unknownCount;
 
-        if (printingMonitorReachabilityMaxInconclusivePolls != null && unknownCount >= printingMonitorReachabilityMaxInconclusivePolls) {
-          nextMap[id] = false;
-          continue;
-        }
-
-        nextMap[id] = previousReachability[id] ?? null;
+        const keepPreviousOnline = previousReachability[id] === true && unknownCount < maxUnknownPolls;
+        nextMap[id] = keepPreviousOnline ? true : false;
       }
 
       monitorReachabilityInconclusiveCountsRef.current = nextInconclusiveCounts;
@@ -12552,7 +12567,7 @@ export default function Home() {
                         Printer is responding slowly
                       </h3>
                       <p className="mt-2 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                        Keeping this printer online while it catches up. We’ll only mark it offline if it stays unresponsive for about {printingMonitorSlowResponseGraceRemainingSec}s.
+                        We will keep trying to reconnect for another {printingMonitorSlowResponseGraceRemainingSec}s. If reconnection fails, please verify the network configuration and confirm the printer is online.
                       </p>
                       <div className="mt-4 mx-auto w-[78%]">
                         <div
