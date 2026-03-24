@@ -4435,13 +4435,7 @@ function PluginLocalMaterialSettingsSections({
     return [{ id: 'local', title: adapter.displayName ?? 'Local Settings', order: 0 }];
   }, [adapter.displayName, adapter.tabs]);
 
-  const defaultTabId = React.useMemo(() => {
-    if (settingsMode) {
-      const modeMatch = tabs.find((tab) => tab.id.trim().toLowerCase() === settingsMode.trim().toLowerCase());
-      if (modeMatch) return modeMatch.id;
-    }
-    return tabs[0]?.id ?? 'local';
-  }, [settingsMode, tabs]);
+  const defaultTabId = React.useMemo(() => tabs[0]?.id ?? 'local', [tabs]);
 
   const [activeTabId, setActiveTabId] = React.useState(defaultTabId);
 
