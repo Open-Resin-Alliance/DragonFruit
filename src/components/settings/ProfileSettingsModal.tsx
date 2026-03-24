@@ -2696,7 +2696,12 @@ export function ProfileSettingsModal({
                 <button
                   type="button"
                   onClick={handleAddPrinter}
-                  className="ui-button ui-button-primary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
+                  className="ui-button ui-button-secondary mt-5 !h-10 !px-4 !py-0 text-sm inline-flex items-center justify-center gap-1.5 rounded-md"
+                  style={{
+                    color: 'var(--accent-secondary)',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                  }}
                 >
                   <Plus className="w-4 h-4" />
                   Printer Library
@@ -2762,11 +2767,17 @@ export function ProfileSettingsModal({
                       type="button"
                       onClick={handleAddPrinter}
                       className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
-                      style={{
-                        color: 'var(--text-strong)',
-                        borderColor: 'var(--border-subtle)',
-                        background: 'var(--surface-1)',
-                      }}
+                      style={shouldShowFleetSwitchAction
+                        ? {
+                            color: 'var(--accent-secondary)',
+                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                          }
+                        : {
+                            color: 'var(--accent-secondary)',
+                            borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                            background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
+                          }}
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Printer Library
@@ -2987,7 +2998,7 @@ export function ProfileSettingsModal({
                         title={fleetCount > 1 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
                       >
                         {fleetCount > 1 ? (
-                          <span className="inline-flex h-full w-full items-center justify-center text-[13px] font-bold leading-none tabular-nums">{fleetCount}</span>
+                          <span className="grid h-full w-full place-items-center text-[12px] font-semibold leading-none tabular-nums">{fleetCount}</span>
                         ) : (
                           <Plus className="w-3.5 h-3.5" />
                         )}
