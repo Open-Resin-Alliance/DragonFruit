@@ -328,6 +328,7 @@ export function ProfileSettingsModal({
   const [selectedResinFamily, setSelectedResinFamily] = React.useState<MaterialProfile['resinFamily'] | null>(null);
   const [isCreateMaterialOpen, setIsCreateMaterialOpen] = React.useState(false);
   const [isMaterialEditorOpen, setIsMaterialEditorOpen] = React.useState(false);
+  const [materialEditorTab, setMaterialEditorTab] = React.useState<string>('meta');
   const [showOfficialLockDialog, setShowOfficialLockDialog] = React.useState(false);
   const [officialLockedProfileId, setOfficialLockedProfileId] = React.useState<string | null>(null);
   const [isNetworkSettingsOpen, setIsNetworkSettingsOpen] = React.useState(false);
@@ -514,6 +515,19 @@ export function ProfileSettingsModal({
   const usePluginLocalSettingsAsReplacement = Boolean(
     selectedLocalMaterialSettingsAdapter?.replacesDefaultMaterialSettings,
   );
+
+  const replacementMaterialEditorTabs = React.useMemo(() => {
+    if (!usePluginLocalSettingsAsReplacement || !selectedLocalMaterialSettingsAdapter) return [] as Array<{ id: string; title: string; order: number }>;
+    const declared = [...(selectedLocalMaterialSettingsAdapter.tabs ?? [])]
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .map((tab, index) => ({ id: tab.id, title: tab.title, order: tab.order ?? (index + 1) * 10 }));
+    return [...declared, { id: 'meta', title: 'Meta', order: 1000 }];
+  }, [selectedLocalMaterialSettingsAdapter, usePluginLocalSettingsAsReplacement]);
+
+  const replacementMaterialEditorDefaultTab = React.useMemo(() => {
+    if (!usePluginLocalSettingsAsReplacement) return 'meta';
+    return replacementMaterialEditorTabs[0]?.id ?? 'meta';
+  }, [replacementMaterialEditorTabs, selectedResolvedSettingsMode, usePluginLocalSettingsAsReplacement]);
 
   const replacementMaterialModalLabel = React.useMemo(() => {
     if (!selectedPrinter || !usePluginLocalSettingsAsReplacement) return null;
@@ -2041,6 +2055,7 @@ export function ProfileSettingsModal({
 
   React.useEffect(() => {
     if (!isMaterialEditorOpen || !selectedMaterial) return;
+    setMaterialEditorTab(replacementMaterialEditorDefaultTab);
     setEditMaterialDraft({
       name: selectedMaterial.name,
       brand: selectedMaterial.brand,
@@ -2071,7 +2086,7 @@ export function ProfileSettingsModal({
         ),
       );
     }
-  }, [isMaterialEditorOpen, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
+  }, [isMaterialEditorOpen, replacementMaterialEditorDefaultTab, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
 
   const handlePickPrinter = React.useCallback((printerId: string) => {
     setSelectedPrinterId(printerId);
@@ -2102,6 +2117,7 @@ export function ProfileSettingsModal({
 
   const handleAddMaterial = React.useCallback(() => {
     if (!selectedPrinter) return;
+    setMaterialEditorTab('meta');
     setNewMaterialDraft({
       name: `Material ${printerMaterials.length + 1}`,
       brand: selectedManufacturerValue ?? 'Default',
@@ -2126,7 +2142,7 @@ export function ProfileSettingsModal({
       ),
     );
     setIsCreateMaterialOpen(true);
-  }, [printerMaterials.length, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue, selectedResolvedSettingsMode]);
+  }, [printerMaterials.length, replacementMaterialEditorDefaultTab, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue, selectedResolvedSettingsMode]);
 
   const handleCreateMaterial = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -3627,20 +3643,32 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
-                {usePluginLocalSettingsAsReplacement && (
-                  <MaterialProfileIdentitySection draft={editMaterialDraft} onChange={setEditMaterialDraft} />
+                {usePluginLocalSettingsAsReplacement ? (
+                  <ReplacementMaterialEditorShell
+                    tabs={replacementMaterialEditorTabs}
+                    activeTabId={materialEditorTab}
+                    onActiveTabChange={setMaterialEditorTab}
+                    draft={editMaterialDraft}
+                    onDraftChange={setEditMaterialDraft}
+                    outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
+                    settingsMode={selectedResolvedSettingsMode}
+                    adapter={selectedLocalMaterialSettingsAdapter}
+                    localSettingsByOutput={editMaterialLocalSettingsByOutput}
+                    onLocalSettingsByOutputChange={setEditMaterialLocalSettingsByOutput}
+                  />
+                ) : (
+                  <>
+                    <MaterialProfileFormSections draft={editMaterialDraft} onChange={setEditMaterialDraft} />
+                    <PluginLocalMaterialSettingsSections
+                      outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
+                      settingsMode={selectedResolvedSettingsMode}
+                      adapter={selectedLocalMaterialSettingsAdapter}
+                      localSettingsByOutput={editMaterialLocalSettingsByOutput}
+                      onChange={setEditMaterialLocalSettingsByOutput}
+                      replacementMode={usePluginLocalSettingsAsReplacement}
+                    />
+                  </>
                 )}
-                {!usePluginLocalSettingsAsReplacement && (
-                  <MaterialProfileFormSections draft={editMaterialDraft} onChange={setEditMaterialDraft} />
-                )}
-                <PluginLocalMaterialSettingsSections
-                  outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
-                  settingsMode={selectedResolvedSettingsMode}
-                  adapter={selectedLocalMaterialSettingsAdapter}
-                  localSettingsByOutput={editMaterialLocalSettingsByOutput}
-                  onChange={setEditMaterialLocalSettingsByOutput}
-                  replacementMode={usePluginLocalSettingsAsReplacement}
-                />
               </div>
 
               <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -4022,20 +4050,32 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="p-3 space-y-3 overflow-y-auto custom-scrollbar flex-1">
-                {usePluginLocalSettingsAsReplacement && (
-                  <MaterialProfileIdentitySection draft={newMaterialDraft} onChange={setNewMaterialDraft} />
+                {usePluginLocalSettingsAsReplacement ? (
+                  <ReplacementMaterialEditorShell
+                    tabs={replacementMaterialEditorTabs}
+                    activeTabId={materialEditorTab}
+                    onActiveTabChange={setMaterialEditorTab}
+                    draft={newMaterialDraft}
+                    onDraftChange={setNewMaterialDraft}
+                    outputFormat={selectedPrinter.display.outputFormat}
+                    settingsMode={selectedResolvedSettingsMode}
+                    adapter={selectedLocalMaterialSettingsAdapter}
+                    localSettingsByOutput={newMaterialLocalSettingsByOutput}
+                    onLocalSettingsByOutputChange={setNewMaterialLocalSettingsByOutput}
+                  />
+                ) : (
+                  <>
+                    <MaterialProfileFormSections draft={newMaterialDraft} onChange={setNewMaterialDraft} />
+                    <PluginLocalMaterialSettingsSections
+                      outputFormat={selectedPrinter.display.outputFormat}
+                      settingsMode={selectedResolvedSettingsMode}
+                      adapter={selectedLocalMaterialSettingsAdapter}
+                      localSettingsByOutput={newMaterialLocalSettingsByOutput}
+                      onChange={setNewMaterialLocalSettingsByOutput}
+                      replacementMode={usePluginLocalSettingsAsReplacement}
+                    />
+                  </>
                 )}
-                {!usePluginLocalSettingsAsReplacement && (
-                  <MaterialProfileFormSections draft={newMaterialDraft} onChange={setNewMaterialDraft} />
-                )}
-                <PluginLocalMaterialSettingsSections
-                  outputFormat={selectedPrinter.display.outputFormat}
-                  settingsMode={selectedResolvedSettingsMode}
-                  adapter={selectedLocalMaterialSettingsAdapter}
-                  localSettingsByOutput={newMaterialLocalSettingsByOutput}
-                  onChange={setNewMaterialLocalSettingsByOutput}
-                  replacementMode={usePluginLocalSettingsAsReplacement}
-                />
               </div>
 
               <div className="px-3 py-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -4487,6 +4527,9 @@ type PluginLocalMaterialSettingsSectionsProps = {
   localSettingsByOutput: LocalSettingsByOutputDraft;
   onChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
   replacementMode?: boolean;
+  activeTabId?: string;
+  onActiveTabChange?: (tabId: string) => void;
+  showTabBar?: boolean;
 };
 
 function PluginLocalMaterialSettingsSections({
@@ -4496,6 +4539,9 @@ function PluginLocalMaterialSettingsSections({
   localSettingsByOutput,
   onChange,
   replacementMode = false,
+  activeTabId: controlledActiveTabId,
+  onActiveTabChange,
+  showTabBar = true,
 }: PluginLocalMaterialSettingsSectionsProps) {
   if (!adapter || adapter.fields.length === 0) return null;
 
@@ -4509,7 +4555,9 @@ function PluginLocalMaterialSettingsSections({
 
   const defaultTabId = React.useMemo(() => tabs[0]?.id ?? 'local', [tabs]);
 
-  const [activeTabId, setActiveTabId] = React.useState(defaultTabId);
+  const [uncontrolledActiveTabId, setUncontrolledActiveTabId] = React.useState(defaultTabId);
+  const activeTabId = controlledActiveTabId ?? uncontrolledActiveTabId;
+  const setActiveTabId = onActiveTabChange ?? setUncontrolledActiveTabId;
 
   React.useEffect(() => {
     if (!tabs.some((tab) => tab.id === activeTabId)) {
@@ -4593,7 +4641,7 @@ function PluginLocalMaterialSettingsSections({
         </div>
       )}
 
-      {tabs.length > 1 && (
+      {showTabBar && tabs.length > 1 && (
         <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
           {tabs.map((tab) => {
             const active = tab.id === activeTabId;
@@ -4815,6 +4863,103 @@ function PluginLocalMaterialSettingsSections({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+type ReplacementMaterialEditorShellProps = {
+  tabs: Array<{ id: string; title: string; order: number }>;
+  activeTabId: string;
+  onActiveTabChange: (tabId: string) => void;
+  draft: MaterialDraft;
+  onDraftChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
+  outputFormat: string;
+  settingsMode?: string;
+  adapter: ReturnType<typeof getProfileLocalMaterialSettingsAdapter> | null;
+  localSettingsByOutput: LocalSettingsByOutputDraft;
+  onLocalSettingsByOutputChange: React.Dispatch<React.SetStateAction<LocalSettingsByOutputDraft>>;
+};
+
+function ReplacementMaterialEditorShell({
+  tabs,
+  activeTabId,
+  onActiveTabChange,
+  draft,
+  onDraftChange,
+  outputFormat,
+  settingsMode,
+  adapter,
+  localSettingsByOutput,
+  onLocalSettingsByOutputChange,
+}: ReplacementMaterialEditorShellProps) {
+  const measureRootRef = React.useRef<HTMLDivElement | null>(null);
+  const [minBodyHeight, setMinBodyHeight] = React.useState<number | null>(null);
+
+  const renderTabBody = React.useCallback((tabId: string) => {
+    if (tabId === 'meta') {
+      return <MaterialProfileIdentitySection draft={draft} onChange={onDraftChange} />;
+    }
+
+    return (
+      <PluginLocalMaterialSettingsSections
+        outputFormat={outputFormat}
+        settingsMode={settingsMode}
+        adapter={adapter}
+        localSettingsByOutput={localSettingsByOutput}
+        onChange={onLocalSettingsByOutputChange}
+        replacementMode
+        activeTabId={tabId}
+        showTabBar={false}
+      />
+    );
+  }, [adapter, draft, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, settingsMode]);
+
+  React.useLayoutEffect(() => {
+    const root = measureRootRef.current;
+    if (!root) return;
+
+    const heights = Array.from(root.querySelectorAll<HTMLElement>('[data-measure-tab-body]'))
+      .map((element) => element.getBoundingClientRect().height)
+      .filter((height) => Number.isFinite(height) && height > 0);
+
+    const nextHeight = heights.length > 0 ? Math.ceil(Math.max(...heights)) : null;
+    setMinBodyHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-1.5 border-b pb-2" style={{ borderColor: 'var(--border-subtle)' }}>
+        {tabs.map((tab) => {
+          const active = activeTabId === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => onActiveTabChange(tab.id)}
+              className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] rounded-md"
+              style={active
+                ? { color: 'var(--accent-secondary)', borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)' }
+                : { color: 'var(--text-muted)' }}
+            >
+              {tab.title}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="relative" style={minBodyHeight ? { minHeight: `${minBodyHeight}px` } : undefined}>
+        <div className="space-y-3" data-measure-tab-body>
+          {renderTabBody(activeTabId)}
+        </div>
+
+        <div ref={measureRootRef} aria-hidden="true" className="absolute inset-0 pointer-events-none invisible overflow-hidden" style={{ width: '100%' }}>
+          {tabs.map((tab) => (
+            <div key={tab.id} className="space-y-3" data-measure-tab-body>
+              {renderTabBody(tab.id)}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -5242,33 +5387,7 @@ type MaterialProfileFormSectionsProps = {
 function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSectionsProps) {
   return (
     <>
-      <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Details</div>
-        <div className="grid grid-cols-2 gap-2">
-          <LabeledInput
-            label="Material brand"
-            value={draft.brand}
-            onChange={(value) => onChange((prev) => ({ ...prev, brand: value }))}
-          />
-          <LabeledInput
-            label="Material name"
-            value={draft.name}
-            onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
-          />
-          <LabeledResinFamilySelect
-            label="Resin family"
-            value={draft.resinFamily}
-            options={RESIN_FAMILY_OPTIONS}
-            onChange={(value) => onChange((prev) => ({ ...prev, resinFamily: value }))}
-          />
-          <LabeledCurrencySelect
-            label="Currency"
-            value={draft.currencyCode || 'USD'}
-            options={CURRENCY_OPTIONS}
-            onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
-          />
-        </div>
-      </div>
+      <MaterialProfileIdentitySection draft={draft} onChange={onChange} />
 
       <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
         <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Print Settings</div>
@@ -5384,7 +5503,7 @@ function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIden
           onChange={(value) => onChange((prev) => ({ ...prev, name: value }))}
         />
         <LabeledResinFamilySelect
-          label="Resin family"
+          label="Resin Family"
           value={draft.resinFamily}
           options={RESIN_FAMILY_OPTIONS}
           onChange={(value) => onChange((prev) => ({ ...prev, resinFamily: value }))}
@@ -5396,12 +5515,12 @@ function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIden
           onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
         />
         <LabeledNumberInput
-          label="Bottle price"
+          label="Bottle Price"
           value={draft.bottlePrice}
           onChange={(value) => onChange((prev) => ({ ...prev, bottlePrice: value }))}
         />
         <LabeledNumberInput
-          label="Bottle capacity (ml)"
+          label="Bottle Capacity (ml)"
           value={draft.bottleCapacityMl}
           onChange={(value) => onChange((prev) => ({ ...prev, bottleCapacityMl: value }))}
         />
