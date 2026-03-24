@@ -146,6 +146,16 @@ export const ATHENA_PLUGIN_MANIFEST = {
   printerPresets: withResolvedImagePaths('plugins/athena/printers', athenaPrinters).map((preset) => {
     const resolutionX = Number((preset as any).display?.resolutionX) || 2560;
     const resolutionY = Number((preset as any).display?.resolutionY) || 1620;
+    const explicitBuildWidth = sanitizePositiveNumber((preset as any).buildVolumeMm?.width);
+    const explicitBuildDepth = sanitizePositiveNumber((preset as any).buildVolumeMm?.depth);
+    const pixelSizeX = sanitizePositiveNumber((preset as any).pixelSize?.x);
+    const pixelSizeY = sanitizePositiveNumber((preset as any).pixelSize?.y);
+    const buildDimensionMode = explicitBuildWidth == null
+      && explicitBuildDepth == null
+      && pixelSizeX != null
+      && pixelSizeY != null
+        ? 'auto'
+        : 'manual';
     const outputFormat = ((preset as any).display?.outputFormat === '.nanodlp'
       || (preset as any).display?.outputFormat === '.goo'
       || (preset as any).display?.outputFormat === '.lumen')
@@ -171,6 +181,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
       platformBadge: (preset as any).platformBadge,
       pixelSize: (preset as any).pixelSize,
       bitDepth: (preset as any).bitDepth,
+      buildDimensionMode,
       buildVolumeMm: {
         width: resolveBuildDimensionMm(
           (preset as any).buildVolumeMm?.width,

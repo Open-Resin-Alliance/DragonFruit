@@ -97,6 +97,11 @@ Integrity hardening:
 
 Complex plugins live at `plugins/<vendor>/`.
 
+Complex plugin sources may be either regular in-repo folders or Git submodules
+mounted under `plugins/<vendor>`. For submodule-backed plugins, ensure
+submodules are initialized/updated before running plugin generation and CI
+validation commands.
+
 Required entrypoint:
 
 - `plugins/<vendor>/pluginDefinition.ts`

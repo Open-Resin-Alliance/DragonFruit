@@ -8,6 +8,7 @@ type TauriEventModule = {
 
 export type NativeSolidSliceJobEnvelope = {
   outputFormat: string;
+  formatVersion?: string | null;
   sourceWidthPx: number;
   sourceHeightPx: number;
   widthPx: number;
@@ -18,6 +19,7 @@ export type NativeSolidSliceJobEnvelope = {
   bvhAccelerationEnabled: boolean;
   antiAliasingLevel: 'Off' | '2x' | '4x' | '8x' | '16x';
   aaOnSupports: boolean;
+  minimumAaAlphaPercent: number;
   mirrorX: boolean;
   mirrorY: boolean;
   modelTriangleCount: number;
@@ -33,6 +35,7 @@ export type NativeSolidSliceJobEnvelope = {
 
 type NativeSolidSlicePayload = {
   output_format: string;
+  format_version?: string | null;
   source_width_px: number;
   source_height_px: number;
   width_px: number;
@@ -43,6 +46,7 @@ type NativeSolidSlicePayload = {
   bvh_acceleration_enabled: boolean;
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
+  minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
   model_triangle_count: number;
@@ -59,6 +63,7 @@ type NativeSolidSlicePayload = {
 /** Metadata-only payload for the binary mesh staging path (no inline triangles). */
 type NativeSolidSliceMetadataPayload = {
   output_format: string;
+  format_version?: string | null;
   source_width_px: number;
   source_height_px: number;
   width_px: number;
@@ -66,6 +71,7 @@ type NativeSolidSliceMetadataPayload = {
   png_compression_strategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
   anti_aliasing_level: 'Off' | '2x' | '4x' | '8x' | '16x';
   aa_on_supports: boolean;
+  minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
   container_compression_level: number;
@@ -80,6 +86,7 @@ type NativeSolidSliceMetadataPayload = {
 type SliceProgressEvent = {
   done: number;
   total: number;
+  phase?: string;
 };
 
 let tauriCorePromise: Promise<TauriCoreModule | null> | null = null;
@@ -125,6 +132,7 @@ async function loadTauriEvent(): Promise<TauriEventModule | null> {
 function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayload {
   return {
     output_format: job.outputFormat,
+    format_version: job.formatVersion ?? null,
     source_width_px: job.sourceWidthPx,
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,
@@ -135,6 +143,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
     bvh_acceleration_enabled: job.bvhAccelerationEnabled,
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,
+    minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
     model_triangle_count: job.modelTriangleCount,
@@ -152,6 +161,7 @@ function toNativePayload(job: NativeSolidSliceJobEnvelope): NativeSolidSlicePayl
 function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidSliceMetadataPayload {
   return {
     output_format: job.outputFormat,
+    format_version: job.formatVersion ?? null,
     source_width_px: job.sourceWidthPx,
     source_height_px: job.sourceHeightPx,
     width_px: job.widthPx,
@@ -159,6 +169,7 @@ function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): NativeSolidS
     png_compression_strategy: job.pngCompressionStrategy,
     anti_aliasing_level: job.antiAliasingLevel,
     aa_on_supports: job.aaOnSupports,
+    minimum_aa_alpha_percent: Math.max(0, Math.min(100, Number(job.minimumAaAlphaPercent) || 0)),
     mirror_x: job.mirrorX,
     mirror_y: job.mirrorY,
     container_compression_level: Math.max(0, Math.min(9, Math.round(job.containerCompressionLevel ?? 2))),
@@ -176,7 +187,7 @@ export async function isNativeSlicerAvailable(): Promise<boolean> {
   return Boolean(core);
 }
 
-export type SlicerProgressCallback = (done: number, total: number) => void;
+export type SlicerProgressCallback = (done: number, total: number, phase: string) => void;
 
 export type NativeSliceTempPathArtifact = {
   tempPath: string;
@@ -186,7 +197,7 @@ export type NativeSliceTempPathArtifact = {
   bridge: NativeSlicerBridgeMetrics;
 };
 
-export type NativeOpenDialogCategory = 'mesh' | 'scene';
+export type NativeOpenDialogCategory = 'mesh' | 'scene' | 'bundle';
 
 export type NativePickedOpenFile = {
   path: string;
@@ -246,7 +257,7 @@ export async function sliceSolidAndEncodeWithNativeSlicer(
     unlistenProgress = await eventModule.listen<SliceProgressEvent>(
       'slicer://progress',
       (event) => {
-        onProgress(event.payload.done, event.payload.total);
+        onProgress(event.payload.done, event.payload.total, event.payload.phase ?? 'Slicing');
       },
     );
   }
@@ -341,7 +352,7 @@ export async function sliceSolidAndEncodeWithNativeSlicerToTempPath(
     unlistenProgress = await eventModule.listen<SliceProgressEvent>(
       'slicer://progress',
       (event) => {
-        onProgress(event.payload.done, event.payload.total);
+        onProgress(event.payload.done, event.payload.total, event.payload.phase ?? 'Slicing');
       },
     );
   }

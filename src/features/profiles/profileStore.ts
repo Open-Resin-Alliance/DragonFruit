@@ -10,7 +10,12 @@ import {
   type InstalledProfilePlugin,
   type PluginManifest,
 } from '@/features/plugins/pluginRegistry';
-import { normalizeOutputFormat, DEFAULT_OUTPUT_FORMAT } from '@/features/profiles/outputFormatUtils';
+import {
+  normalizeOutputFormat,
+  normalizeFormatVersion,
+  normalizeSettingsMode,
+  DEFAULT_OUTPUT_FORMAT,
+} from '@/features/profiles/outputFormatUtils';
 
 export type PrinterOutputFormat = string;
 export type PrinterNetworkSupport = string;
@@ -57,6 +62,8 @@ export type PrinterBitDepth = {
   description?: string;
 };
 
+export type PrinterBuildDimensionMode = 'manual' | 'auto';
+
 export type PrinterPreset = {
   presetId: string;
   profileVersion?: number;
@@ -66,10 +73,12 @@ export type PrinterPreset = {
   imageAssetPath?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  hasCamera?: boolean;
   networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
+  buildDimensionMode?: PrinterBuildDimensionMode;
   buildVolumeMm: {
     width: number;
     depth: number;
@@ -79,6 +88,8 @@ export type PrinterPreset = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    formatVersion?: string;
+    settingsMode?: string;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -91,10 +102,12 @@ export type PrinterProfile = {
   imageDataUrl?: string;
   antiAliasing?: boolean;
   networkSupport?: PrinterNetworkSupport;
+  hasCamera?: boolean;
   networkFilter?: string;
   platformBadge?: PrinterPlatformBadge;
   pixelSize?: PrinterPixelSize;
   bitDepth?: PrinterBitDepth;
+  buildDimensionMode?: PrinterBuildDimensionMode;
   officialPresetId?: string;
   officialPresetVersion?: number;
   isOfficial?: boolean;
@@ -108,6 +121,8 @@ export type PrinterProfile = {
     resolutionX: number;
     resolutionY: number;
     outputFormat: PrinterOutputFormat;
+    formatVersion?: string;
+    settingsMode?: string;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -166,6 +181,9 @@ function sanitizeBitDepth(input: unknown): PrinterBitDepth | undefined {
   };
 }
 
+export type LocalMaterialSettingsValue = string | number | boolean;
+export type LocalMaterialSettingsMap = Record<string, LocalMaterialSettingsValue>;
+
 export type MaterialProfile = {
   id: string;
   printerProfileId: string;
@@ -189,7 +207,47 @@ export type MaterialProfile = {
   liftDistanceMm: number;
   liftSpeedMmMin: number;
   retractSpeedMmMin: number;
+  minimumAaAlphaPercent: number;
+  localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
 };
+
+function normalizeMinimumAaAlphaPercent(value: unknown, fallback = 35): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(100, numeric));
+}
+
+function sanitizeLocalMaterialSettingsMap(input: unknown): LocalMaterialSettingsMap | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const source = input as Record<string, unknown>;
+  const next: LocalMaterialSettingsMap = {};
+
+  Object.entries(source).forEach(([key, rawValue]) => {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) return;
+
+    if (typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean') {
+      next[normalizedKey] = rawValue;
+    }
+  });
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function sanitizeLocalSettingsByOutput(input: unknown): Record<string, LocalMaterialSettingsMap> | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const source = input as Record<string, unknown>;
+  const next: Record<string, LocalMaterialSettingsMap> = {};
+
+  Object.entries(source).forEach(([outputFormatRaw, value]) => {
+    const outputFormat = normalizeOutputFormat(outputFormatRaw);
+    const sanitized = sanitizeLocalMaterialSettingsMap(value);
+    if (!sanitized) return;
+    next[outputFormat] = sanitized;
+  });
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
 
 export type MaterialTemplate = Omit<MaterialProfile, 'id' | 'printerProfileId'> & {
   templateId?: string;
@@ -242,6 +300,16 @@ const DEFAULT_PRINTER_NETWORK_SETTINGS: PrinterNetworkSettings = {
 };
 
 function normalizeAntiAliasingSupport(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  return undefined;
+}
+
+function normalizeBuildDimensionMode(value: unknown): PrinterBuildDimensionMode | undefined {
+  if (value === 'auto' || value === 'manual') return value;
+  return undefined;
+}
+
+function normalizeCameraSupport(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
   return undefined;
 }
@@ -453,6 +521,8 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
   display: {
     ...preset.display,
     outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+    formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
+    settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown } | undefined)?.settingsMode),
     mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown } | undefined)?.mirrorX, false),
     mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown } | undefined)?.mirrorY, false),
   },
@@ -475,10 +545,12 @@ const DEFAULT_PRINTER_PROFILES: PrinterProfile[] = BUILTIN_PRINTER_PRESETS.map((
   imageDataUrl: preset.imageAssetPath,
   antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
   networkSupport: normalizeNetworkSupport(preset.networkSupport),
+  hasCamera: normalizeCameraSupport((preset as any).hasCamera),
   networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
   platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
   pixelSize: sanitizePixelSize((preset as any).pixelSize),
   bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+  buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode),
   officialPresetId: preset.presetId,
   officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
   isOfficial: true,
@@ -544,6 +616,8 @@ function createDefaultMaterials(printerProfiles: PrinterProfile[]): MaterialProf
   return getAllMaterialTemplates().map((template) => ({
     ...template,
     currencyCode: typeof (template as any).currencyCode === 'string' ? (template as any).currencyCode : 'USD',
+    minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((template as any).minimumAaAlphaPercent, 35),
+    localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput),
     id: createDefaultMaterialIdFromTemplateName(template.name),
     printerProfileId: primaryPrinterId,
     officialTemplateId: typeof (template as any).templateId === 'string' && (template as any).templateId.trim().length > 0
@@ -603,6 +677,16 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
         const fallbackBuildVolume = matchedPreset?.buildVolumeMm;
         const fallbackDisplay = matchedPreset?.display;
         const fallbackOfficialPresetVersion = normalizeProfileVersion((matchedPreset as any)?.profileVersion, 1);
+        const resolvedPixelSize = sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize);
+        const explicitBuildDimensionMode = normalizeBuildDimensionMode((profile as any).buildDimensionMode)
+          ?? normalizeBuildDimensionMode((matchedPreset as any)?.buildDimensionMode);
+        const inferAutoBuildDimensionMode = explicitBuildDimensionMode == null
+          && rawBuildVolume != null
+          && (rawBuildVolume as any).width == null
+          && (rawBuildVolume as any).depth == null
+          && resolvedPixelSize != null;
+        const resolvedBuildDimensionMode: PrinterBuildDimensionMode = explicitBuildDimensionMode
+          ?? (inferAutoBuildDimensionMode ? 'auto' : 'manual');
         const networkSupport = resolveNetworkSupport(profile);
         const networkProfileState = networkSupport
           ? deriveNetworkProfileState(profile, networkSupport)
@@ -621,10 +705,13 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           antiAliasing: normalizeAntiAliasingSupport((profile as any).antiAliasing)
             ?? normalizeAntiAliasingSupport((matchedPreset as any)?.antiAliasing),
           networkSupport,
+          hasCamera: normalizeCameraSupport((profile as any).hasCamera)
+            ?? normalizeCameraSupport((matchedPreset as any)?.hasCamera),
           networkFilter: sanitizeNetworkFilter((profile as any).networkFilter) ?? sanitizeNetworkFilter((matchedPreset as any)?.networkFilter),
           platformBadge: sanitizePlatformBadge((profile as any).platformBadge) ?? sanitizePlatformBadge((matchedPreset as any)?.platformBadge),
-          pixelSize: sanitizePixelSize((profile as any).pixelSize) ?? sanitizePixelSize((matchedPreset as any)?.pixelSize),
+          pixelSize: resolvedPixelSize,
           bitDepth: sanitizeBitDepth((profile as any).bitDepth) ?? sanitizeBitDepth((matchedPreset as any)?.bitDepth),
+          buildDimensionMode: resolvedBuildDimensionMode,
           officialPresetId,
           officialPresetVersion: normalizeProfileVersion((profile as any).officialPresetVersion, fallbackOfficialPresetVersion),
           isOfficial: isOfficialProfileByHeuristic(profile),
@@ -638,6 +725,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             resolutionX: Number(rawDisplay?.resolutionX) || fallbackDisplay?.resolutionX || 2560,
             resolutionY: Number(rawDisplay?.resolutionY) || fallbackDisplay?.resolutionY || 1620,
             outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
+            formatVersion: normalizeFormatVersion(rawDisplay?.formatVersion ?? fallbackDisplay?.formatVersion),
+            settingsMode: normalizeSettingsMode(rawDisplay?.settingsMode ?? fallbackDisplay?.settingsMode),
             mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
             mirrorY: normalizeMirrorFlag(rawDisplay?.mirrorY, normalizeMirrorFlag(fallbackDisplay?.mirrorY, false)),
           },
@@ -704,6 +793,8 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
           liftDistanceMm: Number((profile as any).liftDistanceMm) || 6,
           liftSpeedMmMin: Number((profile as any).liftSpeedMmMin) || 60,
           retractSpeedMmMin: Number((profile as any).retractSpeedMmMin) || 150,
+          minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent((profile as any).minimumAaAlphaPercent, 35),
+          localSettingsByOutput: sanitizeLocalSettingsByOutput((profile as any).localSettingsByOutput),
         };
       })
       .filter((profile): profile is MaterialProfile => profile !== null)
@@ -872,6 +963,8 @@ function ensureActiveMaterialForActivePrinter(nextState: ProfileStoreState): Pro
       liftDistanceMm: 6,
       liftSpeedMmMin: 60,
       retractSpeedMmMin: 150,
+      minimumAaAlphaPercent: 35,
+      localSettingsByOutput: undefined,
     };
 
     return {
@@ -934,10 +1027,12 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
     imageDataUrl: partial?.imageDataUrl,
     antiAliasing: normalizeAntiAliasingSupport(partial?.antiAliasing),
     networkSupport,
+    hasCamera: normalizeCameraSupport(partial?.hasCamera),
     networkFilter: sanitizeNetworkFilter(partial?.networkFilter),
     platformBadge: sanitizePlatformBadge(partial?.platformBadge),
     pixelSize: sanitizePixelSize(partial?.pixelSize),
     bitDepth: sanitizeBitDepth(partial?.bitDepth),
+    buildDimensionMode: normalizeBuildDimensionMode((partial as any)?.buildDimensionMode) ?? 'manual',
     officialPresetId: partial?.officialPresetId?.trim(),
     officialPresetVersion: Number.isFinite(Number((partial as any)?.officialPresetVersion))
       ? normalizeProfileVersion((partial as any).officialPresetVersion, 1)
@@ -949,6 +1044,8 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       resolutionX: partial?.display?.resolutionX ?? 2560,
       resolutionY: partial?.display?.resolutionY ?? 1620,
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
+      formatVersion: normalizeFormatVersion(partial?.display?.formatVersion),
+      settingsMode: normalizeSettingsMode(partial?.display?.settingsMode),
       mirrorX: normalizeMirrorFlag(partial?.display?.mirrorX, false),
       mirrorY: normalizeMirrorFlag(partial?.display?.mirrorY, false),
     },
@@ -998,10 +1095,12 @@ export function addPrinterProfileFromPreset(presetId: string): string {
     imageDataUrl: preset.imageAssetPath,
     antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
     networkSupport: normalizeNetworkSupport(preset.networkSupport),
+    hasCamera: normalizeCameraSupport((preset as any).hasCamera),
     networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
     platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
     pixelSize: sanitizePixelSize((preset as any).pixelSize),
     bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+    buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode) ?? 'manual',
     officialPresetId: preset.presetId,
     officialPresetVersion: normalizeProfileVersion((preset as any).profileVersion, 1),
     isOfficial: true,
@@ -1011,6 +1110,8 @@ export function addPrinterProfileFromPreset(presetId: string): string {
       resolutionX: preset.display.resolutionX,
       resolutionY: preset.display.resolutionY,
       outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+      formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
+      settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
       mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
       mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
     },
@@ -1053,6 +1154,8 @@ export function addMaterialProfile(
     liftDistanceMm: partial?.liftDistanceMm ?? 6,
     liftSpeedMmMin: partial?.liftSpeedMmMin ?? 60,
     retractSpeedMmMin: partial?.retractSpeedMmMin ?? 150,
+    minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(partial?.minimumAaAlphaPercent, 35),
+    localSettingsByOutput: sanitizeLocalSettingsByOutput(partial?.localSettingsByOutput),
   };
 
   setState(ensureActiveMaterialForActivePrinter({
@@ -1069,61 +1172,131 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
   ensureHydrated();
   let changed = false;
 
+  const filterOfficialPrinterProfileUpdates = (
+    sourceUpdates: Partial<Omit<PrinterProfile, 'id'>>,
+  ): Partial<Omit<PrinterProfile, 'id'>> => {
+    const nextUpdates: Partial<Omit<PrinterProfile, 'id'>> = {};
+
+    if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'networkSupport')) {
+      nextUpdates.networkSupport = sourceUpdates.networkSupport;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(sourceUpdates, 'hasCamera')) {
+      nextUpdates.hasCamera = sourceUpdates.hasCamera;
+    }
+
+    if (sourceUpdates.display) {
+      const nextDisplay: Partial<PrinterProfile['display']> = {};
+      if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'outputFormat')) {
+        nextDisplay.outputFormat = sourceUpdates.display.outputFormat;
+      }
+      if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'formatVersion')) {
+        nextDisplay.formatVersion = sourceUpdates.display.formatVersion;
+      }
+      if (Object.keys(nextDisplay).length > 0) {
+        nextUpdates.display = nextDisplay as PrinterProfile['display'];
+      }
+    }
+
+    return nextUpdates;
+  };
+
+  const targetProfile = state.printerProfiles.find((profile) => profile.id === id);
+  const appliedUpdates = targetProfile?.isOfficial === true
+    ? filterOfficialPrinterProfileUpdates(updates)
+    : updates;
+  const hasNetworkSupportUpdate = Object.prototype.hasOwnProperty.call(appliedUpdates, 'networkSupport');
+  const hasBuildDimensionModeUpdate = Object.prototype.hasOwnProperty.call(appliedUpdates, 'buildDimensionMode');
+
+  if (targetProfile?.isOfficial === true && Object.keys(appliedUpdates).length === 0) {
+    return;
+  }
+
   const printerProfiles = state.printerProfiles.map((profile) => {
     if (profile.id !== id) return profile;
-    if (profile.isOfficial) return profile;
     changed = true;
+
+    const nextNetworkSupport = hasNetworkSupportUpdate
+      ? normalizeNetworkSupport(appliedUpdates.networkSupport)
+      : profile.networkSupport;
+    const nextNetwork = appliedUpdates.network !== undefined
+      ? sanitizePrinterNetworkSettings(appliedUpdates.network)
+      : sanitizePrinterNetworkSettings(profile.network);
+    const nextNetworkConnection = appliedUpdates.networkConnection !== undefined
+      ? (
+        nextNetworkSupport
+          ? sanitizePrinterNetworkConnectionState(
+            appliedUpdates.networkConnection,
+            nextNetworkSupport,
+            nextNetwork.ipAddress,
+          )
+          : undefined
+      )
+      : profile.networkConnection;
+    const nextNetworkProfileState = nextNetworkSupport
+      ? deriveNetworkProfileState(
+        {
+          ...profile,
+          networkSupport: nextNetworkSupport,
+          network: nextNetwork,
+          networkFleet: appliedUpdates.networkFleet !== undefined ? appliedUpdates.networkFleet : profile.networkFleet,
+          activeNetworkDeviceId: appliedUpdates.activeNetworkDeviceId !== undefined ? appliedUpdates.activeNetworkDeviceId : profile.activeNetworkDeviceId,
+          networkConnection: nextNetworkConnection,
+        },
+        nextNetworkSupport,
+      )
+      : {
+        network: nextNetwork,
+        networkFleet: undefined,
+        activeNetworkDeviceId: undefined,
+        networkConnection: undefined,
+      };
+
     return {
       ...profile,
-      ...updates,
-      name: updates.name !== undefined ? updates.name : profile.name,
-      manufacturer: updates.manufacturer !== undefined ? updates.manufacturer : profile.manufacturer,
-      antiAliasing: updates.antiAliasing !== undefined
-        ? normalizeAntiAliasingSupport(updates.antiAliasing)
+      ...appliedUpdates,
+      name: appliedUpdates.name !== undefined ? appliedUpdates.name : profile.name,
+      manufacturer: appliedUpdates.manufacturer !== undefined ? appliedUpdates.manufacturer : profile.manufacturer,
+      antiAliasing: appliedUpdates.antiAliasing !== undefined
+        ? normalizeAntiAliasingSupport(appliedUpdates.antiAliasing)
         : profile.antiAliasing,
-      networkSupport: updates.networkSupport !== undefined
-        ? normalizeNetworkSupport(updates.networkSupport)
-        : profile.networkSupport,
-      networkFilter: updates.networkFilter !== undefined
-        ? sanitizeNetworkFilter(updates.networkFilter)
+      networkSupport: nextNetworkSupport,
+      hasCamera: appliedUpdates.hasCamera !== undefined
+        ? normalizeCameraSupport(appliedUpdates.hasCamera)
+        : profile.hasCamera,
+      networkFilter: appliedUpdates.networkFilter !== undefined
+        ? sanitizeNetworkFilter(appliedUpdates.networkFilter)
         : profile.networkFilter,
-      platformBadge: updates.platformBadge !== undefined
-        ? sanitizePlatformBadge(updates.platformBadge)
+      platformBadge: appliedUpdates.platformBadge !== undefined
+        ? sanitizePlatformBadge(appliedUpdates.platformBadge)
         : profile.platformBadge,
-      pixelSize: updates.pixelSize !== undefined
-        ? sanitizePixelSize(updates.pixelSize)
+      pixelSize: appliedUpdates.pixelSize !== undefined
+        ? sanitizePixelSize(appliedUpdates.pixelSize)
         : profile.pixelSize,
-      bitDepth: updates.bitDepth !== undefined
-        ? sanitizeBitDepth(updates.bitDepth)
+      bitDepth: appliedUpdates.bitDepth !== undefined
+        ? sanitizeBitDepth(appliedUpdates.bitDepth)
         : profile.bitDepth,
+      buildDimensionMode: hasBuildDimensionModeUpdate
+        ? (normalizeBuildDimensionMode((appliedUpdates as any).buildDimensionMode) ?? 'manual')
+        : (profile.buildDimensionMode ?? 'manual'),
       isOfficial: profile.isOfficial,
       isCustom: profile.isCustom,
-      buildVolumeMm: updates.buildVolumeMm ?? profile.buildVolumeMm,
-      display: updates.display
+      buildVolumeMm: appliedUpdates.buildVolumeMm ?? profile.buildVolumeMm,
+      display: appliedUpdates.display
         ? {
-          resolutionX: Number(updates.display.resolutionX) || profile.display.resolutionX,
-          resolutionY: Number(updates.display.resolutionY) || profile.display.resolutionY,
-          outputFormat: normalizeOutputFormat(updates.display.outputFormat ?? profile.display.outputFormat),
-          mirrorX: normalizeMirrorFlag(updates.display.mirrorX, profile.display.mirrorX === true),
-          mirrorY: normalizeMirrorFlag(updates.display.mirrorY, profile.display.mirrorY === true),
+          resolutionX: Number(appliedUpdates.display.resolutionX) || profile.display.resolutionX,
+          resolutionY: Number(appliedUpdates.display.resolutionY) || profile.display.resolutionY,
+          outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat ?? profile.display.outputFormat),
+          formatVersion: normalizeFormatVersion(appliedUpdates.display.formatVersion ?? profile.display.formatVersion),
+          settingsMode: normalizeSettingsMode(appliedUpdates.display.settingsMode ?? profile.display.settingsMode),
+          mirrorX: normalizeMirrorFlag(appliedUpdates.display.mirrorX, profile.display.mirrorX === true),
+          mirrorY: normalizeMirrorFlag(appliedUpdates.display.mirrorY, profile.display.mirrorY === true),
         }
         : profile.display,
-      network: updates.network !== undefined ? sanitizePrinterNetworkSettings(updates.network) : profile.network,
-      networkConnection: updates.networkConnection !== undefined
-        ? (
-          (updates.networkSupport !== undefined
-            ? normalizeNetworkSupport(updates.networkSupport)
-            : profile.networkSupport)
-            ? sanitizePrinterNetworkConnectionState(
-              updates.networkConnection,
-              (updates.networkSupport !== undefined
-                ? normalizeNetworkSupport(updates.networkSupport)
-                : profile.networkSupport)!,
-              sanitizePrinterNetworkSettings(updates.network ?? profile.network).ipAddress,
-            )
-            : undefined
-        )
-        : profile.networkConnection,
+      network: nextNetworkProfileState.network,
+      networkFleet: nextNetworkProfileState.networkFleet,
+      activeNetworkDeviceId: nextNetworkProfileState.activeNetworkDeviceId,
+      networkConnection: nextNetworkProfileState.networkConnection,
     };
   });
 
@@ -1221,10 +1394,16 @@ export function updatePrinterNetworkConnectionStatus(
     const activeIndex = fleet.findIndex((device) => device.id === activeDeviceId);
 
     if (activeIndex >= 0) {
+      const resolvedDisplayName = (
+        next.connected && next.hostName.trim().length > 0
+          ? next.hostName
+          : fleet[activeIndex].displayName || next.hostName || next.ipAddress || 'Printer'
+      );
+
       fleet[activeIndex] = {
         ...fleet[activeIndex],
         ...next,
-        displayName: fleet[activeIndex].displayName || next.hostName || next.ipAddress || 'Printer',
+        displayName: resolvedDisplayName,
       };
     } else if (hasMeaningfulPrinterNetworkConnection(next)) {
       fleet.push({
@@ -1263,6 +1442,9 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
       brand: updates.brand !== undefined ? updates.brand : profile.brand,
       currencyCode: updates.currencyCode !== undefined ? updates.currencyCode.toUpperCase() : profile.currencyCode,
       name: updates.name !== undefined ? updates.name : profile.name,
+      localSettingsByOutput: updates.localSettingsByOutput !== undefined
+        ? sanitizeLocalSettingsByOutput(updates.localSettingsByOutput)
+        : profile.localSettingsByOutput,
     };
   });
 
@@ -1343,6 +1525,8 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
         liftDistanceMm: 6,
         liftSpeedMmMin: 60,
         retractSpeedMmMin: 150,
+        minimumAaAlphaPercent: 35,
+        localSettingsByOutput: undefined,
       },
     ];
 
@@ -1355,6 +1539,175 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
   });
 
   return duplicateId;
+}
+
+export function movePrinterProfile(id: string, beforeId?: string): void {
+  ensureHydrated();
+  const sourceIndex = state.printerProfiles.findIndex((profile) => profile.id === id);
+  if (sourceIndex < 0) return;
+
+  const nextPrinterProfiles = [...state.printerProfiles];
+  const [movedPrinter] = nextPrinterProfiles.splice(sourceIndex, 1);
+  if (!movedPrinter) return;
+
+  const normalizedBeforeId = typeof beforeId === 'string' ? beforeId.trim() : '';
+  if (!normalizedBeforeId) {
+    nextPrinterProfiles.push(movedPrinter);
+  } else {
+    const targetIndex = nextPrinterProfiles.findIndex((profile) => profile.id === normalizedBeforeId);
+    if (targetIndex < 0) {
+      nextPrinterProfiles.push(movedPrinter);
+    } else {
+      nextPrinterProfiles.splice(targetIndex, 0, movedPrinter);
+    }
+  }
+
+  setState({
+    ...state,
+    printerProfiles: nextPrinterProfiles,
+  });
+}
+
+export type PrinterBundleExportPayload = {
+  version: number;
+  exportedAt: string;
+  printer: PrinterProfile;
+  materials: MaterialProfile[];
+};
+
+export function importPrinterBundle(payload: unknown): string {
+  ensureHydrated();
+
+  const bundle = payload as Partial<PrinterBundleExportPayload> & {
+    printer?: Partial<PrinterProfile>;
+    materials?: unknown;
+  };
+
+  const sourcePrinter = bundle?.printer;
+  if (!sourcePrinter || typeof sourcePrinter !== 'object') {
+    throw new Error('[ProfileStore] Invalid printer bundle payload');
+  }
+
+  const importedPrinterId = createId('printer');
+  const importedNetworkSupport = normalizeNetworkSupport(sourcePrinter.networkSupport);
+  const importedNetworkSettings = sanitizePrinterNetworkSettings(sourcePrinter.network);
+  const importedPrinter: PrinterProfile = {
+    id: importedPrinterId,
+    name: typeof sourcePrinter.name === 'string' && sourcePrinter.name.trim().length > 0
+      ? sourcePrinter.name.trim()
+      : `Printer ${state.printerProfiles.length + 1}`,
+    manufacturer: typeof sourcePrinter.manufacturer === 'string' && sourcePrinter.manufacturer.trim().length > 0
+      ? sourcePrinter.manufacturer.trim()
+      : 'Generic',
+    imageDataUrl: typeof sourcePrinter.imageDataUrl === 'string' ? sourcePrinter.imageDataUrl : undefined,
+    antiAliasing: normalizeAntiAliasingSupport(sourcePrinter.antiAliasing),
+    networkSupport: importedNetworkSupport,
+    hasCamera: normalizeCameraSupport(sourcePrinter.hasCamera),
+    networkFilter: sanitizeNetworkFilter(sourcePrinter.networkFilter),
+    platformBadge: sanitizePlatformBadge(sourcePrinter.platformBadge),
+    pixelSize: sanitizePixelSize(sourcePrinter.pixelSize),
+    bitDepth: sanitizeBitDepth(sourcePrinter.bitDepth),
+    buildDimensionMode: normalizeBuildDimensionMode(sourcePrinter.buildDimensionMode) ?? 'manual',
+    officialPresetId: undefined,
+    officialPresetVersion: undefined,
+    isOfficial: false,
+    isCustom: true,
+    buildVolumeMm: sourcePrinter.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
+    display: {
+      resolutionX: sourcePrinter.display?.resolutionX ?? 2560,
+      resolutionY: sourcePrinter.display?.resolutionY ?? 1620,
+      outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat),
+      formatVersion: normalizeFormatVersion(sourcePrinter.display?.formatVersion),
+      settingsMode: normalizeSettingsMode(sourcePrinter.display?.settingsMode),
+      mirrorX: normalizeMirrorFlag(sourcePrinter.display?.mirrorX, false),
+      mirrorY: normalizeMirrorFlag(sourcePrinter.display?.mirrorY, false),
+    },
+    network: importedNetworkSettings,
+    networkFleet: importedNetworkSupport
+      ? sanitizePrinterNetworkFleet(sourcePrinter.networkFleet, importedNetworkSupport, importedNetworkSettings.ipAddress)
+      : undefined,
+    activeNetworkDeviceId: typeof sourcePrinter.activeNetworkDeviceId === 'string' && sourcePrinter.activeNetworkDeviceId.trim().length > 0
+      ? sourcePrinter.activeNetworkDeviceId.trim()
+      : undefined,
+    networkConnection: importedNetworkSupport
+      ? sanitizePrinterNetworkConnectionState(sourcePrinter.networkConnection, importedNetworkSupport, importedNetworkSettings.ipAddress)
+      : undefined,
+  };
+
+  const sourceMaterials = Array.isArray(bundle.materials) ? bundle.materials : [];
+  const importedMaterials: MaterialProfile[] = sourceMaterials
+    .filter((item): item is Partial<MaterialProfile> => Boolean(item) && typeof item === 'object')
+    .map((material, index) => ({
+      id: createId('material'),
+      printerProfileId: importedPrinterId,
+      officialTemplateId: typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0
+        ? material.officialTemplateId.trim()
+        : undefined,
+      officialTemplateVersion: Number.isFinite(Number(material.officialTemplateVersion))
+        ? normalizeProfileVersion(material.officialTemplateVersion, 1)
+        : undefined,
+      name: typeof material.name === 'string' && material.name.trim().length > 0
+        ? material.name.trim()
+        : `Material ${index + 1}`,
+      brand: typeof material.brand === 'string' && material.brand.trim().length > 0
+        ? material.brand.trim()
+        : 'Default',
+      currencyCode: typeof material.currencyCode === 'string' && material.currencyCode.trim().length > 0
+        ? material.currencyCode.trim().toUpperCase()
+        : 'USD',
+      bottlePrice: Number.isFinite(Number(material.bottlePrice)) ? Number(material.bottlePrice) : 0,
+      bottleCapacityMl: Number.isFinite(Number(material.bottleCapacityMl)) ? Number(material.bottleCapacityMl) : 1000,
+      resinFamily: material.resinFamily ?? 'standard',
+      scaleCompensationPct: {
+        x: Number(material.scaleCompensationPct?.x ?? 0),
+        y: Number(material.scaleCompensationPct?.y ?? 0),
+        z: Number(material.scaleCompensationPct?.z ?? 0),
+      },
+      layerHeightMm: Number.isFinite(Number(material.layerHeightMm)) ? Number(material.layerHeightMm) : 0.05,
+      normalExposureSec: Number.isFinite(Number(material.normalExposureSec)) ? Number(material.normalExposureSec) : 2.5,
+      bottomExposureSec: Number.isFinite(Number(material.bottomExposureSec)) ? Number(material.bottomExposureSec) : 28,
+      bottomLayerCount: Number.isFinite(Number(material.bottomLayerCount)) ? Math.max(1, Math.round(Number(material.bottomLayerCount))) : 5,
+      liftDistanceMm: Number.isFinite(Number(material.liftDistanceMm)) ? Number(material.liftDistanceMm) : 6,
+      liftSpeedMmMin: Number.isFinite(Number(material.liftSpeedMmMin)) ? Number(material.liftSpeedMmMin) : 60,
+      retractSpeedMmMin: Number.isFinite(Number(material.retractSpeedMmMin)) ? Number(material.retractSpeedMmMin) : 150,
+      minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
+      localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
+    }));
+
+  if (importedMaterials.length === 0) {
+    importedMaterials.push({
+      id: createId('material'),
+      printerProfileId: importedPrinterId,
+      officialTemplateId: undefined,
+      officialTemplateVersion: undefined,
+      name: 'Standard 405nm',
+      brand: 'Default',
+      currencyCode: 'USD',
+      bottlePrice: 24.99,
+      bottleCapacityMl: 1000,
+      resinFamily: 'standard',
+      scaleCompensationPct: { x: 0, y: 0, z: 0 },
+      layerHeightMm: 0.05,
+      normalExposureSec: 2.5,
+      bottomExposureSec: 28,
+      bottomLayerCount: 5,
+      liftDistanceMm: 6,
+      liftSpeedMmMin: 60,
+      retractSpeedMmMin: 150,
+      minimumAaAlphaPercent: 35,
+      localSettingsByOutput: undefined,
+    });
+  }
+
+  setState(ensureActiveMaterialForActivePrinter({
+    ...state,
+    printerProfiles: [...state.printerProfiles, importedPrinter],
+    materialProfiles: [...state.materialProfiles, ...importedMaterials],
+    activePrinterProfileId: importedPrinterId,
+    activeMaterialProfileId: importedMaterials[0].id,
+  }));
+
+  return importedPrinterId;
 }
 
 export function removeMaterialProfile(id: string): void {
@@ -1671,10 +2024,12 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
             : item.imageDataUrl,
           antiAliasing: normalizeAntiAliasingSupport((preset as any).antiAliasing),
           networkSupport: normalizeNetworkSupport(preset.networkSupport),
+          hasCamera: normalizeCameraSupport((preset as any).hasCamera),
           networkFilter: sanitizeNetworkFilter((preset as any).networkFilter),
           platformBadge: sanitizePlatformBadge((preset as any).platformBadge),
           pixelSize: sanitizePixelSize((preset as any).pixelSize),
           bitDepth: sanitizeBitDepth((preset as any).bitDepth),
+          buildDimensionMode: normalizeBuildDimensionMode((preset as any).buildDimensionMode) ?? 'manual',
           officialPresetId: preset.presetId,
           officialPresetVersion: latestVersion,
           isOfficial: true,
@@ -1684,6 +2039,8 @@ export function applyOfficialPrinterProfileUpdate(printerProfileId: string): App
             resolutionX: preset.display.resolutionX,
             resolutionY: preset.display.resolutionY,
             outputFormat: normalizeOutputFormat(preset.display.outputFormat),
+            formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
+            settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
             mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
             mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
           },
@@ -1766,6 +2123,12 @@ export function applyOfficialMaterialProfileUpdate(materialProfileId: string): A
         liftDistanceMm: Number((template as any).liftDistanceMm) || item.liftDistanceMm,
         liftSpeedMmMin: Number((template as any).liftSpeedMmMin) || item.liftSpeedMmMin,
         retractSpeedMmMin: Number((template as any).retractSpeedMmMin) || item.retractSpeedMmMin,
+        minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(
+          (template as any).minimumAaAlphaPercent,
+          item.minimumAaAlphaPercent,
+        ),
+        localSettingsByOutput: sanitizeLocalSettingsByOutput((template as any).localSettingsByOutput)
+          ?? item.localSettingsByOutput,
         officialTemplateId: templateId,
         officialTemplateVersion: latestVersion,
       };

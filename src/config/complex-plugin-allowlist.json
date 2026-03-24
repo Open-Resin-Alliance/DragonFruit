@@ -3,6 +3,12 @@
   "builtinComplexPlugins": [
     {
       "id": "athena"
+    },
+    {
+      "id": "ctb"
+    },
+    {
+      "id": "sdcp-v3"
     }
   ]
 }

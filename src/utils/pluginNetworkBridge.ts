@@ -35,6 +35,7 @@ type FetchLikeResponse = {
 export async function pluginNetworkFetch(
   payload: Record<string, unknown>,
 ): Promise<FetchLikeResponse> {
+  const startedAt = Date.now();
   const core = await loadTauriCore();
 
   if (core) {
@@ -51,6 +52,17 @@ export async function pluginNetworkFetch(
         json: async () => body,
       };
     } catch (err) {
+      const operation = typeof payload.operation === 'string'
+        ? payload.operation
+        : Array.isArray(payload.operation)
+          ? payload.operation.join('/')
+          : '<unknown-operation>';
+      console.warn('[PluginNetworkBridge] Tauri IPC request failed', {
+        pluginId: payload.pluginId ?? '<unknown-plugin>',
+        operation,
+        elapsedMs: Date.now() - startedAt,
+        error: String(err),
+      });
       return {
         ok: false,
         status: 500,

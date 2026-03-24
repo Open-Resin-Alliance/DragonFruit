@@ -53,8 +53,12 @@ export function NumberInput({ value, onChange, className, onBlur, showStepper = 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVal = e.target.value;
 
-    // Allow empty, minus, or valid float
-    if (newVal === '' || newVal === '-') {
+    if (newVal.includes('-')) {
+      return;
+    }
+
+    // Allow empty or valid float
+    if (newVal === '') {
       setDisplayValue(newVal);
       return;
     }

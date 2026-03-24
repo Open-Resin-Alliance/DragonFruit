@@ -457,6 +457,11 @@ export function useExportThumbnailCapture({
           node.visible = false;
           return;
         }
+        if (helperType === 'footprintBorder') {
+          visibilityRestores.push({ node, visible: node.visible });
+          node.visible = false;
+          return;
+        }
         if (helperType === 'buildVolumeOverlay') {
           visibilityRestores.push({ node, visible: node.visible });
           node.visible = false;
