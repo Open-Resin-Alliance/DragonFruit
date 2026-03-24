@@ -1608,14 +1608,10 @@ export function importPrinterBundle(payload: unknown): string {
     pixelSize: sanitizePixelSize(sourcePrinter.pixelSize),
     bitDepth: sanitizeBitDepth(sourcePrinter.bitDepth),
     buildDimensionMode: normalizeBuildDimensionMode(sourcePrinter.buildDimensionMode) ?? 'manual',
-    officialPresetId: typeof sourcePrinter.officialPresetId === 'string' && sourcePrinter.officialPresetId.trim().length > 0
-      ? sourcePrinter.officialPresetId.trim()
-      : undefined,
-    officialPresetVersion: Number.isFinite(Number(sourcePrinter.officialPresetVersion))
-      ? normalizeProfileVersion(sourcePrinter.officialPresetVersion, 1)
-      : undefined,
-    isOfficial: sourcePrinter.isOfficial ?? false,
-    isCustom: sourcePrinter.isCustom ?? true,
+    officialPresetId: undefined,
+    officialPresetVersion: undefined,
+    isOfficial: false,
+    isCustom: true,
     buildVolumeMm: sourcePrinter.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
     display: {
       resolutionX: sourcePrinter.display?.resolutionX ?? 2560,
