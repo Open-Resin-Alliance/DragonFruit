@@ -781,12 +781,15 @@ export function ProfileSettingsModal({
     networkUiAdapter && networkUiAdapter.supportsRemoteMaterialProfiles !== false,
   );
   const selectedNetworkModeLabel = networkUiAdapter?.displayName ?? 'Unknown';
+  const selectedActiveNetworkDeviceReachability = selectedPrinter?.activeNetworkDeviceId
+    ? printerReachabilityByDeviceId[selectedPrinter.activeNetworkDeviceId]
+    : null;
   const shouldUseRemoteOnDeviceMaterials = Boolean(
     supportsRemoteMaterialProfiles
     && selectedPrinter?.networkConnection?.connected
-    && (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress),
+    && (selectedPrinter?.networkConnection?.ipAddress || selectedPrinter?.network?.ipAddress)
+    && selectedActiveNetworkDeviceReachability !== false,
   );
-  const shouldShowRemoteMaterialConnectInfo = Boolean(supportsRemoteMaterialProfiles && !shouldUseRemoteOnDeviceMaterials);
 
   const selectedRemoteMaterial = React.useMemo(() => {
     if (!selectedRemoteMaterialId) return null;
@@ -937,7 +940,6 @@ export function ProfileSettingsModal({
     () => managedNetworkPrinters.filter((device) => device.connected).length,
     [managedNetworkPrinters],
   );
-  const hasMultipleConnectedManagedPrinters = connectedManagedNetworkPrinterCount > 1;
   const selectedPrinterFleetCount = managedNetworkPrinters.length;
   const canShowFleetRailMode = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
   const shouldRenderFleetRail = selectedPrinterSupportsNetworkSettings && printerRailViewMode === 'fleet';
@@ -1109,15 +1111,36 @@ export function ProfileSettingsModal({
       return activeManagedNetworkPrinter.connected !== true;
     }
 
+    if (selectedPrinter?.activeNetworkDeviceId && selectedActiveNetworkDeviceReachability === false) {
+      return true;
+    }
+
     return selectedPrinter?.networkConnection?.connected === false;
   }, [
     activeManagedNetworkPrinter,
+    selectedActiveNetworkDeviceReachability,
+    selectedPrinter?.activeNetworkDeviceId,
     supportsRemoteMaterialProfiles,
     printerReachabilityByDeviceId,
     selectedRemoteMaterialHost,
     selectedPrinter?.networkConnection?.connected,
   ]);
-  const shouldShowRemoteMaterialSelectedPrinterOfflineState = isSelectedRemoteMaterialPrinterOffline && hasMultipleConnectedManagedPrinters;
+  const hasConfiguredRemoteMaterialTarget = Boolean(
+    selectedRemoteMaterialHost
+    || selectedPrinter?.activeNetworkDeviceId
+    || activeManagedNetworkPrinter,
+  );
+  const shouldShowRemoteMaterialSelectedPrinterOfflineState = Boolean(
+    supportsRemoteMaterialProfiles
+    && !shouldUseRemoteOnDeviceMaterials
+    && hasConfiguredRemoteMaterialTarget
+    && isSelectedRemoteMaterialPrinterOffline,
+  );
+  const shouldShowRemoteMaterialConnectInfo = Boolean(
+    supportsRemoteMaterialProfiles
+    && !shouldUseRemoteOnDeviceMaterials
+    && !shouldShowRemoteMaterialSelectedPrinterOfflineState,
+  );
   const shouldShowRemoteMaterialsPanel = shouldUseRemoteOnDeviceMaterials || shouldShowRemoteMaterialSelectedPrinterOfflineState;
 
   const primaryEditFields = effectiveNetworkUiAdapter.primaryEditFields;
@@ -2820,7 +2843,12 @@ export function ProfileSettingsModal({
                       useTrimmedImage: false,
                       imageFitClassName: 'object-cover',
                       imageInsetClassName: 'inset-0',
-                      imageFallback: <><Wifi className="w-5 h-5 mx-auto mb-1" />{online ? 'Online' : 'No image'}</>,
+                      imageFallback: (
+                        <>
+                          {online ? <Wifi className="w-5 h-5 mx-auto mb-1" /> : <WifiOff className="w-5 h-5 mx-auto mb-1" />}
+                          {online ? 'Online' : 'Offline'}
+                        </>
+                      ),
                       imageOverlay: (
                         <div className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
                           style={{
@@ -2832,7 +2860,9 @@ export function ProfileSettingsModal({
                               : 'color-mix(in srgb, #ef4444, #0f172a 78%)',
                           }}
                         >
-                          <Wifi className="w-3.5 h-3.5" style={{ color: online ? '#dcfce7' : '#fecaca' }} />
+                          {online
+                            ? <Wifi className="w-3.5 h-3.5" style={{ color: '#dcfce7' }} />
+                            : <WifiOff className="w-3.5 h-3.5" style={{ color: '#fecaca' }} />}
                         </div>
                       ),
                       topBadge: (
@@ -2871,7 +2901,15 @@ export function ProfileSettingsModal({
                   const active = printer.id === selectedPrinter?.id;
                   const isGenericPrinter = (printer.manufacturer ?? '').toLowerCase() === 'generic'
                     || printer.name.toLowerCase().includes('generic');
-                  const isNetworkConnected = printer.networkConnection?.connected === true;
+                  const activeDeviceReachability = printer.activeNetworkDeviceId
+                    ? printerReachabilityByDeviceId[printer.activeNetworkDeviceId]
+                    : null;
+                  const hasConfiguredNetworkTarget = Boolean(
+                    printer.networkSupport
+                    && (printer.networkConnection?.ipAddress || printer.network?.ipAddress || printer.activeNetworkDeviceId),
+                  );
+                  const isNetworkConnected = printer.networkConnection?.connected === true && activeDeviceReachability !== false;
+                  const isNetworkOffline = hasConfiguredNetworkTarget && !isNetworkConnected;
                   const supportsNetworkFleet = Boolean(printer.networkSupport);
                   const fleetCount = printer.networkFleet?.length ?? 0;
                   const platformBadge = printer.platformBadge?.text?.trim()
@@ -2934,17 +2972,25 @@ export function ProfileSettingsModal({
                       </span>
                     ) : null,
                     imageFallback: isGenericPrinter ? <><Printer className="w-5 h-5 mx-auto mb-1" />Generic</> : <><ImagePlus className="w-5 h-5 mx-auto mb-1" />No image</>,
-                    imageOverlay: isNetworkConnected ? (
+                    imageOverlay: (isNetworkConnected || isNetworkOffline) ? (
                       <span
                         className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
-                        title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
-                        style={{
-                          borderColor: 'color-mix(in srgb, #22c55e, white 12%)',
-                          background: 'color-mix(in srgb, #22c55e, #0f172a 40%)',
-                          color: '#dcfce7',
-                        }}
+                        title={isNetworkConnected
+                          ? `Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`
+                          : 'Printer not connected'}
+                        style={isNetworkConnected
+                          ? {
+                              borderColor: 'color-mix(in srgb, #22c55e, white 12%)',
+                              background: 'color-mix(in srgb, #22c55e, #0f172a 40%)',
+                              color: '#dcfce7',
+                            }
+                          : {
+                              borderColor: 'color-mix(in srgb, var(--border-subtle), #ef4444 18%)',
+                              background: 'color-mix(in srgb, #ef4444, #0f172a 78%)',
+                              color: '#fecaca',
+                            }}
                       >
-                        <Wifi className="w-3.5 h-3.5" />
+                        {isNetworkConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
                       </span>
                     ) : null,
                     topBadge: cardBadgeText ? (
@@ -3196,7 +3242,7 @@ export function ProfileSettingsModal({
                     {shouldUseRemoteOnDeviceMaterials
                       ? <>Connected {selectedNetworkModeLabel} profiles are loaded directly from <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span>. Selection is read-only for now.</>
                       : shouldShowRemoteMaterialSelectedPrinterOfflineState
-                        ? <>The selected printer appears offline. Showing on-device materials view with offline status.</>
+                        ? <>Printer not connected. Reconnect the selected machine in Fleet Management, then refresh on-device materials.</>
                         : shouldShowRemoteMaterialConnectInfo
                           ? <>Connect to a machine to view on-device material profiles.</>
                           : <>Profiles below are bound to <span style={{ color: 'var(--text-strong)' }}>{selectedPrinter.name}</span> and follow the selected printer hardware.</>}
@@ -3352,10 +3398,10 @@ export function ProfileSettingsModal({
                       <WifiOff className="w-5 h-5" style={{ color: 'var(--danger)' }} />
                     </div>
                     <h4 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-                      Selected Printer is Offline
+                      Printer Not Connected
                     </h4>
                     <p className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                      Reconnect this printer in Fleet Management, then refresh to load on-device material profiles.
+                      A network printer is configured, but it is not responding right now. Reconnect it in Fleet Management, then refresh to load on-device materials.
                     </p>
                     {selectedPrinterSupportsNetworkSettings && (
                       <button
@@ -3670,7 +3716,7 @@ export function ProfileSettingsModal({
           <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/55 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
             if (event.target === event.currentTarget) setShowPresetPicker(false);
           }}>
-            <div className="w-full max-w-[1040px] max-h-[94vh] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+            <div className="w-full max-w-[1040px] h-[94vh] max-h-[90vh] min-h-[620px] rounded-xl border shadow-2xl overflow-hidden ui-modal-panel-enter flex flex-col" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
               <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-subtle)' }}>
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>Printer Library</h3>
