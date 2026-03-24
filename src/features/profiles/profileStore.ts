@@ -1541,6 +1541,179 @@ export function duplicatePrinterProfileAsCustom(id: string): string {
   return duplicateId;
 }
 
+export function movePrinterProfile(id: string, beforeId?: string): void {
+  ensureHydrated();
+  const sourceIndex = state.printerProfiles.findIndex((profile) => profile.id === id);
+  if (sourceIndex < 0) return;
+
+  const nextPrinterProfiles = [...state.printerProfiles];
+  const [movedPrinter] = nextPrinterProfiles.splice(sourceIndex, 1);
+  if (!movedPrinter) return;
+
+  const normalizedBeforeId = typeof beforeId === 'string' ? beforeId.trim() : '';
+  if (!normalizedBeforeId) {
+    nextPrinterProfiles.push(movedPrinter);
+  } else {
+    const targetIndex = nextPrinterProfiles.findIndex((profile) => profile.id === normalizedBeforeId);
+    if (targetIndex < 0) {
+      nextPrinterProfiles.push(movedPrinter);
+    } else {
+      nextPrinterProfiles.splice(targetIndex, 0, movedPrinter);
+    }
+  }
+
+  setState({
+    ...state,
+    printerProfiles: nextPrinterProfiles,
+  });
+}
+
+export type PrinterBundleExportPayload = {
+  version: number;
+  exportedAt: string;
+  printer: PrinterProfile;
+  materials: MaterialProfile[];
+};
+
+export function importPrinterBundle(payload: unknown): string {
+  ensureHydrated();
+
+  const bundle = payload as Partial<PrinterBundleExportPayload> & {
+    printer?: Partial<PrinterProfile>;
+    materials?: unknown;
+  };
+
+  const sourcePrinter = bundle?.printer;
+  if (!sourcePrinter || typeof sourcePrinter !== 'object') {
+    throw new Error('[ProfileStore] Invalid printer bundle payload');
+  }
+
+  const importedPrinterId = createId('printer');
+  const importedNetworkSupport = normalizeNetworkSupport(sourcePrinter.networkSupport);
+  const importedNetworkSettings = sanitizePrinterNetworkSettings(sourcePrinter.network);
+  const importedPrinter: PrinterProfile = {
+    id: importedPrinterId,
+    name: typeof sourcePrinter.name === 'string' && sourcePrinter.name.trim().length > 0
+      ? sourcePrinter.name.trim()
+      : `Printer ${state.printerProfiles.length + 1}`,
+    manufacturer: typeof sourcePrinter.manufacturer === 'string' && sourcePrinter.manufacturer.trim().length > 0
+      ? sourcePrinter.manufacturer.trim()
+      : 'Generic',
+    imageDataUrl: typeof sourcePrinter.imageDataUrl === 'string' ? sourcePrinter.imageDataUrl : undefined,
+    antiAliasing: normalizeAntiAliasingSupport(sourcePrinter.antiAliasing),
+    networkSupport: importedNetworkSupport,
+    hasCamera: normalizeCameraSupport(sourcePrinter.hasCamera),
+    networkFilter: sanitizeNetworkFilter(sourcePrinter.networkFilter),
+    platformBadge: sanitizePlatformBadge(sourcePrinter.platformBadge),
+    pixelSize: sanitizePixelSize(sourcePrinter.pixelSize),
+    bitDepth: sanitizeBitDepth(sourcePrinter.bitDepth),
+    buildDimensionMode: normalizeBuildDimensionMode(sourcePrinter.buildDimensionMode) ?? 'manual',
+    officialPresetId: typeof sourcePrinter.officialPresetId === 'string' && sourcePrinter.officialPresetId.trim().length > 0
+      ? sourcePrinter.officialPresetId.trim()
+      : undefined,
+    officialPresetVersion: Number.isFinite(Number(sourcePrinter.officialPresetVersion))
+      ? normalizeProfileVersion(sourcePrinter.officialPresetVersion, 1)
+      : undefined,
+    isOfficial: sourcePrinter.isOfficial ?? false,
+    isCustom: sourcePrinter.isCustom ?? true,
+    buildVolumeMm: sourcePrinter.buildVolumeMm ?? { width: 143, depth: 89, height: 175 },
+    display: {
+      resolutionX: sourcePrinter.display?.resolutionX ?? 2560,
+      resolutionY: sourcePrinter.display?.resolutionY ?? 1620,
+      outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat),
+      formatVersion: normalizeFormatVersion(sourcePrinter.display?.formatVersion),
+      settingsMode: normalizeSettingsMode(sourcePrinter.display?.settingsMode),
+      mirrorX: normalizeMirrorFlag(sourcePrinter.display?.mirrorX, false),
+      mirrorY: normalizeMirrorFlag(sourcePrinter.display?.mirrorY, false),
+    },
+    network: importedNetworkSettings,
+    networkFleet: importedNetworkSupport
+      ? sanitizePrinterNetworkFleet(sourcePrinter.networkFleet, importedNetworkSupport, importedNetworkSettings.ipAddress)
+      : undefined,
+    activeNetworkDeviceId: typeof sourcePrinter.activeNetworkDeviceId === 'string' && sourcePrinter.activeNetworkDeviceId.trim().length > 0
+      ? sourcePrinter.activeNetworkDeviceId.trim()
+      : undefined,
+    networkConnection: importedNetworkSupport
+      ? sanitizePrinterNetworkConnectionState(sourcePrinter.networkConnection, importedNetworkSupport, importedNetworkSettings.ipAddress)
+      : undefined,
+  };
+
+  const sourceMaterials = Array.isArray(bundle.materials) ? bundle.materials : [];
+  const importedMaterials: MaterialProfile[] = sourceMaterials
+    .filter((item): item is Partial<MaterialProfile> => Boolean(item) && typeof item === 'object')
+    .map((material, index) => ({
+      id: createId('material'),
+      printerProfileId: importedPrinterId,
+      officialTemplateId: typeof material.officialTemplateId === 'string' && material.officialTemplateId.trim().length > 0
+        ? material.officialTemplateId.trim()
+        : undefined,
+      officialTemplateVersion: Number.isFinite(Number(material.officialTemplateVersion))
+        ? normalizeProfileVersion(material.officialTemplateVersion, 1)
+        : undefined,
+      name: typeof material.name === 'string' && material.name.trim().length > 0
+        ? material.name.trim()
+        : `Material ${index + 1}`,
+      brand: typeof material.brand === 'string' && material.brand.trim().length > 0
+        ? material.brand.trim()
+        : 'Default',
+      currencyCode: typeof material.currencyCode === 'string' && material.currencyCode.trim().length > 0
+        ? material.currencyCode.trim().toUpperCase()
+        : 'USD',
+      bottlePrice: Number.isFinite(Number(material.bottlePrice)) ? Number(material.bottlePrice) : 0,
+      bottleCapacityMl: Number.isFinite(Number(material.bottleCapacityMl)) ? Number(material.bottleCapacityMl) : 1000,
+      resinFamily: material.resinFamily ?? 'standard',
+      scaleCompensationPct: {
+        x: Number(material.scaleCompensationPct?.x ?? 0),
+        y: Number(material.scaleCompensationPct?.y ?? 0),
+        z: Number(material.scaleCompensationPct?.z ?? 0),
+      },
+      layerHeightMm: Number.isFinite(Number(material.layerHeightMm)) ? Number(material.layerHeightMm) : 0.05,
+      normalExposureSec: Number.isFinite(Number(material.normalExposureSec)) ? Number(material.normalExposureSec) : 2.5,
+      bottomExposureSec: Number.isFinite(Number(material.bottomExposureSec)) ? Number(material.bottomExposureSec) : 28,
+      bottomLayerCount: Number.isFinite(Number(material.bottomLayerCount)) ? Math.max(1, Math.round(Number(material.bottomLayerCount))) : 5,
+      liftDistanceMm: Number.isFinite(Number(material.liftDistanceMm)) ? Number(material.liftDistanceMm) : 6,
+      liftSpeedMmMin: Number.isFinite(Number(material.liftSpeedMmMin)) ? Number(material.liftSpeedMmMin) : 60,
+      retractSpeedMmMin: Number.isFinite(Number(material.retractSpeedMmMin)) ? Number(material.retractSpeedMmMin) : 150,
+      minimumAaAlphaPercent: normalizeMinimumAaAlphaPercent(material.minimumAaAlphaPercent, 35),
+      localSettingsByOutput: sanitizeLocalSettingsByOutput(material.localSettingsByOutput),
+    }));
+
+  if (importedMaterials.length === 0) {
+    importedMaterials.push({
+      id: createId('material'),
+      printerProfileId: importedPrinterId,
+      officialTemplateId: undefined,
+      officialTemplateVersion: undefined,
+      name: 'Standard 405nm',
+      brand: 'Default',
+      currencyCode: 'USD',
+      bottlePrice: 24.99,
+      bottleCapacityMl: 1000,
+      resinFamily: 'standard',
+      scaleCompensationPct: { x: 0, y: 0, z: 0 },
+      layerHeightMm: 0.05,
+      normalExposureSec: 2.5,
+      bottomExposureSec: 28,
+      bottomLayerCount: 5,
+      liftDistanceMm: 6,
+      liftSpeedMmMin: 60,
+      retractSpeedMmMin: 150,
+      minimumAaAlphaPercent: 35,
+      localSettingsByOutput: undefined,
+    });
+  }
+
+  setState(ensureActiveMaterialForActivePrinter({
+    ...state,
+    printerProfiles: [...state.printerProfiles, importedPrinter],
+    materialProfiles: [...state.materialProfiles, ...importedMaterials],
+    activePrinterProfileId: importedPrinterId,
+    activeMaterialProfileId: importedMaterials[0].id,
+  }));
+
+  return importedPrinterId;
+}
+
 export function removeMaterialProfile(id: string): void {
   ensureHydrated();
   const target = state.materialProfiles.find((profile) => profile.id === id);

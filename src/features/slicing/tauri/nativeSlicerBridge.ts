@@ -197,7 +197,7 @@ export type NativeSliceTempPathArtifact = {
   bridge: NativeSlicerBridgeMetrics;
 };
 
-export type NativeOpenDialogCategory = 'mesh' | 'scene';
+export type NativeOpenDialogCategory = 'mesh' | 'scene' | 'bundle';
 
 export type NativePickedOpenFile = {
   path: string;

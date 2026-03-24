@@ -105,6 +105,7 @@ fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
             "stl" | "3mf" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
             "voxl" => dialog.add_filter("Scene Files", &["voxl"]),
             "lys" => dialog.add_filter("Scene Files", &["lys"]),
+            "json" => dialog.add_filter("JSON Files", &["json"]),
             _ => dialog.add_filter("Print Files", &[ext]),
         };
     }
@@ -530,6 +531,7 @@ fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
     dialog = match normalized.as_str() {
         "mesh" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
         "scene" => dialog.add_filter("Scene Files", &["voxl", "lys"]),
+        "bundle" => dialog.add_filter("JSON Files", &["json"]),
         _ => dialog
             .add_filter("Mesh Files", &["stl", "3mf"])
             .add_filter("Scene Files", &["voxl", "lys"]),

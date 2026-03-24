@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Box, CarFront, Check, ChevronDown, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, Search, Snail, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Box, CarFront, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, RefreshCw, Search, Snail, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
 import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
@@ -19,9 +19,11 @@ import {
   getMaterialProfilesForPrinter,
   getProfileStoreSnapshot,
   getProfileStoreServerSnapshot,
+  importPrinterBundle,
   removePrinterNetworkDevice,
   removeMaterialProfile,
   removePrinterProfile,
+  movePrinterProfile,
   setActiveMaterialProfile,
   setActivePrinterProfile,
   selectPrinterNetworkDevice,
@@ -54,6 +56,11 @@ import {
   getPrinterReachabilitySnapshot,
   subscribeToPrinterReachability,
 } from '@/features/network/printerReachabilityStore';
+import {
+  pickOpenFilesWithNativeDialog,
+  readPrintArtifactBytesFromPath,
+  savePrintArtifactWithNativeDialog,
+} from '@/features/slicing/tauri/nativeSlicerBridge';
 import {
   buildAdvancedRemoteMaterialSections,
   buildBasicRemoteMaterialSections,
@@ -401,6 +408,7 @@ export function ProfileSettingsModal({
   const [editingFleetUnitNickname, setEditingFleetUnitNickname] = React.useState('');
   const [editingFleetUnitImageDataUrl, setEditingFleetUnitImageDataUrl] = React.useState<string | null>(null);
   const [officialUpdateStatusMessage, setOfficialUpdateStatusMessage] = React.useState<string | null>(null);
+  const [printerDragId, setPrinterDragId] = React.useState<string | null>(null);
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
   const fleetUnitImageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
@@ -935,9 +943,155 @@ export function ProfileSettingsModal({
   const shouldRenderFleetRail = selectedPrinterSupportsNetworkSettings && printerRailViewMode === 'fleet';
   const printerRailEntryCount = shouldRenderFleetRail ? managedNetworkPrinters.length : profileState.printerProfiles.length;
   const shouldConstrainPrinterRailHeight = printerRailEntryCount > 8;
+  const selectedPrinterRailIndex = React.useMemo(
+    () => profileState.printerProfiles.findIndex((profile) => profile.id === selectedPrinter?.id),
+    [profileState.printerProfiles, selectedPrinter?.id],
+  );
   const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 1 ? 'Manage Fleet' : 'Network Settings';
   const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
   const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
+  const printerSectionTitle = shouldRenderFleetRail
+    ? `${selectedPrinter?.name ?? 'Printer'} Fleet`
+    : '3D Printer';
+  const moveDraggedPrinter = React.useCallback((draggedId: string, beforeId?: string | null) => {
+    if (!draggedId) return;
+    movePrinterProfile(draggedId, beforeId ?? undefined);
+  }, []);
+  const moveSelectedPrinterInRail = React.useCallback((direction: -1 | 1) => {
+    if (!selectedPrinter || shouldRenderFleetRail) return;
+    if (selectedPrinterRailIndex < 0) return;
+
+    const targetIndex = selectedPrinterRailIndex + direction;
+    const targetPrinter = profileState.printerProfiles[targetIndex];
+    if (!targetPrinter) return;
+
+    movePrinterProfile(selectedPrinter.id, direction > 0 ? profileState.printerProfiles[targetIndex + 1]?.id : targetPrinter.id);
+  }, [profileState.printerProfiles, selectedPrinter, selectedPrinterRailIndex, shouldRenderFleetRail]);
+  const renderPrinterRailCard = React.useCallback((options: {
+    key: string;
+    active: boolean;
+    draggable?: boolean;
+    dragging?: boolean;
+    onClick: () => void;
+    onDoubleClick?: () => void;
+    onDragStart?: React.DragEventHandler<HTMLDivElement>;
+    onDragEnd?: React.DragEventHandler<HTMLDivElement>;
+    onDragOver?: React.DragEventHandler<HTMLDivElement>;
+    onDrop?: React.DragEventHandler<HTMLDivElement>;
+    imageDataUrl?: string;
+    imageAlt: string;
+    imageFallback: React.ReactNode;
+    imageOverlay?: React.ReactNode;
+    useTrimmedImage?: boolean;
+    imageFitClassName?: string;
+    imageInsetClassName?: string;
+    topBadge?: React.ReactNode;
+    bottomRightBadge?: React.ReactNode;
+    title: string;
+    subtitle: string;
+    footer?: React.ReactNode;
+    activeStyles: React.CSSProperties;
+    inactiveStyles: React.CSSProperties;
+  }) => {
+    const {
+      key,
+      active,
+      draggable,
+      dragging,
+      onClick,
+      onDoubleClick,
+      onDragStart,
+      onDragEnd,
+      onDragOver,
+      onDrop,
+      imageDataUrl,
+      imageAlt,
+      imageFallback,
+      imageOverlay,
+      useTrimmedImage = true,
+      imageFitClassName = 'object-contain',
+      imageInsetClassName = 'inset-1',
+      topBadge,
+      bottomRightBadge,
+      title,
+      subtitle,
+      footer,
+      activeStyles,
+      inactiveStyles,
+    } = options;
+
+    return (
+      <div
+        key={key}
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        className={`min-w-0 w-full rounded-xl border p-2 transition-all duration-150 ${draggable ? (dragging ? 'opacity-60' : 'cursor-grab active:cursor-grabbing') : ''}`}
+        onDoubleClick={onDoubleClick}
+        style={active ? activeStyles : inactiveStyles}
+      >
+        <button
+          type="button"
+          onClick={onClick}
+          className="w-full text-left leading-none"
+        >
+          <div
+            className="h-[128px] min-h-[128px] max-h-[128px] shrink-0 rounded-lg border overflow-hidden relative"
+            style={{
+              borderColor: 'var(--border-subtle)',
+              background: '#1c2027',
+              height: 128,
+              minHeight: 128,
+              maxHeight: 128,
+            }}
+          >
+            {imageDataUrl ? (
+              <div className={`absolute ${imageInsetClassName}`}>
+                {useTrimmedImage ? (
+                  <AutoTrimmedImage src={imageDataUrl} alt={imageAlt} className={`h-full w-full ${imageFitClassName}`} />
+                ) : (
+                  <img src={imageDataUrl} alt={imageAlt} className={`h-full w-full ${imageFitClassName} transition-opacity duration-150 opacity-100`} />
+                )}
+              </div>
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center px-2" style={{ color: 'var(--text-muted)' }}>
+                <div className="flex flex-col items-center justify-center gap-1 text-[10px] text-center leading-tight">
+                  {imageFallback}
+                </div>
+              </div>
+            )}
+            {imageOverlay}
+            {topBadge}
+            {bottomRightBadge && (
+              <div className="absolute bottom-1 right-1 z-10">
+                {bottomRightBadge}
+              </div>
+            )}
+          </div>
+        </button>
+
+        <div className="mt-0.5 flex items-center justify-between gap-1.5">
+          <button
+            type="button"
+            onClick={onClick}
+            className="min-w-0 flex-1 text-left"
+          >
+            <div className="flex items-center gap-1.5">
+              <div className="text-[11px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
+                {title}
+              </div>
+            </div>
+            <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
+              {subtitle}
+            </div>
+          </button>
+          {footer}
+        </div>
+      </div>
+    );
+  }, []);
   const activeManagedNetworkPrinter = React.useMemo(
     () => managedNetworkPrinters.find((device) => device.id === selectedPrinter?.activeNetworkDeviceId) ?? null,
     [managedNetworkPrinters, selectedPrinter?.activeNetworkDeviceId],
@@ -2168,6 +2322,11 @@ export function ProfileSettingsModal({
     setDeleteConfirmTarget({ kind: 'material', id: selectedMaterial.id, name: selectedMaterial.name });
   }, [selectedMaterial]);
 
+  const openSelectedMaterialEditor = React.useCallback(() => {
+    if (!selectedMaterial) return;
+    setIsMaterialEditorOpen(true);
+  }, [selectedMaterial]);
+
   const handleConfirmDelete = React.useCallback(() => {
     if (!deleteConfirmTarget) return;
 
@@ -2282,30 +2441,51 @@ export function ProfileSettingsModal({
   }, [uploadTargetPrinterId]);
 
   const handleExportSelectedPrinterBundle = React.useCallback(() => {
-    if (!selectedPrinter) return;
-    const snapshot = getProfileStoreSnapshot();
-    const printer = snapshot.printerProfiles.find((item) => item.id === selectedPrinter.id);
-    if (!printer) return;
+    void (async () => {
+      if (!selectedPrinter) return;
+      const snapshot = getProfileStoreSnapshot();
+      const printer = snapshot.printerProfiles.find((item) => item.id === selectedPrinter.id);
+      if (!printer) return;
 
-    const materials = getMaterialProfilesForPrinter(printer.id, snapshot);
-    const payload = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      printer,
-      materials,
-    };
+      const materials = getMaterialProfilesForPrinter(printer.id, snapshot);
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        printer,
+        materials,
+      };
 
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const safeName = printer.name.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+      const safeName = printer.name.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase();
+      const suggestedFilename = `${safeName || 'printer-profile'}-bundle.json`;
+      const bytes = new TextEncoder().encode(JSON.stringify(payload, null, 2));
 
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${safeName || 'printer-profile'}-bundle.json`;
-    anchor.click();
-
-    URL.revokeObjectURL(url);
+      try {
+        await savePrintArtifactWithNativeDialog(bytes, suggestedFilename);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) return;
+        throw error;
+      }
+    })();
   }, [selectedPrinter]);
+
+  const handleImportSelectedPrinterBundle = React.useCallback(() => {
+    void (async () => {
+      try {
+        const picked = await pickOpenFilesWithNativeDialog('bundle', false);
+        const sourcePath = picked[0]?.path?.trim();
+        if (!sourcePath) return;
+
+        const bytes = await readPrintArtifactBytesFromPath(sourcePath);
+        const payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+        importPrinterBundle(payload);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error ?? '');
+        if (message.toLowerCase().includes('cancel')) return;
+        console.warn('[ProfileSettingsModal] Failed to import printer bundle', error);
+      }
+    })();
+  }, []);
 
   const renderPresetLibraryCard = React.useCallback((preset: (typeof availablePrinterPresets)[number]) => {
     const isAlreadyAdded = addedOfficialPresetIds.has(preset.presetId);
@@ -2532,7 +2712,7 @@ export function ProfileSettingsModal({
                 <div>
                   <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-strong)' }}>
                     <Box className="w-4 h-4" />
-                    3D Printer
+                    {printerSectionTitle}
                   </h3>
                   <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                     {shouldRenderFleetRail
@@ -2547,19 +2727,51 @@ export function ProfileSettingsModal({
                 </div>
 
                 {!shouldRenderFleetRail && (
-                  <button
-                    type="button"
-                    onClick={handleAddPrinter}
-                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
-                    style={{
-                      color: 'var(--accent-secondary)',
-                      borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                      background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                    }}
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Printer Library
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => moveSelectedPrinterInRail(-1)}
+                      disabled={!selectedPrinter || selectedPrinterRailIndex <= 0}
+                      className="ui-button ui-button-secondary !h-8 !w-8 !px-0 !py-0 inline-flex items-center justify-center rounded-md disabled:opacity-45"
+                      style={{
+                        color: 'var(--text-muted)',
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                      }}
+                      aria-label="Move selected printer left"
+                      title="Move selected printer left"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveSelectedPrinterInRail(1)}
+                      disabled={!selectedPrinter || selectedPrinterRailIndex < 0 || selectedPrinterRailIndex >= profileState.printerProfiles.length - 1}
+                      className="ui-button ui-button-secondary !h-8 !w-8 !px-0 !py-0 inline-flex items-center justify-center rounded-md disabled:opacity-45"
+                      style={{
+                        color: 'var(--text-muted)',
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                      }}
+                      aria-label="Move selected printer right"
+                      title="Move selected printer right"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAddPrinter}
+                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md shrink-0"
+                      style={{
+                        color: 'var(--text-strong)',
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-1)',
+                      }}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Printer Library
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -2567,6 +2779,14 @@ export function ProfileSettingsModal({
             <div className="p-3">
               <div
                 className={`grid grid-cols-5 gap-2.5 pb-1 ${shouldConstrainPrinterRailHeight ? 'max-h-[392px] overflow-y-auto pr-1' : ''}`}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (printerDragId) {
+                    moveDraggedPrinter(printerDragId, null);
+                    setPrinterDragId(null);
+                  }
+                }}
               >
                 {shouldRenderFleetRail
                   ? managedNetworkPrinters.map((device) => {
@@ -2575,109 +2795,66 @@ export function ProfileSettingsModal({
                     const online = device.connected === true && reachable;
                     const cardTitle = device.displayName || device.hostName || device.ipAddress;
                     const statusLabel = online ? 'Online' : device.connected ? 'Limited' : 'Offline';
-                    const selectedPrinterBitDepthBits = Number.isFinite(Number(selectedPrinter?.bitDepth?.bits))
-                      ? Math.round(Number(selectedPrinter?.bitDepth?.bits))
-                      : null;
-                    const selectedPrinterBitDepthLabel = selectedPrinterBitDepthBits != null && selectedPrinterBitDepthBits !== 8
-                      ? `${selectedPrinterBitDepthBits} Bit`
-                      : null;
 
-                    return (
-                      <button
-                        key={device.id}
-                        type="button"
-                        onClick={() => handleSelectManagedPrinter(device)}
-                        onDoubleClick={() => {
-                          handleSelectManagedPrinter(device);
-                          setIsEditingPrinter(true);
-                        }}
-                        className="min-w-0 w-full rounded-xl border p-2 text-left transition-all duration-150"
-                        style={active
-                          ? {
-                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
-                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                            }
-                          : {
-                              borderColor: 'var(--border-subtle)',
-                              background: 'var(--surface-2)',
-                            }}
-                      >
-                        <div
-                          className="h-[120px] rounded-lg border p-2 relative flex flex-col justify-between"
-                          style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}
+                    return renderPrinterRailCard({
+                      key: device.id,
+                      active,
+                      onClick: () => handleSelectManagedPrinter(device),
+                      onDoubleClick: () => {
+                        handleSelectManagedPrinter(device);
+                        setIsEditingPrinter(true);
+                      },
+                      imageDataUrl: device.imageDataUrl,
+                      imageAlt: cardTitle,
+                      useTrimmedImage: false,
+                      imageFitClassName: 'object-cover',
+                      imageInsetClassName: 'inset-0',
+                      imageFallback: <><Wifi className="w-5 h-5 mx-auto mb-1" />{online ? 'Online' : 'No image'}</>,
+                      imageOverlay: (
+                        <div className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
+                          style={{
+                            borderColor: online
+                              ? 'color-mix(in srgb, #22c55e, white 12%)'
+                              : 'color-mix(in srgb, var(--border-subtle), #ef4444 18%)',
+                            background: online
+                              ? 'color-mix(in srgb, #22c55e, #0f172a 40%)'
+                              : 'color-mix(in srgb, #ef4444, #0f172a 78%)',
+                          }}
                         >
-                          {device.imageDataUrl && (
-                            <div className="absolute inset-0 z-0 rounded-lg overflow-hidden pointer-events-none">
-                              <AutoTrimmedImage src={device.imageDataUrl} alt={cardTitle} className="h-full w-full object-cover opacity-45" />
-                              <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(9,12,19,0.72) 0%, rgba(9,12,19,0.86) 72%, rgba(9,12,19,0.93) 100%)' }} />
-                            </div>
-                          )}
-                          <div className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
-                            style={{
-                              borderColor: online
-                                ? 'color-mix(in srgb, #22c55e, white 12%)'
-                                : 'color-mix(in srgb, var(--border-subtle), #ef4444 18%)',
-                              background: online
-                                ? 'color-mix(in srgb, #22c55e, #0f172a 40%)'
-                                : 'color-mix(in srgb, #ef4444, #0f172a 78%)',
-                            }}
-                          >
-                            <Wifi className="w-3.5 h-3.5" style={{ color: online ? '#dcfce7' : '#fecaca' }} />
-                          </div>
-
-                          <div className="relative z-10 mt-auto space-y-1">
-                            <div className="text-[13px] font-semibold leading-tight truncate" style={{ color: 'var(--text-strong)' }}>
-                              {cardTitle}
-                            </div>
-                            <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                              {device.ipAddress}
-                            </div>
-                            <span
-                              className="inline-flex rounded-full border px-2 py-0.5 text-[10px]"
-                              style={online
-                                ? {
-                                    borderColor: 'color-mix(in srgb, #22c55e, var(--border-subtle) 42%)',
-                                    color: '#bbf7d0',
-                                    background: 'color-mix(in srgb, #22c55e, var(--surface-2) 88%)',
-                                  }
-                                : {
-                                    borderColor: 'color-mix(in srgb, #ef4444, var(--border-subtle) 42%)',
-                                    color: '#fecaca',
-                                    background: 'color-mix(in srgb, #ef4444, var(--surface-2) 92%)',
-                                  }}
-                            >
-                              {statusLabel}
-                            </span>
-                          </div>
+                          <Wifi className="w-3.5 h-3.5" style={{ color: online ? '#dcfce7' : '#fecaca' }} />
                         </div>
-
-                        <div className="mt-2.5 text-[12px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate min-w-0">{selectedPrinter?.name}</span>
-                            {selectedPrinterBitDepthLabel && (
-                              <span
-                                className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
-                                style={{
-                                  borderColor: selectedPrinterBitDepthBits === 3
-                                    ? 'color-mix(in srgb, #ef4444, white 18%)'
-                                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
-                                  color: '#f8fafc',
-                                  background: selectedPrinterBitDepthBits === 3
-                                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
-                                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
-                                }}
-                                title={selectedPrinter?.bitDepth?.description || `${selectedPrinterBitDepthLabel} display`}
-                              >
-                                <span className="relative top-[0.5px]">{selectedPrinterBitDepthLabel}</span>
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                          {selectedPrinter?.manufacturer || 'Generic'}
-                        </div>
-                      </button>
-                    );
+                      ),
+                      topBadge: (
+                        <span
+                          className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
+                          style={online
+                            ? {
+                                background: 'linear-gradient(135deg, #22c55e, #15803d)',
+                                color: '#ffffff',
+                                letterSpacing: '0.04em',
+                              }
+                            : {
+                                background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
+                                color: '#ffffff',
+                                letterSpacing: '0.04em',
+                              }}
+                        >
+                          <span className="relative top-[0.5px]">{statusLabel}</span>
+                        </span>
+                      ),
+                      bottomRightBadge: null,
+                      title: cardTitle,
+                      subtitle: device.ipAddress,
+                      footer: null,
+                      activeStyles: {
+                        borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
+                        background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                      },
+                      inactiveStyles: {
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-2)',
+                      },
+                    });
                   })
                   : profileState.printerProfiles.map((printer) => {
                   const active = printer.id === selectedPrinter?.id;
@@ -2698,156 +2875,133 @@ export function ProfileSettingsModal({
                   const bitDepthLabel = bitDepthBits != null && bitDepthBits !== 8
                     ? `${bitDepthBits} Bit`
                     : null;
-                  const imageHeight = 'h-[120px]';
 
-                  return (
-                    <div
-                      key={printer.id}
-                      className="min-w-0 w-full rounded-xl border p-2 transition-all duration-150"
-                      onDoubleClick={() => {
-                        handlePickPrinter(printer.id);
-                        setIsEditingPrinter(true);
-                      }}
-                      style={active
-                        ? {
-                            borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
-                            background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
-                          }
-                        : {
-                            borderColor: 'var(--border-subtle)',
-                            background: 'var(--surface-2)',
-                          }}
-                    >
+                  return renderPrinterRailCard({
+                    key: printer.id,
+                    active,
+                    draggable: true,
+                    dragging: printerDragId === printer.id,
+                    onClick: () => handlePickPrinter(printer.id),
+                    onDoubleClick: () => {
+                      handlePickPrinter(printer.id);
+                      setIsEditingPrinter(true);
+                    },
+                    onDragStart: (event) => {
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', printer.id);
+                      setPrinterDragId(printer.id);
+                    },
+                    onDragEnd: () => setPrinterDragId(null),
+                    onDragOver: (event) => event.preventDefault(),
+                    onDrop: (event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (printerDragId && printerDragId !== printer.id) {
+                        moveDraggedPrinter(printerDragId, printer.id);
+                      }
+                      setPrinterDragId(null);
+                    },
+                    imageDataUrl: printer.imageDataUrl,
+                    imageAlt: printer.name,
+                    useTrimmedImage: true,
+                    imageFitClassName: 'object-contain',
+                    bottomRightBadge: bitDepthLabel ? (
+                      <span
+                        className="inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
+                        style={{
+                          borderColor: bitDepthBits === 3
+                            ? 'color-mix(in srgb, #ef4444, white 18%)'
+                            : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
+                          color: '#f8fafc',
+                          background: bitDepthBits === 3
+                            ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
+                            : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
+                        }}
+                        title={printer.bitDepth?.description || `${bitDepthLabel} display`}
+                      >
+                        <span className="relative top-[0.5px]">{bitDepthLabel}</span>
+                      </span>
+                    ) : null,
+                    imageFallback: isGenericPrinter ? <><Printer className="w-5 h-5 mx-auto mb-1" />Generic</> : <><ImagePlus className="w-5 h-5 mx-auto mb-1" />No image</>,
+                    imageOverlay: isNetworkConnected ? (
+                      <span
+                        className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
+                        title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
+                        style={{
+                          borderColor: 'color-mix(in srgb, #22c55e, white 12%)',
+                          background: 'color-mix(in srgb, #22c55e, #0f172a 40%)',
+                          color: '#dcfce7',
+                        }}
+                      >
+                        <Wifi className="w-3.5 h-3.5" />
+                      </span>
+                    ) : null,
+                    topBadge: cardBadgeText ? (
+                      <span
+                        className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
+                        style={printer.isCustom
+                          ? {
+                              background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
+                              color: '#ffffff',
+                              letterSpacing: '0.04em',
+                            }
+                          : {
+                              background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, black 18%))`,
+                              color: '#ffffff',
+                              letterSpacing: '0.04em',
+                            }}
+                      >
+                        <span className="relative top-[0.5px]">{cardBadgeText}</span>
+                      </span>
+                    ) : null,
+                    title: printer.name,
+                    subtitle: printer.manufacturer || 'Generic',
+                    footer: supportsNetworkFleet ? (
                       <button
                         type="button"
-                        onClick={() => handlePickPrinter(printer.id)}
-                        className="w-full text-left"
-                      >
-                        <div className={`${imageHeight} rounded-lg border overflow-hidden flex items-center justify-center p-2 relative`} style={{ borderColor: 'var(--border-subtle)', background: '#1c2027' }}>
-                          {printer.imageDataUrl ? (
-                            <AutoTrimmedImage src={printer.imageDataUrl} alt={printer.name} className="h-full w-full object-contain" />
-                          ) : (
-                            <div className="text-[10px] text-center px-2" style={{ color: 'var(--text-muted)' }}>
-                              {isGenericPrinter ? (
-                                <>
-                                  <Printer className="w-5 h-5 mx-auto mb-1" />
-                                  Generic
-                                </>
-                              ) : (
-                                <>
-                                  <ImagePlus className="w-5 h-5 mx-auto mb-1" />
-                                  No image
-                                </>
-                              )}
-                            </div>
-                          )}
-                          {isNetworkConnected && (
-                            <span
-                              className="pointer-events-none absolute top-1 left-1 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border"
-                              title={`Connected to ${printer.networkConnection?.hostName || printer.networkConnection?.ipAddress || 'network printer'}`}
-                              style={{
-                                borderColor: 'color-mix(in srgb, #22c55e, white 12%)',
-                                background: 'color-mix(in srgb, #22c55e, #0f172a 40%)',
-                                color: '#dcfce7',
-                              }}
-                            >
-                              <Wifi className="w-3.5 h-3.5" />
-                            </span>
-                          )}
-                          {cardBadgeText && (
-                            <span
-                              className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
-                              style={printer.isCustom
-                                ? {
-                                    background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
-                                    color: '#ffffff',
-                                    letterSpacing: '0.04em',
-                                  }
-                                : {
-                                    background: `linear-gradient(135deg, color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, white 14%), color-mix(in srgb, ${platformBadge?.color || '#0ea5e9'}, black 18%))`,
-                                    color: '#ffffff',
-                                    letterSpacing: '0.04em',
-                                  }}
-                            >
-                              <span className="relative top-[0.5px]">{cardBadgeText}</span>
-                            </span>
-                          )}
-                        </div>
-                      </button>
-
-                      <div className="mt-2 flex items-center justify-between gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handlePickPrinter(printer.id)}
-                          className="min-w-0 flex-1 text-left"
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <div className="text-[11px] leading-snug font-semibold truncate min-w-0" style={{ color: 'var(--text-strong)' }}>
-                              {printer.name}
-                            </div>
-                            {bitDepthLabel && (
-                              <span
-                                className="shrink-0 inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-md border px-1.5 text-[9px] font-bold leading-none"
-                                style={{
-                                  borderColor: bitDepthBits === 3
-                                    ? 'color-mix(in srgb, #ef4444, white 18%)'
-                                    : 'color-mix(in srgb, var(--accent-secondary), white 20%)',
-                                  color: '#f8fafc',
-                                  background: bitDepthBits === 3
-                                    ? 'linear-gradient(135deg, color-mix(in srgb, #ef4444, #111827 56%), color-mix(in srgb, #ef4444, #0b1220 72%))'
-                                    : 'linear-gradient(135deg, color-mix(in srgb, var(--accent-secondary), #111827 52%), color-mix(in srgb, var(--accent-secondary), #0b1220 68%))',
-                                }}
-                                title={printer.bitDepth?.description || `${bitDepthLabel} display`}
-                              >
-                                <span className="relative top-[0.5px]">{bitDepthLabel}</span>
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] truncate" style={{ color: 'var(--text-muted)' }}>
-                            {printer.manufacturer || 'Generic'}
-                          </div>
-                        </button>
-
-                        {supportsNetworkFleet && (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handlePickPrinter(printer.id);
-                              if (fleetCount > 1) {
-                                setPrinterRailViewMode('fleet');
-                                return;
-                              }
-                              setPrinterRailViewMode('profiles');
-                              setIsAddingNetworkPrinter(true);
-                              setShowManualNetworkEntry(false);
-                              setIsNetworkSettingsOpen(true);
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handlePickPrinter(printer.id);
+                          if (fleetCount > 1) {
+                            setPrinterRailViewMode('fleet');
+                            return;
+                          }
+                          setPrinterRailViewMode('profiles');
+                          setIsAddingNetworkPrinter(true);
+                          setShowManualNetworkEntry(false);
+                          setIsNetworkSettingsOpen(true);
+                        }}
+                        aria-label={fleetCount > 1 ? `Open fleet view (${fleetCount})` : 'Add another networked device'}
+                        className="ui-button ui-button-secondary !h-7 !w-7 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
+                        style={fleetCount > 1
+                          ? {
+                              color: 'var(--text-strong)',
+                              borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                              background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
+                            }
+                          : {
+                              color: 'var(--accent-secondary)',
+                              borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                              background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
                             }}
-                            aria-label={fleetCount > 1 ? `Open fleet view (${fleetCount})` : 'Add another networked device'}
-                            className="ui-button ui-button-secondary !h-7 !w-7 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
-                            style={fleetCount > 1
-                              ? {
-                                  color: 'var(--text-strong)',
-                                  borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
-                                  background: 'color-mix(in srgb, var(--accent), var(--surface-1) 90%)',
-                                }
-                              : {
-                                  color: 'var(--accent-secondary)',
-                                  borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
-                                  background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
-                                }}
-                            title={fleetCount > 1 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
-                          >
-                            {fleetCount > 1 ? (
-                              <span className="inline-flex h-full w-full items-center justify-center text-[13px] font-bold leading-none tabular-nums">{fleetCount}</span>
-                            ) : (
-                              <Plus className="w-3.5 h-3.5" />
-                            )}
-                          </button>
+                        title={fleetCount > 1 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
+                      >
+                        {fleetCount > 1 ? (
+                          <span className="inline-flex h-full w-full items-center justify-center text-[13px] font-bold leading-none tabular-nums">{fleetCount}</span>
+                        ) : (
+                          <Plus className="w-3.5 h-3.5" />
                         )}
-                      </div>
-                    </div>
-                  );
+                      </button>
+                    ) : null,
+                    activeStyles: {
+                      borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 28%)',
+                      background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                    },
+                    inactiveStyles: {
+                      borderColor: 'var(--border-subtle)',
+                      background: 'var(--surface-2)',
+                    },
+                  });
                   })}
               </div>
 
@@ -2975,13 +3129,23 @@ export function ProfileSettingsModal({
                       </button>
                       <button
                         type="button"
+                        onClick={handleImportSelectedPrinterBundle}
+                        disabled={!hasPrinters}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        Import
+                      </button>
+                      <button
+                        type="button"
                         onClick={handleExportSelectedPrinterBundle}
                         disabled={!hasPrinters}
                         className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
                         style={{ color: 'var(--text-strong)' }}
                       >
                         <Download className="w-3.5 h-3.5" />
-                        Export Bundle
+                        Export
                       </button>
                       <button
                         type="button"
@@ -3034,19 +3198,42 @@ export function ProfileSettingsModal({
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {shouldUseRemoteOnDeviceMaterials && (
-                    <button
-                      type="button"
-                      onClick={() => { void loadRemoteMaterials(); }}
-                      disabled={isLoadingRemoteMaterials || !selectedRemoteMaterialHost}
-                      className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                      style={{ color: 'var(--text-strong)' }}
-                    >
-                      {isLoadingRemoteMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                      {isLoadingRemoteMaterials ? 'Loading…' : 'Refresh'}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={openRemoteMaterialEditDialog}
+                        disabled={!selectedRemoteMaterial}
+                        className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { void loadRemoteMaterials(); }}
+                        disabled={isLoadingRemoteMaterials || !selectedRemoteMaterialHost}
+                        className="ui-button ui-button-secondary !h-8 !w-8 !p-0 inline-flex items-center justify-center rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                        title="Refresh remote materials"
+                        aria-label="Refresh remote materials"
+                      >
+                        {isLoadingRemoteMaterials ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                      </button>
+                    </>
                   )}
                   {!shouldUseRemoteOnDeviceMaterials && !shouldShowRemoteMaterialSelectedPrinterOfflineState && !shouldShowRemoteMaterialConnectInfo && (
                     <>
+                      <button
+                        type="button"
+                        onClick={openSelectedMaterialEditor}
+                        disabled={!selectedMaterial}
+                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
+                        style={{ color: 'var(--text-strong)' }}
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        Edit
+                      </button>
                       <button
                         type="button"
                         onClick={handleAddMaterial}
@@ -3059,16 +3246,6 @@ export function ProfileSettingsModal({
                       >
                         <Plus className="w-3.5 h-3.5" />
                         Add Resin
-                      </button>
-                      <button
-                        type="button"
-                        onClick={requestDeleteSelectedMaterial}
-                        disabled={!selectedMaterial || printerMaterials.length <= 1}
-                        className="ui-button ui-button-secondary !h-8 !px-2.5 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md disabled:opacity-45"
-                        style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        Delete
                       </button>
                     </>
                   )}
@@ -3156,40 +3333,6 @@ export function ProfileSettingsModal({
                     </div>
                   </div>
 
-                  <div className="rounded-xl border p-3 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                    {selectedRemoteMaterial ? (
-                      <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{selectedRemoteMaterial.name}</span>
-                          <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}>
-                            Profile ID: {selectedRemoteMaterial.id}
-                          </span>
-                          {selectedRemoteMaterial.locked && (
-                            <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 35%)', color: '#fbbf24', background: 'var(--surface-2)' }}>
-                              Locked Profile
-                            </span>
-                          )}
-                          <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-                            Synced with Machine
-                          </span>
-                          {!selectedRemoteMaterial.locked && (
-                            <button
-                              type="button"
-                              onClick={openRemoteMaterialEditDialog}
-                              className="ui-button ui-button-secondary !h-7 !px-2.5 !py-0 text-[11px] inline-flex items-center gap-1 rounded-md"
-                              style={{ color: 'var(--accent-secondary)' }}
-                            >
-                              Edit Profile
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="h-full flex items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                        Select a printer material profile to edit available {selectedNetworkModeLabel} parameters.
-                      </div>
-                    )}
-                  </div>
                 </>
               ) : shouldShowRemoteMaterialSelectedPrinterOfflineState ? (
                 <div className="rounded-xl border flex-1 min-h-0 flex items-center justify-center px-4 py-5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
@@ -3369,36 +3512,6 @@ export function ProfileSettingsModal({
                 </div>
               </div>
 
-              <div className="rounded-xl border p-3 min-h-0" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-                {selectedMaterial ? (
-                  <div className="rounded-lg border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), transparent 5%)' }}>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{selectedMaterial.name}</span>
-                      <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}>
-                        {selectedMaterial.brand}
-                      </span>
-                      <span className="text-[11px] rounded-full border px-2 py-0.5" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-2)' }}>
-                        {selectedMaterial.resinFamily}
-                      </span>
-                      <span className="text-[11px] ml-auto" style={{ color: 'var(--text-muted)' }}>
-                        {selectedMaterial.layerHeightMm}mm • {selectedMaterial.normalExposureSec}s • {selectedMaterial.bottomExposureSec}s
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setIsMaterialEditorOpen(true)}
-                        className="ui-button ui-button-secondary !h-7 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-full"
-                        style={{ color: 'var(--text-strong)' }}
-                      >
-                        Edit Profile
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                    Pick a manufacturer and resin type, or add a new resin profile.
-                  </div>
-                )}
-              </div>
                 </>
               )}
             </div>
@@ -3683,9 +3796,19 @@ export function ProfileSettingsModal({
               </div>
 
               <div className="px-3 py-2 border-t flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Changes are applied when you press Save.
-                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    requestDeleteSelectedMaterial();
+                    setIsMaterialEditorOpen(false);
+                  }}
+                  disabled={!selectedMaterial || printerMaterials.length <= 1}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-full disabled:opacity-45"
+                  style={{ color: !selectedMaterial || printerMaterials.length <= 1 ? 'var(--text-muted)' : '#fca5a5' }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete Resin
+                </button>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
