@@ -1,8 +1,9 @@
 'use client';
 
 import React from 'react';
-import { AlertTriangle, Box, Check, ChevronDown, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, Search, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Box, CarFront, Check, ChevronDown, ChevronUp, Download, Edit3, FlaskConical, ImagePlus, LayoutGrid, Loader2, Lock, Plus, Printer, Search, Snail, Trash2, Upload, Wifi, WifiOff, X } from 'lucide-react';
 import FleetManagement from '@/components/settings/FleetManagement';
+import { NumberInput } from '@/components/ui/NumberInput';
 import { SelectDropdown } from '@/components/ui/SelectDropdown';
 import {
   applyOfficialMaterialProfileUpdate,
@@ -92,6 +93,77 @@ const RESIN_FAMILY_OPTIONS: Array<{ value: MaterialProfile['resinFamily']; label
 ];
 
 const CURRENCY_OPTIONS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CNY'];
+
+type PluginNumericFieldSchema = {
+  kind: 'number' | 'integer';
+  min?: number;
+  max?: number;
+  defaultValue: number;
+};
+
+function clampNonNegativeNumber(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function sanitizePluginNumericValue(field: PluginNumericFieldSchema, value: number): number {
+  let next = clampNonNegativeNumber(value);
+  if (field.kind === 'integer') next = Math.round(next);
+
+  const minimum = Math.max(0, field.min ?? 0);
+  next = Math.max(minimum, next);
+
+  if (field.max != null) next = Math.min(field.max, next);
+  return next;
+}
+
+function isSlowFastPair(firstTag?: string, secondTag?: string): boolean {
+  const first = typeof firstTag === 'string' ? firstTag.trim().toLowerCase() : '';
+  const second = typeof secondTag === 'string' ? secondTag.trim().toLowerCase() : '';
+  return (first === 'slow' && second === 'fast') || (first === 'fast' && second === 'slow');
+}
+
+function resolveFieldTagTone(tag?: string): { icon: typeof CarFront | typeof Snail; fallbackColor: string } | null {
+  const normalized = typeof tag === 'string' ? tag.trim().toLowerCase() : '';
+  if (!normalized) return null;
+
+  if (normalized === 'slow') {
+    return { icon: Snail, fallbackColor: '#f59e0b' };
+  }
+
+  return { icon: CarFront, fallbackColor: '#22c55e' };
+}
+
+type FieldTagChipProps = {
+  tag?: string;
+  color?: string;
+  compact?: boolean;
+};
+
+function FieldTagChip({ tag, color, compact = false }: FieldTagChipProps) {
+  const trimmedTag = typeof tag === 'string' ? tag.trim() : '';
+  const tone = resolveFieldTagTone(trimmedTag);
+  if (!trimmedTag || !tone) return null;
+
+  const accent = (typeof color === 'string' && color.trim().length > 0)
+    ? color.trim()
+    : tone.fallbackColor;
+  const Icon = tone.icon;
+
+  return (
+    <span
+      className={`pointer-events-none absolute top-1/2 z-10 inline-flex -translate-y-1/2 items-center gap-1 rounded-full px-2 font-semibold uppercase tracking-wide ${compact ? 'right-8 h-5 text-[9px]' : 'right-8 h-5 text-[9px]'}`}
+      style={{
+        background: `color-mix(in srgb, ${accent} 18%, var(--surface-1))`,
+        color: accent,
+      }}
+      title={trimmedTag}
+      aria-hidden="true"
+    >
+      <Icon className="h-3 w-3 shrink-0" />
+      <span>{trimmedTag}</span>
+    </span>
+  );
+}
 
 function normalizeNetworkDiscoveryName(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -4592,6 +4664,9 @@ function PluginLocalMaterialSettingsSections({
                         const fieldValue = Object.prototype.hasOwnProperty.call(valuesForOutput, field.key)
                           ? valuesForOutput[field.key]
                           : field.defaultValue;
+                        const sanitizedFieldValue = (field.kind === 'number' || field.kind === 'integer')
+                          ? sanitizePluginNumericValue(field as PluginNumericFieldSchema, Number(fieldValue))
+                          : fieldValue;
 
                         if (field.splitWithKey) {
                           const pairedField = card.fields.find((candidate) => candidate.key === field.splitWithKey);
@@ -4599,6 +4674,9 @@ function PluginLocalMaterialSettingsSections({
                             const pairedValue = Object.prototype.hasOwnProperty.call(valuesForOutput, pairedField.key)
                               ? valuesForOutput[pairedField.key]
                               : pairedField.defaultValue;
+                            const sanitizedPairedValue = (pairedField.kind === 'number' || pairedField.kind === 'integer')
+                              ? sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, Number(pairedValue))
+                              : pairedValue;
                             renderedKeys.add(field.key);
                             renderedKeys.add(pairedField.key);
                             return (
@@ -4606,18 +4684,59 @@ function PluginLocalMaterialSettingsSections({
                                 key={field.key}
                                 label={field.label}
                                 helpText={field.description}
-                                firstValue={Number(fieldValue)}
-                                secondValue={Number(pairedValue)}
+                                firstValue={Number(sanitizedFieldValue)}
+                                secondValue={Number(sanitizedPairedValue)}
+                                firstMin={field.min}
+                                firstMax={field.max}
+                                firstStep={field.step}
+                                firstTag={field.tag}
+                                firstColor={field.color}
+                                secondMin={pairedField.min}
+                                secondMax={pairedField.max}
+                                secondStep={pairedField.step}
+                                secondTag={pairedField.tag}
+                                secondColor={pairedField.color}
                                 onFirstChange={(next) => {
-                                  const normalized = field.kind === 'integer' ? Math.round(next) : next;
-                                  const clampedMin = field.min != null ? Math.max(field.min, normalized) : normalized;
-                                  const clamped = field.max != null ? Math.min(field.max, clampedMin) : clampedMin;
+                                  const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
+                                  const pairedClamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, Number(sanitizedPairedValue));
+
+                                  if (isSlowFastPair(field.tag, pairedField.tag)) {
+                                    const fieldTag = field.tag?.trim().toLowerCase();
+                                    if (fieldTag === 'slow' && clamped > pairedClamped) {
+                                      setFieldValue(field.key, clamped);
+                                      setFieldValue(pairedField.key, clamped);
+                                      return;
+                                    }
+                                    if (fieldTag === 'fast' && clamped < pairedClamped) {
+                                      setFieldValue(field.key, clamped);
+                                      setFieldValue(pairedField.key, clamped);
+                                      return;
+                                    }
+                                  }
+
                                   setFieldValue(field.key, clamped);
                                 }}
                                 onSecondChange={(next) => {
-                                  const normalized = pairedField.kind === 'integer' ? Math.round(next) : next;
-                                  const clampedMin = pairedField.min != null ? Math.max(pairedField.min, normalized) : normalized;
-                                  const clamped = pairedField.max != null ? Math.min(pairedField.max, clampedMin) : clampedMin;
+                                  const clamped = sanitizePluginNumericValue(pairedField as PluginNumericFieldSchema, next);
+                                  const fieldClamped = sanitizePluginNumericValue(
+                                    field as PluginNumericFieldSchema,
+                                    Number(sanitizedFieldValue),
+                                  );
+
+                                  if (isSlowFastPair(field.tag, pairedField.tag)) {
+                                    const pairedTag = pairedField.tag?.trim().toLowerCase();
+                                    if (pairedTag === 'slow' && clamped > fieldClamped) {
+                                      setFieldValue(field.key, clamped);
+                                      setFieldValue(pairedField.key, clamped);
+                                      return;
+                                    }
+                                    if (pairedTag === 'fast' && clamped < fieldClamped) {
+                                      setFieldValue(field.key, clamped);
+                                      setFieldValue(pairedField.key, clamped);
+                                      return;
+                                    }
+                                  }
+
                                   setFieldValue(pairedField.key, clamped);
                                 }}
                               />
@@ -4667,11 +4786,11 @@ function PluginLocalMaterialSettingsSections({
                               key={field.key}
                               label={field.label}
                               helpText={field.description}
-                              value={Number(fieldValue)}
+                              tag={field.tag}
+                              color={field.color}
+                              value={Number(sanitizedFieldValue)}
                               onChange={(next) => {
-                                const normalized = field.kind === 'integer' ? Math.round(next) : next;
-                                const clampedMin = field.min != null ? Math.max(field.min, normalized) : normalized;
-                                const clamped = field.max != null ? Math.min(field.max, clampedMin) : clampedMin;
+                                const clamped = sanitizePluginNumericValue(field as PluginNumericFieldSchema, next);
                                 setFieldValue(field.key, clamped);
                               }}
                             />
@@ -4752,19 +4871,26 @@ function LabeledInput({ label, helpText, disabled = false, value, onChange }: La
 type LabeledNumberInputProps = {
   label: string;
   helpText?: string;
+  tag?: string;
+  color?: string;
   disabled?: boolean;
   value: number;
   onChange: (value: number) => void;
 };
 
-function LabeledNumberInput({ label, helpText, disabled = false, value, onChange }: LabeledNumberInputProps) {
-  const [localValue, setLocalValue] = React.useState<string>(() => String(value));
+function LabeledNumberInput({ label, helpText, tag, color, disabled = false, value, onChange }: LabeledNumberInputProps) {
+  const safeValue = clampNonNegativeNumber(value);
+  const [localValue, setLocalValue] = React.useState<string>(() => String(safeValue));
   const [isFocused, setIsFocused] = React.useState(false);
+  const tone = resolveFieldTagTone(tag);
+  const accent = (typeof color === 'string' && color.trim().length > 0)
+    ? color.trim()
+    : tone?.fallbackColor ?? null;
 
   React.useEffect(() => {
     if (isFocused) return;
-    setLocalValue(String(value));
-  }, [value, isFocused]);
+    setLocalValue(String(safeValue));
+  }, [isFocused, safeValue]);
 
   const commit = React.useCallback(() => {
     const trimmed = localValue.trim();
@@ -4776,24 +4902,25 @@ function LabeledNumberInput({ label, helpText, disabled = false, value, onChange
 
     const next = Number(trimmed);
     if (!Number.isFinite(next)) {
-      setLocalValue(String(value));
+      setLocalValue(String(safeValue));
       return;
     }
 
-    onChange(next);
-    setLocalValue(String(next));
-  }, [localValue, onChange, value]);
+    const sanitized = clampNonNegativeNumber(next);
+    onChange(sanitized);
+    setLocalValue(String(sanitized));
+  }, [localValue, onChange, safeValue]);
 
   const nudge = React.useCallback((direction: 1 | -1) => {
-    const fallback = Number.isFinite(value) ? value : 0;
+    const fallback = safeValue;
     const parsed = Number(localValue.trim());
     const current = Number.isFinite(parsed) ? parsed : fallback;
     const step = Math.abs(current) < 1 ? 0.01 : 1;
     const decimals = step < 1 ? 3 : 0;
-    const next = Number((current + direction * step).toFixed(decimals));
+    const next = clampNonNegativeNumber(Number((current + direction * step).toFixed(decimals)));
     onChange(next);
     setLocalValue(String(next));
-  }, [localValue, onChange, value]);
+  }, [localValue, onChange, safeValue]);
 
   return (
     <label className="space-y-1 block">
@@ -4816,6 +4943,7 @@ function LabeledNumberInput({ label, helpText, disabled = false, value, onChange
           disabled={disabled}
           value={localValue}
           onChange={(event) => {
+            if (event.target.value.includes('-')) return;
             setLocalValue(event.target.value);
           }}
           onFocus={() => setIsFocused(true)}
@@ -4836,10 +4964,16 @@ function LabeledNumberInput({ label, helpText, disabled = false, value, onChange
               nudge(-1);
             }
           }}
-          className={`ui-input w-full h-[36px] pl-2.5 pr-6 leading-tight text-sm no-spinners ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+          className={`ui-input w-full h-[36px] pl-2.5 ${tag ? 'pr-20' : 'pr-6'} leading-tight text-sm no-spinners ${disabled ? 'opacity-55 cursor-not-allowed' : ''}`}
+          style={accent ? {
+            background: `color-mix(in srgb, ${accent} 7%, var(--surface-1))`,
+            borderColor: `color-mix(in srgb, ${accent} 24%, var(--border-subtle))`,
+          } : undefined}
         />
 
-        <div className="absolute inset-y-0 right-1 flex w-4 flex-col items-center justify-center gap-0.5">
+        <FieldTagChip tag={tag} color={color} />
+
+        <div className="absolute inset-y-0 right-1 z-20 flex w-4 flex-col items-center justify-center gap-0.5">
           <button
             type="button"
             className="inline-flex h-3 w-3 items-center justify-center rounded hover:bg-white/10"
@@ -4871,6 +5005,16 @@ type LabeledTwoStageNumberInputProps = {
   helpText?: string;
   firstValue: number;
   secondValue: number;
+  firstMin?: number;
+  firstMax?: number;
+  firstStep?: number;
+  firstTag?: string;
+  firstColor?: string;
+  secondMin?: number;
+  secondMax?: number;
+  secondStep?: number;
+  secondTag?: string;
+  secondColor?: string;
   onFirstChange: (value: number) => void;
   onSecondChange: (value: number) => void;
 };
@@ -4880,9 +5024,28 @@ function LabeledTwoStageNumberInput({
   helpText,
   firstValue,
   secondValue,
+  firstMin,
+  firstMax,
+  firstStep,
+  firstTag,
+  firstColor,
+  secondMin,
+  secondMax,
+  secondStep,
+  secondTag,
+  secondColor,
   onFirstChange,
   onSecondChange,
 }: LabeledTwoStageNumberInputProps) {
+  const firstTone = resolveFieldTagTone(firstTag);
+  const secondTone = resolveFieldTagTone(secondTag);
+  const firstAccent = (typeof firstColor === 'string' && firstColor.trim().length > 0)
+    ? firstColor.trim()
+    : firstTone?.fallbackColor ?? null;
+  const secondAccent = (typeof secondColor === 'string' && secondColor.trim().length > 0)
+    ? secondColor.trim()
+    : secondTone?.fallbackColor ?? null;
+
   return (
     <label className="space-y-1 block md:col-span-2">
       <span className="ui-label font-medium inline-flex items-center gap-1.5">
@@ -4899,21 +5062,41 @@ function LabeledTwoStageNumberInput({
         )}
       </span>
       <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
-        <input
-          type="number"
-          value={Number.isFinite(firstValue) ? firstValue : 0}
-          onChange={(event) => onFirstChange(Number(event.target.value))}
-          className="ui-input w-full h-[36px] px-2.5 text-sm leading-tight no-spinners"
-          aria-label={`${label} stage 1`}
-        />
+        <div className="relative">
+          <NumberInput
+            value={Number.isFinite(firstValue) ? firstValue : 0}
+            onChange={(next) => onFirstChange(next)}
+            min={firstMin}
+            max={firstMax}
+            step={firstStep}
+            showStepper
+            aria-label={`${label} stage 1`}
+            className={`ui-input w-full h-[36px] px-2.5 ${firstTag ? 'pr-24' : 'pr-2.5'} text-sm leading-tight`}
+            style={firstAccent ? {
+              background: `color-mix(in srgb, ${firstAccent} 7%, var(--surface-1))`,
+              borderColor: `color-mix(in srgb, ${firstAccent} 24%, var(--border-subtle))`,
+            } : undefined}
+          />
+          <FieldTagChip tag={firstTag} color={firstColor} compact />
+        </div>
         <div className="text-sm px-1 font-semibold" style={{ color: 'var(--text-muted)' }}>{'>'}</div>
-        <input
-          type="number"
-          value={Number.isFinite(secondValue) ? secondValue : 0}
-          onChange={(event) => onSecondChange(Number(event.target.value))}
-          className="ui-input w-full h-[36px] px-2.5 text-sm leading-tight no-spinners"
-          aria-label={`${label} stage 2`}
-        />
+        <div className="relative">
+          <NumberInput
+            value={Number.isFinite(secondValue) ? secondValue : 0}
+            onChange={(next) => onSecondChange(next)}
+            min={secondMin}
+            max={secondMax}
+            step={secondStep}
+            showStepper
+            aria-label={`${label} stage 2`}
+            className={`ui-input w-full h-[36px] px-2.5 ${secondTag ? 'pr-24' : 'pr-2.5'} text-sm leading-tight`}
+            style={secondAccent ? {
+              background: `color-mix(in srgb, ${secondAccent} 7%, var(--surface-1))`,
+              borderColor: `color-mix(in srgb, ${secondAccent} 24%, var(--border-subtle))`,
+            } : undefined}
+          />
+          <FieldTagChip tag={secondTag} color={secondColor} compact />
+        </div>
       </div>
     </label>
   );
@@ -5060,7 +5243,7 @@ function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSec
   return (
     <>
       <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-2)' }}>
-        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Metadata</div>
+        <div className="ui-meta font-semibold uppercase tracking-wide mb-2">Material Details</div>
         <div className="grid grid-cols-2 gap-2">
           <LabeledInput
             label="Material brand"
@@ -5078,21 +5261,11 @@ function MaterialProfileFormSections({ draft, onChange }: MaterialProfileFormSec
             options={RESIN_FAMILY_OPTIONS}
             onChange={(value) => onChange((prev) => ({ ...prev, resinFamily: value }))}
           />
-          <LabeledNumberInput
-            label="Bottle price"
-            value={draft.bottlePrice}
-            onChange={(value) => onChange((prev) => ({ ...prev, bottlePrice: value }))}
-          />
           <LabeledCurrencySelect
             label="Currency"
             value={draft.currencyCode || 'USD'}
             options={CURRENCY_OPTIONS}
             onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
-          />
-          <LabeledNumberInput
-            label="Bottle capacity (ml)"
-            value={draft.bottleCapacityMl}
-            onChange={(value) => onChange((prev) => ({ ...prev, bottleCapacityMl: value }))}
           />
         </div>
       </div>
@@ -5221,6 +5394,16 @@ function MaterialProfileIdentitySection({ draft, onChange }: MaterialProfileIden
           value={draft.currencyCode || 'USD'}
           options={CURRENCY_OPTIONS}
           onChange={(value) => onChange((prev) => ({ ...prev, currencyCode: value }))}
+        />
+        <LabeledNumberInput
+          label="Bottle price"
+          value={draft.bottlePrice}
+          onChange={(value) => onChange((prev) => ({ ...prev, bottlePrice: value }))}
+        />
+        <LabeledNumberInput
+          label="Bottle capacity (ml)"
+          value={draft.bottleCapacityMl}
+          onChange={(value) => onChange((prev) => ({ ...prev, bottleCapacityMl: value }))}
         />
       </div>
     </div>

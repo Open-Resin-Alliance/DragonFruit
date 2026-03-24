@@ -10,13 +10,13 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
-import { getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
+import { getProfileLocalMaterialSettingsAdapter, getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import {
   runSliceExportOrchestrator,
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
@@ -400,8 +400,44 @@ export function SlicingPanel({
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
   const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
-  const isRemoteProfilePrinter = Boolean(networkUiAdapter);
   const minimumAlphaLabel = 'Minimum Alpha';
+
+  const profileMinimumAaAlphaPercent = useMemo(() => {
+    const fallback = Math.max(
+      0,
+      Math.min(100, Math.round(Number(effectiveMaterialProfile?.minimumAaAlphaPercent ?? 35))),
+    );
+
+    if (!effectiveMaterialProfile) return fallback;
+
+    const outputFormat = (selectedFormat?.outputFormat ?? activePrinterProfile?.display.outputFormat ?? '').trim();
+    if (!outputFormat) return fallback;
+
+    const normalizedOutput = outputFormat.toLowerCase();
+    const outputWithoutDot = normalizedOutput.replace(/^\./, '');
+    const settingsMode = resolveOutputSettingsMode(outputFormat, activePrinterProfile?.display.settingsMode);
+
+    const localAdapter = getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
+    const profileAlphaFieldKey = localAdapter?.fields.find((field) => {
+      const metadataPath = field.metadataPath?.trim().toLowerCase();
+      return metadataPath === 'dragonfruit.minimumaaalphapercent' || field.key === 'minimumAaAlphaPercent';
+    })?.key ?? 'minimumAaAlphaPercent';
+
+    const localForOutput = effectiveMaterialProfile.localSettingsByOutput?.[normalizedOutput]
+      ?? effectiveMaterialProfile.localSettingsByOutput?.[outputWithoutDot]
+      ?? null;
+
+    const localValue = localForOutput?.[profileAlphaFieldKey];
+    const parsed = Number(localValue);
+    if (!Number.isFinite(parsed)) return fallback;
+
+    return Math.max(0, Math.min(100, Math.round(parsed)));
+  }, [
+    activePrinterProfile?.display.outputFormat,
+    activePrinterProfile?.display.settingsMode,
+    effectiveMaterialProfile,
+    selectedFormat?.outputFormat,
+  ]);
 
   const setClampedMinimumAaAlphaPercent = useCallback((value: number) => {
     const next = Number.isFinite(value) ? value : 50;
@@ -638,7 +674,9 @@ export function SlicingPanel({
         materialProfile: effectiveMaterialProfile,
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
         antiAliasingLevel: effectiveAntiAliasingLevel,
-        minimumAaAlphaPercentOverride: (!isRemoteProfilePrinter && !enableMinimumAaAlphaOverride) ? undefined : minimumAaAlphaPercent,
+        minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
+          ? minimumAaAlphaPercent
+          : profileMinimumAaAlphaPercent,
 
         outputMode: 'return',
         exportThumbnailPng,
@@ -1068,51 +1106,12 @@ export function SlicingPanel({
                   Unavailable for the active printer profile.
                 </div>
               )}
-              {isRemoteProfilePrinter ? (
-                <div className="mt-2 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-                  <label className="ui-meta" style={{ color: 'var(--text-muted)' }}>{minimumAlphaLabel} (%)</label>
-                  <div className="mt-1 flex min-w-0 items-center gap-1">
-                    <IconButton
-                      className="!h-8 !w-8 shrink-0 !p-0"
-                      onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent - 1)}
-                      disabled={minimumAaAlphaPercent <= 0}
-                      title="Decrease minimum alpha"
-                    >
-                      <Minus className="h-3.5 w-3.5" />
-                    </IconButton>
-
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={minimumAaAlphaPercent}
-                      onChange={(event) => setClampedMinimumAaAlphaPercent(Number(event.target.value))}
-                      onWheel={(event) => {
-                        event.preventDefault();
-                        setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + (event.deltaY < 0 ? 1 : -1));
-                      }}
-                      className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
-                      aria-label={`${minimumAlphaLabel} percent`}
-                    />
-
-                    <IconButton
-                      className="!h-8 !w-8 shrink-0 !p-0"
-                      onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + 1)}
-                      disabled={minimumAaAlphaPercent >= 100}
-                      title="Increase minimum alpha"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </IconButton>
-                  </div>
-                </div>
-              ) : (
                 <div className="space-y-1">
                   <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Alpha</div>
                   <div className="grid grid-cols-2 gap-1">
                     {(['Profile', 'Override'] as const).map((mode) => {
                       const active = (mode === 'Profile' && !enableMinimumAaAlphaOverride) || (mode === 'Override' && enableMinimumAaAlphaOverride);
-                      const displayText = mode === 'Profile' ? `Profile (${activeMaterialProfile?.minimumAaAlphaPercent ?? 35}%)` : 'Override';
+                      const displayText = mode === 'Profile' ? `Profile (${profileMinimumAaAlphaPercent}%)` : 'Override';
                       return (
                         <button
                           key={mode}
@@ -1181,7 +1180,6 @@ export function SlicingPanel({
                     </div>
                   )}
                 </div>
-              )}
             </div>
           </div>
 

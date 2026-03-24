@@ -219,6 +219,10 @@ export type LocalMaterialFieldSchema = {
   label: string;
   kind: LocalMaterialFieldKind;
   defaultValue: number | string | boolean;
+  /** Optional short tag rendered by the UI as an inline chip (e.g. Fast/Slow). */
+  tag?: string;
+  /** Optional accent color for the field chip / highlight. */
+  color?: string;
   /** Optional key to render as a two-stage paired input row with this field. */
   splitWithKey?: string;
   description?: string;
