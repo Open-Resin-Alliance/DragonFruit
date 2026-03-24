@@ -240,7 +240,7 @@ function mergeMetadataOverridesIntoMetadata(
       parsed.export = exportNode;
     }
 
-    const adapter = getProfileLocalMaterialSettingsAdapter(outputFormat);
+    const adapter = getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
     const fieldSchema = adapter?.fields ?? [];
     if (fieldSchema.length > 0) {
       const localForOutput = materialProfile.localSettingsByOutput?.[outputFormat] ?? {};

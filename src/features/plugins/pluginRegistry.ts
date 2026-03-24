@@ -51,6 +51,7 @@ export type ProfileLocalMaterialSettingsAdapter = {
 const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>();
 const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>();
 const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT = new Map<string, ProfileLocalMaterialSettingsAdapter>();
+const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE = new Map<string, Map<string, ProfileLocalMaterialSettingsAdapter>>();
 let builtinAdaptersHydrated = false;
 
 function ensureBuiltinAdaptersHydrated(): void {
@@ -75,6 +76,26 @@ function ensureBuiltinAdaptersHydrated(): void {
         ...adapter,
         outputFormat: normalized,
       });
+    });
+
+    const localMaterialAdaptersByMode = definition.localMaterialSettingsByOutputAndMode ?? {};
+    Object.entries(localMaterialAdaptersByMode).forEach(([outputFormat, adaptersByMode]) => {
+      const normalizedOutput = normalizeOutputFormat(outputFormat);
+      const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(normalizedOutput) ?? new Map<string, ProfileLocalMaterialSettingsAdapter>();
+
+      Object.entries(adaptersByMode ?? {}).forEach(([settingsMode, adapter]) => {
+        const normalizedMode = normalizeSettingsMode(settingsMode);
+        if (!normalizedMode) return;
+
+        modeMap.set(normalizedMode, {
+          ...adapter,
+          outputFormat: normalizedOutput,
+        });
+      });
+
+      if (modeMap.size > 0) {
+        LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.set(normalizedOutput, modeMap);
+      }
     });
   });
 }
@@ -143,10 +164,32 @@ export function getProfileMonitoringUiAdapter(mode: string | null | undefined): 
 
 export function getProfileLocalMaterialSettingsAdapter(
   outputFormat: string | null | undefined,
+  settingsMode?: string | null | undefined,
 ): ProfileLocalMaterialSettingsAdapter | null {
   ensureBuiltinAdaptersHydrated();
   if (!outputFormat || typeof outputFormat !== 'string') return null;
-  return LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.get(normalizeOutputFormat(outputFormat)) ?? null;
+
+  const normalizedOutput = normalizeOutputFormat(outputFormat);
+  const normalizedMode = normalizeSettingsMode(settingsMode);
+
+  if (normalizedMode) {
+    const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(normalizedOutput);
+    const modeMatch = modeMap?.get(normalizedMode);
+    if (modeMatch) return modeMatch;
+  }
+
+  const fallbackByOutput = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.get(normalizedOutput);
+  if (fallbackByOutput) return fallbackByOutput;
+
+  const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(normalizedOutput);
+  if (!modeMap || modeMap.size === 0) return null;
+
+  const explicitDefault = modeMap.get('default');
+  if (explicitDefault) return explicitDefault;
+
+  const first = Array.from(modeMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))[0]?.[1];
+  return first ?? null;
 }
 
 export type InstalledProfilePlugin = {

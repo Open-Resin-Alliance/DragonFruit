@@ -242,6 +242,20 @@ export type PluginLocalMaterialSettingsAdapterContract = {
   fields: LocalMaterialFieldSchema[];
 };
 
+/**
+ * Optional mode-indexed local material settings contract.
+ *
+ * Example:
+ * {
+ *   '.ctb': {
+ *     simple: { ...adapter },
+ *     twostage: { ...adapter }
+ *   }
+ * }
+ */
+export type PluginLocalMaterialSettingsByModeContract =
+  Record<string, Record<string, PluginLocalMaterialSettingsAdapterContract>>;
+
 export type ComplexPluginManifestReference = {
   id: string;
   name: string;
@@ -271,4 +285,5 @@ export type ComplexPluginDefinition = {
   networkOperationHandler?: PluginNetworkOperationHandlerContract;
   slicingFormatsByOutput?: Record<string, PluginSlicingFormatDefinitionContract>;
   localMaterialSettingsByOutput?: Record<string, PluginLocalMaterialSettingsAdapterContract>;
+  localMaterialSettingsByOutputAndMode?: PluginLocalMaterialSettingsByModeContract;
 };

@@ -191,8 +191,11 @@ function computeBuildDimensionMm(resolutionPx: number, pixelSizeUm: number): num
   return Number(((safeResolution * safePixelSize) / 1000).toFixed(3));
 }
 
-function resolveDefaultLocalSettingsForOutput(outputFormat: string): LocalSettingsByOutputDraft {
-  const adapter = getProfileLocalMaterialSettingsAdapter(outputFormat);
+function resolveDefaultLocalSettingsForOutput(
+  outputFormat: string,
+  settingsMode?: string,
+): LocalSettingsByOutputDraft {
+  const adapter = getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
   if (!adapter) return {};
 
   const normalizedOutput = outputFormat.trim().toLowerCase();
@@ -206,6 +209,7 @@ function resolveDefaultLocalSettingsForOutput(outputFormat: string): LocalSettin
 
 function mergeWithLocalSettingsDefaults(
   outputFormat: string,
+  settingsMode: string | undefined,
   source?: MaterialProfile['localSettingsByOutput'],
 ): LocalSettingsByOutputDraft {
   const normalizedOutput = outputFormat.trim().toLowerCase();
@@ -216,7 +220,7 @@ function mergeWithLocalSettingsDefaults(
     return acc;
   }, {});
 
-  const adapter = getProfileLocalMaterialSettingsAdapter(normalizedOutput);
+  const adapter = getProfileLocalMaterialSettingsAdapter(normalizedOutput, settingsMode);
   if (!adapter) return base;
 
   const outputValues = { ...(base[normalizedOutput] ?? {}) };
@@ -429,8 +433,11 @@ export function ProfileSettingsModal({
 
   const selectedLocalMaterialSettingsAdapter = React.useMemo(() => {
     if (!selectedPrinter) return null;
-    return getProfileLocalMaterialSettingsAdapter(selectedPrinter.display.outputFormat);
-  }, [selectedPrinter]);
+    return getProfileLocalMaterialSettingsAdapter(
+      selectedPrinter.display.outputFormat,
+      selectedResolvedSettingsMode,
+    );
+  }, [selectedPrinter, selectedResolvedSettingsMode]);
 
   const usePluginLocalSettingsAsReplacement = Boolean(
     selectedLocalMaterialSettingsAdapter?.replacesDefaultMaterialSettings,
@@ -1985,10 +1992,14 @@ export function ProfileSettingsModal({
     });
     if (selectedPrinter) {
       setEditMaterialLocalSettingsByOutput(
-        mergeWithLocalSettingsDefaults(selectedPrinter.display.outputFormat, selectedMaterial.localSettingsByOutput),
+        mergeWithLocalSettingsDefaults(
+          selectedPrinter.display.outputFormat,
+          selectedResolvedSettingsMode,
+          selectedMaterial.localSettingsByOutput,
+        ),
       );
     }
-  }, [isMaterialEditorOpen, selectedMaterial, selectedPrinter]);
+  }, [isMaterialEditorOpen, selectedMaterial, selectedPrinter, selectedResolvedSettingsMode]);
 
   const handlePickPrinter = React.useCallback((printerId: string) => {
     setSelectedPrinterId(printerId);
@@ -2036,9 +2047,14 @@ export function ProfileSettingsModal({
       retractSpeedMmMin: 150,
       minimumAaAlphaPercent: 35,
     });
-    setNewMaterialLocalSettingsByOutput(resolveDefaultLocalSettingsForOutput(selectedPrinter.display.outputFormat));
+    setNewMaterialLocalSettingsByOutput(
+      resolveDefaultLocalSettingsForOutput(
+        selectedPrinter.display.outputFormat,
+        selectedResolvedSettingsMode,
+      ),
+    );
     setIsCreateMaterialOpen(true);
-  }, [printerMaterials.length, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue]);
+  }, [printerMaterials.length, selectedPrinter, selectedManufacturerValue, selectedResinFamilyValue, selectedResolvedSettingsMode]);
 
   const handleCreateMaterial = React.useCallback(() => {
     if (!selectedPrinter) return;
@@ -4414,16 +4430,10 @@ function PluginLocalMaterialSettingsSections({
   const normalizedOutput = outputFormat.trim().toLowerCase();
   const tabs = React.useMemo(() => {
     const declared = [...(adapter.tabs ?? [])]
-      .filter((tab) => {
-        if (settingsMode?.toLowerCase() === 'simple' && tab.id.toLowerCase() === 'twostage') {
-          return false;
-        }
-        return true;
-      })
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     if (declared.length > 0) return declared;
     return [{ id: 'local', title: adapter.displayName ?? 'Local Settings', order: 0 }];
-  }, [adapter.displayName, adapter.tabs, settingsMode]);
+  }, [adapter.displayName, adapter.tabs]);
 
   const defaultTabId = React.useMemo(() => {
     if (settingsMode) {
