@@ -3456,25 +3456,12 @@ export default function Home() {
   const shouldShowPrintingMonitorSlowResponseCard = React.useMemo(() => {
     return isPrintingMonitorSelectedPrinterOfflineRaw && isPrintingMonitorWithinSlowResponseGrace;
   }, [isPrintingMonitorSelectedPrinterOfflineRaw, isPrintingMonitorWithinSlowResponseGrace]);
-  const isPrintingMonitorInInitialStatusProbe = React.useMemo(() => {
-    if (!printingMonitorModalOpen) return false;
-    if (printingMonitorLastStatusSuccessAtMs != null) return false;
-    return isPrintingMonitorStatusRequestInFlight;
-  }, [
-    isPrintingMonitorStatusRequestInFlight,
-    printingMonitorLastStatusSuccessAtMs,
-    printingMonitorModalOpen,
-  ]);
   const isPrintingMonitorSelectedPrinterOffline = React.useMemo(() => {
-    if (isPrintingMonitorInInitialStatusProbe) {
-      return false;
-    }
     if (isPrintingMonitorSelectedPrinterOfflineRaw && isPrintingMonitorWithinSlowResponseGrace) {
       return false;
     }
     return isPrintingMonitorSelectedPrinterOfflineRaw;
   }, [
-    isPrintingMonitorInInitialStatusProbe,
     isPrintingMonitorSelectedPrinterOfflineRaw,
     isPrintingMonitorWithinSlowResponseGrace,
   ]);
@@ -3546,7 +3533,6 @@ export default function Home() {
 
     if (!shouldProbeFleetReachability) {
       monitorReachabilityInconclusiveCountsRef.current = {};
-      setPrinterReachabilityMap({});
       return;
     }
 
@@ -3557,7 +3543,6 @@ export default function Home() {
 
     if (probeFleet.length === 0) {
       monitorReachabilityInconclusiveCountsRef.current = {};
-      setPrinterReachabilityMap({});
       return;
     }
 
@@ -4025,7 +4010,14 @@ export default function Home() {
           if (snapshot?.connected === true) {
             setPrintingMonitorLastStatusSuccessAtMs(Date.now());
           }
-          setPrintingMonitorError(typeof payload?.error === 'string' ? payload.error : null);
+          const payloadError = typeof payload?.error === 'string' ? payload.error : null;
+          const liveReachability = monitoringDevice ? getPrinterReachabilitySnapshot()[monitoringDevice.id] : null;
+          const isLikelyOffline = Boolean(
+            monitoringDevice
+            && (liveReachability !== true || monitoringDevice.connected !== true)
+            && snapshot?.connected !== true,
+          );
+          setPrintingMonitorError(isLikelyOffline ? null : payloadError);
           setPrintingMonitorDebugState((previous) => ({
             ...previous,
             status: {
@@ -4040,7 +4032,12 @@ export default function Home() {
         } catch (error) {
           if (cancelled) return;
           const message = error instanceof Error ? error.message : 'Failed to poll printer status.';
-          setPrintingMonitorError(message);
+          const liveReachability = monitoringDevice ? getPrinterReachabilitySnapshot()[monitoringDevice.id] : null;
+          const isLikelyOffline = Boolean(
+            monitoringDevice
+            && (liveReachability !== true || monitoringDevice.connected !== true),
+          );
+          setPrintingMonitorError(isLikelyOffline ? null : message);
           setPrintingMonitorDebugState((previous) => ({
             ...previous,
             status: {
