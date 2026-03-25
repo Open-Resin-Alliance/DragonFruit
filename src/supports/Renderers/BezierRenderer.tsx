@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useState, useRef } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { toVector3 } from '../Curves/BezierUtils';
@@ -74,6 +74,7 @@ export function BezierRenderer({
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const { altActive: braceAltActive } = useBracePlacementState();
     const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
+    const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     const geometry = useMemo(() => {
@@ -244,7 +245,7 @@ export function BezierRenderer({
     const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.5 : emissiveIntensity);
 
     return (
-        <group>
+        <group ref={groupRef}>
             {pickGeometry && (
                 <mesh
                     ref={pickRef as any}
@@ -253,7 +254,6 @@ export function BezierRenderer({
                     onClick={handleClick}
                     onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
                     onPointerLeave={enableSegmentInteraction ? handlePointerLeave : undefined}
-                    userData={{ segmentId: id }}
                 >
                     <primitive object={pickGeometry} attach="geometry" />
                     <meshBasicMaterial transparent opacity={0} depthWrite={false} />
