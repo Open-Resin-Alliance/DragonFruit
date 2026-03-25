@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Cpu, Gauge, Layers3, Timer } from 'lucide-react';
+import { Cpu, Gauge, Layers3, Minus, Plus, Timer } from 'lucide-react';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import { Button, Card, CardHeader, IconButton } from '@/components/ui/primitives';
 import {
@@ -10,12 +10,13 @@ import {
   getProfileStoreSnapshot,
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
+import { getProfileLocalMaterialSettingsAdapter, getProfileNetworkUiAdapter } from '@/features/plugins/pluginRegistry';
 import {
   runSliceExportOrchestrator,
   type SliceExportArtifact,
   type SliceExportResult,
 } from '@/features/slicing/sliceExportOrchestrator';
-import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
+import { resolveOutputSettingsMode, resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { cleanupStalePrintTempArtifacts, cleanupAllPrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
@@ -59,7 +60,7 @@ type LifetimeTelemetry = {
 };
 
 type SliceBenchmarkSnapshot = SliceExportResult['benchmark'];
-type NanoDlpMaterial = {
+type RemoteMaterialProfile = {
   id: string;
   name: string;
   locked?: boolean;
@@ -116,7 +117,7 @@ function formatProgressLayerLabel(done: number, total: number): string {
   return `${doneSafe}/${totalSafe}`;
 }
 
-type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'finalizing' | 'handoff' | 'other';
+type SlicingPhaseKind = 'preparing' | 'staging' | 'slicing' | 'encoding' | 'finalizing' | 'handoff' | 'other';
 
 function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   const lower = phase.toLowerCase();
@@ -124,7 +125,8 @@ function resolveSlicingPhaseKind(phase: string): SlicingPhaseKind {
   if (lower.includes('preparing')) return 'preparing';
   if (lower.includes('staging mesh') || lower.includes('transferring mesh')) return 'staging';
   if (lower.includes('slicing layer') || lower.includes('raster')) return 'slicing';
-  if (lower.includes('finalizing') || lower.includes('encoding') || lower.includes('metadata') || lower.includes('compression') || lower.includes('packaging')) return 'finalizing';
+  if (lower.includes('encoding') || lower.includes('metadata') || lower.includes('compression') || lower.includes('packaging')) return 'encoding';
+  if (lower.includes('finalizing')) return 'finalizing';
   if (lower.includes('opening printing') || lower.includes('handoff') || lower.includes('ready')) return 'handoff';
   return 'other';
 }
@@ -155,7 +157,8 @@ function formatElapsedClock(ms: number): string {
 }
 
 const SLICING_AA_LEVEL_STORAGE_KEY = 'dragonfruit.slicing.aaLevel';
-const SLICING_AA_ON_SUPPORTS_STORAGE_KEY = 'dragonfruit.slicing.aaOnSupports';
+const SLICING_MIN_AA_ALPHA_STORAGE_KEY = 'dragonfruit.slicing.minimumAaAlphaPercent';
+const SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY = 'dragonfruit.slicing.minimumAaAlphaOverrideEnabled';
 
 function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   if (typeof window === 'undefined') return 'Off';
@@ -169,15 +172,24 @@ function resolveInitialAaLevel(): 'Off' | '2x' | '4x' | '8x' | '16x' {
   return 'Off';
 }
 
-function resolveInitialAaOnSupports(): boolean {
-  if (typeof window === 'undefined') return false;
+function resolveInitialMinimumAaAlphaPercent(): number {
+  if (typeof window === 'undefined') return 35;
 
-  const stored = window.localStorage.getItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY)
-    ?? window.sessionStorage.getItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY);
+  const stored = window.localStorage.getItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY)
+    ?? window.sessionStorage.getItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY);
+  if (stored == null || stored.trim().length === 0) return 35;
+  const parsed = Number(stored);
+  if (!Number.isFinite(parsed)) return 35;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
 
-  if (stored === 'true') return true;
+function resolveInitialMinimumAaAlphaOverrideEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+
+  const stored = window.localStorage.getItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY)
+    ?? window.sessionStorage.getItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY);
   if (stored === 'false') return false;
-  return false;
+  return true;
 }
 
 export function SlicingPanel({
@@ -205,6 +217,8 @@ export function SlicingPanel({
   const [currentPhase, setCurrentPhase] = useState('Idle');
   const [progressDone, setProgressDone] = useState(0);
   const [progressTotal, setProgressTotal] = useState(1);
+  const [slicingLayerDone, setSlicingLayerDone] = useState(0);
+  const [slicingLayerTotal, setSlicingLayerTotal] = useState(1);
   const [currentElapsedMs, setCurrentElapsedMs] = useState(0);
   const [currentRasterMs, setCurrentRasterMs] = useState(0);
   const [liveLayersPerSec, setLiveLayersPerSec] = useState<number | null>(null);
@@ -214,10 +228,10 @@ export function SlicingPanel({
   const [slicingModalStage, setSlicingModalStage] = useState<'running' | 'finished' | 'failed' | 'cancelled'>('running');
   const [displayProgressPercent, setDisplayProgressPercent] = useState(0);
   const [antiAliasingLevel, setAntiAliasingLevel] = useState<'Off' | '2x' | '4x' | '8x' | '16x'>(resolveInitialAaLevel);
-  const [aaOnSupports, setAaOnSupports] = useState(resolveInitialAaOnSupports);
-  const [isLiveStatusExpanded, setIsLiveStatusExpanded] = useState(false);
-  const [nanodlpSelectedMaterialName, setNanodlpSelectedMaterialName] = useState<string | null>(null);
-  const [isLoadingNanodlpMaterial, setIsLoadingNanodlpMaterial] = useState(false);
+  const [minimumAaAlphaPercent, setMinimumAaAlphaPercent] = useState<number>(resolveInitialMinimumAaAlphaPercent);
+  const [enableMinimumAaAlphaOverride, setEnableMinimumAaAlphaOverride] = useState<boolean>(resolveInitialMinimumAaAlphaOverrideEnabled);
+  const [selectedRemoteMaterialName, setSelectedRemoteMaterialName] = useState<string | null>(null);
+  const [isLoadingRemoteMaterial, setIsLoadingRemoteMaterial] = useState(false);
   const [layerPreviewUrls, setLayerPreviewUrls] = useState<Array<string | null>>([]);
   const [previewTotalLayers, setPreviewTotalLayers] = useState(0);
   const [previewSelectedLayer, setPreviewSelectedLayer] = useState(1);
@@ -238,10 +252,15 @@ export function SlicingPanel({
 
   const profileState = React.useSyncExternalStore(subscribeToProfileStore, getProfileStoreSnapshot, getProfileStoreServerSnapshot);
   const activePrinterProfile = useMemo(() => getActivePrinterProfile(profileState), [profileState]);
+  const networkUiAdapter = useMemo(
+    () => getProfileNetworkUiAdapter(activePrinterProfile?.networkSupport),
+    [activePrinterProfile?.networkSupport],
+  );
   const activeMaterialProfile = useMemo(() => getActiveMaterialProfile(profileState), [profileState]);
   const effectiveMaterialProfile = useMemo(() => {
     if (!activeMaterialProfile) return null;
-    if (activePrinterProfile?.networkSupport !== 'nanodlp') return activeMaterialProfile;
+    if (!activePrinterProfile) return activeMaterialProfile;
+    if (!networkUiAdapter) return activeMaterialProfile;
     if (activePrinterProfile.networkConnection?.connected !== true) return activeMaterialProfile;
 
     const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
@@ -269,7 +288,7 @@ export function SlicingPanel({
         ? selectedBottomLayerCount
         : activeMaterialProfile.bottomLayerCount,
     };
-  }, [activeMaterialProfile, activePrinterProfile]);
+  }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter]);
 
   const selectedFormat = useMemo(() => {
     if (!activePrinterProfile || !effectiveMaterialProfile) return null;
@@ -279,50 +298,34 @@ export function SlicingPanel({
     });
   }, [activePrinterProfile, effectiveMaterialProfile]);
 
-  const selectedNanodlpMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
+  const selectedRemoteMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
   // V3 supports grayscale anti-aliasing in the native raster pipeline,
   // so this should not be gated by legacy profile capability flags.
   const antiAliasingAvailable = true;
-  const isNanodlpConnected = activePrinterProfile?.networkSupport === 'nanodlp'
-    && activePrinterProfile.networkConnection?.connected === true;
-  const nanodlpHost = (activePrinterProfile?.networkConnection?.ipAddress
+  const isRemoteMaterialSyncConnected = Boolean(networkUiAdapter)
+    && activePrinterProfile?.networkConnection?.connected === true;
+  const remoteMaterialHost = (activePrinterProfile?.networkConnection?.ipAddress
     || activePrinterProfile?.network?.ipAddress
     || '').trim();
-  const nanodlpPort = activePrinterProfile?.networkConnection?.port || 80;
-
-  const pipelineContainerBackendLabel = useMemo(() => (
-    selectedFormat ? 'Native Rust container encoder (Tauri)' : '—'
-  ), [selectedFormat]);
-
-  const pipelineRasterizerLabel = useMemo(() => (
-    selectedFormat ? 'Native Rust solid cross-section slicer (Rayon pool)' : '—'
-  ), [selectedFormat]);
 
   const progressPercent = useMemo(() => {
     const total = Math.max(1, progressTotal);
-    const layerProgress = Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
-    if (slicingModalStage !== 'running') {
-      return layerProgress;
-    }
-
-    const phaseKind = resolveSlicingPhaseKind(currentPhase);
-    switch (phaseKind) {
-      case 'preparing':
-        return layerProgress;
-      case 'staging':
-        return layerProgress;
-      case 'slicing':
-        return Math.min(99, layerProgress);
-      case 'finalizing':
-        return 99;
-      case 'handoff':
-        return 99;
-      default:
-        return Math.min(99, layerProgress);
-    }
-  }, [currentPhase, progressDone, progressTotal, slicingModalStage]);
+    return Math.max(0, Math.min(100, Math.round((progressDone / total) * 100)));
+  }, [progressDone, progressTotal]);
 
   const phaseKind = useMemo(() => resolveSlicingPhaseKind(currentPhase), [currentPhase]);
+  const encodeUnitTotal = Math.max(1, progressTotal - slicingLayerTotal);
+  const encodeUnitDone = Math.max(0, Math.min(encodeUnitTotal, progressDone - slicingLayerTotal));
+  const progressCounterLabel = phaseKind === 'slicing'
+    ? 'Sliced Layers'
+    : phaseKind === 'encoding'
+      ? 'Encoded Layers'
+      : 'Pipeline Units';
+  const progressCounterValue = phaseKind === 'slicing'
+    ? formatProgressLayerLabel(slicingLayerDone, slicingLayerTotal)
+    : phaseKind === 'encoding'
+      ? formatProgressLayerLabel(encodeUnitDone, encodeUnitTotal)
+      : formatProgressLayerLabel(progressDone, progressTotal);
   const canCancelSlicing = slicingModalStage === 'running'
     && (phaseKind === 'preparing' || phaseKind === 'staging' || phaseKind === 'slicing');
 
@@ -397,7 +400,50 @@ export function SlicingPanel({
   }, [effectiveMaterialProfile, estimatedLayerCount]);
 
   const effectiveAntiAliasingLevel = antiAliasingAvailable ? antiAliasingLevel : 'Off';
-  const effectiveAaOnSupports = antiAliasingAvailable ? aaOnSupports : false;
+  const minimumAlphaLabel = 'Minimum Alpha';
+
+  const profileMinimumAaAlphaPercent = useMemo(() => {
+    const fallback = Math.max(
+      0,
+      Math.min(100, Math.round(Number(effectiveMaterialProfile?.minimumAaAlphaPercent ?? 35))),
+    );
+
+    if (!effectiveMaterialProfile) return fallback;
+
+    const outputFormat = (selectedFormat?.outputFormat ?? activePrinterProfile?.display.outputFormat ?? '').trim();
+    if (!outputFormat) return fallback;
+
+    const normalizedOutput = outputFormat.toLowerCase();
+    const outputWithoutDot = normalizedOutput.replace(/^\./, '');
+    const settingsMode = resolveOutputSettingsMode(outputFormat, activePrinterProfile?.display.settingsMode);
+
+    const localAdapter = getProfileLocalMaterialSettingsAdapter(outputFormat, settingsMode);
+    const profileAlphaFieldKey = localAdapter?.fields.find((field) => {
+      const metadataPath = field.metadataPath?.trim().toLowerCase();
+      return metadataPath === 'dragonfruit.minimumaaalphapercent' || field.key === 'minimumAaAlphaPercent';
+    })?.key ?? 'minimumAaAlphaPercent';
+
+    const localForOutput = effectiveMaterialProfile.localSettingsByOutput?.[normalizedOutput]
+      ?? effectiveMaterialProfile.localSettingsByOutput?.[outputWithoutDot]
+      ?? null;
+
+    const localValue = localForOutput?.[profileAlphaFieldKey];
+    const parsed = Number(localValue);
+    if (!Number.isFinite(parsed)) return fallback;
+
+    return Math.max(0, Math.min(100, Math.round(parsed)));
+  }, [
+    activePrinterProfile?.display.outputFormat,
+    activePrinterProfile?.display.settingsMode,
+    effectiveMaterialProfile,
+    selectedFormat?.outputFormat,
+  ]);
+
+  const setClampedMinimumAaAlphaPercent = useCallback((value: number) => {
+    const next = Number.isFinite(value) ? value : 50;
+    setMinimumAaAlphaPercent(Math.max(0, Math.min(100, Math.round(next))));
+  }, []);
+
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -408,28 +454,36 @@ export function SlicingPanel({
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const serialized = aaOnSupports ? 'true' : 'false';
-    window.localStorage.setItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY, serialized);
-    window.sessionStorage.setItem(SLICING_AA_ON_SUPPORTS_STORAGE_KEY, serialized);
-  }, [aaOnSupports]);
+    const serialized = String(Math.max(0, Math.min(100, Math.round(minimumAaAlphaPercent))));
+    window.localStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_MIN_AA_ALPHA_STORAGE_KEY, serialized);
+  }, [minimumAaAlphaPercent]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const serialized = String(enableMinimumAaAlphaOverride);
+    window.localStorage.setItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY, serialized);
+    window.sessionStorage.setItem(SLICING_MIN_AA_ALPHA_OVERRIDE_ENABLED_KEY, serialized);
+  }, [enableMinimumAaAlphaOverride]);
 
   const resolvedMaterialLabel = useMemo(() => {
-    if (isNanodlpConnected && selectedNanodlpMaterialId) {
-      if (isLoadingNanodlpMaterial) return 'Loading NanoDLP material…';
-      if (nanodlpSelectedMaterialName) return `${nanodlpSelectedMaterialName} (NanoDLP)`;
+    if (isRemoteMaterialSyncConnected && selectedRemoteMaterialId) {
+      if (isLoadingRemoteMaterial) return 'Loading remote material…';
+      if (selectedRemoteMaterialName) return `${selectedRemoteMaterialName} (${networkUiAdapter?.displayName ?? 'Remote'})`;
       const fromConnection = activePrinterProfile?.networkConnection?.selectedMaterialName?.trim();
-      if (fromConnection) return `${fromConnection} (NanoDLP)`;
-      return `${selectedNanodlpMaterialId} (NanoDLP ID)`;
+      if (fromConnection) return `${fromConnection} (${networkUiAdapter?.displayName ?? 'Remote'})`;
+      return `${selectedRemoteMaterialId} (Remote ID)`;
     }
 
     return effectiveMaterialProfile?.name ?? 'No material selected';
   }, [
     activePrinterProfile?.networkConnection?.selectedMaterialName,
     effectiveMaterialProfile?.name,
-    isLoadingNanodlpMaterial,
-    isNanodlpConnected,
-    nanodlpSelectedMaterialName,
-    selectedNanodlpMaterialId,
+    isLoadingRemoteMaterial,
+    isRemoteMaterialSyncConnected,
+    networkUiAdapter?.displayName,
+    selectedRemoteMaterialName,
+    selectedRemoteMaterialId,
   ]);
 
   useEffect(() => {
@@ -492,22 +546,21 @@ export function SlicingPanel({
   }, [isSlicingZip]);
 
   useEffect(() => {
-    if (!isNanodlpConnected || !nanodlpHost || !selectedNanodlpMaterialId) {
-      setNanodlpSelectedMaterialName(null);
-      setIsLoadingNanodlpMaterial(false);
+    if (!networkUiAdapter || !isRemoteMaterialSyncConnected || !remoteMaterialHost || !selectedRemoteMaterialId) {
+      setSelectedRemoteMaterialName(null);
+      setIsLoadingRemoteMaterial(false);
       return;
     }
 
     let cancelled = false;
-    setIsLoadingNanodlpMaterial(true);
+    setIsLoadingRemoteMaterial(true);
 
     void (async () => {
       try {
         const response = await pluginNetworkFetch({
-          pluginId: 'athena',
-          operation: 'nanodlp/materials',
-          ipAddress: nanodlpHost,
-          port: nanodlpPort,
+          pluginId: networkUiAdapter.pluginId,
+          operation: networkUiAdapter.operations.materials,
+          host: remoteMaterialHost,
         });
 
         const payload = await response.json().catch(() => ({} as Record<string, unknown>));
@@ -515,9 +568,9 @@ export function SlicingPanel({
           ? (payload as { materials: unknown[] }).materials
           : [];
 
-        const materials: NanoDlpMaterial[] = listRaw
-          .map<NanoDlpMaterial | null>((item) => {
-            const value = item as Partial<NanoDlpMaterial>;
+        const materials: RemoteMaterialProfile[] = listRaw
+          .map<RemoteMaterialProfile | null>((item) => {
+            const value = item as Partial<RemoteMaterialProfile>;
             if (typeof value?.id !== 'string' || typeof value?.name !== 'string') return null;
             return {
               id: value.id,
@@ -525,19 +578,19 @@ export function SlicingPanel({
               locked: value.locked === true ? true : undefined,
             };
           })
-          .filter((item): item is NanoDlpMaterial => item !== null);
+          .filter((item): item is RemoteMaterialProfile => item !== null);
 
-        const selected = materials.find((material) => material.id === selectedNanodlpMaterialId) ?? null;
+        const selected = materials.find((material) => material.id === selectedRemoteMaterialId) ?? null;
         if (!cancelled) {
-          setNanodlpSelectedMaterialName(selected?.name ?? null);
+          setSelectedRemoteMaterialName(selected?.name ?? null);
         }
       } catch {
         if (!cancelled) {
-          setNanodlpSelectedMaterialName(null);
+          setSelectedRemoteMaterialName(null);
         }
       } finally {
         if (!cancelled) {
-          setIsLoadingNanodlpMaterial(false);
+          setIsLoadingRemoteMaterial(false);
         }
       }
     })();
@@ -545,7 +598,12 @@ export function SlicingPanel({
     return () => {
       cancelled = true;
     };
-  }, [isNanodlpConnected, nanodlpHost, nanodlpPort, selectedNanodlpMaterialId]);
+  }, [
+    isRemoteMaterialSyncConnected,
+    networkUiAdapter,
+    remoteMaterialHost,
+    selectedRemoteMaterialId,
+  ]);
 
   const handleSliceZipExport = async () => {
     if (!activePrinterProfile) {
@@ -569,6 +627,8 @@ export function SlicingPanel({
     setSliceStatus('Preparing');
     setProgressDone(0);
     setProgressTotal(1);
+    setSlicingLayerDone(0);
+    setSlicingLayerTotal(1);
     setCurrentElapsedMs(0);
     setCurrentRasterMs(0);
     setLiveLayersPerSec(null);
@@ -614,21 +674,29 @@ export function SlicingPanel({
         materialProfile: effectiveMaterialProfile,
         filenameBase: sliceFilenameBase || activePrinterProfile.name || 'slice_export',
         antiAliasingLevel: effectiveAntiAliasingLevel,
-        aaOnSupports: effectiveAaOnSupports,
+        minimumAaAlphaPercentOverride: enableMinimumAaAlphaOverride
+          ? minimumAaAlphaPercent
+          : profileMinimumAaAlphaPercent,
+
         outputMode: 'return',
         exportThumbnailPng,
         abortSignal: abortController.signal,
         onProgress: (done, total, phase) => {
           const phaseKind = resolveSlicingPhaseKind(phase);
           const isSlicingPhase = phaseKind === 'slicing';
+          const safeTotal = Math.max(1, total);
+          const safeDone = Math.max(0, Math.min(done, safeTotal));
           setCurrentPhase(phase);
           setSliceStatus(phase);
-          setProgressDone(done);
-          setProgressTotal(Math.max(1, total));
+          setProgressDone(safeDone);
+          setProgressTotal(safeTotal);
 
           const nowMs = performance.now();
 
           if (isSlicingPhase) {
+            setSlicingLayerDone(safeDone);
+            setSlicingLayerTotal(safeTotal);
+
             if (slicingPhaseStartMs == null) {
               slicingPhaseStartMs = nowMs;
             }
@@ -640,8 +708,8 @@ export function SlicingPanel({
             // Compute speed from cumulative elapsed time to avoid burst-induced spikes
             // when progress events are delivered in batches.
             const phaseElapsedMs = Math.max(1, nowMs - slicingPhaseStartMs);
-            if (done > 0 && phaseElapsedMs > 300) {
-              const rawRate = (done * 1000) / phaseElapsedMs;
+            if (safeDone > 0 && phaseElapsedMs > 300) {
+              const rawRate = (safeDone * 1000) / phaseElapsedMs;
               const alpha = 0.2;
               const priorRate = smoothedMetricsRef.current.layersPerSec;
               const smoothedRate = priorRate > 0
@@ -650,7 +718,7 @@ export function SlicingPanel({
               smoothedMetricsRef.current.layersPerSec = smoothedRate;
               setLiveLayersPerSec(smoothedRate);
 
-              const remaining = Math.max(0, total - done);
+              const remaining = Math.max(0, safeTotal - safeDone);
               if (smoothedRate > 0) {
                 const rawRemainingMs = (remaining / smoothedRate) * 1000;
                 const priorRemaining = smoothedMetricsRef.current.remainingMs;
@@ -718,7 +786,6 @@ export function SlicingPanel({
       setCurrentElapsedMs(benchmarkTotalMs);
       setCurrentRasterMs(benchmarkCoreMs ?? rasterAccumulatedMs);
       setLastBenchmark(result.benchmark);
-      setLastNativeError(result.nativeError);
 
       const effectiveElapsedMs = benchmarkTotalMs || elapsedMs;
       const effectiveCoreMs = benchmarkCoreMs ?? rasterAccumulatedMs;
@@ -1039,34 +1106,87 @@ export function SlicingPanel({
                   Unavailable for the active printer profile.
                 </div>
               )}
-            </div>
+                <div className="space-y-1">
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Minimum Alpha</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {(['Profile', 'Override'] as const).map((mode) => {
+                      const active = (mode === 'Profile' && !enableMinimumAaAlphaOverride) || (mode === 'Override' && enableMinimumAaAlphaOverride);
+                      const displayText = mode === 'Profile' ? `Profile (${profileMinimumAaAlphaPercent}%)` : 'Override';
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          className="rounded border px-1.5 py-1 text-xs font-medium transition-colors"
+                          style={active
+                            ? {
+                                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
+                                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 88%)',
+                                color: 'var(--text-strong)',
+                              }
+                            : {
+                                borderColor: 'var(--border-subtle)',
+                                background: 'var(--surface-0)',
+                                color: 'var(--text-muted)',
+                              }}
+                          onClick={() => {
+                            if (mode === 'Profile') {
+                              setEnableMinimumAaAlphaOverride(false);
+                            } else {
+                              setEnableMinimumAaAlphaOverride(true);
+                            }
+                          }}
+                        >
+                          {displayText}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {enableMinimumAaAlphaOverride && (
+                    <div className="mt-1 rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+                      <div className="flex min-w-0 items-center gap-1">
+                        <IconButton
+                          className="!h-8 !w-8 shrink-0 !p-0"
+                          onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent - 1)}
+                          disabled={minimumAaAlphaPercent <= 0}
+                          title="Decrease minimum alpha"
+                        >
+                          <Minus className="h-3.5 w-3.5" />
+                        </IconButton>
 
-            <div className="mt-1 rounded-md border px-2.5 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs font-medium" style={{ color: 'var(--text-strong)' }}>AA on Supports</div>
-                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Apply anti-aliasing to generated supports</div>
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={minimumAaAlphaPercent}
+                          onChange={(event) => setClampedMinimumAaAlphaPercent(Number(event.target.value))}
+                          onWheel={(event) => {
+                            event.preventDefault();
+                            setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + (event.deltaY < 0 ? 1 : -1));
+                          }}
+                          className="ui-input h-8 w-0 min-w-0 flex-1 px-0 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners"
+                          aria-label="Minimum alpha percent override"
+                        />
+
+                        <IconButton
+                          className="!h-8 !w-8 shrink-0 !p-0"
+                          onClick={() => setClampedMinimumAaAlphaPercent(minimumAaAlphaPercent + 1)}
+                          disabled={minimumAaAlphaPercent >= 100}
+                          title="Increase minimum alpha"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </IconButton>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={aaOnSupports}
-                  disabled={!antiAliasingAvailable}
-                  onClick={() => setAaOnSupports((prev) => !prev)}
-                  className="w-10 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0"
-                  style={{
-                    background: antiAliasingAvailable
-                      ? (aaOnSupports ? 'var(--accent)' : 'var(--surface-2)')
-                      : 'color-mix(in srgb, var(--surface-2), black 10%)',
-                    opacity: antiAliasingAvailable ? 1 : 0.6,
-                    cursor: antiAliasingAvailable ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  <span
-                    className={`w-5 h-5 rounded-full bg-white shadow transform transition-transform ${aaOnSupports ? 'translate-x-4' : 'translate-x-0'}`}
-                  />
-                </button>
-              </div>
+            </div>
+          </div>
+
+          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+              <Layers3 className="w-3.5 h-3.5" />
+              <span>Thumbnails</span>
             </div>
 
             <div className="mt-1 rounded-md border px-2.5 py-2 space-y-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
@@ -1138,105 +1258,6 @@ export function SlicingPanel({
                 </button>
               </div>
             </div>
-          </div>
-
-          <div className="rounded-md border p-2 space-y-1.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-            <button
-              type="button"
-              onClick={() => setIsLiveStatusExpanded((prev) => !prev)}
-              aria-expanded={isLiveStatusExpanded}
-              className="w-full flex items-center justify-between gap-2 rounded border px-2 py-1.5 text-left"
-              style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Timer className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Live Status</span>
-                <div
-                  className="rounded px-2 py-0.5 text-xs font-semibold"
-                  style={{
-                    background: isSlicingZip
-                      ? 'color-mix(in srgb, var(--accent), var(--surface-1) 84%)'
-                      : sliceStatus.toLowerCase().includes('failed')
-                        ? 'color-mix(in srgb, #ef4444, var(--surface-1) 78%)'
-                        : sliceStatus.toLowerCase().includes('cancel')
-                          ? 'color-mix(in srgb, #f59e0b, var(--surface-1) 78%)'
-                          : 'color-mix(in srgb, #22c55e, var(--surface-1) 82%)',
-                    color: 'var(--text-strong)',
-                  }}
-                >
-                  {isSlicingZip
-                    ? 'Slicing'
-                    : sliceStatus.toLowerCase().includes('failed')
-                      ? 'Failed'
-                      : sliceStatus.toLowerCase().includes('cancel')
-                        ? 'Cancelled'
-                        : 'Idle / Ready'}
-                </div>
-              </div>
-
-              <svg
-                className={`w-3 h-3 transform transition-transform shrink-0 ${isLiveStatusExpanded ? 'rotate-180' : ''}`}
-                style={{ color: 'var(--text-muted)' }}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-
-            {!isLiveStatusExpanded && (
-              <div className="rounded border px-2 py-1.5 text-xs" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
-                <span className="font-medium" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</span>
-                {' · '}
-                <span className="truncate" title={currentPhase}>{currentPhase}</span>
-                {' · '}
-                <span>{slicingElapsedLabel}</span>
-              </div>
-            )}
-
-            {isLiveStatusExpanded && (
-              <>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Phase</div>
-                    <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
-                  </div>
-                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Progress</div>
-                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{progressPercent}%</div>
-                  </div>
-                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
-                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{slicingElapsedLabel}</div>
-                  </div>
-                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Layers</div>
-                    <div className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>{formatProgressLayerLabel(progressDone, progressTotal)}</div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Rasterizer</div>
-                    <div className="text-sm font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineRasterizerLabel}</div>
-                  </div>
-                  <div className="rounded border px-1.5 py-1" style={{ borderColor: 'var(--border-subtle)' }}>
-                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Container</div>
-                    <div className="text-sm font-semibold leading-snug" style={{ color: 'var(--text-strong)' }}>{pipelineContainerBackendLabel}</div>
-                  </div>
-                </div>
-
-                <div className="rounded border px-2 py-1.5 text-xs leading-snug" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)', background: 'var(--surface-0)' }}>
-                  {sliceStatus}
-                </div>
-                {lastNativeError && (
-                  <div className="rounded border px-2 py-1.5 text-xs leading-snug" style={{ borderColor: 'color-mix(in srgb, #f59e0b, var(--border-subtle) 55%)', color: 'var(--status-warning, #f59e0b)', background: 'color-mix(in srgb, #f59e0b, var(--surface-0) 92%)' }}>
-                    Last native backend warning: {lastNativeError}
-                  </div>
-                )}
-              </>
-            )}
           </div>
 
           <Button
@@ -1322,9 +1343,9 @@ export function SlicingPanel({
                   <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={currentPhase}>{currentPhase}</div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
-                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Sliced Layers</div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{progressCounterLabel}</div>
                   <div className="text-sm font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
-                    {formatProgressLayerLabel(progressDone, progressTotal)}
+                    {progressCounterValue}
                   </div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>

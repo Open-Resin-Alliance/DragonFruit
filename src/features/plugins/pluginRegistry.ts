@@ -1,25 +1,19 @@
 import type { MaterialProfile, PrinterPreset } from '@/features/profiles/profileStore';
-import { ATHENA_PLUGIN_MANIFEST } from '../../../plugins/athena/pluginManifest';
-import {
-  NANODLP_ADVANCED_SECTIONS,
-  NANODLP_BASIC_SECTIONS,
-  NANODLP_PRIMARY_EDIT_FIELDS,
-  denormalizeNanodlpEditDraftForBackend,
-  getNanoDlpFieldHelpText,
-  isNanoDlpDynamicWaitEnabled,
-  resolveNanodlpEditDraftFromMeta,
-  resolveNanoDlpAdvancedSectionId,
-  resolveNanodlpMaterialProcessValues,
-  type NanoDlpAdvancedSectionDef,
-  type NanoDlpBasicSection,
-  type NanoDlpPrimaryEditField,
-} from '../../../plugins/athena/nanodlpProfilePlugin';
-import {
-  resolveNanodlpMonitoringSnapshot,
-  resolveNanodlpWebcamFeedInfo,
-} from '../../../plugins/athena/network';
+import type {
+  PluginLocalMaterialSettingsAdapterContract,
+  PluginMonitoringSnapshotContract,
+  PluginMonitoringUiAdapterContract,
+  PluginMonitoringWebcamInfoContract,
+  PluginNetworkUiAdapterContract,
+  RemoteMaterialProcessValues,
+  RemoteMaterialSettingsAdapter,
+} from '@/features/plugins/complexPluginContracts';
+import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
+import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
+import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
 
 export type PluginSource = 'builtin' | 'github';
+export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
 
 export type PluginManifest = {
   schemaVersion: number;
@@ -34,122 +28,78 @@ export type PluginManifest = {
 };
 
 export type ProfileNetworkUiAdapter = {
+} & PluginNetworkUiAdapterContract;
+
+export type ProfileNetworkModeOption = {
   mode: string;
-  pluginId: string;
   displayName: string;
+  pluginId: string;
   operationNamespace: string;
-  operations: {
-    connect: string;
-    discover: string;
-    materials: string;
-    materialsEdit: string;
-  };
-  defaultLocalHostnames: string[];
-  primaryEditFields: NanoDlpPrimaryEditField[];
-  basicSections: NanoDlpBasicSection[];
-  advancedSections: NanoDlpAdvancedSectionDef[];
-  resolveEditDraftFromMeta: (meta: Record<string, unknown>) => Record<string, string>;
-  resolveMaterialProcessValues: (meta: Record<string, unknown>) => {
-    layerHeightMm?: number;
-    normalExposureSec?: number;
-    bottomExposureSec?: number;
-    bottomLayerCount?: number;
-  };
-  denormalizeEditDraftForBackend: (draft: Record<string, string>) => Record<string, string>;
-  resolveAdvancedSectionId: (fieldKey: string) => string;
-  getFieldHelpText: (fieldKey: string) => string;
-  isDynamicWaitEnabled: (draft: Record<string, string>) => boolean;
 };
 
 export type PrinterMonitoringSnapshot = {
-  connected: boolean;
-  stateText: string;
-  isPrinting: boolean;
-  isPaused: boolean;
-  cancelLatched: boolean;
-  pauseLatched: boolean;
-  finished: boolean;
-  progressPct: number | null;
-  currentLayer: number | null;
-  totalLayers: number | null;
-  plateId: number | null;
-  jobName: string | null;
-  etaSec: number | null;
-};
+} & PluginMonitoringSnapshotContract;
 
 export type PrinterMonitoringWebcamInfo = {
-  available: boolean;
-  streamUrl: string | null;
-  snapshotUrl: string | null;
-  message: string;
-};
+} & PluginMonitoringWebcamInfoContract;
 
 export type ProfileMonitoringUiAdapter = {
-  mode: string;
-  pluginId: string | null;
-  displayName: string;
-  available: boolean;
-  operations: {
-    status: string;
-    webcamInfo: string;
-    platesList: string;
-    start: string;
-    deletePlate: string;
-    pause: string;
-    resume: string;
-    cancel: string;
-    emergencyStop: string;
-  } | null;
-  parseStatusPayload: (payload: unknown, contextKey?: string) => PrinterMonitoringSnapshot;
-  parseWebcamInfoPayload: (payload: unknown, host: string, port: number) => PrinterMonitoringWebcamInfo;
-};
+} & PluginMonitoringUiAdapterContract;
 
-const ATHENA_NANODLP_NETWORK_ADAPTER: ProfileNetworkUiAdapter = {
-  mode: 'nanodlp',
-  pluginId: 'athena',
-  displayName: 'NanoDLP',
-  operationNamespace: 'nanodlp',
-  operations: {
-    connect: 'nanodlp/connect',
-    discover: 'nanodlp/discover',
-    materials: 'nanodlp/materials',
-    materialsEdit: 'nanodlp/materials/edit',
-  },
-  defaultLocalHostnames: ['nanodlp.local', 'athena.local', 'printer.local', 'resin.local'],
-  primaryEditFields: NANODLP_PRIMARY_EDIT_FIELDS,
-  basicSections: NANODLP_BASIC_SECTIONS,
-  advancedSections: NANODLP_ADVANCED_SECTIONS,
-  resolveEditDraftFromMeta: resolveNanodlpEditDraftFromMeta,
-  resolveMaterialProcessValues: resolveNanodlpMaterialProcessValues,
-  denormalizeEditDraftForBackend: denormalizeNanodlpEditDraftForBackend,
-  resolveAdvancedSectionId: resolveNanoDlpAdvancedSectionId,
-  getFieldHelpText: getNanoDlpFieldHelpText,
-  isDynamicWaitEnabled: isNanoDlpDynamicWaitEnabled,
-};
+export type ProfileLocalMaterialSettingsAdapter = {
+} & PluginLocalMaterialSettingsAdapterContract;
 
-const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>([
-  [ATHENA_NANODLP_NETWORK_ADAPTER.mode, ATHENA_NANODLP_NETWORK_ADAPTER],
-]);
+const NETWORK_ADAPTERS_BY_MODE = new Map<string, ProfileNetworkUiAdapter>();
+const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>();
+const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT = new Map<string, ProfileLocalMaterialSettingsAdapter>();
+const LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE = new Map<string, Map<string, ProfileLocalMaterialSettingsAdapter>>();
+let builtinAdaptersHydrated = false;
 
-const ATHENA_NANODLP_MONITORING_ADAPTER: ProfileMonitoringUiAdapter = {
-  mode: 'nanodlp',
-  pluginId: 'athena',
-  displayName: 'Athena Monitoring',
-  available: true,
-  operations: {
-    status: 'nanodlp/printer/status',
-    webcamInfo: 'nanodlp/printer/webcam/info',
-    platesList: 'nanodlp/plates/list/json',
-    start: 'nanodlp/printer/start',
-    deletePlate: 'nanodlp/plate/delete',
-    pause: 'nanodlp/printer/pause',
-    resume: 'nanodlp/printer/unpause',
-    cancel: 'nanodlp/printer/stop',
-    emergencyStop: 'nanodlp/printer/force-stop',
-  },
-  parseStatusPayload: (payload, contextKey) => resolveNanodlpMonitoringSnapshot(payload, contextKey),
-  parseWebcamInfoPayload: (payload, host, port) => resolveNanodlpWebcamFeedInfo(payload, host, port),
-};
+function ensureBuiltinAdaptersHydrated(): void {
+  if (builtinAdaptersHydrated) return;
+  builtinAdaptersHydrated = true;
+
+  getBuiltinComplexPluginDefinitions().forEach((definition) => {
+    const networkAdapters = definition.networkAdaptersByMode ?? {};
+    Object.values(networkAdapters).forEach((adapter) => {
+      NETWORK_ADAPTERS_BY_MODE.set(adapter.mode, adapter);
+    });
+
+    const monitoringAdapters = definition.monitoringAdaptersByMode ?? {};
+    Object.values(monitoringAdapters).forEach((adapter) => {
+      MONITORING_ADAPTERS_BY_MODE.set(adapter.mode, adapter);
+    });
+
+    const localMaterialAdapters = definition.localMaterialSettingsByOutput ?? {};
+    Object.entries(localMaterialAdapters).forEach(([outputFormat, adapter]) => {
+      const normalized = normalizeOutputFormat(outputFormat);
+      LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.set(normalized, {
+        ...adapter,
+        outputFormat: normalized,
+      });
+    });
+
+    const localMaterialAdaptersByMode = definition.localMaterialSettingsByOutputAndMode ?? {};
+    Object.entries(localMaterialAdaptersByMode).forEach(([outputFormat, adaptersByMode]) => {
+      const normalizedOutput = normalizeOutputFormat(outputFormat);
+      const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(normalizedOutput) ?? new Map<string, ProfileLocalMaterialSettingsAdapter>();
+
+      Object.entries(adaptersByMode ?? {}).forEach(([settingsMode, adapter]) => {
+        const normalizedMode = normalizeSettingsMode(settingsMode);
+        if (!normalizedMode) return;
+
+        modeMap.set(normalizedMode, {
+          ...adapter,
+          outputFormat: normalizedOutput,
+        });
+      });
+
+      if (modeMap.size > 0) {
+        LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.set(normalizedOutput, modeMap);
+      }
+    });
+  });
+}
 
 const GENERIC_MONITORING_STUB_ADAPTER: ProfileMonitoringUiAdapter = {
   mode: 'generic',
@@ -180,22 +130,67 @@ const GENERIC_MONITORING_STUB_ADAPTER: ProfileMonitoringUiAdapter = {
   }),
 };
 
-const MONITORING_ADAPTERS_BY_MODE = new Map<string, ProfileMonitoringUiAdapter>([
-  [ATHENA_NANODLP_MONITORING_ADAPTER.mode, ATHENA_NANODLP_MONITORING_ADAPTER],
-]);
-
 export function getProfileNetworkUiAdapter(mode: string | null | undefined): ProfileNetworkUiAdapter | null {
+  ensureBuiltinAdaptersHydrated();
   if (!mode || typeof mode !== 'string') return null;
   return NETWORK_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? null;
 }
 
 export function getDefaultProfileNetworkUiAdapter(): ProfileNetworkUiAdapter {
-  return ATHENA_NANODLP_NETWORK_ADAPTER;
+  ensureBuiltinAdaptersHydrated();
+  const first = NETWORK_ADAPTERS_BY_MODE.values().next().value as ProfileNetworkUiAdapter | undefined;
+  if (!first) {
+    throw new Error('No built-in profile network adapters registered');
+  }
+  return first;
+}
+
+export function getAvailableProfileNetworkModes(): ProfileNetworkModeOption[] {
+  ensureBuiltinAdaptersHydrated();
+  return Array.from(NETWORK_ADAPTERS_BY_MODE.values())
+    .map((adapter) => ({
+      mode: adapter.mode,
+      displayName: adapter.displayName,
+      pluginId: adapter.pluginId,
+      operationNamespace: adapter.operationNamespace,
+    }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 export function getProfileMonitoringUiAdapter(mode: string | null | undefined): ProfileMonitoringUiAdapter {
+  ensureBuiltinAdaptersHydrated();
   if (!mode || typeof mode !== 'string') return GENERIC_MONITORING_STUB_ADAPTER;
   return MONITORING_ADAPTERS_BY_MODE.get(mode.trim().toLowerCase()) ?? GENERIC_MONITORING_STUB_ADAPTER;
+}
+
+export function getProfileLocalMaterialSettingsAdapter(
+  outputFormat: string | null | undefined,
+  settingsMode?: string | null | undefined,
+): ProfileLocalMaterialSettingsAdapter | null {
+  ensureBuiltinAdaptersHydrated();
+  if (!outputFormat || typeof outputFormat !== 'string') return null;
+
+  const normalizedOutput = normalizeOutputFormat(outputFormat);
+  const normalizedMode = normalizeSettingsMode(settingsMode);
+
+  if (normalizedMode) {
+    const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(normalizedOutput);
+    const modeMatch = modeMap?.get(normalizedMode);
+    if (modeMatch) return modeMatch;
+  }
+
+  const fallbackByOutput = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT.get(normalizedOutput);
+  if (fallbackByOutput) return fallbackByOutput;
+
+  const modeMap = LOCAL_MATERIAL_SETTINGS_BY_OUTPUT_AND_MODE.get(normalizedOutput);
+  if (!modeMap || modeMap.size === 0) return null;
+
+  const explicitDefault = modeMap.get('default');
+  if (explicitDefault) return explicitDefault;
+
+  const first = Array.from(modeMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))[0]?.[1];
+  return first ?? null;
 }
 
 export type InstalledProfilePlugin = {
@@ -203,6 +198,9 @@ export type InstalledProfilePlugin = {
   enabled: boolean;
   source: PluginSource;
   sourceUrl?: string;
+  manifestSha256?: string;
+  installTrust?: PluginInstallTrust;
+  liabilityAcceptedAt?: string;
   installedAt: string;
 };
 
@@ -245,10 +243,21 @@ function sanitizeOptionalPositiveNumber(value: unknown): number | undefined {
   return n;
 }
 
+function sanitizeProfileVersion(value: unknown): number | undefined {
+  const n = sanitizeOptionalPositiveNumber(value);
+  if (n == null) return undefined;
+  return Math.max(1, Math.round(n));
+}
+
 function sanitizeOutputFormat(value: unknown): PrinterPreset['display']['outputFormat'] {
-  return value === '.nanodlp' || value === '.goo' || value === '.lumen'
-    ? value
-    : '.goo';
+  return normalizeOutputFormat(value);
+}
+
+function sanitizeNetworkSupport(value: unknown): PrinterPreset['networkSupport'] {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return normalized;
 }
 
 function sanitizeImageAssetPath(value: unknown): string | undefined {
@@ -317,19 +326,30 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
   const resolutionX = Math.round(sanitizeNumber((value as any).display?.resolutionX, 2560, 1, 200000));
   const resolutionY = Math.round(sanitizeNumber((value as any).display?.resolutionY, 1620, 1, 200000));
   const pixelSize = sanitizePixelSize((value as any).pixelSize);
+  const explicitBuildWidth = sanitizeOptionalPositiveNumber((value as any).buildVolumeMm?.width);
+  const explicitBuildDepth = sanitizeOptionalPositiveNumber((value as any).buildVolumeMm?.depth);
+  const buildDimensionMode: PrinterPreset['buildDimensionMode'] =
+    explicitBuildWidth == null
+      && explicitBuildDepth == null
+      && pixelSize != null
+      ? 'auto'
+      : 'manual';
 
   return {
     presetId,
+    profileVersion: sanitizeProfileVersion((value as any).profileVersion),
     manufacturer,
     name,
     family: family || undefined,
     imageAssetPath: sanitizeImageAssetPath(value.imageAssetPath),
     antiAliasing: typeof value.antiAliasing === 'boolean' ? value.antiAliasing : undefined,
-    networkSupport: value.networkSupport === 'nanodlp' ? 'nanodlp' : undefined,
+    hasCamera: typeof value.hasCamera === 'boolean' ? value.hasCamera : undefined,
+    networkSupport: sanitizeNetworkSupport(value.networkSupport),
     networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
     platformBadge: sanitizePlatformBadge((value as any).platformBadge),
     pixelSize,
     bitDepth: sanitizeBitDepth((value as any).bitDepth),
+    buildDimensionMode,
     buildVolumeMm: {
       width: resolveBuildDimensionMm((value as any).buildVolumeMm?.width, resolutionX, pixelSize?.x, 143),
       depth: resolveBuildDimensionMm((value as any).buildVolumeMm?.depth, resolutionY, pixelSize?.y, 89),
@@ -339,6 +359,8 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       resolutionX,
       resolutionY,
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
+      formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
+      settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,
@@ -385,16 +407,20 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
     liftDistanceMm: sanitizeNumber(value.liftDistanceMm, 6, 0, 1000),
     liftSpeedMmMin: sanitizeNumber(value.liftSpeedMmMin, 60, 0, 100000),
     retractSpeedMmMin: sanitizeNumber(value.retractSpeedMmMin, 150, 0, 100000),
+    minimumAaAlphaPercent: sanitizeNumber(value.minimumAaAlphaPercent, 35, 0, 100),
   };
 }
 
-const BUILTIN_ATHENA_PLUGIN: InstalledProfilePlugin = {
-  manifest: ATHENA_PLUGIN_MANIFEST,
+const BUILTIN_COMPLEX_PLUGINS: InstalledProfilePlugin[] = getBuiltinComplexPluginDefinitions().map((definition) => ({
+  manifest: {
+    schemaVersion: 1,
+    ...definition.manifest,
+  },
   enabled: true,
-  source: 'builtin',
-  sourceUrl: 'builtin://plugins/athena',
+  source: 'builtin' as const,
+  sourceUrl: `builtin://plugins/${definition.id}`,
   installedAt: new Date(0).toISOString(),
-};
+}));
 
 let hydrated = false;
 let externalPlugins: InstalledProfilePlugin[] = [];
@@ -436,16 +462,40 @@ function sanitizeManifest(input: unknown): PluginManifest | null {
   };
 }
 
+const BUILTIN_SIMPLE_PLUGINS: InstalledProfilePlugin[] = BUILTIN_SIMPLE_PLUGIN_MANIFESTS
+  .map((manifest) => sanitizeManifest(manifest))
+  .filter((manifest): manifest is PluginManifest => manifest !== null)
+  .map((manifest) => ({
+    manifest,
+    enabled: true,
+    source: 'builtin' as const,
+    sourceUrl: `builtin://plugins/${manifest.id}`,
+    installedAt: new Date(0).toISOString(),
+  }));
+
 function sanitizeInstalledPlugin(input: unknown): InstalledProfilePlugin | null {
   const value = (input ?? {}) as any;
   const manifest = sanitizeManifest(value.manifest);
   if (!manifest) return null;
+
+  const manifestSha256 = typeof value.manifestSha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(value.manifestSha256.trim())
+    ? value.manifestSha256.trim().toLowerCase()
+    : undefined;
+  const installTrust = value.installTrust === 'allowlisted' || value.installTrust === 'unverified-user-approved'
+    ? value.installTrust
+    : undefined;
+  const liabilityAcceptedAt = typeof value.liabilityAcceptedAt === 'string' && value.liabilityAcceptedAt.trim().length > 0
+    ? value.liabilityAcceptedAt
+    : undefined;
 
   return {
     manifest,
     enabled: value.enabled !== false,
     source: value.source === 'github' ? 'github' : 'builtin',
     sourceUrl: typeof value.sourceUrl === 'string' ? value.sourceUrl : undefined,
+    manifestSha256,
+    installTrust,
+    liabilityAcceptedAt,
     installedAt: typeof value.installedAt === 'string' ? value.installedAt : new Date().toISOString(),
   };
 }
@@ -488,19 +538,37 @@ export function hydratePluginRegistry() {
 
 export function getInstalledProfilePlugins(): InstalledProfilePlugin[] {
   hydratePluginRegistry();
-  return [BUILTIN_ATHENA_PLUGIN, ...externalPlugins];
+  return [...BUILTIN_COMPLEX_PLUGINS, ...BUILTIN_SIMPLE_PLUGINS, ...externalPlugins];
 }
 
-export function installExternalProfilePlugin(manifestInput: PluginManifest, sourceUrl?: string): InstalledProfilePlugin {
+export function installExternalProfilePlugin(
+  manifestInput: PluginManifest,
+  sourceUrl?: string,
+  options?: { manifestSha256?: string; installTrust?: PluginInstallTrust; liabilityAcceptedAt?: string },
+): InstalledProfilePlugin {
   hydratePluginRegistry();
   const manifest = sanitizeManifest(manifestInput);
   if (!manifest) throw new Error('Invalid plugin manifest');
+  const manifestSha256 = typeof options?.manifestSha256 === 'string' && /^[a-f0-9]{64}$/.test(options.manifestSha256.trim())
+    ? options.manifestSha256.trim().toLowerCase()
+    : undefined;
+  const installTrust = options?.installTrust === 'allowlisted' || options?.installTrust === 'unverified-user-approved'
+    ? options.installTrust
+    : undefined;
+  const liabilityAcceptedAt = installTrust === 'unverified-user-approved'
+    ? (typeof options?.liabilityAcceptedAt === 'string' && options.liabilityAcceptedAt.trim().length > 0
+      ? options.liabilityAcceptedAt
+      : new Date().toISOString())
+    : undefined;
 
   const plugin: InstalledProfilePlugin = {
     manifest,
     enabled: true,
     source: 'github',
     sourceUrl,
+    manifestSha256,
+    installTrust,
+    liabilityAcceptedAt,
     installedAt: new Date().toISOString(),
   };
 

@@ -199,3 +199,43 @@ Use this to identify what data needs to be migrated to a backend filesystem or d
   ```json
   "2026-02-22T06:10:00.000Z"
   ```
+
+### `dragonfruit-plugins-v1`
+
+- **Description**: Stores externally installed plugin manifests and install metadata for runtime preset/template extension.
+- **Location**: `src/features/plugins/pluginRegistry.ts`
+- **Schema**:
+  - Envelope: `{ version: number; plugins: InstalledProfilePlugin[] }`
+  - `InstalledProfilePlugin`: `{ manifest, enabled, source, sourceUrl?, manifestSha256?, installTrust?, liabilityAcceptedAt?, installedAt }`
+  - `manifestSha256` is a lowercase 64-char hex digest (when available from verified GitHub install flow).
+  - `installTrust` indicates install provenance for external simple plugins:
+    - `allowlisted`
+    - `unverified-user-approved`
+  - `liabilityAcceptedAt` is ISO-8601 timestamp recorded when a user explicitly approves installing an unallowlisted plugin.
+- **Notes**:
+  - Built-in plugins are not persisted in this key; only external plugins are stored.
+  - Plugin manifests are sanitized before persistence.
+- **Example**:
+  ```json
+  {
+    "version": 1,
+    "plugins": [
+      {
+        "manifest": {
+          "schemaVersion": 1,
+          "id": "ora-material-pack",
+          "name": "ORA Material Pack",
+          "version": "1.2.0",
+          "printerPresets": [],
+          "materialTemplates": []
+        },
+        "enabled": true,
+        "source": "github",
+        "sourceUrl": "https://github.com/open-resin-alliance/ora-material-pack",
+        "manifestSha256": "2f75c76f6a77b5bfa7644f70f99f2e14e91db1e54f37dd1ae7a6d8e3f4f2a4bf",
+        "installTrust": "allowlisted",
+        "installedAt": "2026-03-18T00:00:00.000Z"
+      }
+    ]
+  }
+  ```

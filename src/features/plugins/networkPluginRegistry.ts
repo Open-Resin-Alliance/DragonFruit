@@ -1,4 +1,4 @@
-import { handleAthenaNetworkOperation } from '../../../plugins/athena/network/nanodlpHandlers';
+import { getBuiltinComplexPluginNetworkHandlers } from '@/features/plugins/builtinComplexPluginNetworkHandlers';
 
 /**
  * Shape returned by plugin-owned network handlers.
@@ -50,7 +50,9 @@ function ensureBuiltinNetworkPluginsRegistered(): void {
   if (builtinsRegistered) return;
   builtinsRegistered = true;
 
-  registerNetworkPluginHandler('athena', handleAthenaNetworkOperation);
+  getBuiltinComplexPluginNetworkHandlers().forEach((builtin) => {
+    registerNetworkPluginHandler(builtin.pluginId, builtin.handler);
+  });
 }
 
 /**

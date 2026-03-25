@@ -1,4 +1,4 @@
-import concepts3dPrinters from './printers/concepts3d/printers.json';
+import athenaPrinters from './printers/printers.json';
 import type { PrinterPreset } from '../../src/features/profiles/profileStore';
 
 /**
@@ -103,6 +103,12 @@ function sanitizePositiveNumber(value: unknown): number | null {
   return n;
 }
 
+function sanitizeProfileVersion(value: unknown): number | undefined {
+  const n = sanitizePositiveNumber(value);
+  if (n == null) return undefined;
+  return Math.max(1, Math.round(n));
+}
+
 function resolveBuildDimensionMm(
   explicitValue: unknown,
   resolutionPx: unknown,
@@ -126,8 +132,8 @@ function resolveBuildDimensionMm(
  *
  * Note:
  * - This manifest is bundled with the app (not fetched remotely).
- * - Concepts3D printer profiles and assets are plugin-owned under
- *   `plugins/athena/printers/concepts3d`.
+ * - Athena printer profiles and assets are plugin-owned under
+ *   `plugins/athena/printers`.
  * - Presets are coerced into the strict runtime `PrinterPreset` shape to ensure
  *   stable behavior when merged with other profile sources.
  */
@@ -136,10 +142,20 @@ export const ATHENA_PLUGIN_MANIFEST = {
   id: 'athena-builtin',
   name: 'Athena Plugin',
   version: '1.1.0',
-  description: 'Athena/NanoDLP integration and Concepts3D profile pack.',
-  printerPresets: withResolvedImagePaths('plugins/athena/printers/concepts3d', concepts3dPrinters).map((preset) => {
+  description: 'Athena/NanoDLP integration and Athena profile pack.',
+  printerPresets: withResolvedImagePaths('plugins/athena/printers', athenaPrinters).map((preset) => {
     const resolutionX = Number((preset as any).display?.resolutionX) || 2560;
     const resolutionY = Number((preset as any).display?.resolutionY) || 1620;
+    const explicitBuildWidth = sanitizePositiveNumber((preset as any).buildVolumeMm?.width);
+    const explicitBuildDepth = sanitizePositiveNumber((preset as any).buildVolumeMm?.depth);
+    const pixelSizeX = sanitizePositiveNumber((preset as any).pixelSize?.x);
+    const pixelSizeY = sanitizePositiveNumber((preset as any).pixelSize?.y);
+    const buildDimensionMode = explicitBuildWidth == null
+      && explicitBuildDepth == null
+      && pixelSizeX != null
+      && pixelSizeY != null
+        ? 'auto'
+        : 'manual';
     const outputFormat = ((preset as any).display?.outputFormat === '.nanodlp'
       || (preset as any).display?.outputFormat === '.goo'
       || (preset as any).display?.outputFormat === '.lumen')
@@ -154,6 +170,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
 
     return {
       presetId: String((preset as any).presetId),
+      profileVersion: sanitizeProfileVersion((preset as any).profileVersion),
       manufacturer: String((preset as any).manufacturer),
       name: String((preset as any).name),
       family: typeof (preset as any).family === 'string' && (preset as any).family.trim().length > 0
@@ -164,6 +181,7 @@ export const ATHENA_PLUGIN_MANIFEST = {
       platformBadge: (preset as any).platformBadge,
       pixelSize: (preset as any).pixelSize,
       bitDepth: (preset as any).bitDepth,
+      buildDimensionMode,
       buildVolumeMm: {
         width: resolveBuildDimensionMm(
           (preset as any).buildVolumeMm?.width,

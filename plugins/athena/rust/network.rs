@@ -12,7 +12,7 @@ static ATHENA_NETWORK_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
 
 fn athena_network_filters() -> &'static Vec<String> {
     ATHENA_NETWORK_FILTERS.get_or_init(|| {
-        let raw = include_str!("../printers/concepts3d/printers.json");
+        let raw = include_str!("../printers/printers.json");
         let parsed: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
         let Some(arr) = parsed.as_array() else {
             return Vec::new();

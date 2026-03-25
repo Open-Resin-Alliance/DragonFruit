@@ -1,0 +1,8 @@
+{
+  "NanoDLP": {
+    "extensions": [".nanodlp"],
+    "displayName": "NanoDLP Format",
+    "version": "1.0",
+    "notes": "Athena-specific NanoDLP container format for Concepts3D and compatible printers"
+  }
+}

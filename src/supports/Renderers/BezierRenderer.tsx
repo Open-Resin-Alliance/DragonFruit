@@ -4,6 +4,7 @@ import { Vec3 } from '../types';
 import { toVector3 } from '../Curves/BezierUtils';
 import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../SupportTypes/Brace/bracePlacementState';
+import { emitImmediateModelHover, getFrontBlockingModelId } from '../interaction/pointerOcclusion';
 
 const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 
@@ -73,6 +74,7 @@ export function BezierRenderer({
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const { altActive: braceAltActive } = useBracePlacementState();
     const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
+    const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     const geometry = useMemo(() => {
         const tubularSegments = Math.max(2, resolution);
@@ -145,6 +147,21 @@ export function BezierRenderer({
     const isHovered = isPickingHovered && !isSelected && isParentSelected;
 
     const handleClick = (e: any) => {
+        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
+        if (frontModelId) {
+            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            emitImmediateModelHover(frontModelId);
+            window.dispatchEvent(new CustomEvent('shaft-leave', {
+                detail: { segmentId: id }
+            }));
+            return;
+        }
+
+        if (frontBlockingModelId !== null) {
+            setFrontBlockingModelId(null);
+            emitImmediateModelHover(null);
+        }
+
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
 
@@ -232,6 +249,7 @@ export function BezierRenderer({
                 <mesh
                     ref={pickRef as any}
                     raycast={raycast}
+                    userData={{ excludeFromPickingClone: true }}
                     onClick={handleClick}
                     onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
                     onPointerLeave={enableSegmentInteraction ? handlePointerLeave : undefined}

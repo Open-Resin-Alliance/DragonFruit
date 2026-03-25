@@ -13,7 +13,8 @@ import {
   resolveSupportedAthenaModel,
   resolveNanoDlpStatusHostName,
 } from './nanodlp';
-import athenaPrinters from '../printers/concepts3d/printers.json';
+import { dispatchNanoDlpOperation } from './handlers';
+import athenaPrinters from '../printers/printers.json';
 
 /**
  * Athena-owned NanoDLP network operation handlers.
@@ -1433,23 +1434,30 @@ export async function handleAthenaNetworkOperation(operationPath: string[], payl
   // compatible with the generic plugin network route dispatcher.
   const op = operationPath.slice(1).join('/');
 
-  if (op === 'connect') return handleNanoDlpConnect(payload);
-  if (op === 'discover') return handleNanoDlpDiscover(payload);
-  if (op === 'materials') return handleNanoDlpMaterials(payload);
-  if (op === 'materials/edit') return handleNanoDlpMaterialsEdit(payload);
-  if (op === 'job/import') return handleNanoDlpJobImport(payload);
-  if (op === 'plates/list/json') return handleNanoDlpPlatesListJson(payload);
-  if (op === 'plate/delete') return handleNanoDlpPlateDelete(payload);
-  if (op === 'printer/start') return handleNanoDlpPrinterStart(payload);
-  if (op === 'printer/pause') return handleNanoDlpPrinterPause(payload);
-  if (op === 'printer/unpause' || op === 'printer/resume') return handleNanoDlpPrinterResume(payload);
-  if (op === 'printer/stop' || op === 'printer/cancel') return handleNanoDlpPrinterCancel(payload);
-  if (op === 'printer/force-stop' || op === 'printer/emergency-stop') return handleNanoDlpPrinterEmergencyStop(payload);
-  if (op === 'printer/status') return handleNanoDlpPrinterStatus(payload);
-  if (op === 'printer/webcam/info') return handleNanoDlpPrinterWebcamInfo(payload);
+  const handled = await dispatchNanoDlpOperation(op, payload, {
+    connect: handleNanoDlpConnect,
+    discover: handleNanoDlpDiscover,
+    materials: handleNanoDlpMaterials,
+    materialsEdit: handleNanoDlpMaterialsEdit,
+    jobImport: handleNanoDlpJobImport,
+    platesListJson: handleNanoDlpPlatesListJson,
+    plateDelete: handleNanoDlpPlateDelete,
+    printerStart: handleNanoDlpPrinterStart,
+    printerPause: handleNanoDlpPrinterPause,
+    printerResume: handleNanoDlpPrinterResume,
+    printerCancel: handleNanoDlpPrinterCancel,
+    printerEmergencyStop: handleNanoDlpPrinterEmergencyStop,
+    printerStatus: handleNanoDlpPrinterStatus,
+    printerWebcamInfo: handleNanoDlpPrinterWebcamInfo,
+  });
+
+  if (handled) return handled;
 
   return { status: 404, body: { error: 'Unknown Athena NanoDLP operation' } };
 }
+
+// Generic compile-time registration alias used by generated plugin registries.
+export const handlePluginNetworkOperation = handleAthenaNetworkOperation;
 
 async function handleNanoDlpPlatesListJson(payload: unknown): Promise<HandlerResult> {
   const rawHost = resolveNanoDlpRawHost(payload);

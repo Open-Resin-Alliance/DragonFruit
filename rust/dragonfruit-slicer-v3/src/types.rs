@@ -1,6 +1,7 @@
 //! Shared data contracts for the DragonFruit V3 slicing pipeline.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::metrics::SlicingPerfV3;
 
@@ -16,6 +17,10 @@ fn default_anti_aliasing_level() -> String {
     "Off".to_string()
 }
 
+fn default_minimum_aa_alpha_percent() -> f32 {
+    35.0
+}
+
 fn default_false() -> bool {
     false
 }
@@ -24,6 +29,9 @@ fn default_false() -> bool {
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
     pub output_format: String,
+    /// Optional encoder-specific format version tag (e.g. `v4v5`, `v5enc`).
+    #[serde(default)]
+    pub format_version: Option<String>,
     /// Source raster resolution used for layer PNG generation.
     pub source_width_px: u32,
     pub source_height_px: u32,
@@ -52,6 +60,9 @@ pub struct SliceJobV3 {
     /// Whether AA should apply to support geometry (reserved for future split masks).
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// Minimum grayscale alpha (0-100%) for non-zero AA pixels.
+    #[serde(default = "default_minimum_aa_alpha_percent")]
+    pub minimum_aa_alpha_percent: f32,
     /// Mirror output image across X axis.
     #[serde(default = "default_false")]
     pub mirror_x: bool,
@@ -110,5 +121,21 @@ pub struct LayerAreaStatsV3 {
     pub area_count: u32,
 }
 
-/// Progress callback signature `(done_layers, total_layers)`.
-pub type ProgressCallbackV3 = Box<dyn Fn(u32, u32) + Send + Sync>;
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SliceProgressPhaseV3 {
+    Slicing,
+    Encoding,
+    Finalizing,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SliceProgressUpdateV3 {
+    pub done: u32,
+    pub total: u32,
+    pub phase: SliceProgressPhaseV3,
+}
+
+/// Progress callback signature for full end-to-end slicing lifecycle.
+pub type ProgressCallbackV3 = Arc<dyn Fn(SliceProgressUpdateV3) + Send + Sync>;

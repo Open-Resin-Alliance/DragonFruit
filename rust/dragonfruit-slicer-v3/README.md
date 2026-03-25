@@ -26,6 +26,23 @@ Primary exports are in:
 - `src/engine.rs`
 - `src/types.rs`
 
+## Full documentation
+
+This crate now has a dedicated docs set under:
+
+- `docs/README.md`
+
+Quick links:
+
+- `docs/ARCHITECTURE.md`
+- `docs/API.md`
+- `docs/PIPELINE.md`
+- `docs/ENCODERS.md`
+- `docs/INTEGRATION_TAURI.md`
+- `docs/BENCHMARKING.md`
+- `docs/TROUBLESHOOTING.md`
+- `docs/DEVELOPMENT_GUIDE.md`
+
 ## Integration in DragonFruit
 
 - `src-tauri` depends on this crate directly.

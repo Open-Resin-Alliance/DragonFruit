@@ -155,7 +155,7 @@ export function SliceMetricsDebugModal({
               <RuntimeStat label="Container compression" value={String(benchmark.jobConfig.containerCompressionLevel)} />
               <RuntimeStat label="BVH accel requested" value={benchmark.jobConfig.bvhAccelerationEnabled ? 'true' : 'false'} />
               <RuntimeStat label="AA level" value={benchmark.jobConfig.antiAliasingLevel} />
-              <RuntimeStat label="AA on supports" value={benchmark.jobConfig.aaOnSupports ? 'true' : 'false'} />
+
               <RuntimeStat label="Layer height" value={`${benchmark.jobConfig.layerHeightMm.toFixed(4)} mm`} />
               <RuntimeStat label="Build area" value={`${benchmark.jobConfig.buildWidthMm.toFixed(2)} × ${benchmark.jobConfig.buildDepthMm.toFixed(2)} mm`} />
             </div>

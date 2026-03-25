@@ -4012,6 +4012,7 @@ export function SceneCanvas({
               )}
 
               {!hideRaftPrimitives
+                && !thumbnailCaptureActive
                 && !isGizmoDragging
                 && !isGizmoRetargeting
                 && !(transformMode === 'placeOnFace' && disableRaycast)

@@ -444,6 +444,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     }, []);
 
     const effectiveHoverModelId = supportSelectionAndHoverSuppressed ? null : (immediateModelHoverId ?? hoverModelId);
+    const suppressSupportLikeVisualHoverFromModel = !supportSelectionAndHoverSuppressed
+        && rawSupportLikeHover
+        && immediateModelHoverId !== null;
     const effectiveVisualActiveModelId = mode === 'prepare'
         ? (immediatePrepareActiveModelId ?? activeModelId)
         : activeModelId;

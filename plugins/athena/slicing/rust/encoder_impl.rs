@@ -16,6 +16,10 @@ use zip::{CompressionMethod, ZipWriter};
 
 pub struct AthenaPluginEncoder;
 
+pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
+    vec![Box::new(AthenaPluginEncoder)]
+}
+
 fn normalize_container_compression_level(raw: u8) -> i32 {
     (raw.min(9)) as i32
 }
@@ -228,6 +232,7 @@ fn write_nanodlp_archive<W: Write + Seek>(
     job: &SliceJobV3,
     layer_pngs: &[Vec<u8>],
     layer_area_stats: &[LayerAreaStatsV3],
+    on_progress: Option<&dyn Fn(u32, u32)>,
 ) -> Result<(), SlicerV3Error> {
     let metadata: Value = serde_json::from_str(&job.metadata_json).unwrap_or(Value::Null);
     let layers_count = layer_pngs.len() as u32;
@@ -294,7 +299,15 @@ fn write_nanodlp_archive<W: Write + Seek>(
         .compression_level(Some(normalize_container_compression_level(
             job.container_compression_level,
         )));
-    let layer_opt = FileOptions::default().compression_method(CompressionMethod::Stored);
+
+    // We used to use Stored for layers because PNGs are already compressed.
+    // However, when using fast PNG compression, a light ZIP Deflate pass
+    // across the archive can still squeeze out significant redundant data.
+    let layer_opt = FileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .compression_level(Some(normalize_container_compression_level(
+            job.container_compression_level,
+        )));
 
     let meta_json = json!({
         "format_version": 3,
@@ -328,6 +341,9 @@ fn write_nanodlp_archive<W: Write + Seek>(
         let name = format!("{}.png", idx + 1);
         zip.start_file(name, layer_opt)?;
         zip.write_all(png)?;
+        if let Some(progress) = on_progress {
+            progress((idx as u32) + 1, layers_count.max(1));
+        }
     }
 
     let captured_preview_png = job
@@ -348,6 +364,11 @@ fn write_nanodlp_archive<W: Write + Seek>(
     }
 
     zip.finish()?;
+
+    if let Some(progress) = on_progress {
+        progress(layers_count.max(1), layers_count.max(1));
+    }
+
     Ok(())
 }
 
@@ -357,7 +378,34 @@ impl FormatEncoder for AthenaPluginEncoder {
     }
 
     fn requires_area_stats(&self) -> bool {
-        true
+        false
+    }
+
+    fn estimate_encode_progress_units(&self, rendered_layers: &RenderedLayersV3) -> u32 {
+        rendered_layers
+            .png_layers
+            .as_ref()
+            .map(|layers| layers.len() as u32)
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    fn encode_container_from_rendered_layers_with_progress(
+        &self,
+        job: &SliceJobV3,
+        rendered_layers: &RenderedLayersV3,
+        layer_area_stats: &[LayerAreaStatsV3],
+        on_progress: Option<&dyn Fn(u32, u32)>,
+    ) -> Result<Vec<u8>, SlicerV3Error> {
+        let Some(layer_pngs) = rendered_layers.png_layers.as_ref() else {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                "png layers are required by Athena NanoDLP encoder".to_string(),
+            ));
+        };
+
+        let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+        write_nanodlp_archive(&mut cursor, job, layer_pngs, layer_area_stats, on_progress)?;
+        Ok(cursor.into_inner())
     }
 
     fn encode_container(
@@ -367,8 +415,27 @@ impl FormatEncoder for AthenaPluginEncoder {
         layer_area_stats: &[LayerAreaStatsV3],
     ) -> Result<Vec<u8>, SlicerV3Error> {
         let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
-        write_nanodlp_archive(&mut cursor, job, layer_pngs, layer_area_stats)?;
+        write_nanodlp_archive(&mut cursor, job, layer_pngs, layer_area_stats, None)?;
         Ok(cursor.into_inner())
+    }
+
+    fn encode_container_to_path_with_progress(
+        &self,
+        job: &SliceJobV3,
+        rendered_layers: &RenderedLayersV3,
+        layer_area_stats: &[LayerAreaStatsV3],
+        output_path: &Path,
+        on_progress: Option<&dyn Fn(u32, u32)>,
+    ) -> Result<(), SlicerV3Error> {
+        let Some(layer_pngs) = rendered_layers.png_layers.as_ref() else {
+            return Err(SlicerV3Error::MissingRenderedLayerPayload(
+                "png layers are required by Athena NanoDLP encoder".to_string(),
+            ));
+        };
+
+        let file = std::fs::File::create(output_path)?;
+        let writer = std::io::BufWriter::new(file);
+        write_nanodlp_archive(writer, job, layer_pngs, layer_area_stats, on_progress)
     }
 
     fn encode_container_to_path(
@@ -386,6 +453,6 @@ impl FormatEncoder for AthenaPluginEncoder {
 
         let file = std::fs::File::create(output_path)?;
         let writer = std::io::BufWriter::new(file);
-        write_nanodlp_archive(writer, job, layer_pngs, layer_area_stats)
+        write_nanodlp_archive(writer, job, layer_pngs, layer_area_stats, None)
     }
 }

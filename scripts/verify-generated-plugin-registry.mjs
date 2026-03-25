@@ -1,0 +1,103 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, '..');
+
+const allowlistPath = path.join(repoRoot, 'src', 'config', 'complex-plugin-allowlist.json');
+const pluginsRoot = path.join(repoRoot, 'plugins');
+const generatedTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPlugins.ts');
+const generatedNetworkTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginNetworkHandlers.ts');
+const generatedUploadTsPath = path.join(repoRoot, 'src', 'features', 'plugins', 'generatedBuiltinComplexPluginUploadHandlers.ts');
+const generatedRustPath = path.join(repoRoot, 'src-tauri', 'src', 'generated_builtin_plugins.rs');
+const generatedEncoderRustPath = path.join(repoRoot, 'rust', 'dragonfruit-slicer-v3', 'src', 'encoders', 'generated_plugin_encoders.rs');
+
+async function readText(filePath) {
+      return fs.readFile(filePath, 'utf8');
+}
+
+function parseCapabilitiesFromPluginDefinitionSource(sourceText) {
+      const hasCapabilityBlock = /capabilities\s*:\s*\{[\s\S]*?\}/m.test(sourceText);
+      const hasTrueFlag = (flag) => new RegExp(`${flag}\\s*:\\s*true`, 'm').test(sourceText);
+
+      return {
+            hasCapabilityBlock,
+            networkOperations: hasTrueFlag('networkOperations'),
+            uploadWithProgress: hasTrueFlag('uploadWithProgress'),
+            slicerEncoder: hasTrueFlag('slicerEncoder'),
+            tauriRuntimePlugin: hasTrueFlag('tauriRuntimePlugin'),
+      };
+}
+
+async function readPluginCapabilities(pluginId) {
+      const definitionPath = path.join(pluginsRoot, pluginId, 'pluginDefinition.ts');
+      const source = await readText(definitionPath);
+      return parseCapabilitiesFromPluginDefinitionSource(source);
+}
+
+async function main() {
+      const allowRaw = await readText(allowlistPath);
+      const allowParsed = JSON.parse(allowRaw);
+      const ids = (Array.isArray(allowParsed?.builtinComplexPlugins) ? allowParsed.builtinComplexPlugins : [])
+            .map((entry) => (typeof entry?.id === 'string' ? entry.id.trim() : ''))
+            .filter(Boolean);
+
+      if (ids.length === 0) {
+            throw new Error('[plugin-registry-smoke] allowlist has no plugin ids');
+      }
+
+      const [generatedTs, generatedNetworkTs, generatedUploadTs, generatedRust, generatedEncoderRust] = await Promise.all([
+            readText(generatedTsPath),
+            readText(generatedNetworkTsPath),
+            readText(generatedUploadTsPath),
+            readText(generatedRustPath),
+            readText(generatedEncoderRustPath),
+      ]);
+
+      const capabilityEntries = await Promise.all(
+            ids.map(async (id) => ({ id, capabilities: await readPluginCapabilities(id) })),
+      );
+
+      for (const { id, capabilities } of capabilityEntries) {
+            if (!capabilities.hasCapabilityBlock) {
+                  throw new Error(`[plugin-registry-smoke] plugin '${id}' is missing capabilities block in pluginDefinition.ts`);
+            }
+
+            if (!generatedTs.includes(`'${id}'`)) {
+                  throw new Error(`[plugin-registry-smoke] ${path.basename(generatedTsPath)} missing plugin id '${id}'`);
+            }
+
+            if (capabilities.networkOperations && !generatedNetworkTs.includes(`pluginId: '${id}'`)) {
+                  throw new Error(`[plugin-registry-smoke] ${path.basename(generatedNetworkTsPath)} missing network handler entry for '${id}'`);
+            }
+
+            if (capabilities.uploadWithProgress && !generatedUploadTs.includes(`pluginId: '${id}'`)) {
+                  throw new Error(`[plugin-registry-smoke] ${path.basename(generatedUploadTsPath)} missing upload handler entry for '${id}'`);
+            }
+
+            if (capabilities.tauriRuntimePlugin && !generatedRust.includes(`"${id}"`)) {
+                  throw new Error(`[plugin-registry-smoke] ${path.basename(generatedRustPath)} missing rust runtime plugin id '${id}'`);
+            }
+
+            if (
+                  capabilities.slicerEncoder &&
+                  !generatedEncoderRust.includes(`plugins/${id}/slicing/rust/encoder_impl.rs`)
+            ) {
+                  throw new Error(
+                        `[plugin-registry-smoke] ${path.basename(generatedEncoderRustPath)} missing slicing encoder include for '${id}'`,
+                  );
+            }
+      }
+
+      if (!generatedEncoderRust.includes('create_plugin_encoder()')) {
+            throw new Error(`[plugin-registry-smoke] ${path.basename(generatedEncoderRustPath)} missing create_plugin_encoder() invocation`);
+      }
+
+      console.log(`[plugin-registry-smoke] OK (${ids.length} plugin id(s))`);
+}
+
+main().catch((error) => {
+      console.error('[plugin-registry-smoke] Failed.', error);
+      process.exitCode = 1;
+});

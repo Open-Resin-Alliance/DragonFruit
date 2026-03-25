@@ -12,6 +12,7 @@ export const ATHENA_NANODLP_FORMAT_DEFINITION: SlicingFormatDefinition = {
   outputFormat: '.nanodlp',
   displayName: 'NanoDLP (Athena)',
   ownership: 'plugin',
+  layerDataKind: 'png',
   pluginId: 'athena-builtin',
   rustModulePath: 'formats::nanodlp',
   wasmExportName: 'encode_nanodlp_container',

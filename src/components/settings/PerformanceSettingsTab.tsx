@@ -2,21 +2,29 @@
 
 import React from 'react';
 import { Cpu, Gauge, Sparkles, Zap, Trash2 } from 'lucide-react';
-import type { SlicingPerformanceSettings, PngCompressionStrategy } from '@/components/settings/performancePreferences';
+import type { SlicingPerformanceSettings } from '@/components/settings/performancePreferences';
 import { cleanupAllPrintTempArtifacts, cleanupStalePrintTempArtifacts } from '@/features/slicing/tauri/nativeSlicerBridge';
 
 interface PerformanceSettingsTabProps {
   settings: SlicingPerformanceSettings;
   onChange: (settings: SlicingPerformanceSettings) => void;
+  showPngCompressionControls?: boolean;
 }
 
 export function PerformanceSettingsTab({
   settings,
   onChange,
+  showPngCompressionControls = true,
 }: PerformanceSettingsTabProps) {
   const patch = React.useCallback((partial: Partial<SlicingPerformanceSettings>) => {
     onChange({ ...settings, ...partial });
   }, [onChange, settings]);
+
+  const pngCompressionMode: 'auto' | 'on' | 'off' = settings.pngCompressionStrategy === 'auto'
+    ? 'auto'
+    : settings.pngCompressionStrategy === 'fastest'
+      ? 'off'
+      : 'on';
 
   return (
     <div className="space-y-3">
@@ -137,64 +145,84 @@ export function PerformanceSettingsTab({
         </div>
       </section>
 
-      {/* PNG Compression Section */}
-      <section
-        className="rounded-lg border p-3"
-        style={{
-          background: 'var(--surface-1)',
-          borderColor: 'var(--border-subtle)',
-        }}
-      >
-        <div className="flex items-start gap-2">
-          <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
-            style={{
-              borderColor: 'var(--border-subtle)',
-              background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
-            }}
-          >
-            <Zap className="h-4 w-4" style={{ color: 'var(--accent)' }} />
-          </span>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
-              PNG Compression
-            </h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Lossless PNG encoding strategy.
-            </p>
+      {showPngCompressionControls && (
+        <section
+          className="rounded-lg border p-3"
+          style={{
+            background: 'var(--surface-1)',
+            borderColor: 'var(--border-subtle)',
+          }}
+        >
+          <div className="flex items-start gap-2">
+            <span
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border shrink-0"
+              style={{
+                borderColor: 'var(--border-subtle)',
+                background: 'color-mix(in srgb, var(--surface-2), transparent 8%)',
+              }}
+            >
+              <Zap className="h-4 w-4" style={{ color: 'var(--accent)' }} />
+            </span>
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                PNG Compression
+              </h3>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Enable or disable PNG compression for PNG-based formats.
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="mt-3 space-y-2">
-          {([
-            { key: 'fastest', label: 'Fastest', desc: '5-10µs – Real-time previews' },
-            { key: 'balanced', label: 'Balanced', desc: '50-100µs – Default balance' },
-            { key: 'smallest', label: 'Smallest', desc: '200-400µs – Compact files' },
-            { key: 'optimal', label: 'Optimal', desc: '300-500µs – Maximum compression' },
-          ] as const).map((option) => {
-            const active = settings.pngCompressionStrategy === option.key;
-            return (
-              <button
-                key={option.key}
-                type="button"
-                onClick={() => patch({ pngCompressionStrategy: option.key as PngCompressionStrategy })}
-                className="w-full rounded-md border p-2.5 text-left transition-all"
-                style={{
-                  borderColor: active ? 'var(--accent)' : 'var(--border-subtle)',
-                  background: active ? 'color-mix(in srgb, var(--accent), var(--surface-0) 84%)' : 'var(--surface-0)',
-                }}
-              >
-                <div className="text-xs font-semibold" style={{ color: active ? 'var(--accent)' : 'var(--text-strong)' }}>
-                  {option.label}
+          <div className="mt-3 rounded-md border p-2.5" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-0)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-strong)' }}>
+                  Compression
                 </div>
-                <div className="text-[11px] mt-0.5" style={{ color: active ? 'var(--accent)' : 'var(--text-muted)' }}>
-                  {option.desc}
+                <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  Auto adapts by AA level, Off is fastest, On favors smaller PNG files
                 </div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+              </div>
+              <div className="flex gap-1.5">
+                {([
+                  { key: 'auto', label: 'Auto' },
+                  { key: 'off', label: 'Off' },
+                  { key: 'on', label: 'On' },
+                ] as const).map((option) => {
+                  const active = pngCompressionMode === option.key;
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => patch({
+                        pngCompressionStrategy: option.key === 'auto'
+                          ? 'auto'
+                          : option.key === 'off'
+                            ? 'fastest'
+                            : 'balanced',
+                      })}
+                      className="h-10 min-w-[76px] rounded-md border px-3 text-[12px] font-semibold uppercase tracking-wide transition-colors"
+                      style={active
+                        ? {
+                            borderColor: 'color-mix(in srgb, var(--accent), white 10%)',
+                            background: 'color-mix(in srgb, var(--accent), var(--surface-0) 76%)',
+                            color: 'var(--accent)',
+                          }
+                        : {
+                            borderColor: 'var(--border-subtle)',
+                            background: 'var(--surface-1)',
+                            color: 'var(--text-muted)',
+                          }}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* BVH Acceleration Section */}
       <section

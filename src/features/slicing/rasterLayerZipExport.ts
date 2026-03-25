@@ -3,7 +3,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { LoadedModel } from '@/features/scene/useSceneCollectionManager';
 import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
-import { getSavedSlicingPerformanceSettings } from '@/components/settings/performancePreferences';
+import {
+  getSavedSlicingPerformanceSettings,
+  type PngCompressionStrategy,
+} from '@/components/settings/performancePreferences';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
@@ -17,6 +20,7 @@ import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints } from '@/supports/SupportPrimitives/Knot/knotUtils';
+import { resolveSlicingFormatDefinition } from '@/features/slicing/formats/registry';
 
 const MAX_CANVAS_PIXELS = 24_000_000;
 
@@ -83,7 +87,7 @@ export type SolidSliceMeshForWasm = {
   heightPx: number;
   xPackingMode: 'none' | 'rgb8_div3' | 'gray3_div2';
   computeBackend: 'auto' | 'cpu' | 'gpu';
-  pngCompressionStrategy: 'fastest' | 'balanced' | 'smallest' | 'optimal';
+  pngCompressionStrategy: PngCompressionStrategy;
   bvhAccelerationEnabled: boolean;
   mirrorX: boolean;
   mirrorY: boolean;
@@ -155,7 +159,7 @@ type EffectiveSettings = {
   tallestObjectHeightMm: number;
 };
 
-function resolveNanodlpPackedWidth(printerProfile: PrinterProfile): {
+function resolvePluginPackedWidth(printerProfile: PrinterProfile): {
   widthPx: number;
   sourceResolutionX: number;
   sourceResolutionY: number;
@@ -1408,9 +1412,14 @@ function resolveEffectiveSettings(options: RasterLayerZipExportOptions): Effecti
   const sourceResolutionX = Math.max(1, Math.round(options.printerProfile.display.resolutionX));
   const sourceResolutionY = Math.max(1, Math.round(options.printerProfile.display.resolutionY));
 
-  const outputFormat = options.printerProfile.display.outputFormat;
-  const packed = outputFormat === '.nanodlp'
-    ? resolveNanodlpPackedWidth(options.printerProfile)
+  const resolvedFormat = resolveSlicingFormatDefinition({
+    printerProfile: options.printerProfile,
+    materialProfile: options.materialProfile,
+  });
+  const usesPluginOwnedEncoding = resolvedFormat.ownership === 'plugin';
+
+  const packed = usesPluginOwnedEncoding
+    ? resolvePluginPackedWidth(options.printerProfile)
     : {
       widthPx: sourceResolutionX,
       sourceResolutionX,
@@ -1422,7 +1431,7 @@ function resolveEffectiveSettings(options: RasterLayerZipExportOptions): Effecti
   let heightPx = packed.sourceResolutionY;
 
   const pixelCount = widthPx * heightPx;
-  if (pixelCount > MAX_CANVAS_PIXELS && outputFormat !== '.nanodlp') {
+  if (pixelCount > MAX_CANVAS_PIXELS && !usesPluginOwnedEncoding) {
     const scale = Math.sqrt(MAX_CANVAS_PIXELS / pixelCount);
     widthPx = Math.max(1, Math.floor(widthPx * scale));
     heightPx = Math.max(1, Math.floor(heightPx * scale));
@@ -1592,7 +1601,7 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
     mode: 'raster_layer_zip_solid_v1',
     notes: [
       'JS fallback generates solid cross-sections via plane intersections and scanline fill.',
-      'Used when WASM .nanodlp path is unavailable or fails.',
+      'Used when plugin-owned WASM encoding path is unavailable or fails.',
     ],
     printer: {
       id: options.printerProfile.id,
@@ -1612,6 +1621,9 @@ async function rasterizeLayerStack(options: RasterLayerZipExportOptions): Promis
       normalExposureSec: options.materialProfile.normalExposureSec,
       bottomExposureSec: options.materialProfile.bottomExposureSec,
       bottomLayerCount: options.materialProfile.bottomLayerCount,
+      liftDistanceMm: options.materialProfile.liftDistanceMm,
+      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
+      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
     },
     effective: {
       widthPx: settings.widthPx,
@@ -1732,6 +1744,9 @@ export function buildSolidSliceMeshForWasm(options: RasterLayerZipExportOptions)
       normalExposureSec: options.materialProfile.normalExposureSec,
       bottomExposureSec: options.materialProfile.bottomExposureSec,
       bottomLayerCount: options.materialProfile.bottomLayerCount,
+      liftDistanceMm: options.materialProfile.liftDistanceMm,
+      liftSpeedMmMin: options.materialProfile.liftSpeedMmMin,
+      retractSpeedMmMin: options.materialProfile.retractSpeedMmMin,
     },
     effective: {
       widthPx: settings.widthPx,

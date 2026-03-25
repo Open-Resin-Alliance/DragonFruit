@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "builtinComplexPlugins": [
+    {
+      "id": "athena"
+    },
+    {
+      "id": "ctb"
+    },
+    {
+      "id": "sdcp-v3"
+    }
+  ]
+}

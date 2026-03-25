@@ -21,6 +21,7 @@ export type PickingDiagnosticsSnapshot = {
 const EMPTY_CATEGORY_COUNTS: PickingCategoryCounts = {
   model: 0,
   support: 0,
+  contactDisk: 0,
   joint: 0,
   knot: 0,
   segment: 0,
