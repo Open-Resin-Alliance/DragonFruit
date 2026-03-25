@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
+import * as THREE from 'three';
 import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
 import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
@@ -80,6 +81,8 @@ export function ContactConeRenderer({
     const bodyRadius = profile.bodyDiameterMm / 2;
     const length = profile.lengthMm;
     const penetrationMm = profile.penetrationMm ?? 0;
+    const [isHovered, setIsHovered] = useState(false);
+    const hoverVisible = isHovered && isInteractable && isParentSelected;
 
     // Resolve accurate colors logic
     const finalDiskColor = diskColor || color;
@@ -122,28 +125,65 @@ export function ContactConeRenderer({
     // Calculate cone center (based on shifted start position)
     const center = getConeCenterPosition(coneStartPos, normal, profile);
     const quaternion = getConeQuaternion(normal);
+    const displayEmissive = hoverVisible ? '#ffffff' : emissive;
+    const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.35) : emissiveIntensity;
+
     const handleConeClick = (e: any) => {
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                const primitiveType = current.userData?.supportPrimitiveType;
+                if (primitiveType === 'joint' || primitiveType === 'knot') {
+                    return;
+                }
+                current = current.parent;
+            }
+        }
+
         if (!contactDiskId) return;
         handleContactDiskClick(e, contactDiskId, isInteractable, isParentSelected, isContactDiskSelected);
     };
 
     const handleConePointerMove = React.useCallback((e: any) => {
-        if (!contactDiskId || !isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
+        if (!contactDiskId || !isInteractable || (!isParentSelected && !isContactDiskSelected)) {
+            setIsHovered(false);
+            return;
+        }
+
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                const primitiveType = current.userData?.supportPrimitiveType;
+                if (primitiveType === 'joint' || primitiveType === 'knot') {
+                    emitImmediateModelHover(null);
+                    setHoveredId(null);
+                    setHoveredCategory('none');
+                    setIsHovered(false);
+                    return;
+                }
+                current = current.parent;
+            }
+        }
 
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             emitImmediateModelHover(frontModelId);
             setHoveredId(null);
             setHoveredCategory('none');
+            setIsHovered(false);
             return;
         }
 
         emitImmediateModelHover(null);
         setHoveredId(contactDiskId);
         setHoveredCategory('contactDisk');
+        setIsHovered(true);
     }, [contactDiskId, isInteractable, isParentSelected, isContactDiskSelected]);
 
     const handleConePointerOut = React.useCallback(() => {
+        setIsHovered(false);
         if (!isInteractable || (!isParentSelected && !isContactDiskSelected)) return;
 
         emitImmediateModelHover(null);
@@ -221,8 +261,8 @@ export function ContactConeRenderer({
                     <cylinderGeometry args={[contactRadius, bodyRadius, length, radialSegments]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
-                        emissive={emissive}
-                        emissiveIntensity={emissiveIntensity}
+                        emissive={displayEmissive}
+                        emissiveIntensity={displayEmissiveIntensity}
                         transparent={transparent}
                         opacity={opacity}
                         depthWrite={!transparent}
@@ -237,8 +277,8 @@ export function ContactConeRenderer({
                     <sphereGeometry args={[contactRadius, sphereSegments, Math.max(6, Math.floor(sphereSegments * 0.75))]} />
                     <meshStandardMaterial
                         color={finalBodyColor}
-                        emissive={emissive}
-                        emissiveIntensity={emissiveIntensity}
+                        emissive={displayEmissive}
+                        emissiveIntensity={displayEmissiveIntensity}
                         transparent={transparent}
                         opacity={opacity}
                         depthWrite={!transparent}

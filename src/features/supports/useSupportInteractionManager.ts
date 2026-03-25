@@ -18,8 +18,6 @@ import {
   getBranches,
   getBraces,
   getLeaves,
-  getTwigs,
-  getSticks,
   getSnapshot,
   removeBranch,
   removeBrace,
@@ -39,8 +37,11 @@ import {
 import { registerDeleteHandler } from '@/features/delete/deleteRegistry';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_REMOVE_BRANCH, SUPPORT_REMOVE_BRACE, SUPPORT_REMOVE_LEAF, SUPPORT_REMOVE_TRUNK, SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH, SUPPORT_REMOVE_TWIG, SUPPORT_REMOVE_STICK, SUPPORT_AUTO_BRACE_REPLACE, SUPPORT_REMOVE_KICKSTAND } from '@/supports/history/actionTypes';
-import { clearSelection, getMultiSelectedSupportIds, selectAllSupports } from '@/supports/interaction/SupportSelection';
+import { clearSupportSelection, getResolvedPrimarySelection, selectSupportIds } from '@/supports/interaction/shared/selection/selectionController';
 import { getKickstandSnapshot } from '@/supports/SupportTypes/Kickstand/kickstandStore';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
+import { getSupportPlacementModifierState, resolveSupportPlacementHotkeyBindings } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
+import { resolveSupportPlacementRouting } from '@/supports/interaction/shared/placement/hotkeys/supportPlacementRouting';
 
 interface SupportInteractionOptions {
   mode: SupportMode;
@@ -146,6 +147,11 @@ function resolveSupportOwnerFromJointId(jointId: string): { category: 'brace'; i
   return null;
 }
 
+function getNativeEventSource(source: unknown): unknown {
+  if (!source || typeof source !== 'object') return null;
+  return (source as { nativeEvent?: unknown }).nativeEvent ?? null;
+}
+
 export function useSupportInteractionManager({ mode }: SupportInteractionOptions) {
   // V2 Trunk Placement
   const trunkPlacementV2 = useTrunkPlacementV2();
@@ -153,6 +159,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const leafPlacement = useLeafPlacement();
   const bracePlacement = useBracePlacement();
   const kickstandPlacement = useKickstandPlacement();
+  const { getHotkey } = useHotkeyConfig();
 
   const altDownRef = useRef(false);
 
@@ -170,8 +177,27 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
 
   const selectedJointId = globalSelectedCategory === 'joint' ? globalSelectedId : null;
 
+  const resolvePlacementRouting = useCallback((source: unknown) => {
+    const bindings = resolveSupportPlacementHotkeyBindings(getHotkey);
+    return resolveSupportPlacementRouting({
+      bindings,
+      modifierState: getSupportPlacementModifierState(source),
+      state: {
+        branchHotkeyActive: branchPlacement.altActive,
+        branchAwaitingBase: branchPlacement.stage === 'awaitingBase',
+        leafHotkeyActive: leafPlacement.hotkeyActive,
+        leafAwaitingBase: leafPlacement.stage === 'awaitingBase',
+        braceHotkeyActive: bracePlacement.altActive,
+        braceAwaitingEnd: bracePlacement.stage === 'awaitingEnd',
+        kickstandHotkeyActive: kickstandPlacement.hotkeyActive,
+      },
+    });
+  }, [getHotkey, branchPlacement.altActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, bracePlacement.altActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
+
   // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
+    const nativeEvent = getNativeEventSource(hit);
+
     if (isContactDiskHudInteractionActive()) {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
@@ -193,61 +219,58 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       return;
     }
 
-    if (bracePlacement.isActive) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(null);
-      return;
-    }
+    const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
-    if (kickstandPlacement.isActive) {
-      trunkPlacementV2.onSupportHover(null);
-      branchPlacement.onModelHover(null);
-      leafPlacement.onModelHover(null);
-      return;
-    }
-
-    if (leafPlacement.isActive) {
+    if (routing.modelHoverOwner === 'leaf') {
       trunkPlacementV2.onSupportHover(null);
       branchPlacement.onModelHover(null);
       leafPlacement.onModelHover(hit);
-    } else if (branchPlacement.isActive) {
+      return;
+    }
+
+    if (routing.modelHoverOwner === 'branch') {
       trunkPlacementV2.onSupportHover(null);
       leafPlacement.onModelHover(null);
       branchPlacement.onModelHover(hit);
-    } else {
-      // Normal trunk placement preview
-      trunkPlacementV2.onSupportHover(hit);
+      return;
     }
-  }, [isPlacementHardDisabled, trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, kickstandPlacement.isActive, jointCreationState.isActive]);
+
+    if (routing.blocksDefaultModelPlacement) {
+      trunkPlacementV2.onSupportHover(null);
+      branchPlacement.onModelHover(null);
+      leafPlacement.onModelHover(null);
+      return;
+    }
+
+    trunkPlacementV2.onSupportHover(hit);
+  }, [isPlacementHardDisabled, trunkPlacementV2, branchPlacement, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
 
   // Handler for MODEL click (trunk placement, or branch tip placement)
   const onModelClick = useCallback((hit: THREE.Intersection) => {
+    const nativeEvent = getNativeEventSource(hit);
+
     if (jointCreationState.isActive) {
       return;
     }
 
-    if (bracePlacement.isActive) {
-      return;
-    }
+    const routing = resolvePlacementRouting(nativeEvent ?? hit);
 
-    if (kickstandPlacement.isActive) {
-      return;
-    }
-
-    const nativeEvent = (hit as any)?.nativeEvent;
-    const altDown = !!(nativeEvent?.altKey ?? (hit as any)?.altKey);
-    const ctrlDown = !!(nativeEvent?.ctrlKey ?? (hit as any)?.ctrlKey);
-
-    if ((altDown && ctrlDown) || leafPlacement.isActive) {
+    if (routing.modelClickOwner === 'leaf') {
       leafPlacement.onModelClick(hit);
-    } else if (altDown || branchPlacement.isActive) {
-      branchPlacement.onModelClick(hit);
-    } else {
-      // Normal trunk placement
-      trunkPlacementV2.onSupportClick(hit);
+      return;
     }
-  }, [trunkPlacementV2, branchPlacement, leafPlacement, bracePlacement.isActive, kickstandPlacement.isActive, jointCreationState.isActive]);
+
+    if (routing.modelClickOwner === 'branch') {
+      branchPlacement.onModelClick(hit);
+      return;
+    }
+
+    if (routing.blocksDefaultModelPlacement) {
+      return;
+    }
+
+    trunkPlacementV2.onSupportClick(hit);
+  }, [trunkPlacementV2, branchPlacement, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
 
   // Handler for SUPPORT hover (branch base preview when hovering existing support shafts)
   // NOTE: We do NOT check isPlacementDisabled here because branch placement
@@ -256,24 +279,30 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
   const onSupportHover = useCallback((hit: THREE.Intersection | null) => {
     if (mode !== 'support') return;
 
-    if (leafPlacement.isActive) {
+    const nativeEvent = getNativeEventSource(hit);
+    const routing = resolvePlacementRouting(nativeEvent ?? hit);
+
+    if (routing.supportHoverOwner === 'leaf') {
       leafPlacement.onSupportHover(hit);
-    } else if (branchPlacement.isActive) {
+    } else if (routing.supportHoverOwner === 'branch') {
       branchPlacement.onSupportHover(hit);
     }
-  }, [mode, branchPlacement, leafPlacement]);
+  }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
 
   // Handler for SUPPORT click (branch base placement on existing support shaft)
   const onSupportClick = useCallback((hit: THREE.Intersection) => {
     if (mode !== 'support') return;
 
-    if (leafPlacement.isActive) {
+    const nativeEvent = getNativeEventSource(hit);
+    const routing = resolvePlacementRouting(nativeEvent ?? hit);
+
+    if (routing.supportClickOwner === 'leaf') {
       leafPlacement.onSupportClick(hit);
-    } else if (branchPlacement.isActive) {
+    } else if (routing.supportClickOwner === 'branch') {
       branchPlacement.onSupportClick(hit);
     }
     // Note: clicking on supports in non-branch mode is handled by SupportRenderer (selection)
-  }, [mode, branchPlacement, leafPlacement]);
+  }, [mode, branchPlacement, leafPlacement, resolvePlacementRouting]);
 
   useEffect(() => {
     if (mode !== 'support') return;
@@ -370,8 +399,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           if (!snapshots) return false;
           const afterSnapshot = getSnapshot();
 
-          let trunkUpdate: { before: any; after: any } | undefined;
-          let knotUpdates: any[] | undefined;
+          let trunkUpdate: { before: unknown; after: unknown } | undefined;
+          let knotUpdates: unknown[] | undefined;
           const parentKnot = branch.parentKnotId ? beforeSnapshot.knots[branch.parentKnotId] : undefined;
           const parentSegId = parentKnot?.parentShaftId;
           const trunkId = parentSegId
@@ -444,8 +473,8 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         if (!snapshots) return false;
         const afterSnapshot = getSnapshot();
 
-        let trunkUpdate: { before: any; after: any } | undefined;
-        let knotUpdates: any[] | undefined;
+        let trunkUpdate: { before: unknown; after: unknown } | undefined;
+        let knotUpdates: unknown[] | undefined;
         const removedRootBranch = snapshots.branches.find(b => b.id === id) ?? snapshots.branches[0];
         const parentKnot = removedRootBranch?.parentKnotId ? beforeSnapshot.knots[removedRootBranch.parentKnotId] : undefined;
         const parentSegId = parentKnot?.parentShaftId;
@@ -539,7 +568,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     };
 
     const canDeleteSelection = () => {
-      const multiSelectedIds = getMultiSelectedSupportIds();
+      const multiSelectedIds = getResolvedPrimarySelection().selectedIds;
       if (multiSelectedIds.length > 0) return true;
 
       const category = getSelectedCategory();
@@ -571,7 +600,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     };
 
     const performDeleteSelection = () => {
-      const multiSelectedIds = Array.from(new Set(getMultiSelectedSupportIds()));
+      const multiSelectedIds = Array.from(new Set(getResolvedPrimarySelection().selectedIds));
       if (multiSelectedIds.length > 0) {
         const beforeSupportSnapshot = structuredClone(getSnapshot());
         const beforeKickstandSnapshot = structuredClone(getKickstandSnapshot());
@@ -599,7 +628,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
           });
         }
 
-        clearSelection();
+        clearSupportSelection();
         setHoveredId(null);
         setHoveredCategory('none');
         if (anyDeleted) return;
@@ -627,10 +656,10 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       }
 
       if (e.key === 'Escape') {
-        if (getSelectedId() || getMultiSelectedSupportIds().length > 0) {
+        if (getSelectedId() || getResolvedPrimarySelection().selectedIds.length > 0) {
           e.preventDefault();
           e.stopPropagation();
-          clearSelection();
+          clearSupportSelection();
           setHoveredId(null);
           setHoveredCategory('none');
         }
@@ -641,7 +670,7 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
         e.preventDefault();
         e.stopPropagation();
         const allSupportIds = collectAllSupportIds();
-        selectAllSupports(allSupportIds);
+        selectSupportIds(allSupportIds);
         return;
       }
 

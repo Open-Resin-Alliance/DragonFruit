@@ -1,13 +1,16 @@
 import React, { useSyncExternalStore } from 'react';
 import { useThree } from '@react-three/fiber';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { getSnapshot, subscribe, updateLeaf } from '../../state';
 import { Leaf, Knot } from '../../types';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
+import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
+import { branchPlacementStore } from '../Branch/branchPlacementState';
 
 interface LeafRendererProps {
     leaf: Leaf;
@@ -23,6 +26,28 @@ interface LeafRendererProps {
     hoverColor?: string;
     selectedColor?: string;
     onContactDiskHudHoverChange?: (hovered: boolean) => void;
+}
+
+interface LeafRendererPointerEvent {
+    altKey?: boolean;
+    button?: number;
+    clientX?: number;
+    clientY?: number;
+    point?: { x: number; y: number; z: number };
+    sourceEvent?: {
+        button?: number;
+        clientX?: number;
+        clientY?: number;
+    };
+    nativeEvent?: {
+        altKey?: boolean;
+        button?: number;
+        clientX?: number;
+        clientY?: number;
+        stopPropagation?: () => void;
+        stopImmediatePropagation?: () => void;
+    };
+    stopPropagation: () => void;
 }
 
 export const LeafRenderer = React.memo(function LeafRenderer({
@@ -41,6 +66,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     onContactDiskHudHoverChange,
 }: LeafRendererProps) {
     const { camera, scene, gl } = useThree();
+    const { getHotkey } = useHotkeyConfig();
+    const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
@@ -61,12 +88,14 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         hoverColor,
     });
 
-    const handleClick = (e: any) => {
-        if (e?.nativeEvent?.altKey || e?.altKey) {
+    const handleClick = (e: LeafRendererPointerEvent) => {
+        const branchFamilyHeld = branchPlacementStore.getSnapshot().altActive
+            || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e));
+        if (branchFamilyHeld) {
             e.stopPropagation();
             if (e.nativeEvent) {
-                e.nativeEvent.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation();
+                e.nativeEvent.stopPropagation?.();
+                e.nativeEvent.stopImmediatePropagation?.();
             }
 
             window.dispatchEvent(new CustomEvent('brace-leaf-click', {
@@ -82,7 +111,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
         handleSupportClick(e, leaf.id, !!isInteractable);
     };
 
-    const handleContactDiskHudPointerDown = React.useCallback((e: any) => {
+    const handleContactDiskHudPointerDown = React.useCallback((e: LeafRendererPointerEvent) => {
         if (!isSelected || !leaf.contactCone) return;
         if (!isPrimaryPointerPress(e)) return;
 
@@ -118,7 +147,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     }, []);
     return (
         <group onClick={handleClick}>
-            <group ref={pickRef as any}>
+            <group ref={pickRef}>
                 {(() => {
                     const effectiveCone = liveDragConeRef.current ?? leaf.contactCone;
                     if (!effectiveCone || deferContactConesToSceneBatch) return null;

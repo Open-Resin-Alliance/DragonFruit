@@ -1,13 +1,13 @@
-import { setSelectedId, getSelectedId, getSelectedCategory, subscribe } from '../state';
-import { useSyncExternalStore } from 'react';
 import {
-    clearSelectedSupportIds,
-    getEmptySelectedSupportIdsSnapshot,
-    getSelectedSupportIds,
-    setSelectedSupportIds,
-    subscribeSupportMultiSelection,
-    toggleSelectedSupportId,
-} from './supportMultiSelection';
+    applySupportSelectionClick,
+    clearSupportSelection,
+    getResolvedPrimarySelection,
+    selectJointById,
+    selectPrimitiveById,
+    selectSupportById,
+    selectSupportIds,
+} from './shared/selection/selectionController';
+import { useResolvedSelectionState } from './shared/selection/resolvedSelectionStore';
 
 /**
  * Interaction module for V2 support selection.
@@ -23,45 +23,23 @@ import {
  * Infers the category based on the ID.
  */
 export function selectSupport(id: string) {
-    clearSelectedSupportIds();
-    setSelectedSupportIds([id]);
-    setSelectedId(id);
+    applySupportSelectionClick({
+        id,
+        shiftKey: false,
+        isInteractable: true,
+    });
 }
 
 export function selectSupportWithToggle(id: string) {
-    if (!id) return;
-
-    const existing = getSelectedSupportIds();
-    const isAlreadySelected = existing.includes(id);
-
-    toggleSelectedSupportId(id);
-
-    const updated = getSelectedSupportIds();
-
-    if (isAlreadySelected) {
-        setSelectedId(updated.length > 0 ? updated[updated.length - 1] : null);
-        return;
-    }
-
-    // Once a second support is added, transition out of single-support edit mode
-    // into bulk multi-select mode (same UX intent as Ctrl+A behavior).
-    if (updated.length > 1) {
-        setSelectedId(null);
-        return;
-    }
-
-    setSelectedId(id);
+    selectSupportById(id, true);
 }
 
 export function selectAllSupports(ids: string[]) {
-    const normalized = ids.filter(Boolean);
-    clearSelectedSupportIds();
-    setSelectedSupportIds(normalized);
-    setSelectedId(normalized.length > 0 ? normalized[0] : null);
+    selectSupportIds(ids);
 }
 
 export function getMultiSelectedSupportIds() {
-    return getSelectedSupportIds();
+    return getResolvedPrimarySelection().selectedIds;
 }
 
 /**
@@ -69,7 +47,11 @@ export function getMultiSelectedSupportIds() {
  * Infers the category 'joint'.
  */
 export function selectJoint(id: string) {
-    setSelectedId(id);
+    selectJointById(id);
+}
+
+export function selectContactDisk(id: string) {
+    selectPrimitiveById(id);
 }
 
 export function selectContactDisk(id: string) {
@@ -80,8 +62,7 @@ export function selectContactDisk(id: string) {
  * Clear any current selection (support or joint).
  */
 export function clearSelection() {
-    clearSelectedSupportIds();
-    setSelectedId(null);
+    clearSupportSelection();
     if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('support-selection-cleared'));
     }
@@ -92,30 +73,18 @@ export function clearSelection() {
  * Returns selection details and helper booleans.
  */
 export function useSupportSelection() {
-    const state = useSyncExternalStore(
-        subscribe,
-        () => ({
-            selectedId: getSelectedId(),
-            selectedCategory: getSelectedCategory(),
-        }),
-        () => ({ selectedId: null, selectedCategory: null }) // Server snapshot
-    );
-
-    const selectedSupportIds = useSyncExternalStore(
-        subscribeSupportMultiSelection,
-        getSelectedSupportIds,
-        getEmptySelectedSupportIdsSnapshot,
-    );
+    const resolvedSelection = useResolvedSelectionState();
+    const selectedSupportIds = resolvedSelection.selectedIds;
 
     return {
-        selectedId: state.selectedId,
-        selectedCategory: state.selectedCategory,
+        selectedId: resolvedSelection.selectedId,
+        selectedCategory: resolvedSelection.selectedCategory,
         selectedSupportIds,
         
         // Helpers
-        isSelected: (id: string) => state.selectedId === id || selectedSupportIds.includes(id),
-        hasSelection: state.selectedId !== null,
-        isJointSelected: state.selectedCategory === 'joint',
-        isSupportSelected: ['trunk', 'branch', 'leaf', 'twig', 'stick', 'root', 'brace', 'knot'].includes(state.selectedCategory || '')
+        isSelected: (id: string) => resolvedSelection.selectedId === id || selectedSupportIds.includes(id),
+        hasSelection: resolvedSelection.selectedId !== null || selectedSupportIds.length > 0,
+        isJointSelected: resolvedSelection.selectedCategory === 'joint',
+        isSupportSelected: ['trunk', 'branch', 'leaf', 'twig', 'stick', 'root', 'brace', 'knot'].includes(resolvedSelection.selectedCategory || '')
     };
 }

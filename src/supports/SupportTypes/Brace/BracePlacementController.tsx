@@ -2,36 +2,61 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { subscribe, getSnapshot, addKnot, addBrace } from '../../state';
 import { pushHistory } from '@/history/historyStore';
-import { useSnapping } from '../../interaction/useSnapping';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Brace, Knot, Vec3 } from '../../types';
 import { SUPPORT_ADD_BRACE } from '../../history/actionTypes';
 import { getSettings } from '../../Settings/state';
-import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints } from '../../SupportPrimitives/Knot/knotUtils';
-import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
-import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { generateUuid } from '@/utils/uuid';
-import { clearSelection } from '../../interaction/SupportSelection';
+import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
+import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
+import {
+    buildKickstandPathSnapTargets,
+    buildLeafConePathSnapTargets,
+    buildLeafConeSnapMeta,
+    buildPrimarySnapTargetIndex,
+    buildSnapTargetCandidateIndex,
+    buildSupportPathSnapTargets,
+    resolveBracePathDiameterAtT,
+} from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
+import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
     point?: Vec3 | null;
 }
 
-function vecEq(a: Vec3, b: Vec3) {
-    return a.x === b.x && a.y === b.y && a.z === b.z;
+interface ModifierAwareIntersection {
+    altKey?: boolean;
+    nativeEvent?: {
+        altKey?: boolean;
+    };
+}
+
+interface ShaftClickDetail extends ShaftHoverDetail {
+    segmentId?: string;
+    point?: Vec3 | null;
+    intersection?: ModifierAwareIntersection;
+}
+
+interface LeafClickDetail {
+    leafId?: string;
+    point?: Vec3 | null;
+    intersection?: ModifierAwareIntersection;
 }
 
 export function BracePlacementController() {
     const { altActive, stage, start } = useBracePlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
+    const { getHotkey } = useHotkeyConfig();
+    const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
 
     const { raycaster, camera, pointer } = useThree();
     const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
@@ -98,65 +123,7 @@ export function BracePlacementController() {
     }, [supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, kickstandState.kickstands]);
 
     const leafMeta = useMemo(() => {
-        const map = new Map<
-            string,
-            {
-                modelId: string;
-                cone: ContactCone;
-                start: Vec3;
-                end: Vec3;
-                contactRadiusMm: number;
-                bodyRadiusMm: number;
-                lengthMm: number;
-            }
-        >();
-
-        for (const leaf of Object.values(supportState.leaves)) {
-            const cone = leaf.contactCone;
-            if (!cone) continue;
-
-            const profile = cone.profile;
-            const contactRadiusMm = profile.contactDiameterMm / 2;
-            const bodyRadiusMm = profile.bodyDiameterMm / 2;
-            const lengthMm = profile.lengthMm;
-
-            const coneAxis = new THREE.Vector3(cone.normal.x, cone.normal.y, cone.normal.z).normalize();
-            const sn = (cone.surfaceNormal ?? cone.normal);
-            const surfNormal = new THREE.Vector3(sn.x, sn.y, sn.z).normalize();
-
-            let offset = 0;
-            if (profile.type === 'disk') {
-                if (cone.diskLengthOverride !== undefined) {
-                    offset = cone.diskLengthOverride;
-                } else {
-                    offset = calculateDiskThickness(cone.surfaceNormal ?? cone.normal, cone.normal, profile);
-                }
-            }
-
-            const startPos = {
-                x: cone.pos.x + surfNormal.x * offset,
-                y: cone.pos.y + surfNormal.y * offset,
-                z: cone.pos.z + surfNormal.z * offset,
-            };
-
-            const endPos = {
-                x: startPos.x + coneAxis.x * lengthMm,
-                y: startPos.y + coneAxis.y * lengthMm,
-                z: startPos.z + coneAxis.z * lengthMm,
-            };
-
-            map.set(leaf.id, {
-                modelId: leaf.modelId,
-                cone,
-                start: startPos,
-                end: endPos,
-                contactRadiusMm,
-                bodyRadiusMm,
-                lengthMm,
-            });
-        }
-
-        return map;
+        return buildLeafConeSnapMeta(supportState.leaves);
     }, [supportState.leaves]);
 
     const resolveLeafSurface = useCallback((leafId: string, axisPoint: Vec3, coneT: number) => {
@@ -172,7 +139,7 @@ export function BracePlacementController() {
             diameterMm: rMm * 2,
             modelId: meta.modelId,
         };
-    }, [leafMeta, camera.position]);
+    }, [leafMeta]);
 
     const isValidEndSegment = useCallback(
         (endSegmentId: string) => {
@@ -203,221 +170,32 @@ export function BracePlacementController() {
     const allTargets = useMemo(() => {
         if (!altActive && stage === 'idle') return [];
 
-        const roots = Object.values(supportState.roots);
-        const knots = Object.values(supportState.knots);
-        const rootMap = new Map(roots.map((r) => [r.id, r]));
-        const knotMap = new Map(knots.map((k) => [k.id, k]));
-
-        const targets: SnapTarget[] = [];
-
-        for (const trunk of Object.values(supportState.trunks)) {
-            const root = rootMap.get(trunk.rootId);
-            if (!root) continue;
-
-            trunk.segments.forEach((seg, idx) => {
-                if (start?.kind === 'shaft' && start.segmentId && seg.id === start.segmentId) return;
-
-                const endpoints = getTrunkSegmentEndpoints(trunk, seg, idx, root);
-                if (!endpoints) return;
-
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: endpoints.start,
-                        end: endpoints.end,
-                        radius: seg.diameter / 2,
-                        bezier:
-                            seg.type === 'bezier'
-                                ? { control1: seg.controlPoint1, control2: seg.controlPoint2 }
-                                : undefined,
-                    },
-                });
-            });
+        const excludedSegmentIds = new Set<string>();
+        if (start?.kind === 'shaft' && start.segmentId) {
+            excludedSegmentIds.add(start.segmentId);
         }
 
-        for (const kickstand of Object.values(kickstandState.kickstands)) {
-            const kickstandRoot = kickstandState.roots[kickstand.rootId];
-            const kickstandHostKnot = kickstandState.knots[kickstand.hostKnotId];
-            if (!kickstandRoot || !kickstandHostKnot) continue;
+        const targets: SnapTarget[] = buildSupportPathSnapTargets(supportState, {
+            includeTrunks: true,
+            includeBranches: true,
+            includeBraces: true,
+            includeTwigs: true,
+            includeSticks: true,
+            excludeSegmentIds: excludedSegmentIds,
+        });
 
-            const rootTopZ = kickstandRoot.transform.pos.z + kickstandRoot.diskHeight + kickstandRoot.coneHeight;
-
-            kickstand.segments.forEach((seg, idx) => {
-                if (start?.kind === 'shaft' && start.segmentId && seg.id === start.segmentId) return;
-
-                let startPos: Vec3;
-                if (idx === 0) {
-                    startPos = {
-                        x: kickstandRoot.transform.pos.x,
-                        y: kickstandRoot.transform.pos.y,
-                        z: rootTopZ,
-                    };
-                } else {
-                    const prevSeg = kickstand.segments[idx - 1];
-                    if (!prevSeg.topJoint) return;
-                    startPos = prevSeg.topJoint.pos;
-                }
-
-                const endPos = seg.topJoint?.pos ?? kickstandHostKnot.pos;
-
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: startPos,
-                        end: endPos,
-                        radius: seg.diameter / 2,
-                        bezier:
-                            seg.type === 'bezier'
-                                ? { control1: seg.controlPoint1, control2: seg.controlPoint2 }
-                                : undefined,
-                    },
-                });
-            });
-        }
-
-        // Add brace shafts as path targets
-        for (const brace of Object.values(supportState.braces)) {
-            const id = `braceSegment:${brace.id}`;
-            if (start?.kind === 'shaft' && start.segmentId && id === start.segmentId) continue;
-
-            const startKnot = knotMap.get(brace.startKnotId);
-            const endKnot = knotMap.get(brace.endKnotId);
-            if (!startKnot || !endKnot) continue;
-
-            const startDia = Math.max(
-                0.001,
-                (startKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
-            );
-            const endDia = Math.max(
-                0.001,
-                (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
-            );
-            const radius = Math.max(startDia, endDia) / 2;
-
-            targets.push({
-                id,
-                type: 'path',
-                pathSegment: {
-                    start: startKnot.pos,
-                    end: endKnot.pos,
-                    radius,
-                    bezier: brace.curve?.type === 'bezier' ? {
-                        control1: brace.curve.controlPoint1,
-                        control2: brace.curve.controlPoint2,
-                    } : undefined,
-                },
-            });
-        }
-
-        for (const branch of Object.values(supportState.branches)) {
-            const parentKnot = knotMap.get(branch.parentKnotId);
-            if (!parentKnot) continue;
-
-            branch.segments.forEach((seg, idx) => {
-                if (start?.kind === 'shaft' && start.segmentId && seg.id === start.segmentId) return;
-
-                const endpoints = getBranchSegmentEndpoints(branch, seg, idx, parentKnot);
-                if (!endpoints) return;
-
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: endpoints.start,
-                        end: endpoints.end,
-                        radius: seg.diameter / 2,
-                        bezier:
-                            seg.type === 'bezier'
-                                ? { control1: seg.controlPoint1, control2: seg.controlPoint2 }
-                                : undefined,
-                    },
-                });
-            });
-        }
-
-        for (const twig of Object.values(supportState.twigs)) {
-            twig.segments.forEach((seg) => {
-                if (start?.kind === 'shaft' && start.segmentId && seg.id === start.segmentId) return;
-                if (!seg.bottomJoint || !seg.topJoint) return;
-
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: seg.bottomJoint.pos,
-                        end: seg.topJoint.pos,
-                        radius: seg.diameter / 2,
-                        bezier:
-                            seg.type === 'bezier'
-                                ? { control1: seg.controlPoint1, control2: seg.controlPoint2 }
-                                : undefined,
-                    },
-                });
-            });
-        }
-
-        for (const stick of Object.values(supportState.sticks)) {
-            stick.segments.forEach((seg) => {
-                if (start?.kind === 'shaft' && start.segmentId && seg.id === start.segmentId) return;
-                if (!seg.bottomJoint || !seg.topJoint) return;
-
-                targets.push({
-                    id: seg.id,
-                    type: 'path',
-                    pathSegment: {
-                        start: seg.bottomJoint.pos,
-                        end: seg.topJoint.pos,
-                        radius: seg.diameter / 2,
-                        bezier:
-                            seg.type === 'bezier'
-                                ? { control1: seg.controlPoint1, control2: seg.controlPoint2 }
-                                : undefined,
-                    },
-                });
-            });
-        }
-
-        // Add leaf cones as path targets along the cone axis.
-        for (const leaf of Object.values(supportState.leaves)) {
-            const meta = leafMeta.get(leaf.id);
-            if (!meta) continue;
-            targets.push({
-                id: leaf.id,
-                type: 'path',
-                pathSegment: {
-                    start: meta.start,
-                    end: meta.end,
-                    radius: meta.bodyRadiusMm,
-                },
-            });
-        }
+        targets.push(...buildKickstandPathSnapTargets(kickstandState, { excludeSegmentIds: excludedSegmentIds }));
+        targets.push(...buildLeafConePathSnapTargets(leafMeta));
 
         return targets;
-    }, [altActive, stage, start, supportState.trunks, supportState.branches, supportState.twigs, supportState.sticks, supportState.braces, supportState.leaves, supportState.roots, supportState.knots, kickstandState.kickstands, kickstandState.roots, kickstandState.knots, leafMeta]);
+    }, [altActive, stage, start, supportState, kickstandState, leafMeta]);
 
     const targetById = useMemo(() => {
-        const map = new Map<string, SnapTarget>();
-        for (const t of allTargets) {
-            if (!map.has(t.id)) {
-                map.set(t.id, t);
-            }
-        }
-        return map;
+        return buildPrimarySnapTargetIndex(allTargets);
     }, [allTargets]);
 
     const targetCandidatesById = useMemo(() => {
-        const map = new Map<string, SnapTarget[]>();
-        for (const t of allTargets) {
-            const existing = map.get(t.id);
-            if (existing) {
-                existing.push(t);
-            } else {
-                map.set(t.id, [t]);
-            }
-        }
-        return map;
+        return buildSnapTargetCandidateIndex(allTargets);
     }, [allTargets]);
 
     const getTarget = useCallback(
@@ -436,7 +214,7 @@ export function BracePlacementController() {
 
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
-    const { updateSnapping, resetSnapping } = useSnapping(getTarget, getPotentialTargets);
+    const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
 
     useEffect(() => {
         if (altActive) return;
@@ -449,102 +227,37 @@ export function BracePlacementController() {
         resetSnapping();
     }, [altActive, resetSnapping]);
 
-    const projectPointToPathTarget = useCallback((target: SnapTarget, point: Vec3) => {
-        if (!target.pathSegment) return null;
-
-        const a = new THREE.Vector3(target.pathSegment.start.x, target.pathSegment.start.y, target.pathSegment.start.z);
-        const b = new THREE.Vector3(target.pathSegment.end.x, target.pathSegment.end.y, target.pathSegment.end.z);
-        const p = new THREE.Vector3(point.x, point.y, point.z);
-
-        let t = 0;
-        let snapped = a.clone();
-
-        if (target.pathSegment.bezier) {
-            const c1 = new THREE.Vector3(
-                target.pathSegment.bezier.control1.x,
-                target.pathSegment.bezier.control1.y,
-                target.pathSegment.bezier.control1.z
-            );
-            const c2 = new THREE.Vector3(
-                target.pathSegment.bezier.control2.x,
-                target.pathSegment.bezier.control2.y,
-                target.pathSegment.bezier.control2.z
-            );
-
-            let bestT = 0;
-            let bestDistSq = Infinity;
-            const curve = new THREE.CubicBezierCurve3(a, c1, c2, b);
-            const steps = 40;
-            for (let i = 0; i <= steps; i++) {
-                const tt = i / steps;
-                const q = curve.getPoint(tt);
-                const d = q.distanceToSquared(p);
-                if (d < bestDistSq) {
-                    bestDistSq = d;
-                    bestT = tt;
-                    snapped = q;
-                }
-            }
-            t = bestT;
-        } else {
-            const ab = b.clone().sub(a);
-            const abLenSq = ab.lengthSq();
-            if (abLenSq > 0.0000001) {
-                t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / abLenSq, 0, 1);
-                snapped = a.clone().add(ab.multiplyScalar(t));
-            }
-        }
-
-        return {
-            t,
-            snapped,
-            distSq: snapped.distanceToSquared(p),
-        };
-    }, []);
-
     const resolveNearestPathTarget = useCallback((targetId: string, point: Vec3) => {
         const candidates = getTargetCandidates(targetId).filter((target) => !!target.pathSegment);
         if (candidates.length === 0) return null;
         if (candidates.length === 1) return candidates[0];
 
-        let bestTarget: SnapTarget | null = null;
-        let bestDistSq = Infinity;
-
-        for (const candidate of candidates) {
-            const projected = projectPointToPathTarget(candidate, point);
-            if (!projected) continue;
-            if (projected.distSq < bestDistSq) {
-                bestDistSq = projected.distSq;
-                bestTarget = candidate;
-            }
-        }
-
-        return bestTarget ?? candidates[0];
-    }, [getTargetCandidates, projectPointToPathTarget]);
+        return selectNearestPathTarget(point, candidates) ?? candidates[0];
+    }, [getTargetCandidates]);
 
     const resolveSnapFromClick = useCallback(
         (segmentId: string, point: Vec3) => {
             const target = resolveNearestPathTarget(segmentId, point) ?? getTarget(segmentId);
             if (!target?.pathSegment) return null;
 
-            let hostDiameterMm = target.pathSegment.radius * 2;
-            let ownerModelId = segmentMeta.get(segmentId)?.modelId;
+            const hostDiameterMm = target.pathSegment.radius * 2;
+            const ownerModelId = segmentMeta.get(segmentId)?.modelId;
 
-            const projected = projectPointToPathTarget(target, point);
+            const projected = projectPointToSnapTargetPath(target, point);
             if (!projected) return null;
 
-            const { t, snapped } = projected;
+            const { t, pos } = projected;
 
             return {
                 kind: 'shaft' as const,
                 segmentId,
-                snappedPos: { x: snapped.x, y: snapped.y, z: snapped.z },
+                snappedPos: pos,
                 t,
                 hostDiameterMm,
                 ownerModelId,
             };
         },
-        [getTarget, projectPointToPathTarget, resolveNearestPathTarget, segmentMeta, supportState.braces, supportState.knots]
+        [getTarget, resolveNearestPathTarget, segmentMeta]
     );
 
     const resolveLeafSnapFromClick = useCallback(
@@ -592,7 +305,7 @@ export function BracePlacementController() {
     useFrame(() => {
         if (!altActive && stage === 'idle') return;
 
-        const result = updateSnapping();
+        const resolvedSnap = updateAndGetResolvedSnap();
 
         // Hover preview (before first click): show a knot-sized sphere on the hovered segment.
         if (stage === 'idle') {
@@ -618,12 +331,12 @@ export function BracePlacementController() {
                 return;
             }
 
-            if (result.state === 'locked' && result.targetId && result.t !== undefined) {
+            if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
                 const settings = getSettings();
                 const fallbackDia = settings.shaft.diameterMm;
 
-                if (leafMeta.has(result.targetId)) {
-                    const resolved = resolveLeafSurface(result.targetId, result.snappedPos, result.t);
+                if (leafMeta.has(resolvedSnap.targetId)) {
+                    const resolved = resolveLeafSurface(resolvedSnap.targetId, resolvedSnap.snappedPos, resolvedSnap.t);
                     if (resolved) {
                         bracePlacementStore.setPreview({
                             start: resolved.pos,
@@ -635,29 +348,22 @@ export function BracePlacementController() {
                         bracePlacementStore.setPreview(null);
                     }
                 } else {
-                    const target = resolveNearestPathTarget(result.targetId, result.snappedPos) ?? getTarget(result.targetId);
+                    const target = resolveNearestPathTarget(resolvedSnap.targetId, resolvedSnap.snappedPos) ?? getTarget(resolvedSnap.targetId);
                     let hostDia = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : fallbackDia;
-                    if (result.targetId.startsWith('braceSegment:')) {
-                        const braceId = result.targetId.slice('braceSegment:'.length);
+                    if (resolvedSnap.targetId.startsWith('braceSegment:')) {
+                        const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
                         const brace = supportState.braces[braceId];
-                        const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
-                        const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
-                        if (brace && startKnot && endKnot) {
-                            const startDia = Math.max(
-                                0.001,
-                                (startKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
-                            );
-                            const endDia = Math.max(
-                                0.001,
-                                (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
-                            );
-                            hostDia = THREE.MathUtils.lerp(startDia, endDia, result.t);
+                        if (brace) {
+                            const resolvedDiameter = resolveBracePathDiameterAtT(brace, supportState.knots, resolvedSnap.t);
+                            if (resolvedDiameter !== null) {
+                                hostDia = resolvedDiameter;
+                            }
                         }
                     }
                     // Zero-length preview: renders as a single sphere with green lights.
                     bracePlacementStore.setPreview({
-                        start: result.snappedPos,
-                        end: result.snappedPos,
+                        start: resolvedSnap.snappedPos,
+                        end: resolvedSnap.snappedPos,
                         startDiameterMm: hostDia,
                         endDiameterMm: hostDia,
                     });
@@ -723,24 +429,24 @@ export function BracePlacementController() {
                     bracePlacementStore.setSnapTarget(null);
                 }
             }
-        } else if (result.state === 'locked' && result.targetId && result.t !== undefined) {
-            if (leafMeta.has(result.targetId)) {
+        } else if (resolvedSnap.state === 'locked' && resolvedSnap.targetId && resolvedSnap.snappedPos && resolvedSnap.t !== null) {
+            if (leafMeta.has(resolvedSnap.targetId)) {
                 const startModelId = start.ownerModelId;
-                const meta = leafMeta.get(result.targetId);
+                const meta = leafMeta.get(resolvedSnap.targetId);
                 if (meta && startModelId && meta.modelId && startModelId !== meta.modelId) {
                     bracePlacementStore.setSnapTarget(null);
                 } else {
-                    const resolved = resolveLeafSurface(result.targetId, result.snappedPos, result.t);
+                    const resolved = resolveLeafSurface(resolvedSnap.targetId, resolvedSnap.snappedPos, resolvedSnap.t);
                     const minMm = 0.25;
                     const minT = meta ? THREE.MathUtils.clamp(minMm / Math.max(0.0001, meta.lengthMm), 0, 0.99) : 0;
-                    const coneT = Math.max(result.t, minT);
+                    const coneT = Math.max(resolvedSnap.t, minT);
 
-                    const sameLeaf = start.kind === 'leaf' && start.leafId === result.targetId;
+                    const sameLeaf = start.kind === 'leaf' && start.leafId === resolvedSnap.targetId;
 
                     if (resolved && !sameLeaf) {
                         const snapTarget = {
                             kind: 'leaf' as const,
-                            leafId: result.targetId,
+                            leafId: resolvedSnap.targetId,
                             coneT,
                             snappedPos: resolved.pos,
                             hostDiameterMm: resolved.diameterMm,
@@ -754,34 +460,27 @@ export function BracePlacementController() {
                     }
                 }
             } else {
-                const target = resolveNearestPathTarget(result.targetId, result.snappedPos) ?? getTarget(result.targetId);
+                const target = resolveNearestPathTarget(resolvedSnap.targetId, resolvedSnap.snappedPos) ?? getTarget(resolvedSnap.targetId);
                 let hostDiameterMm = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : undefined;
-                let ownerModelId = segmentMeta.get(result.targetId)?.modelId;
+                let ownerModelId = segmentMeta.get(resolvedSnap.targetId)?.modelId;
 
-                if (result.targetId.startsWith('braceSegment:')) {
-                    const braceId = result.targetId.slice('braceSegment:'.length);
+                if (resolvedSnap.targetId.startsWith('braceSegment:')) {
+                    const braceId = resolvedSnap.targetId.slice('braceSegment:'.length);
                     const brace = supportState.braces[braceId];
-                    const startKnot = brace ? supportState.knots[brace.startKnotId] : undefined;
-                    const endKnot = brace ? supportState.knots[brace.endKnotId] : undefined;
-                    if (brace && startKnot && endKnot) {
-                        const startDia = Math.max(
-                            0.001,
-                            (startKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
-                        );
-                        const endDia = Math.max(
-                            0.001,
-                            (endKnot.diameter ?? (brace.profile.diameter + JOINT_DIAMETER_OFFSET_MM)) - JOINT_DIAMETER_OFFSET_MM
-                        );
-                        hostDiameterMm = THREE.MathUtils.lerp(startDia, endDia, result.t);
+                    if (brace) {
+                        const resolvedDiameter = resolveBracePathDiameterAtT(brace, supportState.knots, resolvedSnap.t);
+                        if (resolvedDiameter !== null) {
+                            hostDiameterMm = resolvedDiameter;
+                        }
                         ownerModelId = brace.modelId;
                     }
                 }
 
                 const snapTarget = {
                     kind: 'shaft' as const,
-                    segmentId: result.targetId,
-                    snappedPos: result.snappedPos,
-                    t: result.t,
+                    segmentId: resolvedSnap.targetId,
+                    snappedPos: resolvedSnap.snappedPos,
+                    t: resolvedSnap.t,
                     hostDiameterMm,
                     ownerModelId,
                 };
@@ -856,13 +555,11 @@ export function BracePlacementController() {
     }, [altActive, stage, resetSnapping]);
 
     useEffect(() => {
-        const handleShaftClick = (evt: any) => {
-            const detail = evt?.detail;
-            const altDown =
-                !!altActive ||
-                !!detail?.intersection?.altKey ||
-                !!detail?.intersection?.nativeEvent?.altKey;
-            if (!altDown) return;
+        const handleShaftClick = (evt: Event) => {
+            const detail = (evt as CustomEvent<ShaftClickDetail>).detail;
+            const branchFamilyHeld = !!altActive
+                || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(detail?.intersection));
+            if (!branchFamilyHeld) return;
 
             // If Branch placement is awaiting a base click, do not steal the segment click.
             // (Branch uses Alt+click model first, then click on a segment to place the base.)
@@ -952,7 +649,7 @@ export function BracePlacementController() {
 
                 bracePlacementStore.finalize();
                 bracePlacementStore.reset();
-                clearSelection();
+                clearSupportSelection();
                 return;
             }
 
@@ -1020,18 +717,19 @@ export function BracePlacementController() {
 
             bracePlacementStore.finalize();
             bracePlacementStore.reset();
-            clearSelection();
+            clearSupportSelection();
         };
 
-        window.addEventListener('shaft-click', handleShaftClick as any, true);
-        return () => window.removeEventListener('shaft-click', handleShaftClick as any, true);
-    }, [altActive, stage, start, resolveSnapFromClick, isValidEndSegment, segmentMeta]);
+        window.addEventListener('shaft-click', handleShaftClick as EventListener, true);
+        return () => window.removeEventListener('shaft-click', handleShaftClick as EventListener, true);
+    }, [altActive, stage, start, branchFamilyBinding, resolveSnapFromClick, isValidEndSegment, segmentMeta]);
 
     useEffect(() => {
-        const handleLeafClick = (evt: any) => {
-            const detail = evt?.detail;
-            const altDown = !!altActive || !!detail?.intersection?.altKey || !!detail?.intersection?.nativeEvent?.altKey;
-            if (!altDown) return;
+        const handleLeafClick = (evt: Event) => {
+            const detail = (evt as CustomEvent<LeafClickDetail>).detail;
+            const branchFamilyHeld = !!altActive
+                || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(detail?.intersection));
+            if (!branchFamilyHeld) return;
 
             if (branchPlacementStore.getSnapshot().stage === 'awaitingBase') {
                 return;
@@ -1185,9 +883,9 @@ export function BracePlacementController() {
             bracePlacementStore.reset();
         };
 
-        window.addEventListener('brace-leaf-click', handleLeafClick as any, true);
-        return () => window.removeEventListener('brace-leaf-click', handleLeafClick as any, true);
-    }, [altActive, stage, start, resolveLeafSnapFromClick, resolveSnapFromClick]);
+        window.addEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
+        return () => window.removeEventListener('brace-leaf-click', handleLeafClick as EventListener, true);
+    }, [altActive, stage, start, branchFamilyBinding, resolveLeafSnapFromClick, resolveSnapFromClick]);
 
     return null;
 }

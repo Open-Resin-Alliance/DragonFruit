@@ -66,10 +66,22 @@ export const leafPlacementStore = {
     },
 
     setHotkeyActive(active: boolean) {
-        if (state.hotkeyActive !== active) {
-            state = { ...state, hotkeyActive: active };
+        if (active) {
+            if (state.hotkeyActive) return;
+            state = { ...initialState, hotkeyActive: true };
             notify();
+            return;
         }
+
+        if (!state.hotkeyActive && state.stage === 'idle' && state.previewData === null && state.snapTarget === null && state.hoverPosition === null) {
+            return;
+        }
+
+        state = {
+            ...initialState,
+            hotkeyActive: false,
+        };
+        notify();
     },
 
     setTip(tipPosition: Vec3, surfaceNormal: Vec3, modelId: string) {
@@ -125,7 +137,21 @@ export const leafPlacementStore = {
     },
 
     reset() {
-        state = { ...initialState, hotkeyActive: state.hotkeyActive };
+        const nextState = { ...initialState, hotkeyActive: state.hotkeyActive };
+        if (
+            state.stage === nextState.stage
+            && state.tipPosition === nextState.tipPosition
+            && state.surfaceNormal === nextState.surfaceNormal
+            && state.modelId === nextState.modelId
+            && state.previewData === nextState.previewData
+            && state.hoverPosition === nextState.hoverPosition
+            && state.snapTarget === nextState.snapTarget
+            && state.justFinalized === nextState.justFinalized
+        ) {
+            return;
+        }
+
+        state = nextState;
         notify();
     },
 

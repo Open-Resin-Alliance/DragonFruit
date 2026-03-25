@@ -11,8 +11,9 @@ import type { ContactCone } from '../../SupportPrimitives/ContactCone/types';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
-import { getSnapshot, setSelectedId, subscribe, updateStick } from '../../state';
+import { getSnapshot, subscribe, updateStick } from '../../state';
 
 interface StickRendererProps {
   stick: Stick;
@@ -192,7 +193,7 @@ export const StickRenderer = React.memo(function StickRenderer({
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
-          onClick={() => setSelectedId(seg.id)}
+          onClick={() => selectPrimitiveById(seg.id)}
         />
       );
     } else if (!deferStraightShaftsToSceneBatch || isSelected) {
@@ -209,7 +210,7 @@ export const StickRenderer = React.memo(function StickRenderer({
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
-          onClick={() => setSelectedId(seg.id)}
+          onClick={() => selectPrimitiveById(seg.id)}
         />
       );
     }

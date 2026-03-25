@@ -40,7 +40,9 @@ import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacem
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
 import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/KickstandPlacementController';
 import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
-import { clearSelection } from '@/supports/interaction/SupportSelection';
+import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
+import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
+import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
 import { SupportLimitationFeedback } from '@/supports/PlacementLogic/SupportLimitations';
 import { useCurveInteractionState } from '@/supports/Curves/curveInteractionState';
 import { DEFAULT_TIP_CONTACT_DIAMETER_MM } from '@/supports/Settings/defaults';
@@ -395,6 +397,7 @@ export function SceneCanvas({
     getSupportSnapshot,
     getSupportSnapshot,
   );
+  const sceneHoveredSupportId = useSceneHoveredSupportId();
   const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = React.useState(() => isContactDiskHudInteractionActive());
 
   React.useEffect(() => {
@@ -1204,12 +1207,8 @@ export function SceneCanvas({
   );
   const suppressSupportSelectionAndHover = mode === 'prepare' && transformMode === 'transform';
 
-  const supportHoverTargetActive = supportStateForBounds.hoveredCategory === 'support'
-    || supportStateForBounds.hoveredCategory === 'contactDisk'
-    || supportStateForBounds.hoveredCategory === 'segment'
-    || supportStateForBounds.hoveredCategory === 'joint'
-    || supportStateForBounds.hoveredCategory === 'knot';
-  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive;
+  const supportHoverTargetActive = isSupportTargetHoverCategory(supportStateForBounds.hoveredCategory);
+  const suppressSupportPlacementPreviewRendering = contactDiskHudInteractionActive || supportHoverTargetActive || sceneHoveredSupportId !== null;
 
   const branchHoverDotVisible = Boolean(
     branchHoverPosition
@@ -2805,7 +2804,7 @@ export function SceneCanvas({
 
     if (mode === 'support') {
       if (supportStateForBounds.hoveredCategory === 'contactDisk') return;
-      clearSelection();
+      clearSupportSelection();
     }
   }, [isMarqueeSelecting, isOrbitInteracting, mode, onActiveModelChange, spaceMouseNavigationActive, supportStateForBounds.hoveredCategory]);
 

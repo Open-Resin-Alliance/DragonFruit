@@ -1,10 +1,12 @@
-import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../types';
 import { toVector3 } from '../Curves/BezierUtils';
-import { usePicking } from '@/components/picking';
+import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../SupportTypes/Brace/bracePlacementState';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../interaction/pointerOcclusion';
+
+const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 
 interface BezierRendererProps {
     id: string;
@@ -133,44 +135,16 @@ export function BezierRenderer({
             pickGeometry?.dispose();
         };
     }, [pickGeometry]);
-    const groupRef = useRef<THREE.Group>(null);
 
-    // GPU Picking Setup
-    const pickIdRef = useRef<number | null>(null);
-    const { register, unregister, hit } = usePicking();
-
-    // Register with picking system
-    useEffect(() => {
-        if (!groupRef.current || !enableSegmentInteraction) {
-            if (pickIdRef.current !== null) {
-                unregister(pickIdRef.current);
-                pickIdRef.current = null;
-            }
-            return;
-        }
-        
-        // Only register if parent is selected (editable mode)
-        pickIdRef.current = register({
-            category: 'segment',
-            objectId: id,
-            object: groupRef.current,
-        });
-        
-        return () => {
-            if (pickIdRef.current !== null) {
-                unregister(pickIdRef.current);
-                pickIdRef.current = null;
-            }
-        };
-    }, [register, unregister, id, enableSegmentInteraction]);
+    const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
+        category: 'segment',
+        objectId: id,
+        enabled: enableSegmentInteraction,
+    });
 
     // Determine Hover State
-    const isTopPickedSegment = enableSegmentInteraction
-        && frontBlockingModelId === null
-        && hit.category === 'segment'
-        && hit.objectId === id;
-    const isPickingHovered = isTopPickedSegment;
-    const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
+    const isTopPickedSegment = enableSegmentInteraction && isPickingHovered;
+    const isHovered = isPickingHovered && !isSelected && isParentSelected;
 
     const handleClick = (e: any) => {
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
@@ -245,24 +219,7 @@ export function BezierRenderer({
     };
 
     const handlePointerMove = (e: any) => {
-        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
-        if (frontModelId) {
-            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
-            emitImmediateModelHover(frontModelId);
-            window.dispatchEvent(new CustomEvent('shaft-leave', {
-                detail: { segmentId: id }
-            }));
-            return;
-        }
-
-        if (frontBlockingModelId !== null) {
-            setFrontBlockingModelId(null);
-        }
-        emitImmediateModelHover(null);
-
-        const isTopPickedSegmentNow = enableSegmentInteraction
-            && hit.category === 'segment'
-            && hit.objectId === id;
+        const isTopPickedSegmentNow = enableSegmentInteraction && isPickingHovered;
         if (!isTopPickedSegmentNow) return;
 
         window.dispatchEvent(new CustomEvent('shaft-hover', {
@@ -274,42 +231,40 @@ export function BezierRenderer({
         }));
     };
 
-    const handlePointerOut = () => {
-        if (frontBlockingModelId !== null) {
-            setFrontBlockingModelId(null);
-        }
-        emitImmediateModelHover(null);
-
-        if (!enableSegmentInteraction || !isTopPickedSegment) return;
+    const handlePointerLeave = () => {
+        if (!enableSegmentInteraction) return;
 
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
         }));
     };
 
-    const finalColor = isSelected ? '#ff80ff' : color;
+    const finalColor = isSelected ? '#ff80ff' : (isHovered ? '#ffffff' : color);
     const finalEmissive = isSelected ? '#440044' : (isHovered ? '#ffffff' : emissive);
-    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.3 : emissiveIntensity);
+    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.5 : emissiveIntensity);
 
     return (
-        <group ref={groupRef}>
+        <group>
             {pickGeometry && (
                 <mesh
+                    ref={pickRef as any}
                     raycast={raycast}
                     userData={{ excludeFromPickingClone: true }}
                     onClick={handleClick}
                     onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
-                    onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
+                    onPointerLeave={enableSegmentInteraction ? handlePointerLeave : undefined}
+                    userData={{ segmentId: id }}
                 >
                     <primitive object={pickGeometry} attach="geometry" />
                     <meshBasicMaterial transparent opacity={0} depthWrite={false} />
                 </mesh>
             )}
             <mesh
-                raycast={raycast}
-                onClick={handleClick}
-                onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
-                onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
+                raycast={enableSegmentInteraction ? NOOP_RAYCAST : raycast}
+                onClick={!enableSegmentInteraction ? handleClick : undefined}
+                onPointerMove={!enableSegmentInteraction ? handlePointerMove : undefined}
+                onPointerLeave={!enableSegmentInteraction ? handlePointerLeave : undefined}
+                userData={enableSegmentInteraction ? { excludeFromPickingClone: true } : undefined}
             >
                 <primitive object={geometry} attach="geometry" />
                 <meshStandardMaterial 

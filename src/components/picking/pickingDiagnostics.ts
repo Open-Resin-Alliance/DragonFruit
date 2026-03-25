@@ -25,6 +25,7 @@ const EMPTY_CATEGORY_COUNTS: PickingCategoryCounts = {
   joint: 0,
   knot: 0,
   segment: 0,
+  contactDisk: 0,
   raft: 0,
   gizmo: 0,
   none: 0,

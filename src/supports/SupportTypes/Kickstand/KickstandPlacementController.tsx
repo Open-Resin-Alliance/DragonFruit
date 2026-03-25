@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_ADD_KICKSTAND } from '@/supports/history/actionTypes';
-import { getBezierPointAtT } from '../../Curves/BezierUtils';
-import { addKnot, addRoot, subscribe, getSnapshot, setSelectedId } from '../../state';
-import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints } from '../../SupportPrimitives/Knot/knotUtils';
+import { addKnot, addRoot, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import { useSnapping } from '../../interaction/useSnapping';
 import { getGridSettings } from '../../Settings';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
 import { addKickstand, getKickstandSnapshot } from './kickstandStore';
@@ -15,20 +13,15 @@ import { clampKickstandHostT } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
-import type { KickstandHostKind } from './types';
+import { leafPlacementStore } from '../Leaf/leafPlacementState';
 import type { Vec3 } from '../../types';
-import { clearSelection } from '../../interaction/SupportSelection';
+import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
+import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState, resolveSupportPlacementHotkeyBindings, resolveSupportPlacementHotkeyIntent } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
+import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
+import { buildKickstandSnapTargetMetaIndex, type KickstandSnapTargetMeta } from '../../interaction/shared/placement/snapping/kickstandSnapTargets';
+import { getSnapPathPointAtT, projectPointToSnapPath } from '../../interaction/shared/placement/snapping/pathProjection';
 
 type DesiredBand = 'left' | 'right' | 'front';
-
-interface KickstandTargetMeta {
-    segmentId: string;
-    supportKind: KickstandHostKind;
-    modelId: string;
-    diameterMm: number;
-    minT: number;
-    target: SnapTarget;
-}
 
 interface ShaftClickDetail {
     segmentId?: string;
@@ -36,75 +29,8 @@ interface ShaftClickDetail {
     intersection?: unknown;
 }
 
-interface IntersectionWithCtrl {
-    ctrlKey?: boolean;
-    nativeEvent?: {
-        ctrlKey?: boolean;
-    };
-}
-
 function toVector3(v: Vec3): THREE.Vector3 {
     return new THREE.Vector3(v.x, v.y, v.z);
-}
-
-function getPathPointAtT(path: NonNullable<SnapTarget['pathSegment']>, t: number): Vec3 {
-    const clampedT = THREE.MathUtils.clamp(t, 0, 1);
-
-    if (path.bezier) {
-        return getBezierPointAtT(path.start, path.bezier.control1, path.bezier.control2, path.end, clampedT);
-    }
-
-    const start = toVector3(path.start);
-    const end = toVector3(path.end);
-    const point = start.lerp(end, clampedT);
-
-    return { x: point.x, y: point.y, z: point.z };
-}
-
-function projectPointToPath(point: Vec3, path: NonNullable<SnapTarget['pathSegment']>): { t: number; pos: Vec3 } {
-    const p = toVector3(point);
-
-    if (path.bezier) {
-        let bestT = 0;
-        let bestDistSq = Number.POSITIVE_INFINITY;
-        const steps = 60;
-
-        for (let i = 0; i <= steps; i += 1) {
-            const t = i / steps;
-            const sample = getBezierPointAtT(path.start, path.bezier.control1, path.bezier.control2, path.end, t);
-            const sampleVec = toVector3(sample);
-            const distSq = sampleVec.distanceToSquared(p);
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                bestT = t;
-            }
-        }
-
-        return {
-            t: bestT,
-            pos: getPathPointAtT(path, bestT),
-        };
-    }
-
-    const start = toVector3(path.start);
-    const end = toVector3(path.end);
-    const segment = end.clone().sub(start);
-    const segmentLenSq = segment.lengthSq();
-
-    if (segmentLenSq < 1e-8) {
-        return {
-            t: 0,
-            pos: path.start,
-        };
-    }
-
-    const projectedT = THREE.MathUtils.clamp(p.clone().sub(start).dot(segment) / segmentLenSq, 0, 1);
-    const projectedPoint = start.clone().add(segment.multiplyScalar(projectedT));
-
-    return {
-        t: projectedT,
-        pos: { x: projectedPoint.x, y: projectedPoint.y, z: projectedPoint.z },
-    };
 }
 
 function perpendicularDirection(
@@ -192,9 +118,7 @@ function pickDesiredBand(
     pointer: THREE.Vector2,
     previousBand: DesiredBand,
     diameterMm: number,
-    isOnShaftSurface: boolean,
 ): DesiredBand {
-    if (isOnShaftSurface) return 'front';
 
     const axisNdc = toVector3(axisPoint).project(camera);
     const horizontalDelta = pointer.x - axisNdc.x;
@@ -204,11 +128,13 @@ function pickDesiredBand(
     const shaftEdgeNdc = toVector3(axisPoint)
         .add(cameraRight.multiplyScalar(shaftRadiusMm))
         .project(camera);
-    const shaftHalfWidthNdc = Math.max(0.008, Math.abs(shaftEdgeNdc.x - axisNdc.x));
+    // Use the shaft's screen-space half-width as the zone unit, with a
+    // comfortable minimum so thin shafts still have a usable zone.
+    const shaftHalfWidthNdc = Math.max(0.02, Math.abs(shaftEdgeNdc.x - axisNdc.x));
 
-    // Side zones start outside the visible shaft edge.
-    const enterSideBoundaryNdc = shaftHalfWidthNdc + 0.006;
-    const exitSideBoundaryNdc = shaftHalfWidthNdc + 0.002;
+    // Divide the hover zone into thirds: outer thirds = left/right, center = front.
+    const enterSideBoundaryNdc = shaftHalfWidthNdc * 0.33;
+    const exitSideBoundaryNdc = shaftHalfWidthNdc * 0.2;
 
     if (previousBand === 'left' && horizontalDelta <= -exitSideBoundaryNdc) return 'left';
     if (previousBand === 'right' && horizontalDelta >= exitSideBoundaryNdc) return 'right';
@@ -226,7 +152,6 @@ function snapRootPosToGrid(
     pointer: THREE.Vector2,
     previousBand: DesiredBand,
     diameterMm?: number,
-    isOnShaftSurface = false,
 ): { rootPos: Vec3; band: DesiredBand } {
     const grid = getGridSettings();
     if (!grid.enabled || grid.spacingMm <= 0) return { rootPos, band: previousBand };
@@ -249,7 +174,6 @@ function snapRootPosToGrid(
         pointer,
         previousBand,
         diameterMm ?? grid.spacingMm,
-        isOnShaftSurface,
     );
 
     if (!towardCamera || !right) {
@@ -340,87 +264,20 @@ function isGridRootOccupied(rootPos: Vec3, modelId: string): boolean {
     return false;
 }
 
-function hasCtrlModifier(intersection: unknown): boolean {
-    if (!intersection || typeof intersection !== 'object') return false;
-    const candidate = intersection as IntersectionWithCtrl;
-    return Boolean(candidate.ctrlKey ?? candidate.nativeEvent?.ctrlKey);
-}
-
 export function KickstandPlacementController() {
     const { hotkeyActive } = useKickstandPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const { camera, gl, pointer, raycaster } = useThree();
+    const { getHotkey } = useHotkeyConfig();
     const hoverPointBySegmentRef = useRef<Map<string, Vec3>>(new Map());
+    const hoveredSegmentIdRef = useRef<string | null>(null);
     const desiredBandRef = useRef<DesiredBand>('front');
     const lastPreviewSegmentIdRef = useRef<string | null>(null);
+    const placementBindings = useMemo(() => resolveSupportPlacementHotkeyBindings(getHotkey), [getHotkey]);
 
     const targetMetaById = useMemo(() => {
-        const map = new Map<string, KickstandTargetMeta>();
-        const rootsById = new Map(Object.values(supportState.roots).map((root) => [root.id, root]));
-        const knotsById = new Map(Object.values(supportState.knots).map((knot) => [knot.id, knot]));
-
-        for (const trunk of Object.values(supportState.trunks)) {
-            const root = rootsById.get(trunk.rootId);
-            if (!root) continue;
-
-            trunk.segments.forEach((segment, index) => {
-                const endpoints = getTrunkSegmentEndpoints(trunk, segment, index, root);
-                if (!endpoints) return;
-
-                map.set(segment.id, {
-                    segmentId: segment.id,
-                    supportKind: 'trunk',
-                    modelId: trunk.modelId,
-                    diameterMm: segment.diameter,
-                    minT: 0,
-                    target: {
-                        id: segment.id,
-                        type: 'path',
-                        pathSegment: {
-                            start: endpoints.start,
-                            end: endpoints.end,
-                            radius: segment.diameter / 2,
-                            bezier: segment.type === 'bezier'
-                                ? { control1: segment.controlPoint1, control2: segment.controlPoint2 }
-                                : undefined,
-                        },
-                    },
-                });
-            });
-        }
-
-        for (const branch of Object.values(supportState.branches)) {
-            const parentKnot = knotsById.get(branch.parentKnotId);
-            if (!parentKnot) continue;
-
-            branch.segments.forEach((segment, index) => {
-                const endpoints = getBranchSegmentEndpoints(branch, segment, index, parentKnot);
-                if (!endpoints) return;
-
-                map.set(segment.id, {
-                    segmentId: segment.id,
-                    supportKind: 'branch',
-                    modelId: branch.modelId,
-                    diameterMm: segment.diameter,
-                    minT: 0,
-                    target: {
-                        id: segment.id,
-                        type: 'path',
-                        pathSegment: {
-                            start: endpoints.start,
-                            end: endpoints.end,
-                            radius: segment.diameter / 2,
-                            bezier: segment.type === 'bezier'
-                                ? { control1: segment.controlPoint1, control2: segment.controlPoint2 }
-                                : undefined,
-                        },
-                    },
-                });
-            });
-        }
-
-        return map;
-    }, [supportState.branches, supportState.knots, supportState.roots, supportState.trunks]);
+        return buildKickstandSnapTargetMetaIndex(supportState);
+    }, [supportState]);
 
     const snapTargets = useMemo(() => {
         return Array.from(targetMetaById.values()).map((meta) => meta.target);
@@ -433,9 +290,9 @@ export function KickstandPlacementController() {
 
     const getPotentialTargets = useCallback(() => snapTargets, [snapTargets]);
 
-    const { updateSnapping, resetSnapping } = useSnapping(getTarget, getPotentialTargets);
+    const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
 
-    const buildPlacementFromSnap = useCallback((meta: KickstandTargetMeta, t: number, snappedPos: Vec3, rootPos: Vec3): {
+    const buildPlacementFromSnap = useCallback((meta: KickstandSnapTargetMeta, t: number, snappedPos: Vec3, rootPos: Vec3): {
         target: KickstandPlacementTarget;
         build: ReturnType<typeof buildKickstandData>;
     } => {
@@ -471,27 +328,31 @@ export function KickstandPlacementController() {
 
     useEffect(() => {
         const el = gl.domElement;
+        const kickstandBinding = placementBindings.kickstand;
+        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(kickstandBinding);
 
-        const cancelIfCtrlReleased = (event: PointerEvent) => {
-            if (event.ctrlKey) return;
+        const cancelIfBindingReleased = (event: PointerEvent) => {
+            if (modifierResolvable && isSupportPlacementBindingSatisfiedByModifierState(kickstandBinding, getSupportPlacementModifierState(event))) {
+                return;
+            }
 
             const snapshot = kickstandPlacementStore.getSnapshot();
-            if (snapshot.hotkeyActive) {
+            if (modifierResolvable && snapshot.hotkeyActive) {
                 kickstandPlacementStore.setHotkeyActive(false);
                 resetSnapping();
             }
         };
 
-        el.addEventListener('pointermove', cancelIfCtrlReleased, true);
-        el.addEventListener('pointerdown', cancelIfCtrlReleased, true);
-        el.addEventListener('pointerup', cancelIfCtrlReleased, true);
+        el.addEventListener('pointermove', cancelIfBindingReleased, true);
+        el.addEventListener('pointerdown', cancelIfBindingReleased, true);
+        el.addEventListener('pointerup', cancelIfBindingReleased, true);
 
         return () => {
-            el.removeEventListener('pointermove', cancelIfCtrlReleased, true);
-            el.removeEventListener('pointerdown', cancelIfCtrlReleased, true);
-            el.removeEventListener('pointerup', cancelIfCtrlReleased, true);
+            el.removeEventListener('pointermove', cancelIfBindingReleased, true);
+            el.removeEventListener('pointerdown', cancelIfBindingReleased, true);
+            el.removeEventListener('pointerup', cancelIfBindingReleased, true);
         };
-    }, [gl, resetSnapping]);
+    }, [gl, placementBindings, resetSnapping]);
 
     useEffect(() => {
         const hoverPoints = hoverPointBySegmentRef.current;
@@ -499,6 +360,7 @@ export function KickstandPlacementController() {
         const handleShaftHover = (event: Event) => {
             const detail = (event as CustomEvent<ShaftClickDetail>).detail;
             if (!detail?.segmentId) return;
+            hoveredSegmentIdRef.current = detail.segmentId;
             if (!detail.point) {
                 hoverPoints.delete(detail.segmentId);
                 return;
@@ -509,6 +371,9 @@ export function KickstandPlacementController() {
         const handleShaftLeave = (event: Event) => {
             const detail = (event as CustomEvent<{ segmentId?: string }>).detail;
             if (!detail?.segmentId) return;
+            if (hoveredSegmentIdRef.current === detail.segmentId) {
+                hoveredSegmentIdRef.current = null;
+            }
             hoverPoints.delete(detail.segmentId);
         };
 
@@ -519,6 +384,7 @@ export function KickstandPlacementController() {
             window.removeEventListener('shaft-hover', handleShaftHover);
             window.removeEventListener('shaft-leave', handleShaftLeave);
             hoverPoints.clear();
+            hoveredSegmentIdRef.current = null;
         };
     }, []);
 
@@ -530,18 +396,37 @@ export function KickstandPlacementController() {
             return;
         }
 
-        const result = updateSnapping();
+        const resolvedSnap = updateAndGetResolvedSnap();
 
-        if (result.state !== 'locked' || !result.targetId || result.t === undefined) {
+        // Determine meta and snapped position — prefer GPU pick, fall back to shaft-hover event.
+        let meta = resolvedSnap.state === 'locked' && resolvedSnap.targetId
+            ? targetMetaById.get(resolvedSnap.targetId) ?? null
+            : null;
+        let snapT = resolvedSnap.t ?? null;
+        let snapPos = resolvedSnap.snappedPos ?? null;
+
+        if (!meta || snapT === null || !snapPos) {
+            // GPU pick did not lock — try the most recently hovered segment from Three.js raycasting.
+            const hoveredSegId = hoveredSegmentIdRef.current;
+            const hoveredPoint = hoveredSegId ? hoverPointBySegmentRef.current.get(hoveredSegId) : null;
+            const hoveredMeta = hoveredSegId ? targetMetaById.get(hoveredSegId) ?? null : null;
+            if (hoveredMeta && hoveredMeta.target.pathSegment && hoveredPoint) {
+                const projected = projectPointToSnapPath(hoveredPoint, hoveredMeta.target.pathSegment);
+                meta = hoveredMeta;
+                snapT = projected.t;
+                snapPos = projected.pos;
+            }
+        }
+
+        if (!meta || snapT === null || !snapPos) {
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
             return;
         }
 
-        const meta = targetMetaById.get(result.targetId);
-        const path = meta?.target.pathSegment;
-        if (!meta || !path) {
+        const path = meta.target.pathSegment;
+        if (!path) {
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -553,8 +438,8 @@ export function KickstandPlacementController() {
             lastPreviewSegmentIdRef.current = meta.segmentId;
         }
 
-        const clampedT = clampKickstandHostT(result.t, meta.minT);
-        const snappedPos = clampedT === result.t ? result.snappedPos : getPathPointAtT(path, clampedT);
+        const clampedT = clampKickstandHostT(snapT, meta.minT);
+        const snappedPos = clampedT === snapT ? snapPos : getSnapPathPointAtT(path, clampedT);
         const hoveredPoint = hoverPointBySegmentRef.current.get(meta.segmentId);
         const preferredPoint = hoveredPoint
             ?? getPreferredPointFromPointerRay(snappedPos, camera, pointer, raycaster);
@@ -566,7 +451,6 @@ export function KickstandPlacementController() {
             pointer,
             desiredBandRef.current,
             meta.diameterMm,
-            Boolean(hoveredPoint),
         );
         desiredBandRef.current = snapDecision.band;
         const rootPos = snapDecision.rootPos;
@@ -592,8 +476,12 @@ export function KickstandPlacementController() {
             const detail = (event as CustomEvent<ShaftClickDetail>).detail;
             if (!detail?.segmentId) return;
 
-            const ctrlDown = hasCtrlModifier(detail.intersection) || kickstandPlacementStore.getSnapshot().hotkeyActive;
-            if (!ctrlDown) return;
+            const intent = resolveSupportPlacementHotkeyIntent(placementBindings, getSupportPlacementModifierState(detail.intersection));
+            const leafActive = leafPlacementStore.isActive() || intent.family === 'leaf';
+            if (leafActive) return;
+
+            const kickstandIntentActive = kickstandPlacementStore.getSnapshot().hotkeyActive || intent.family === 'kickstand';
+            if (!kickstandIntentActive) return;
 
             const meta = targetMetaById.get(detail.segmentId);
             const path = meta?.target.pathSegment;
@@ -603,7 +491,7 @@ export function KickstandPlacementController() {
             let projectedPos: Vec3;
 
             if (detail.point) {
-                const projected = projectPointToPath(detail.point, path);
+                const projected = projectPointToSnapPath(detail.point, path);
                 projectedT = projected.t;
                 projectedPos = projected.pos;
             } else {
@@ -615,7 +503,7 @@ export function KickstandPlacementController() {
 
             const clampedT = clampKickstandHostT(projectedT, meta.minT);
             if (clampedT !== projectedT) {
-                projectedPos = getPathPointAtT(path, clampedT);
+                projectedPos = getSnapPathPointAtT(path, clampedT);
             }
 
             const preferredPoint = detail.point
@@ -628,7 +516,6 @@ export function KickstandPlacementController() {
                 pointer,
                 desiredBandRef.current,
                 meta.diameterMm,
-                Boolean(detail.point),
             );
             desiredBandRef.current = snapDecision.band;
             const rootPos = snapDecision.rootPos;
@@ -648,7 +535,7 @@ export function KickstandPlacementController() {
                 payload: { build },
             });
 
-            clearSelection();
+            clearSupportSelection();
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';
             lastPreviewSegmentIdRef.current = null;
@@ -660,7 +547,7 @@ export function KickstandPlacementController() {
         return () => {
             window.removeEventListener('shaft-click', handleShaftClick);
         };
-    }, [buildPlacementFromSnap, hotkeyActive, resetSnapping, camera, pointer, raycaster, targetMetaById]);
+    }, [buildPlacementFromSnap, hotkeyActive, placementBindings, resetSnapping, camera, pointer, raycaster, targetMetaById]);
 
     return null;
 }

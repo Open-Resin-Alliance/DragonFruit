@@ -1,5 +1,5 @@
-import { selectSupport, selectSupportWithToggle, selectJoint, selectContactDisk } from './SupportSelection';
-import { setSelectedId } from '../state';
+import { applySupportSelectionClick, selectJointById, selectPrimitiveById } from './shared/selection/selectionController';
+import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
@@ -93,11 +93,11 @@ export function emitSupportModelPointerSelect(modelId: string | null) {
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.
  */
 export function handleSupportClick(e: any, id: string, isInteractable: boolean) {
+    const shiftDown = isShiftActiveFromEvent(e);
+
     if (!isInteractable) {
         return;
     }
-
-    const shiftDown = isShiftActiveFromEvent(e);
     
     e.stopPropagation(); // Stop R3F propagation
     
@@ -107,11 +107,11 @@ export function handleSupportClick(e: any, id: string, isInteractable: boolean) 
         e.nativeEvent.stopImmediatePropagation();
     }
     
-    if (shiftDown) {
-        selectSupportWithToggle(id);
-    } else {
-        selectSupport(id);
-    }
+    applySupportSelectionClick({
+        id,
+        shiftKey: shiftDown,
+        isInteractable,
+    });
 }
 
 /**
@@ -143,7 +143,7 @@ export function handleJointClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    selectJoint(id);
+    selectJointById(id);
     if (onSelect) onSelect(id);
 }
 
@@ -172,7 +172,32 @@ export function handleKnotClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    setSelectedId(id);
+    selectPrimitiveById(id);
+    if (onSelect) onSelect(id);
+}
+
+export function handleContactDiskClick(
+    e: any,
+    id: string,
+    isInteractable: boolean,
+    isParentSelected: boolean,
+    isContactDiskSelected: boolean,
+    onSelect?: (id: string) => void
+) {
+    if (!isInteractable) return;
+
+    if (!isParentSelected && !isContactDiskSelected) {
+        return;
+    }
+
+    e.stopPropagation();
+
+    if (e.nativeEvent) {
+        e.nativeEvent.stopPropagation();
+        e.nativeEvent.stopImmediatePropagation();
+    }
+
+    selectPrimitiveById(id);
     if (onSelect) onSelect(id);
 }
 
