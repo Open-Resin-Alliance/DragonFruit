@@ -53,6 +53,7 @@ todo_list
 Scratch/
 
 src-tauri/gen/
+src-tauri/frontend-dist/**
 conversion/
 
 **/target/
