@@ -5962,147 +5962,171 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
   const [displaySrc, setDisplaySrc] = React.useState(src);
   const [isLoading, setIsLoading] = React.useState(true);
 
+  const sourceCandidates = React.useMemo(() => {
+    const trimmed = src.trim();
+    const candidates = [trimmed];
+
+    if (trimmed.startsWith('/api/profile-assets/')) {
+      candidates.push(`/${trimmed.slice('/api/profile-assets/'.length)}`);
+    } else if (trimmed.startsWith('/plugins/')) {
+      candidates.push(`/api/profile-assets/${trimmed.slice('/'.length)}`);
+    }
+
+    return Array.from(new Set(candidates.filter((candidate) => candidate.length > 0)));
+  }, [src]);
+
   React.useEffect(() => {
     let cancelled = false;
 
     const process = async () => {
       hydrateTrimmedImageCacheFromStorage();
 
-      const cached = trimmedImageMemoryCache.get(src);
-      if (cached) {
+      for (const candidate of sourceCandidates) {
+        const cached = trimmedImageMemoryCache.get(candidate) ?? trimmedImageMemoryCache.get(src);
+        if (cached) {
+          if (!cancelled) {
+            setDisplaySrc(cached);
+            setIsLoading(false);
+          }
+          return;
+        }
+
         if (!cancelled) {
-          setDisplaySrc(cached);
-          setIsLoading(false);
+          setDisplaySrc(candidate);
+          setIsLoading(true);
         }
-        return;
-      }
 
-      if (!cancelled) {
-        setDisplaySrc(src);
-        setIsLoading(true);
-      }
+        try {
+          const image = new Image();
+          image.decoding = 'async';
+          image.src = candidate;
+          await image.decode();
 
-      try {
-        const image = new Image();
-        image.decoding = 'async';
-        image.src = src;
-        await image.decode();
-
-        const width = image.naturalWidth;
-        const height = image.naturalHeight;
-        if (!width || !height) {
-          cacheTrimmedImage(src, src);
-          if (!cancelled) {
-            setDisplaySrc(src);
-            setIsLoading(false);
+          const width = image.naturalWidth;
+          const height = image.naturalHeight;
+          if (!width || !height) {
+            cacheTrimmedImage(src, candidate);
+            cacheTrimmedImage(candidate, candidate);
+            if (!cancelled) {
+              setDisplaySrc(candidate);
+              setIsLoading(false);
+            }
+            return;
           }
-          return;
-        }
 
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          cacheTrimmedImage(src, src);
-          if (!cancelled) {
-            setDisplaySrc(src);
-            setIsLoading(false);
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            cacheTrimmedImage(src, candidate);
+            cacheTrimmedImage(candidate, candidate);
+            if (!cancelled) {
+              setDisplaySrc(candidate);
+              setIsLoading(false);
+            }
+            return;
           }
-          return;
-        }
 
-        ctx.drawImage(image, 0, 0);
-        const imageData = ctx.getImageData(0, 0, width, height);
-        const pixels = imageData.data;
-        const background = resolveUniformBackgroundColor(width, height, pixels);
+          ctx.drawImage(image, 0, 0);
+          const imageData = ctx.getImageData(0, 0, width, height);
+          const pixels = imageData.data;
+          const background = resolveUniformBackgroundColor(width, height, pixels);
 
-        let minX = width;
-        let minY = height;
-        let maxX = -1;
-        let maxY = -1;
+          let minX = width;
+          let minY = height;
+          let maxX = -1;
+          let maxY = -1;
 
-        for (let y = 0; y < height; y += 1) {
-          for (let x = 0; x < width; x += 1) {
-            const pixel = readPixelRgba(pixels, width, x, y);
-            if (!isLikelyBackgroundPixel(pixel, background)) {
-              if (x < minX) minX = x;
-              if (y < minY) minY = y;
-              if (x > maxX) maxX = x;
-              if (y > maxY) maxY = y;
+          for (let y = 0; y < height; y += 1) {
+            for (let x = 0; x < width; x += 1) {
+              const pixel = readPixelRgba(pixels, width, x, y);
+              if (!isLikelyBackgroundPixel(pixel, background)) {
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
+              }
             }
           }
-        }
 
-        if (maxX < minX || maxY < minY) {
-          cacheTrimmedImage(src, src);
+          if (maxX < minX || maxY < minY) {
+            cacheTrimmedImage(src, candidate);
+            cacheTrimmedImage(candidate, candidate);
+            if (!cancelled) {
+              setDisplaySrc(candidate);
+              setIsLoading(false);
+            }
+            return;
+          }
+
+          const trimmedWidth = maxX - minX + 1;
+          const trimmedHeight = maxY - minY + 1;
+
+          const pad = Math.max(2, Math.round(Math.max(trimmedWidth, trimmedHeight) * 0.04));
+          const paddedMinX = Math.max(0, minX - pad);
+          const paddedMinY = Math.max(0, minY - pad);
+          const paddedMaxX = Math.min(width - 1, maxX + pad);
+          const paddedMaxY = Math.min(height - 1, maxY + pad);
+          const paddedWidth = paddedMaxX - paddedMinX + 1;
+          const paddedHeight = paddedMaxY - paddedMinY + 1;
+
+          if (
+            paddedWidth >= width * 0.99
+            && paddedHeight >= height * 0.99
+          ) {
+            cacheTrimmedImage(src, candidate);
+            cacheTrimmedImage(candidate, candidate);
+            if (!cancelled) {
+              setDisplaySrc(candidate);
+              setIsLoading(false);
+            }
+            return;
+          }
+
+          const trimmedCanvas = document.createElement('canvas');
+          trimmedCanvas.width = paddedWidth;
+          trimmedCanvas.height = paddedHeight;
+          const trimmedCtx = trimmedCanvas.getContext('2d');
+          if (!trimmedCtx) {
+            cacheTrimmedImage(src, candidate);
+            cacheTrimmedImage(candidate, candidate);
+            if (!cancelled) {
+              setDisplaySrc(candidate);
+              setIsLoading(false);
+            }
+            return;
+          }
+
+          trimmedCtx.drawImage(
+            canvas,
+            paddedMinX,
+            paddedMinY,
+            paddedWidth,
+            paddedHeight,
+            0,
+            0,
+            paddedWidth,
+            paddedHeight,
+          );
+
+          const next = trimmedCanvas.toDataURL('image/png');
+          cacheTrimmedImage(src, next);
+          cacheTrimmedImage(candidate, next);
           if (!cancelled) {
-            setDisplaySrc(src);
+            setDisplaySrc(next);
             setIsLoading(false);
           }
           return;
+        } catch {
+          continue;
         }
+      }
 
-        const trimmedWidth = maxX - minX + 1;
-        const trimmedHeight = maxY - minY + 1;
-
-        const pad = Math.max(2, Math.round(Math.max(trimmedWidth, trimmedHeight) * 0.04));
-        const paddedMinX = Math.max(0, minX - pad);
-        const paddedMinY = Math.max(0, minY - pad);
-        const paddedMaxX = Math.min(width - 1, maxX + pad);
-        const paddedMaxY = Math.min(height - 1, maxY + pad);
-        const paddedWidth = paddedMaxX - paddedMinX + 1;
-        const paddedHeight = paddedMaxY - paddedMinY + 1;
-
-        if (
-          paddedWidth >= width * 0.99
-          && paddedHeight >= height * 0.99
-        ) {
-          cacheTrimmedImage(src, src);
-          if (!cancelled) {
-            setDisplaySrc(src);
-            setIsLoading(false);
-          }
-          return;
-        }
-
-        const trimmedCanvas = document.createElement('canvas');
-        trimmedCanvas.width = paddedWidth;
-        trimmedCanvas.height = paddedHeight;
-        const trimmedCtx = trimmedCanvas.getContext('2d');
-        if (!trimmedCtx) {
-          cacheTrimmedImage(src, src);
-          if (!cancelled) {
-            setDisplaySrc(src);
-            setIsLoading(false);
-          }
-          return;
-        }
-
-        trimmedCtx.drawImage(
-          canvas,
-          paddedMinX,
-          paddedMinY,
-          paddedWidth,
-          paddedHeight,
-          0,
-          0,
-          paddedWidth,
-          paddedHeight,
-        );
-
-        const next = trimmedCanvas.toDataURL('image/png');
-        cacheTrimmedImage(src, next);
-        if (!cancelled) {
-          setDisplaySrc(next);
-          setIsLoading(false);
-        }
-      } catch {
-        cacheTrimmedImage(src, src);
-        if (!cancelled) {
-          setDisplaySrc(src);
-          setIsLoading(false);
-        }
+      cacheTrimmedImage(src, src);
+      if (!cancelled) {
+        setDisplaySrc(src);
+        setIsLoading(false);
       }
     };
 
@@ -6111,7 +6135,7 @@ function AutoTrimmedImage({ src, alt, className }: AutoTrimmedImageProps) {
     return () => {
       cancelled = true;
     };
-  }, [src]);
+  }, [sourceCandidates, src]);
 
   return (
     <div className="relative h-full w-full min-h-0 overflow-hidden">

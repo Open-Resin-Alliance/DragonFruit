@@ -218,13 +218,24 @@ function shouldUseBundledAssetPaths(): boolean {
   if (typeof window === 'undefined') return false;
   const protocol = window.location?.protocol ?? '';
   const hostname = window.location?.hostname ?? '';
-  return protocol === 'file:' || protocol === 'tauri:' || hostname === 'tauri.localhost';
+  const hasTauriInternals = typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
+  return protocol === 'file:' || protocol === 'tauri:' || hostname === 'tauri.localhost' || hasTauriInternals;
 }
 
 function resolveRuntimeAssetPath(value: string): string {
-  if (!value.startsWith('/api/profile-assets/')) return value;
-  if (!shouldUseBundledAssetPaths()) return value;
-  return `/${value.slice('/api/profile-assets/'.length)}`;
+  const isBundledRuntime = shouldUseBundledAssetPaths();
+
+  if (value.startsWith('/api/profile-assets/')) {
+    if (!isBundledRuntime) return value;
+    return `/${value.slice('/api/profile-assets/'.length)}`;
+  }
+
+  if (value.startsWith('/plugins/') || value.startsWith('/printers/')) {
+    if (isBundledRuntime) return value;
+    return `/api/profile-assets${value}`;
+  }
+
+  return value;
 }
 
 function boundedString(value: unknown, max = 120): string {
@@ -265,7 +276,13 @@ function sanitizeImageAssetPath(value: unknown): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
 
-  if (trimmed.startsWith('/api/profile-assets/')) return resolveRuntimeAssetPath(trimmed);
+  if (
+    trimmed.startsWith('/api/profile-assets/')
+    || trimmed.startsWith('/plugins/')
+    || trimmed.startsWith('/printers/')
+  ) {
+    return resolveRuntimeAssetPath(trimmed);
+  }
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   if (trimmed.startsWith('data:')) return undefined;
 

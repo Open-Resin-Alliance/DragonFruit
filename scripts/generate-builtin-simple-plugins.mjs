@@ -40,7 +40,7 @@ function normalizeImageAssetPath(pluginFolder, sourceDirWithinPlugin, imageAsset
       }
 
       const normalized = normalizeRelativePath(sourceDirWithinPlugin, trimmed);
-      return `/api/profile-assets/plugins/${pluginFolder}/${normalized}`;
+      return `/plugins/${pluginFolder}/${normalized}`;
 }
 
 function sanitizeRelativeJsonPath(input) {
