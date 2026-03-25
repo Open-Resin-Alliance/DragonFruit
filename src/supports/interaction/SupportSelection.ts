@@ -54,10 +54,6 @@ export function selectContactDisk(id: string) {
     selectPrimitiveById(id);
 }
 
-export function selectContactDisk(id: string) {
-    setSelectedId(id);
-}
-
 /**
  * Clear any current selection (support or joint).
  */
