@@ -467,7 +467,7 @@ async function sanitizeManifest(manifest: any, baseRawDir: string) {
     : [];
 
   const fetchedPrinterPresetEntries = await Promise.all(
-    presetPathEntries.map(async (relativePath) => {
+    presetPathEntries.map(async (relativePath: string) => {
       const rawUrl = `${baseRawDir}/${relativePath}`;
       const sourceBaseRawDir = rawUrl.includes('/')
         ? rawUrl.slice(0, rawUrl.lastIndexOf('/'))
