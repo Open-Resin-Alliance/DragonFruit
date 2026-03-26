@@ -8,8 +8,8 @@ import { BezierRenderer } from '../../Renderers/BezierRenderer';
 import { ContactDiskRenderer } from '../../SupportPrimitives/ContactDisk/ContactDiskRenderer';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { handleSupportClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
-import { setSelectedId } from '../../state';
 
 interface TwigRendererProps {
   twig: Twig;
@@ -136,7 +136,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
-          onClick={() => setSelectedId(seg.id)}
+          onClick={() => selectPrimitiveById(seg.id)}
         />
       );
     } else if (!deferStraightShaftsToSceneBatch || isSelected) {
@@ -155,7 +155,7 @@ export const TwigRenderer = React.memo(function TwigRenderer({
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
-          onClick={() => setSelectedId(seg.id)}
+          onClick={() => selectPrimitiveById(seg.id)}
         />
       );
     }

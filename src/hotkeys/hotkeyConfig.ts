@@ -129,9 +129,16 @@ export const DEFAULT_KEYBINDINGS: HotkeyConfig = {
 
 type ModifierKey = 'ctrl' | 'shift' | 'alt' | 'meta';
 
+function normalizeKeyName(key?: string): string {
+    const normalized = (key ?? '').trim().toLowerCase();
+    if (normalized === 'control') return 'ctrl';
+    if (normalized === 'altgraph') return 'alt';
+    return normalized;
+}
+
 function parseModifier(modifier?: string): Set<ModifierKey> {
     if (!modifier) return new Set();
-    const parts = modifier.split('+').map(p => p.trim().toLowerCase()).filter(Boolean);
+    const parts = modifier.split('+').map(p => normalizeKeyName(p)).filter(Boolean);
     const mods = new Set<ModifierKey>();
     for (const p of parts) {
         if (p === 'ctrl') mods.add('ctrl');
@@ -162,16 +169,18 @@ export function matchesConfiguredHotkeyDown(
     binding: { key: string; modifier?: string }
 ): boolean {
     const expectedMods = parseModifier(binding.modifier);
-    if (binding.key.toLowerCase() === 'alt') expectedMods.add('alt');
-    if (binding.key.toLowerCase() === 'control') expectedMods.add('ctrl');
-    if (binding.key.toLowerCase() === 'shift') expectedMods.add('shift');
-    if (binding.key.toLowerCase() === 'meta') expectedMods.add('meta');
+    const normalizedBindingKey = normalizeKeyName(binding.key);
+    const normalizedEventKey = normalizeKeyName(e.key);
+    if (normalizedBindingKey === 'alt') expectedMods.add('alt');
+    if (normalizedBindingKey === 'ctrl') expectedMods.add('ctrl');
+    if (normalizedBindingKey === 'shift') expectedMods.add('shift');
+    if (normalizedBindingKey === 'meta') expectedMods.add('meta');
 
     const actualMods = getEventModifiers(e);
 
-    const baseKeyMatches = binding.key.toLowerCase() === 'alt'
+    const baseKeyMatches = normalizedBindingKey === 'alt'
         ? e.altKey
-        : e.key.toLowerCase() === binding.key.toLowerCase();
+        : normalizedEventKey === normalizedBindingKey;
 
     return baseKeyMatches && setEquals(actualMods, expectedMods);
 }
@@ -181,18 +190,19 @@ export function matchesConfiguredHotkeyUp(
     binding: { key: string; modifier?: string }
 ): boolean {
     const expectedMods = parseModifier(binding.modifier);
-    const releasedKey = e.key;
+    const normalizedBindingKey = normalizeKeyName(binding.key);
+    const releasedKey = normalizeKeyName(e.key);
 
-    const primaryReleased = binding.key.toLowerCase() === 'alt'
-        ? releasedKey === 'Alt'
-        : releasedKey.toLowerCase() === binding.key.toLowerCase();
+    const primaryReleased = normalizedBindingKey === 'alt'
+        ? releasedKey === 'alt'
+        : releasedKey === normalizedBindingKey;
 
     if (primaryReleased) return true;
 
-    if (expectedMods.has('ctrl') && releasedKey === 'Control') return true;
-    if (expectedMods.has('shift') && releasedKey === 'Shift') return true;
-    if (expectedMods.has('alt') && releasedKey === 'Alt') return true;
-    if (expectedMods.has('meta') && releasedKey === 'Meta') return true;
+    if (expectedMods.has('ctrl') && releasedKey === 'ctrl') return true;
+    if (expectedMods.has('shift') && releasedKey === 'shift') return true;
+    if (expectedMods.has('alt') && releasedKey === 'alt') return true;
+    if (expectedMods.has('meta') && releasedKey === 'meta') return true;
 
     return false;
 }

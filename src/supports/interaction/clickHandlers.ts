@@ -1,11 +1,10 @@
-import { selectSupport, selectSupportWithToggle, selectJoint, selectContactDisk } from './SupportSelection';
-import { setSelectedId } from '../state';
+import { applySupportSelectionClick, selectJointById, selectPrimitiveById } from './shared/selection/selectionController';
+import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 let hoverGuardInitialized = false;
 let orbitInteractionActive = false;
 let shiftModifierActive = false;
 let lastDispatchedHoverModelId: string | null = null;
-import { isContactDiskHudInteractionActive } from '../SupportPrimitives/ContactDisk/contactDiskHudInteraction';
 
 function initializeHoverGuards() {
     if (hoverGuardInitialized || typeof window === 'undefined') return;
@@ -93,11 +92,11 @@ export function emitSupportModelPointerSelect(modelId: string | null) {
  * Enforces interactability check and stops DOM propagation to prevent canvas deselection.
  */
 export function handleSupportClick(e: any, id: string, isInteractable: boolean) {
+    const shiftDown = isShiftActiveFromEvent(e);
+
     if (!isInteractable) {
         return;
     }
-
-    const shiftDown = isShiftActiveFromEvent(e);
     
     e.stopPropagation(); // Stop R3F propagation
     
@@ -107,11 +106,11 @@ export function handleSupportClick(e: any, id: string, isInteractable: boolean) 
         e.nativeEvent.stopImmediatePropagation();
     }
     
-    if (shiftDown) {
-        selectSupportWithToggle(id);
-    } else {
-        selectSupport(id);
-    }
+    applySupportSelectionClick({
+        id,
+        shiftKey: shiftDown,
+        isInteractable,
+    });
 }
 
 /**
@@ -143,7 +142,7 @@ export function handleJointClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    selectJoint(id);
+    selectJointById(id);
     if (onSelect) onSelect(id);
 }
 
@@ -172,7 +171,7 @@ export function handleKnotClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    setSelectedId(id);
+    selectPrimitiveById(id);
     if (onSelect) onSelect(id);
 }
 
@@ -197,6 +196,6 @@ export function handleContactDiskClick(
         e.nativeEvent.stopImmediatePropagation();
     }
 
-    selectContactDisk(id);
+    selectPrimitiveById(id);
     if (onSelect) onSelect(id);
 }

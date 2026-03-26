@@ -87,7 +87,7 @@ export const branchPlacementStore = {
             return;
         }
 
-        state = { ...state, altActive: true };
+        state = { ...initialState, altActive: true };
         notify();
     },
 

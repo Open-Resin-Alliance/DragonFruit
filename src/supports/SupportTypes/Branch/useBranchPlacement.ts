@@ -1,10 +1,11 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
 import { branchPlacementStore, useBranchPlacementState } from './branchPlacementState';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
+import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 
 /**
  * Branch Placement Hook
@@ -20,43 +21,52 @@ import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkey
 export function useBranchPlacement() {
     const { getHotkey } = useHotkeyConfig();
     const binding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
-    const BRANCH_KEY = binding.key;
+    const pointerFreshSinceIdleActivationRef = useRef(false);
 
     const { isPlacementHardDisabled } = useInteractionStatus();
     const state = useBranchPlacementState();
 
     // Track branch placement hotkey globally
     useEffect(() => {
-        const down = (e: KeyboardEvent) => {
-            const matches = matchesConfiguredHotkeyDown(e, { key: BRANCH_KEY }) || e.key === BRANCH_KEY || (BRANCH_KEY === 'Alt' && e.key === 'AltGraph');
-            if (matches) {
-                e.preventDefault();
-                branchPlacementStore.setAltActive(true);
-            }
-        };
-        const up = (e: KeyboardEvent) => {
-            const releasedAlt = e.key === 'Alt' || e.key === 'AltGraph' || e.code === 'AltLeft' || e.code === 'AltRight';
-            const matches = matchesConfiguredHotkeyUp(e, { key: BRANCH_KEY }) || e.key === BRANCH_KEY || (BRANCH_KEY === 'Alt' && e.key === 'AltGraph');
-            if (matches || (BRANCH_KEY === 'Alt' && releasedAlt)) {
-                e.preventDefault();
-                // Releasing the key cancels branch mode entirely and returns to trunk mode
-                branchPlacementStore.setAltActive(false);
-                branchPlacementStore.reset();
-            }
-        };
+        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(binding);
 
-        const blur = () => {
-            // Losing focus can prevent keyup from firing. Treat it as a cancel.
+        const cancelBranchMode = () => {
+            pointerFreshSinceIdleActivationRef.current = false;
             branchPlacementStore.setAltActive(false);
             branchPlacementStore.reset();
         };
 
+        const down = (e: KeyboardEvent) => {
+            const matches = matchesConfiguredHotkeyDown(e, binding);
+            if (matches) {
+                e.preventDefault();
+                pointerFreshSinceIdleActivationRef.current = false;
+                branchPlacementStore.setAltActive(true);
+            }
+        };
+        const up = (e: KeyboardEvent) => {
+            const matches = matchesConfiguredHotkeyUp(e, binding);
+            if (matches) {
+                e.preventDefault();
+                cancelBranchMode();
+            }
+        };
+
+        const blur = () => {
+            cancelBranchMode();
+        };
+
         const pointerMove = (e: PointerEvent) => {
-            // Some browser/OS combos can miss Alt keyup. Pointer events still report modifier state.
             const snapshot = branchPlacementStore.getSnapshot();
-            if ((snapshot.altActive || snapshot.stage === 'awaitingBase') && !e.altKey) {
-                branchPlacementStore.setAltActive(false);
-                branchPlacementStore.reset();
+            const bindingHeld = isSupportPlacementBindingSatisfiedByModifierState(binding, getSupportPlacementModifierState(e));
+
+            if (modifierResolvable && (snapshot.altActive || snapshot.stage === 'awaitingBase') && !bindingHeld) {
+                cancelBranchMode();
+                return;
+            }
+
+            if (snapshot.altActive && snapshot.stage === 'idle' && (!modifierResolvable || bindingHeld)) {
+                pointerFreshSinceIdleActivationRef.current = true;
             }
         };
 
@@ -73,7 +83,7 @@ export function useBranchPlacement() {
             window.removeEventListener('blur', blur);
             window.removeEventListener('pointermove', pointerMove, true);
         };
-    }, [BRANCH_KEY]);
+    }, [binding]);
 
     // Escape to cancel
     useEffect(() => {
@@ -90,6 +100,11 @@ export function useBranchPlacement() {
     // Hover over model - track position for preview dot when Alt is held
     const onModelHover = useCallback((hit: THREE.Intersection | null) => {
         const snapshot = branchPlacementStore.getSnapshot();
+        if (snapshot.altActive && snapshot.stage === 'idle' && !pointerFreshSinceIdleActivationRef.current) {
+            branchPlacementStore.setHoverPosition(null);
+            return;
+        }
+
         if (snapshot.altActive && snapshot.stage === 'idle' && hit) {
             const pos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
             branchPlacementStore.setHoverPosition(pos);
@@ -97,17 +112,16 @@ export function useBranchPlacement() {
             // Clear hover position when Alt released or after first click
             branchPlacementStore.setHoverPosition(null);
         }
-    }, [state.altActive, state.stage]);
+    }, []);
 
     // Click on model to set tip
     const onModelClick = useCallback((hit: THREE.Intersection | null) => {
         if (isPlacementHardDisabled || !hit) return;
 
-        const nativeEvent = (hit as any)?.nativeEvent;
-        const altDown = !!(nativeEvent?.altKey ?? (hit as any)?.altKey);
-        if (!altDown) return;
-
         const snapshot = branchPlacementStore.getSnapshot();
+        const bindingHeld = isSupportPlacementBindingSatisfiedByModifierState(binding, getSupportPlacementModifierState(hit));
+        if (!snapshot.altActive && !bindingHeld) return;
+
         if (!snapshot.altActive) {
             branchPlacementStore.setAltActive(true);
         }
@@ -123,11 +137,11 @@ export function useBranchPlacement() {
         branchPlacementStore.setTip(pos, normal, modelId);
 
         console.log('[BranchPlacement] Tip set at', pos, 'awaiting base click on support');
-    }, [isPlacementHardDisabled]);
+    }, [binding, isPlacementHardDisabled]);
 
     // These are no-ops - snapping is handled by BranchPlacementController
-    const onSupportHover = useCallback((hit: THREE.Intersection | null) => { }, []);
-    const onSupportClick = useCallback((hit: THREE.Intersection | null) => { }, []);
+    const onSupportHover = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
+    const onSupportClick = useCallback((hit: THREE.Intersection | null) => { void hit; }, []);
 
     // Clear if placement disabled and idle
     useEffect(() => {

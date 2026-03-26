@@ -47,3 +47,17 @@ export type NanoDlpAdvancedSectionDef = {
   title: string;
   keywords: string[];
 };
+
+/**
+ * JSON-backed source of truth for NanoDLP remote material settings.
+ *
+ * This keeps the UI catalog declarative while the mapping layer continues to
+ * handle NanoDLP-specific alias resolution and backend payload normalization.
+ */
+export type NanoDlpRemoteMaterialSettingsSchema = {
+  primaryEditFields: NanoDlpPrimaryEditField[];
+  basicSections: NanoDlpBasicSection[];
+  advancedAllowedKeywords: string[];
+  nonEditableMetaKeys: string[];
+  advancedSections: NanoDlpAdvancedSectionDef[];
+};

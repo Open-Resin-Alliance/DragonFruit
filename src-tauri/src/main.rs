@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod network;
+fn default_minimum_aa_alpha_percent() -> f32 {
+    35.0
+}
 mod plugin_registry;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -102,6 +105,7 @@ fn build_save_dialog_with_filters(suggested_name: &str) -> rfd::FileDialog {
             "stl" | "3mf" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
             "voxl" => dialog.add_filter("Scene Files", &["voxl"]),
             "lys" => dialog.add_filter("Scene Files", &["lys"]),
+            "json" => dialog.add_filter("JSON Files", &["json"]),
             _ => dialog.add_filter("Print Files", &[ext]),
         };
     }
@@ -156,6 +160,8 @@ fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
 #[derive(Deserialize)]
 struct SliceJobMetadata {
     output_format: String,
+    #[serde(default)]
+    format_version: Option<String>,
     source_width_px: u32,
     source_height_px: u32,
     width_px: u32,
@@ -163,6 +169,8 @@ struct SliceJobMetadata {
     png_compression_strategy: String,
     anti_aliasing_level: String,
     aa_on_supports: bool,
+    #[serde(default = "default_minimum_aa_alpha_percent")]
+    minimum_aa_alpha_percent: f32,
     #[serde(default)]
     mirror_x: bool,
     #[serde(default)]
@@ -217,6 +225,15 @@ fn cancel_flag() -> &'static Arc<AtomicBool> {
 struct SliceProgressPayload {
     done: u32,
     total: u32,
+    phase: String,
+}
+
+fn phase_to_label(phase: dragonfruit_slicer_v3::types::SliceProgressPhaseV3) -> &'static str {
+    match phase {
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Slicing => "Slicing",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Encoding => "Encoding",
+        dragonfruit_slicer_v3::types::SliceProgressPhaseV3::Finalizing => "Finalizing",
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -257,10 +274,18 @@ async fn slice_solid_native(window: tauri::Window, job_json: String) -> Result<R
         let job: dragonfruit_slicer_v3::types::SliceJobV3 = serde_json::from_str(&job_json)
             .map_err(|err| format!("Invalid SliceJobV3 JSON: {err}"))?;
 
-        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            Box::new(move |done: u32, total: u32| {
-                let _ = win.emit("slicer://progress", SliceProgressPayload { done, total });
-            });
+        let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 = std::sync::Arc::new(
+            move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
+                let _ = win.emit(
+                    "slicer://progress",
+                    SliceProgressPayload {
+                        done: update.done,
+                        total: update.total,
+                        phase: phase_to_label(update.phase).to_string(),
+                    },
+                );
+            },
+        );
 
         slicer_pool().install(|| -> Result<Vec<u8>, String> {
             let artifact = dragonfruit_slicer_v3::slice_with_progress_v3(
@@ -319,6 +344,7 @@ async fn slice_solid_native_to_temp_path(
 
         let job = dragonfruit_slicer_v3::SliceJobV3 {
             output_format: meta.output_format,
+            format_version: meta.format_version,
             source_width_px: meta.source_width_px,
             source_height_px: meta.source_height_px,
             width_px: meta.width_px,
@@ -326,6 +352,7 @@ async fn slice_solid_native_to_temp_path(
             png_compression_strategy: meta.png_compression_strategy,
             anti_aliasing_level: meta.anti_aliasing_level,
             aa_on_supports: meta.aa_on_supports,
+            minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,
             mirror_y: meta.mirror_y,
             container_compression_level: meta.container_compression_level,
@@ -339,8 +366,15 @@ async fn slice_solid_native_to_temp_path(
         };
 
         let progress_cb: dragonfruit_slicer_v3::types::ProgressCallbackV3 =
-            Box::new(move |done: u32, total: u32| {
-                let _ = win.emit("slicer://progress", SliceProgressPayload { done, total });
+            std::sync::Arc::new(move |update: dragonfruit_slicer_v3::types::SliceProgressUpdateV3| {
+                let _ = win.emit(
+                    "slicer://progress",
+                    SliceProgressPayload {
+                        done: update.done,
+                        total: update.total,
+                        phase: phase_to_label(update.phase).to_string(),
+                    },
+                );
             });
 
         slicer_pool().install(
@@ -814,6 +848,7 @@ fn build_open_dialog_with_filters(category: &str) -> rfd::FileDialog {
     dialog = match normalized.as_str() {
         "mesh" => dialog.add_filter("Mesh Files", &["stl", "3mf"]),
         "scene" => dialog.add_filter("Scene Files", &["voxl", "lys"]),
+        "bundle" => dialog.add_filter("JSON Files", &["json"]),
         _ => dialog
             .add_filter("Mesh Files", &["stl", "3mf"])
             .add_filter("Scene Files", &["voxl", "lys"]),

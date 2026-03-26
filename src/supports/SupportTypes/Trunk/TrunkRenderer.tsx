@@ -12,8 +12,9 @@ import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimit
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
-import { getSnapshot, setSelectedId, subscribe, updateTrunk } from '../../state';
+import { getSnapshot, subscribe, updateTrunk } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
 
 interface TrunkRendererProps {
@@ -67,7 +68,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
 
     // Handle Click
     const handleClick = (e: any) => {
-        if (!isPickingHovered) return;
+        if (!isPickingHovered && !isSelected) return;
         handleSupportClick(e, trunk.id, !!isInteractable);
     };
 
@@ -190,7 +191,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={isSegSelected}
-                    onClick={() => setSelectedId(seg.id)}
+                    onClick={() => selectPrimitiveById(seg.id)}
                 />
             );
         } else if (!deferStraightShaftsToSceneBatch || isSelected) {
@@ -207,7 +208,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={isSegSelected}
-                    onClick={() => setSelectedId(seg.id)}
+                    onClick={() => selectPrimitiveById(seg.id)}
                 />
             );
         }

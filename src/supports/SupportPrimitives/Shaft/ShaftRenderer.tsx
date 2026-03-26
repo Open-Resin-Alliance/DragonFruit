@@ -1,10 +1,12 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import * as THREE from 'three';
 import { Vec3 } from '../../types';
-import { usePicking } from '@/components/picking';
+import { usePickingSubscription } from '@/components/picking';
 import { useBracePlacementState } from '../../SupportTypes/Brace/bracePlacementState';
-import { useImmediateModelHoverId } from '../../interaction/useInteractionStatus';
-import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { useKickstandPlacementState } from '../../SupportTypes/Kickstand/kickstandPlacementState';
+import { emitImmediateModelHover } from '../../interaction/pointerOcclusion';
+
+const NOOP_RAYCAST: THREE.Object3D['raycast'] = () => {};
 
 interface ShaftRendererProps {
     id: string;
@@ -50,60 +52,28 @@ export function ShaftRenderer({
 }: ShaftRendererProps) {
     const radiusStart = (diameterStart ?? diameter) / 2;
     const radiusEnd = (diameterEnd ?? diameter) / 2;
-    const PICK_RADIUS_MULTIPLIER = 1.9;
-    const MIN_PICK_RADIUS_MM = 0.45;
     const selectedVisualScale = isSelected ? 1.03 : 1;
     const visualRadiusStart = radiusStart * selectedVisualScale;
     const visualRadiusEnd = radiusEnd * selectedVisualScale;
-    const pickRadiusStart = Math.max(visualRadiusStart * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
-    const pickRadiusEnd = Math.max(visualRadiusEnd * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
-    const groupRef = useRef<THREE.Group>(null);
+    const pickRadiusStart = visualRadiusStart;
+    const pickRadiusEnd = visualRadiusEnd;
 
     const { altActive: braceAltActive } = useBracePlacementState();
-    const enableSegmentInteraction = (isParentSelected || braceAltActive) === true;
-    const immediateModelHoverId = useImmediateModelHoverId();
-    const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
-    
-    // GPU Picking Setup
-    const pickIdRef = useRef<number | null>(null);
-    const { register, unregister, hit } = usePicking();
+    const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
+    const enableSegmentInteraction = (isParentSelected || braceAltActive || kickstandHotkeyActive) === true;
 
-    // Register with picking system
-    // Always register so branch placement can detect shaft hovers/clicks
-    useEffect(() => {
-        if (!groupRef.current || !enablePicking || !enableSegmentInteraction) {
-            if (pickIdRef.current !== null) {
-                unregister(pickIdRef.current);
-                pickIdRef.current = null;
-            }
-            return;
-        }
-
-        // Expose segment id for snapping/branch placement
-        groupRef.current.userData.segmentId = id;
-
-        pickIdRef.current = register({
-            category: 'segment',
-            objectId: id,
-            object: groupRef.current,
-        });
-        
-        return () => {
-            if (pickIdRef.current !== null) {
-                unregister(pickIdRef.current);
-                pickIdRef.current = null;
-            }
-        };
-    }, [register, unregister, id, enablePicking, enableSegmentInteraction]);
+    const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
+        category: 'segment',
+        objectId: id,
+        enabled: !!enablePicking && enableSegmentInteraction,
+    });
+    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     // Determine Hover State
-    const isTopPickedSegment = enableSegmentInteraction
-        && immediateModelHoverId === null
-        && frontBlockingModelId === null
-        && hit.category === 'segment'
-        && hit.objectId === id;
-    const isPickingHovered = isTopPickedSegment;
-    const isHovered = isPickingHovered && !isSelected && isParentSelected && !braceAltActive;
+    const isTopPickedSegment = enableSegmentInteraction && isPickingHovered;
+    const isHovered = (isTopPickedSegment || pointerHoverActive)
+        && !isSelected
+        && isParentSelected;
 
     // Vector math
     const startVec = new THREE.Vector3(start.x, start.y, start.z);
@@ -117,22 +87,24 @@ export function ShaftRenderer({
     const direction = new THREE.Vector3().subVectors(endVec, startVec).normalize();
     const up = new THREE.Vector3(0, 1, 0);
     const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
+
+    const rayIntersectsJointOrKnot = (e: any): boolean => {
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                const primitiveType = current.userData?.supportPrimitiveType;
+                if (primitiveType === 'joint' || primitiveType === 'knot') {
+                    return true;
+                }
+                current = current.parent;
+            }
+        }
+        return false;
+    };
     
     const handleClick = (e: any) => {
-        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
-        if (frontModelId) {
-            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
-            emitImmediateModelHover(frontModelId);
-            window.dispatchEvent(new CustomEvent('shaft-leave', {
-                detail: { segmentId: id }
-            }));
-            return;
-        }
-
-        if (frontBlockingModelId !== null) {
-            setFrontBlockingModelId(null);
-            emitImmediateModelHover(null);
-        }
+        if (rayIntersectsJointOrKnot(e)) return;
 
         const altDown = !!(e?.nativeEvent?.altKey || e?.altKey);
         const ctrlDown = !!(e?.nativeEvent?.ctrlKey || e?.ctrlKey);
@@ -177,31 +149,40 @@ export function ShaftRenderer({
         }
     };
 
-    const finalColor = isSelected ? '#ffffff' : color;
+    const finalColor = isSelected ? '#ffffff' : (isHovered ? '#ffffff' : color);
     const finalEmissive = isSelected ? '#444444' : (isHovered ? '#ffffff' : emissive);
-    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.3 : emissiveIntensity);
+    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.5 : emissiveIntensity);
     
     // Handle pointer move for branch placement preview
     const handlePointerMove = (e: any) => {
-        const frontModelId = getFrontBlockingModelId(e, groupRef.current);
-        if (frontModelId) {
-            setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
-            emitImmediateModelHover(frontModelId);
-            window.dispatchEvent(new CustomEvent('shaft-leave', {
-                detail: { segmentId: id }
-            }));
+        if (rayIntersectsJointOrKnot(e)) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
             return;
         }
 
-        if (frontBlockingModelId !== null) {
-            setFrontBlockingModelId(null);
+        const topIntersectionObject = Array.isArray(e?.intersections)
+            ? ((e.intersections[0] as { object?: THREE.Object3D | null } | undefined)?.object ?? null)
+            : null;
+
+        let isTopPointerTargetNow = false;
+        let current = topIntersectionObject;
+        while (current) {
+            if (current === pickRef.current) {
+                isTopPointerTargetNow = true;
+                break;
+            }
+            current = current.parent;
         }
         emitImmediateModelHover(null);
 
-        const isTopPickedSegmentNow = enableSegmentInteraction
-            && hit.category === 'segment'
-            && hit.objectId === id;
-        if (!isTopPickedSegmentNow) return;
+        if (!isTopPointerTargetNow) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
+        if (isParentSelected) {
+            setPointerHoverActive((prev) => (prev ? prev : true));
+        }
 
         // Emit global event for branch placement preview
         window.dispatchEvent(new CustomEvent('shaft-hover', {
@@ -218,13 +199,11 @@ export function ShaftRenderer({
     };
 
     // Handle pointer leaving shaft - clear branch preview
-    const handlePointerOut = () => {
-        if (frontBlockingModelId !== null) {
-            setFrontBlockingModelId(null);
-        }
+    const handlePointerLeave = () => {
+        setPointerHoverActive((prev) => (prev ? false : prev));
         emitImmediateModelHover(null);
 
-        if (!enableSegmentInteraction || !isTopPickedSegment) return;
+        if (!enableSegmentInteraction) return;
 
         window.dispatchEvent(new CustomEvent('shaft-leave', {
             detail: { segmentId: id }
@@ -233,21 +212,30 @@ export function ShaftRenderer({
 
     return (
         <group 
-            ref={groupRef}
             position={[midpoint.x, midpoint.y, midpoint.z]} 
             quaternion={quaternion} 
             scale={[1, length, 1]}
-            onClick={handleClick}
-            onPointerMove={enableSegmentInteraction ? handlePointerMove : undefined}
-            onPointerOut={enableSegmentInteraction ? handlePointerOut : undefined}
+            onClick={!enableSegmentInteraction ? handleClick : undefined}
+            onPointerMove={!enableSegmentInteraction ? handlePointerMove : undefined}
+            onPointerLeave={!enableSegmentInteraction ? handlePointerLeave : undefined}
         >
             {enableSegmentInteraction && (
-                <mesh raycast={raycast} userData={{ excludeFromPickingClone: true }}>
+                <mesh
+                    ref={pickRef as any}
+                    raycast={raycast}
+                    onClick={handleClick}
+                    onPointerMove={handlePointerMove}
+                    onPointerLeave={handlePointerLeave}
+                    userData={{ segmentId: id, supportPrimitiveType: 'shaft' }}
+                >
                     <cylinderGeometry args={[pickRadiusEnd, pickRadiusStart, 1, Math.max(8, radialSegments)]} />
                     <meshBasicMaterial transparent opacity={0} depthWrite={false} />
                 </mesh>
             )}
-            <mesh raycast={raycast}>
+            <mesh
+                raycast={enableSegmentInteraction ? NOOP_RAYCAST : raycast}
+                userData={enableSegmentInteraction ? { excludeFromPickingClone: true, supportPrimitiveType: 'shaft' } : { supportPrimitiveType: 'shaft' }}
+            >
                 <cylinderGeometry args={[visualRadiusEnd, visualRadiusStart, 1, radialSegments]} />
                 <meshStandardMaterial 
                     color={finalColor} 

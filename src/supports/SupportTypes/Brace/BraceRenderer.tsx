@@ -1,13 +1,16 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
+import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import type { Brace, Knot } from '../../types';
 import { useHighlight } from '../../interaction/useHighlight';
 import { handleSupportClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
+import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { ShaftRenderer } from '../../SupportPrimitives/Shaft/ShaftRenderer';
 import { InstancedShaftGroup, type InstancedShaft } from '../../SupportPrimitives/Shaft/InstancedShaftGroup';
 import { BezierRenderer } from '../../Renderers/BezierRenderer';
-import { setSelectedId } from '../../state';
+import { branchPlacementStore } from '../Branch/branchPlacementState';
 
 const DEBUG_SECTION_COLORS: Record<string, string> = {
     initial: '#00ff00',
@@ -32,6 +35,15 @@ interface BraceRendererProps {
     selectedColor?: string;
 }
 
+interface BraceRendererClickEvent {
+    point?: { x: number; y: number; z: number };
+    nativeEvent?: {
+        stopPropagation?: () => void;
+        stopImmediatePropagation?: () => void;
+    };
+    stopPropagation: () => void;
+}
+
 export const BraceRenderer = React.memo(function BraceRenderer({
     brace,
     startKnot,
@@ -46,11 +58,12 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     deferInteractionToSceneBatch = false,
     debugSectionColors = false,
     baseColor = '#ff8800',
-    hoverColor,
-    selectedColor = '#80fffd',
+    hoverColor = '#66e0ff',
+    selectedColor = '#66e0ff',
 }: BraceRendererProps) {
+    const { getHotkey } = useHotkeyConfig();
+    const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
     const segmentId = `braceSegment:${brace.id}`;
-
     const debugColor = debugSectionColors && brace.debugSection
         ? DEBUG_SECTION_COLORS[brace.debugSection] ?? baseColor
         : null;
@@ -86,13 +99,14 @@ export const BraceRenderer = React.memo(function BraceRenderer({
         }];
     }, [isSelected, isBezierBrace, deferStraightShaftToSceneBatch, segmentId, startKnot.pos, endKnot.pos, uniformBraceDiameter]);
 
-    const handleClick = (e: any) => {
-        // Alt+click should behave like a shaft click for placement tools (Brace/Branch/etc.)
-        if (e?.nativeEvent?.altKey || e?.altKey) {
+    const handleClick = (e: BraceRendererClickEvent) => {
+        const branchFamilyHeld = branchPlacementStore.getSnapshot().altActive
+            || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e));
+        if (branchFamilyHeld) {
             e.stopPropagation();
             if (e.nativeEvent) {
-                e.nativeEvent.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation();
+                e.nativeEvent.stopPropagation?.();
+                e.nativeEvent.stopImmediatePropagation?.();
             }
 
             window.dispatchEvent(new CustomEvent('shaft-click', {
@@ -110,10 +124,10 @@ export const BraceRenderer = React.memo(function BraceRenderer({
             if (!isInteractable) return;
             e.stopPropagation();
             if (e.nativeEvent) {
-                e.nativeEvent.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation();
+                e.nativeEvent.stopPropagation?.();
+                e.nativeEvent.stopImmediatePropagation?.();
             }
-            setSelectedId(segmentId);
+            selectPrimitiveById(segmentId);
             return;
         }
 
@@ -132,7 +146,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
         <group
             onClick={handleClick}
         >
-            <group ref={pickRef as any}>
+            <group ref={pickRef}>
                 <group>
                     <InstancedShaftGroup
                         shafts={batchedStraightShafts}
@@ -157,7 +171,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
                             isSelected={false}
-                            onClick={() => setSelectedId(segmentId)}
+                            onClick={() => selectPrimitiveById(segmentId)}
                         />
                     ) : isSelected ? (
                         <ShaftRenderer
@@ -173,7 +187,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
                             isSelected={false}
-                            onClick={() => setSelectedId(segmentId)}
+                            onClick={() => selectPrimitiveById(segmentId)}
                         />
                     ) : null}
                 </group>

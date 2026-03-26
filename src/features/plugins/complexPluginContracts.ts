@@ -63,6 +63,11 @@ export type PluginNetworkUiAdapterContract = {
   pluginId: string;
   displayName: string;
   operationNamespace: string;
+  /**
+   * Whether this backend exposes on-device remote material/profile listing and editing.
+   * Defaults to true for existing backends when omitted.
+   */
+  supportsRemoteMaterialProfiles?: boolean;
   operations: {
     connect: string;
     discover: string;
@@ -95,6 +100,21 @@ export type PluginMonitoringWebcamInfoContract = {
   message: string;
 };
 
+export type PluginMonitoringUiPolicy = {
+  /** How long the monitor can keep showing stale online state after the last successful status poll. */
+  busyResponseGraceMs?: number;
+  /** How many inconclusive reachability polls are allowed before the UI treats a device as offline. */
+  inconclusiveReachabilityMaxPolls?: number;
+  /** Whether the UI should surface a manual stale-webcam-stream reset action. */
+  supportsWebcamStreamSlotReset?: boolean;
+  /** How many consecutive webcam failures should trigger a cooldown. */
+  webcamMaxConsecutiveTimeouts?: number;
+  /** Cooldown after repeated webcam timeouts. */
+  webcamTimeoutCooldownMs?: number;
+  /** Cooldown after an immediate webcam request failure. */
+  webcamFailureCooldownMs?: number;
+};
+
 export type PluginMonitoringUiAdapterContract = {
   mode: string;
   pluginId: string | null;
@@ -103,6 +123,10 @@ export type PluginMonitoringUiAdapterContract = {
   operations: {
     status: string;
     webcamInfo: string;
+    webcamEnable?: string;
+    webcamDisable?: string;
+    timelapseEnable?: string;
+    timelapseDisable?: string;
     platesList: string;
     start: string;
     deletePlate: string;
@@ -113,6 +137,7 @@ export type PluginMonitoringUiAdapterContract = {
   } | null;
   parseStatusPayload: (payload: unknown, contextKey?: string) => PluginMonitoringSnapshotContract;
   parseWebcamInfoPayload: (payload: unknown, host: string, port: number) => PluginMonitoringWebcamInfoContract;
+  getMonitoringUiPolicy?: () => PluginMonitoringUiPolicy;
 };
 
 export type PluginNetworkOperationHandlerContract = (
@@ -126,10 +151,114 @@ export type PluginSlicingFormatDefinitionContract = {
   displayName: string;
   ownership: 'core' | 'plugin';
   pluginId?: string;
+  formatVersions?: Array<{
+    value: string;
+    label: string;
+    isDefault?: boolean;
+  }>;
+  settingsModes?: Array<{
+    value: string;
+    label: string;
+    isDefault?: boolean;
+  }>;
   rustModulePath: string;
   wasmExportName: string;
   notes?: string;
 };
+
+export type LocalMaterialFieldKind = 'number' | 'integer' | 'text' | 'boolean' | 'select';
+
+export type LocalMaterialFieldOption = {
+  value: string;
+  label: string;
+};
+
+export type LocalMaterialTabSchema = {
+  id: string;
+  title: string;
+  order?: number;
+  description?: string;
+};
+
+export type LocalMaterialSectionSchema = {
+  id: string;
+  title: string;
+  tabId?: string;
+  order?: number;
+  description?: string;
+};
+
+export type LocalMaterialCardSchema = {
+  id: string;
+  title: string;
+  tabId?: string;
+  sectionId?: string;
+  order?: number;
+  description?: string;
+};
+
+export type LocalMaterialFieldPlacement = {
+  /** Preferred tab target for this field (e.g. basic, advanced, custom). */
+  tabId?: string;
+  /** Optional section grouping under a tab. */
+  sectionId?: string;
+  /** Optional card grouping within a section/tab (e.g. metadata, print-settings). */
+  cardId?: string;
+  /** Render order within the destination group. */
+  order?: number;
+};
+
+/**
+ * Declarative local material field schema for file-format-specific settings.
+ *
+ * These fields are intended for local export profiles (not remote printer APIs)
+ * and can be surfaced by UI based on selected output format/plugin.
+ */
+export type LocalMaterialFieldSchema = {
+  key: string;
+  label: string;
+  kind: LocalMaterialFieldKind;
+  defaultValue: number | string | boolean;
+  /** Optional short tag rendered by the UI as an inline chip (e.g. Fast/Slow). */
+  tag?: string;
+  /** Optional accent color for the field chip / highlight. */
+  color?: string;
+  /** Optional key to render as a two-stage paired input row with this field. */
+  splitWithKey?: string;
+  description?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: LocalMaterialFieldOption[];
+  placement?: LocalMaterialFieldPlacement;
+  /** Optional metadata path override for serialization (dot notation). */
+  metadataPath?: string;
+};
+
+export type PluginLocalMaterialSettingsAdapterContract = {
+  outputFormat: string;
+  displayName?: string;
+  /** When true, plugin-defined material fields replace stock local material fields in the UI. */
+  replacesDefaultMaterialSettings?: boolean;
+  tabs?: LocalMaterialTabSchema[];
+  sections?: LocalMaterialSectionSchema[];
+  cards?: LocalMaterialCardSchema[];
+  fields: LocalMaterialFieldSchema[];
+};
+
+/**
+ * Optional mode-indexed local material settings contract.
+ *
+ * Example:
+ * {
+ *   '.ctb': {
+ *     simple: { ...adapter },
+ *     twostage: { ...adapter }
+ *   }
+ * }
+ */
+export type PluginLocalMaterialSettingsByModeContract =
+  Record<string, Record<string, PluginLocalMaterialSettingsAdapterContract>>;
 
 export type ComplexPluginManifestReference = {
   id: string;
@@ -159,4 +288,6 @@ export type ComplexPluginDefinition = {
   monitoringAdaptersByMode?: Record<string, PluginMonitoringUiAdapterContract>;
   networkOperationHandler?: PluginNetworkOperationHandlerContract;
   slicingFormatsByOutput?: Record<string, PluginSlicingFormatDefinitionContract>;
+  localMaterialSettingsByOutput?: Record<string, PluginLocalMaterialSettingsAdapterContract>;
+  localMaterialSettingsByOutputAndMode?: PluginLocalMaterialSettingsByModeContract;
 };

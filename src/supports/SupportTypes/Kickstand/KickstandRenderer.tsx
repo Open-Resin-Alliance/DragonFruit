@@ -2,7 +2,7 @@ import React from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Knot, Roots } from '../../types';
-import { setSelectedId } from '../../state';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { JointRenderer } from '../../SupportPrimitives/Joint/JointRenderer';
@@ -124,7 +124,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={segmentSelected}
-                    onClick={() => setSelectedId(segment.id)}
+                    onClick={() => selectPrimitiveById(segment.id)}
                 />,
             );
         } else if (!deferStraightShaftsToSceneBatch || isSelected) {
@@ -143,7 +143,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
                     isSelected={segmentSelected}
-                    onClick={() => setSelectedId(segment.id)}
+                    onClick={() => selectPrimitiveById(segment.id)}
                 />,
             );
         }

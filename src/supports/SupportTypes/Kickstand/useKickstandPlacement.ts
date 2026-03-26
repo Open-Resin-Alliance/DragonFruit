@@ -3,22 +3,20 @@ import { useInteractionStatus } from '../../interaction/useInteractionStatus';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { matchesConfiguredHotkeyDown, matchesConfiguredHotkeyUp } from '@/hotkeys/hotkeyConfig';
 import { kickstandPlacementStore, useKickstandPlacementState } from './kickstandPlacementState';
+import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 
 export function useKickstandPlacement() {
     const { getHotkey } = useHotkeyConfig();
     const binding = getHotkey('SUPPORTS', 'KICKSTAND_PLACEMENT');
-    const KICKSTAND_KEY = binding.key;
-    const KICKSTAND_MODIFIER = binding.modifier;
 
     const { isGizmoActive } = useInteractionStatus();
     const state = useKickstandPlacementState();
 
     useEffect(() => {
+        const modifierResolvable = canResolveSupportPlacementBindingFromModifierState(binding);
+
         const down = (e: KeyboardEvent) => {
-            const matches = matchesConfiguredHotkeyDown(e, {
-                key: KICKSTAND_KEY,
-                modifier: KICKSTAND_MODIFIER,
-            });
+            const matches = matchesConfiguredHotkeyDown(e, binding);
 
             if (matches) {
                 e.preventDefault();
@@ -27,10 +25,7 @@ export function useKickstandPlacement() {
         };
 
         const up = (e: KeyboardEvent) => {
-            const matches = matchesConfiguredHotkeyUp(e, {
-                key: KICKSTAND_KEY,
-                modifier: KICKSTAND_MODIFIER,
-            });
+            const matches = matchesConfiguredHotkeyUp(e, binding);
 
             if (matches) {
                 e.preventDefault();
@@ -44,7 +39,8 @@ export function useKickstandPlacement() {
 
         const pointerMove = (e: PointerEvent) => {
             const snapshot = kickstandPlacementStore.getSnapshot();
-            if (snapshot.hotkeyActive && !e.ctrlKey) {
+            const bindingHeld = isSupportPlacementBindingSatisfiedByModifierState(binding, getSupportPlacementModifierState(e));
+            if (modifierResolvable && snapshot.hotkeyActive && !bindingHeld) {
                 kickstandPlacementStore.setHotkeyActive(false);
             }
         };
@@ -62,7 +58,7 @@ export function useKickstandPlacement() {
             window.removeEventListener('blur', blur);
             window.removeEventListener('pointermove', pointerMove, true);
         };
-    }, [KICKSTAND_KEY, KICKSTAND_MODIFIER]);
+    }, [binding]);
 
     useEffect(() => {
         if (isGizmoActive && state.hotkeyActive) {

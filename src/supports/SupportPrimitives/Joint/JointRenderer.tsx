@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { Joint } from '../../types';
 import { usePicking } from '@/components/picking';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
-import { subscribe, getSnapshot, setSelectedId } from '../../state';
+import { subscribe, getSnapshot } from '../../state';
 import { handleJointClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
 
 interface JointRendererProps {
@@ -45,6 +46,7 @@ export function JointRenderer({
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
+    const [pointerHoverActive, setPointerHoverActive] = useState(false);
 
     // State Subscription
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -86,13 +88,26 @@ export function JointRenderer({
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
-    const isHovered = isTopPickedJoint && !isSelected;
+    const isHovered = (isTopPickedJoint || pointerHoverActive) && !isSelected;
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
-    const displayColor = isSelected ? '#1a75ff' : (isParentSelected ? '#888888' : propColor);
+    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#888888' : propColor));
     const displayEmissive = isHovered ? '#ffffff' : propEmissive;
     const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
+
+    const isPointerOverThisJoint = (e: any): boolean => {
+        if (!groupRef.current) return false;
+        const intersections = Array.isArray(e?.intersections) ? e.intersections : [];
+        for (const intersection of intersections) {
+            let current = (intersection as { object?: THREE.Object3D | null })?.object ?? null;
+            while (current) {
+                if (current === groupRef.current) return true;
+                current = current.parent;
+            }
+        }
+        return false;
+    };
 
     const handleClick = (e: any) => {
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
@@ -107,7 +122,8 @@ export function JointRenderer({
             emitImmediateModelHover(null);
         }
 
-        if (!isTopPickedJoint) return;
+        const pointerOverJoint = isPointerOverThisJoint(e);
+        if (!pointerOverJoint || !isParentSelected) return;
         handleJointClick(e, joint.id, !!isInteractable, isParentSelected, isSelected, (id) => {
             if (onSelect) onSelect(id);
             if (onClick) onClick(e);
@@ -130,13 +146,14 @@ export function JointRenderer({
 
         // Only allow left-click (button 0) for dragging
         if (e.button !== 0) return;
-        if (!isParentSelected || !isInteractable || !isTopPickedJoint) return;
+        const pointerOverJoint = isPointerOverThisJoint(e);
+        if (!isParentSelected || !isInteractable || !pointerOverJoint) return;
         
         e.stopPropagation();
         
         // Select this joint if not already selected
         if (!isSelected) {
-            setSelectedId(joint.id);
+            selectPrimitiveById(joint.id);
         }
         
         // Start drag operation
@@ -164,6 +181,7 @@ export function JointRenderer({
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));
+            setPointerHoverActive((prev) => (prev ? false : prev));
             emitImmediateModelHover(frontModelId);
             return;
         }
@@ -172,36 +190,47 @@ export function JointRenderer({
             setFrontBlockingModelId(null);
         }
         emitImmediateModelHover(null);
+
+        const pointerOverJoint = isPointerOverThisJoint(e);
+        if (!pointerOverJoint || !isParentSelected) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
+        if (isParentSelected && isInteractable) {
+            setPointerHoverActive((prev) => (prev ? prev : true));
+        }
     };
 
     const handlePointerLeave = () => {
         if (frontBlockingModelId !== null) {
             setFrontBlockingModelId(null);
         }
+        setPointerHoverActive((prev) => (prev ? false : prev));
         emitImmediateModelHover(null);
         document.body.style.cursor = '';
     };
     
-    // Only use expanded hitbox when parent is selected (editable mode)
-    const hitboxRadius = isParentSelected ? radius * 2.5 : radius;
+    const hitboxRadius = isParentSelected ? radius * 1.15 : radius;
 
     return (
         <group 
             ref={groupRef}
             position={[joint.pos.x, joint.pos.y, joint.pos.z]}
+            userData={{ supportPrimitiveType: 'joint' }}
             onClick={handleClick}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerLeave={handlePointerLeave}
         >
             {/* Hitbox Mesh - Only expanded when parent is selected */}
-            <mesh raycast={raycast} userData={{ excludeFromPickingClone: true }}>
+            <mesh raycast={raycast} userData={{ supportPrimitiveType: 'joint' }}>
                 <sphereGeometry args={[hitboxRadius, 16, 12]} />
                 <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
 
             {/* Visual Mesh - Purely display */}
-            <mesh raycast={raycast}>
+            <mesh raycast={raycast} userData={{ supportPrimitiveType: 'joint' }}>
                 <sphereGeometry args={[radius, 16, 12]} />
                 <meshStandardMaterial 
                     color={displayColor} 

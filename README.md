@@ -39,6 +39,11 @@ DragonFruit currently includes a growing set of capabilities for resin 3D printi
 
 To get started with DragonFruit, follow one of these variants depending on your workflow.
 
+### Submodule note (plugin development)
+
+DragonFruit supports complex plugins that can be sourced as Git submodules (for example `plugins/ctb`).
+If your local clone is missing plugin folders, initialize and update repository submodules before running generation/build checks.
+
 ### Variant 1: Frontend Development (Next.js)
 
 For UI and interaction development only (without full desktop packaging):

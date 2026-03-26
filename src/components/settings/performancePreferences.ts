@@ -1,6 +1,6 @@
 export type SlicingComputeBackendPreference = 'auto' | 'cpu' | 'gpu';
 export type SlicingCpuProfile = 'balanced' | 'max';
-export type PngCompressionStrategy = 'fastest' | 'balanced' | 'smallest' | 'optimal';
+export type PngCompressionStrategy = 'auto' | 'fastest' | 'balanced' | 'smallest' | 'optimal';
 
 export type SlicingPerformanceSettings = {
   computeBackend: SlicingComputeBackendPreference;
@@ -15,7 +15,7 @@ const SLICING_PERFORMANCE_SETTINGS_EVENT = 'app-slicing-performance-settings-cha
 export const DEFAULT_SLICING_PERFORMANCE_SETTINGS: SlicingPerformanceSettings = {
   computeBackend: 'auto',
   cpuProfile: 'max',
-  pngCompressionStrategy: 'balanced',
+  pngCompressionStrategy: 'auto',
   bvhAccelerationEnabled: true,
 };
 
@@ -33,12 +33,13 @@ export function normalizeSlicingPerformanceSettings(input: unknown): SlicingPerf
     candidate.cpuProfile === 'balanced' ? 'balanced' : 'max';
 
   const pngCompressionStrategy: PngCompressionStrategy =
+    candidate.pngCompressionStrategy === 'auto' ||
     candidate.pngCompressionStrategy === 'fastest' ||
     candidate.pngCompressionStrategy === 'balanced' ||
     candidate.pngCompressionStrategy === 'smallest' ||
     candidate.pngCompressionStrategy === 'optimal'
       ? candidate.pngCompressionStrategy
-      : 'balanced';
+      : 'auto';
 
   const bvhAccelerationEnabled = candidate.bvhAccelerationEnabled !== false;
 

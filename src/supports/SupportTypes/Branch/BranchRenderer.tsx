@@ -10,9 +10,10 @@ import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimit
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDragHit, type ContactDiskDragSession } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
-import { getSnapshot, setSelectedId, subscribe, updateBranch } from '../../state';
+import { getSnapshot, subscribe, updateBranch } from '../../state';
 
 interface BranchRendererProps {
   branch: Branch;
@@ -75,7 +76,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
 
   // Handle Click
   const handleClick = (e: any) => {
-    if (!isPickingHovered) return;
+    if (!isPickingHovered && !isSelected) return;
     handleSupportClick(e, branch.id, !!isInteractable);
   };
 
@@ -173,7 +174,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
-          onClick={() => setSelectedId(seg.id)}
+          onClick={() => selectPrimitiveById(seg.id)}
         />
       );
     } else if (!deferStraightShaftsToSceneBatch || isSelected) {
@@ -190,7 +191,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
           isSelected={isSegSelected}
-          onClick={() => setSelectedId(seg.id)}
+          onClick={() => selectPrimitiveById(seg.id)}
         />
       );
     }
