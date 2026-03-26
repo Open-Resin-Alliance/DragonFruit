@@ -998,6 +998,8 @@ export default function Home() {
   const printingMonitorWebcamReadinessTimeoutRef = React.useRef<number | null>(null);
   const printingMonitorStartFocusDeviceIdRef = React.useRef<string | null>(null);
   const printingMonitorRecentPlatesRequestIdRef = React.useRef(0);
+  const printingMonitorRecentPlatesRef = React.useRef<PrintingMonitorRecentPlate[]>([]);
+  const printingMonitorSelectedPlateIdRef = React.useRef<number | null>(null);
   const printingMonitorRecentPlatesCacheRef = React.useRef<Map<string, {
     plates: PrintingMonitorRecentPlate[];
     selectedPlateId: number | null;
@@ -3819,6 +3821,14 @@ export default function Home() {
   }, [hasMonitorSelectableTarget, printingMonitoringAdapter]);
 
   React.useEffect(() => {
+    printingMonitorRecentPlatesRef.current = printingMonitorRecentPlates;
+  }, [printingMonitorRecentPlates]);
+
+  React.useEffect(() => {
+    printingMonitorSelectedPlateIdRef.current = printingMonitorSelectedPlateId;
+  }, [printingMonitorSelectedPlateId]);
+
+  React.useEffect(() => {
     if (!printingMonitorModalOpen) return;
 
     setPrintingMonitorNowEpochMs(Date.now());
@@ -4595,8 +4605,8 @@ export default function Home() {
       if (printingMonitorRecentPlatesCacheKey) {
         const cached = printingMonitorRecentPlatesCacheRef.current.get(printingMonitorRecentPlatesCacheKey);
         printingMonitorRecentPlatesCacheRef.current.set(printingMonitorRecentPlatesCacheKey, {
-          plates: cached?.plates ?? printingMonitorRecentPlates,
-          selectedPlateId: cached?.selectedPlateId ?? printingMonitorSelectedPlateId,
+          plates: cached?.plates ?? printingMonitorRecentPlatesRef.current,
+          selectedPlateId: cached?.selectedPlateId ?? printingMonitorSelectedPlateIdRef.current,
           error: message,
         });
       }
@@ -4620,9 +4630,7 @@ export default function Home() {
     printingMonitorModalOpen,
     printingMonitorPlateId,
     printingMonitorPlatesStoragePath,
-    printingMonitorRecentPlates,
     printingMonitorRecentPlatesCacheKey,
-    printingMonitorSelectedPlateId,
     printingMonitoringAdapter,
   ]);
 
@@ -4667,19 +4675,7 @@ export default function Home() {
       return;
     }
 
-    let cancelled = false;
-
     void refreshPrintingMonitorRecentPlates();
-
-    const intervalId = window.setInterval(() => {
-      if (cancelled) return;
-      void refreshPrintingMonitorRecentPlates();
-    }, 15_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
   }, [printingMonitorModalOpen, refreshPrintingMonitorRecentPlates]);
 
   React.useLayoutEffect(() => {
@@ -13246,10 +13242,27 @@ export default function Home() {
                               </div>
                             </div>
                           ) : (
-                            <div className="flex h-full w-full items-center justify-center px-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                              {isPrintingMonitorRecentPlatesLoading
-                                ? 'Loading recent print files…'
-                                : (printingMonitorRecentPlatesError ?? (printingMonitorHasActivePrint ? 'No print thumbnail available yet.' : 'No active print.'))}
+                            <div className="flex h-full w-full items-center justify-center px-3 py-3 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                              {isPrintingMonitorRecentPlatesLoading ? (
+                                'Loading recent print files…'
+                              ) : printingMonitorRecentPlatesError ? (
+                                printingMonitorRecentPlatesError
+                              ) : (
+                                <div className="flex flex-col items-center gap-2 text-center">
+                                  <span className="text-[11px] font-semibold" style={{ color: 'var(--text-strong)' }}>No Files Found</span>
+                                  <button
+                                    type="button"
+                                    className="ui-button ui-button-secondary !h-8 !px-3 !py-0 !text-[11px] !font-semibold inline-flex items-center justify-center gap-1"
+                                    onClick={() => {
+                                      void refreshPrintingMonitorRecentPlates();
+                                    }}
+                                    disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
+                                  >
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                    Refresh
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
