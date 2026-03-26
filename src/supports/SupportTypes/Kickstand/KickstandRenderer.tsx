@@ -165,6 +165,21 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
             );
         }
 
+        if (isSelected && index === 0 && segment.bottomJoint) {
+            joints.push(
+                <JointRenderer
+                    key={`joint-${segment.bottomJoint.id}`}
+                    joint={segment.bottomJoint}
+                    color={visuals.color}
+                    emissive={visuals.emissive}
+                    emissiveIntensity={visuals.emissiveIntensity}
+                    selectedColor={visuals.selectedColor}
+                    isInteractable={isInteractable}
+                    isParentSelected={isSelected}
+                />,
+            );
+        }
+
         currentStart = endPoint;
     });
 

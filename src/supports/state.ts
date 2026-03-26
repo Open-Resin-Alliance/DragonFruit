@@ -5,7 +5,7 @@ import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
+import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, setKickstandSnapshot, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -3045,6 +3045,18 @@ export function removeKnotById(knotId: string): Knot | null {
 export function updateKnot(knot: Knot) {
     const existing = state.knots[knot.id];
     if (!existing) return;
+
+    const kickstandState = getKickstandSnapshot();
+    const hostKickstand = Object.values(kickstandState.kickstands).find((kickstand) => kickstand.hostKnotId === knot.id);
+    if (hostKickstand) {
+        setKickstandSnapshot({
+            ...kickstandState,
+            knots: {
+                ...kickstandState.knots,
+                [knot.id]: knot,
+            },
+        });
+    }
 
     const baseKnots = { ...state.knots, [knot.id]: knot };
 
