@@ -1,0 +1,43 @@
+[package]
+name = "dragonfruit-islands"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "dragonfruit_islands"
+path = "src/lib.rs"
+
+[dependencies]
+dragonfruit-slicer-v3 = { path = "../dragonfruit-slicer-v3" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1.10"
+indexmap = "2"
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "island_harness"
+path = "src/bin/island_harness.rs"
+
+[[bin]]
+name = "island_diff"
+path = "src/bin/island_diff.rs"
+
+[[bin]]
+name = "island_bench"
+path = "src/bin/island_bench.rs"
+
+[[bin]]
+name = "island_stl_bench"
+path = "src/bin/island_stl_bench.rs"
+
+[[bin]]
+name = "island_ipc_debug"
+path = "src/bin/island_ipc_debug.rs"
+
+[[bin]]
+name = "island_scan_cli"
+path = "src/bin/island_scan_cli.rs"
+
+[dev-dependencies]
+proptest = "1.9.0"

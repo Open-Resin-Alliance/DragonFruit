@@ -33,8 +33,11 @@
       {
         "label": "main",
         "title": "DragonFruit",
-        "width": 1920,
-        "height": 1080,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "maximized": true,
         "decorations": false,
         "resizable": true
       }
