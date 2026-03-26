@@ -21,6 +21,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use tungstenite::http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL};
 use tungstenite::handshake::server::{Request, Response};
 use tungstenite::{accept_hdr, Message};
@@ -32,6 +34,18 @@ const DEFAULT_LEASE_TTL_MS: u64 = 60_000;
 const DEFAULT_PORT_BASE_MIN: u16 = 5000;
 const DEFAULT_PORT_BASE_MAX: u16 = 64998;
 const DEFAULT_LEASE_STORE_FILENAME: &str = "dragonfruit-rtsp-relay-leases.json";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Applies platform-specific process options for background ffmpeg tasks.
+#[cfg(windows)]
+fn configure_background_process(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+/// Applies platform-specific process options for background ffmpeg tasks.
+#[cfg(not(windows))]
+fn configure_background_process(_command: &mut Command) {}
 
 /// Persisted per-URL reclaim metadata used to stabilize reconnect behavior.
 #[derive(Clone, Serialize, serde::Deserialize)]
@@ -287,6 +301,7 @@ impl StreamRelay {
             .arg("-")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        configure_background_process(&mut command);
 
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -872,10 +887,11 @@ fn ffmpeg_binary_is_runnable(binary: &str) -> bool {
         return false;
     }
 
-    Command::new(trimmed)
+    let mut command = Command::new(trimmed);
+    command
         .arg("-version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
+        .stderr(Stdio::null());
+    configure_background_process(&mut command);
+    command.status().is_ok()
 }
