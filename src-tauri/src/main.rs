@@ -644,6 +644,7 @@ async fn run_island_scan_native(
                     let _ = win_scan.emit("islandscan://progress", SliceProgressPayload {
                         done: layer.min(total_layers),
                         total: total_layers,
+                        phase: "Scanning".to_string(),
                     });
                 }),
             )
