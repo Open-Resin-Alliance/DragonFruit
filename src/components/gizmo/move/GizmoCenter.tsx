@@ -37,12 +37,10 @@ export function GizmoCenter({
   onPointerEnter,
   onPointerLeave,
 }: GizmoCenterProps) {
-  const MIN_DRAG_DELTA_SQ = 1e-10;
+  const MIN_DRAG_DELTA_SQ = 1e-12;
   const [isDragging, setIsDragging] = useState(false);
   const lastPointRef = useRef<THREE.Vector3 | null>(null);
   const dragPlane = useRef<THREE.Plane | null>(null);
-  const pendingPointerRef = useRef<{ x: number; y: number } | null>(null);
-  const rafIdRef = useRef<number | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const ndcRef = useRef(new THREE.Vector2());
   const intersectionRef = useRef(new THREE.Vector3());
@@ -155,13 +153,10 @@ export function GizmoCenter({
   useEffect(() => {
     if (!isDragging) return;
 
-    const processPendingPointerMove = () => {
-      rafIdRef.current = null;
-      const pending = pendingPointerRef.current;
-      pendingPointerRef.current = null;
-      if (!pending || !lastPointRef.current) return;
+    const handleGlobalPointerMove = (e: PointerEvent) => {
+      if (!lastPointRef.current) return;
 
-      const worldPoint = getWorldPointFromMouse(pending.x, pending.y);
+      const worldPoint = getWorldPointFromMouse(e.clientX, e.clientY);
       if (!worldPoint || !lastPointRef.current) return;
 
       const delta = deltaRef.current.copy(worldPoint).sub(lastPointRef.current);
@@ -171,27 +166,9 @@ export function GizmoCenter({
 
       onDrag(delta);
       lastPointRef.current.copy(worldPoint);
-
-      if (pendingPointerRef.current && rafIdRef.current === null) {
-        rafIdRef.current = window.requestAnimationFrame(processPendingPointerMove);
-      }
-    };
-
-    const handleGlobalPointerMove = (e: PointerEvent) => {
-      if (!lastPointRef.current) return;
-
-      pendingPointerRef.current = { x: e.clientX, y: e.clientY };
-      if (rafIdRef.current === null) {
-        rafIdRef.current = window.requestAnimationFrame(processPendingPointerMove);
-      }
     };
 
     const handleGlobalPointerUp = () => {
-      if (rafIdRef.current !== null) {
-        window.cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      pendingPointerRef.current = null;
       setIsDragging(false);
       lastPointRef.current = null;
       dragPlane.current = null;
@@ -202,11 +179,6 @@ export function GizmoCenter({
     window.addEventListener('pointerup', handleGlobalPointerUp);
     
     return () => {
-      if (rafIdRef.current !== null) {
-        window.cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      pendingPointerRef.current = null;
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };

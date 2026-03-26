@@ -5,7 +5,7 @@ import { usePicking } from '@/components/picking';
 import { getTrunks, getBranches, updateTrunk, updateBranch, getSelectedId, getTrunkById, getRootById, getBranchById, getKnotById, setInteractionWarning } from '../../state';
 import { moveJoint } from './jointUtils';
 import { getTrunkSegmentEndpoints } from '../Knot/knotUtils';
-import { Vec3, Trunk, Branch } from '../../types';
+import { Vec3, Trunk, Branch, Roots } from '../../types';
 import { getKickstandSnapshot, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushHistory } from '@/history/historyStore';
@@ -19,7 +19,7 @@ import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
  * It monitors the picking state and handles drag operations for any 'joint' object.
  */
 export function useJointInteraction(enabled: boolean = true) {
-    const MIN_DRAG_DELTA_SQ = 1e-4; // 0.01mm positional epsilon
+    const MIN_DRAG_DELTA_SQ = 1e-8; // 0.0001mm positional epsilon (noise-only)
     const WARNING_DISTANCE_THRESHOLD = 0.05; // mm
     const WARNING_EVAL_INTERVAL_MS = 48; // ~20Hz warning updates during drag
 
@@ -30,25 +30,21 @@ export function useJointInteraction(enabled: boolean = true) {
     const activeTrunkId = useRef<string | null>(null);
     const activeBranchId = useRef<string | null>(null);
     const activeKickstandId = useRef<string | null>(null);
-    const activeMesh = useRef<THREE.Mesh | undefined>(undefined); // Cache the mesh during drag
     const dragPlane = useRef<THREE.Plane>(new THREE.Plane());
     const dragOffset = useRef<THREE.Vector3>(new THREE.Vector3());
     const lastDragPos = useRef<Vec3 | null>(null);
     const forceEndDragRef = useRef(false);
     const initialTrunkSnapshot = useRef<Trunk | null>(null);
-    const initialBranchSnapshot = useRef<Branch | null>(null);
-    const initialKickstandSnapshot = useRef<Kickstand | null>(null);
     const lastAppliedDragPosRef = useRef<THREE.Vector3 | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
+    const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'kickstand'; supportId: string }>>(new Map());
+    const activeConstraintRootRef = useRef<Roots | undefined>(undefined);
+    const activeConstraintStartRef = useRef<Vec3 | undefined>(undefined);
 
     const savedControlsEnabledRef = useRef<boolean | null>(null);
 
-    const { scene } = useThree(); // Get scene for mesh lookup
-
     const cloneTrunk = (trunk: Trunk): Trunk => JSON.parse(JSON.stringify(trunk));
-    const cloneBranch = (branch: Branch): Branch => JSON.parse(JSON.stringify(branch));
-    const cloneKickstand = (kickstand: Kickstand): Kickstand => JSON.parse(JSON.stringify(kickstand));
 
     const applyInteractionWarning = useCallback((warning: 'SHAFT_ANGLE_TOO_FLAT' | null) => {
         if (lastWarningRef.current === warning) return;
@@ -106,17 +102,6 @@ export function useJointInteraction(enabled: boolean = true) {
         };
     }, []);
 
-    // Helper to find mesh by modelId
-    const findMesh = (modelId: string): THREE.Mesh | undefined => {
-        let found: THREE.Mesh | undefined;
-        scene.traverse((child) => {
-            if (child instanceof THREE.Mesh && child.userData.modelId === modelId) {
-                found = child;
-            }
-        });
-        return found;
-    };
-
     // Monitor drag state
     useEffect(() => {
         if (!enabled && !activeJointId.current) return;
@@ -124,8 +109,6 @@ export function useJointInteraction(enabled: boolean = true) {
         // Start Drag
         if (enabled && isDragging && hit.category === 'joint' && hit.objectId && !activeJointId.current) {
             const jointId = hit.objectId;
-            const trunks = getTrunks();
-            const branches = getBranches();
 
             // Find trunk/branch and joint
             let foundTrunk: Trunk | null = null;
@@ -133,59 +116,88 @@ export function useJointInteraction(enabled: boolean = true) {
             let foundKickstand: Kickstand | null = null;
             let foundJointPos: Vec3 | null = null;
 
-            // Search trunks first
-            for (const t of trunks) {
-                for (const s of t.segments) {
-                    if (s.topJoint?.id === jointId) {
-                        foundTrunk = t;
-                        foundJointPos = s.topJoint.pos;
-                        break;
+            const resolveJointPosFromSegments = (segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>, targetJointId: string): Vec3 | null => {
+                for (const s of segments) {
+                    if (s.topJoint?.id === targetJointId) return s.topJoint.pos;
+                    if (s.bottomJoint?.id === targetJointId) return s.bottomJoint.pos;
+                }
+                return null;
+            };
+
+            // Fast path: resolve via last-known parent cache.
+            const cachedParent = jointParentCacheRef.current.get(jointId);
+            if (cachedParent) {
+                if (cachedParent.kind === 'trunk') {
+                    const trunk = getTrunkById(cachedParent.supportId);
+                    const pos = trunk ? resolveJointPosFromSegments(trunk.segments as any[], jointId) : null;
+                    if (trunk && pos) {
+                        foundTrunk = trunk;
+                        foundJointPos = pos;
+                    } else {
+                        jointParentCacheRef.current.delete(jointId);
                     }
-                    if (s.bottomJoint?.id === jointId) {
+                } else if (cachedParent.kind === 'branch') {
+                    const branch = getBranchById(cachedParent.supportId);
+                    const pos = branch ? resolveJointPosFromSegments(branch.segments as any[], jointId) : null;
+                    if (branch && pos) {
+                        foundBranch = branch;
+                        foundJointPos = pos;
+                    } else {
+                        jointParentCacheRef.current.delete(jointId);
+                    }
+                } else {
+                    const kickstand = getKickstandSnapshot().kickstands[cachedParent.supportId];
+                    const pos = kickstand ? resolveJointPosFromSegments(kickstand.segments as any[], jointId) : null;
+                    if (kickstand && pos) {
+                        foundKickstand = kickstand;
+                        foundJointPos = pos;
+                    } else {
+                        jointParentCacheRef.current.delete(jointId);
+                    }
+                }
+            }
+
+            // Fallback path: full scan if cache miss.
+            if (!foundJointPos) {
+                const trunks = getTrunks();
+                const branches = getBranches();
+
+                // Search trunks first
+                for (const t of trunks) {
+                    const pos = resolveJointPosFromSegments(t.segments as any[], jointId);
+                    if (pos) {
                         foundTrunk = t;
-                        foundJointPos = s.bottomJoint.pos;
+                        foundJointPos = pos;
+                        jointParentCacheRef.current.set(jointId, { kind: 'trunk', supportId: t.id });
                         break;
                     }
                 }
-                if (foundTrunk) break;
-            }
 
-            // If not in trunk, search branches
-            if (!foundTrunk) {
-                for (const b of branches) {
-                    for (const s of b.segments) {
-                        if (s.topJoint?.id === jointId) {
+                // If not in trunk, search branches
+                if (!foundTrunk) {
+                    for (const b of branches) {
+                        const pos = resolveJointPosFromSegments(b.segments as any[], jointId);
+                        if (pos) {
                             foundBranch = b;
-                            foundJointPos = s.topJoint.pos;
-                            break;
-                        }
-                        if (s.bottomJoint?.id === jointId) {
-                            foundBranch = b;
-                            foundJointPos = s.bottomJoint.pos;
+                            foundJointPos = pos;
+                            jointParentCacheRef.current.set(jointId, { kind: 'branch', supportId: b.id });
                             break;
                         }
                     }
-                    if (foundBranch) break;
                 }
-            }
 
-            // If not in trunk/branch, search kickstands
-            if (!foundTrunk && !foundBranch) {
-                const kickstands = Object.values(getKickstandSnapshot().kickstands);
-                for (const kickstand of kickstands) {
-                    for (const s of kickstand.segments) {
-                        if (s.topJoint?.id === jointId) {
+                // If not in trunk/branch, search kickstands
+                if (!foundTrunk && !foundBranch) {
+                    const kickstands = Object.values(getKickstandSnapshot().kickstands);
+                    for (const kickstand of kickstands) {
+                        const pos = resolveJointPosFromSegments(kickstand.segments as any[], jointId);
+                        if (pos) {
                             foundKickstand = kickstand;
-                            foundJointPos = s.topJoint.pos;
-                            break;
-                        }
-                        if (s.bottomJoint?.id === jointId) {
-                            foundKickstand = kickstand;
-                            foundJointPos = s.bottomJoint.pos;
+                            foundJointPos = pos;
+                            jointParentCacheRef.current.set(jointId, { kind: 'kickstand', supportId: kickstand.id });
                             break;
                         }
                     }
-                    if (foundKickstand) break;
                 }
             }
 
@@ -213,16 +225,34 @@ export function useJointInteraction(enabled: boolean = true) {
 
                 if (foundTrunk) {
                     activeTrunkId.current = foundTrunk.id;
-                    activeMesh.current = findMesh(foundTrunk.modelId);
-                    initialTrunkSnapshot.current = cloneTrunk(foundTrunk);
+                    // Keep a direct immutable reference; trunk updates are copy-on-write.
+                    initialTrunkSnapshot.current = foundTrunk;
+
+                    const root = getRootById(foundTrunk.rootId) ?? undefined;
+                    activeConstraintRootRef.current = root;
+                    activeConstraintStartRef.current = undefined;
+                    if (root) {
+                        const bottomSegIndex = foundTrunk.segments.findIndex((s) => s.topJoint?.id === jointId);
+                        if (bottomSegIndex !== -1) {
+                            const bottomSeg = foundTrunk.segments[bottomSegIndex];
+                            const endpoints = getTrunkSegmentEndpoints(foundTrunk, bottomSeg, bottomSegIndex, root);
+                            activeConstraintStartRef.current = endpoints?.start;
+                        }
+                    }
                 } else if (foundBranch) {
                     activeBranchId.current = foundBranch.id;
-                    activeMesh.current = findMesh(foundBranch.modelId);
-                    initialBranchSnapshot.current = cloneBranch(foundBranch);
+                    activeConstraintRootRef.current = undefined;
+                    activeConstraintStartRef.current = getKnotById(foundBranch.parentKnotId)?.pos;
                 } else if (foundKickstand) {
                     activeKickstandId.current = foundKickstand.id;
-                    activeMesh.current = findMesh(foundKickstand.modelId);
-                    initialKickstandSnapshot.current = cloneKickstand(foundKickstand);
+                    const root = getRootById(foundKickstand.rootId) ?? undefined;
+                    activeConstraintRootRef.current = root;
+                    activeConstraintStartRef.current = undefined;
+                    if (root) {
+                        const rPos = root.transform.pos;
+                        const startZ = rPos.z + root.diskHeight + root.coneHeight;
+                        activeConstraintStartRef.current = { x: rPos.x, y: rPos.y, z: startZ };
+                    }
                 }
 
                 const jointVec = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z);
@@ -243,7 +273,7 @@ export function useJointInteraction(enabled: boolean = true) {
                     dragOffset.current.set(0, 0, 0);
                 }
 
-                console.log(`[JointInteraction] Started dragging joint ${jointId} on ${foundParent.id}`);
+                // Drag started
             }
         }
 
@@ -254,7 +284,7 @@ export function useJointInteraction(enabled: boolean = true) {
             && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current);
 
         if (shouldEndDrag) {
-            console.log(`[JointInteraction] Stopped dragging joint ${activeJointId.current}`);
+            // Drag ended
 
             // On drag end, do one collision-aware recompute so diskLengthOverride only reflects
             // the final settled joint position (avoids latching max standoff mid-drag).
@@ -262,16 +292,8 @@ export function useJointInteraction(enabled: boolean = true) {
                 if (activeTrunkId.current) {
                     const trunk = getTrunkById(activeTrunkId.current);
                     if (trunk) {
-                        const root = getRootById(trunk.rootId) ?? undefined;
-                        let contextStart: Vec3 | undefined;
-                        if (root) {
-                            const bottomSegIndex = trunk.segments.findIndex((s) => s.topJoint?.id === activeJointId.current);
-                            if (bottomSegIndex !== -1) {
-                                const bottomSeg = trunk.segments[bottomSegIndex];
-                                const endpoints = getTrunkSegmentEndpoints(trunk, bottomSeg, bottomSegIndex, root);
-                                contextStart = endpoints?.start;
-                            }
-                        }
+                        const root = activeConstraintRootRef.current ?? getRootById(trunk.rootId) ?? undefined;
+                        const contextStart = activeConstraintStartRef.current;
 
                         const resolved = moveJoint(
                             trunk,
@@ -296,8 +318,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 } else if (activeBranchId.current) {
                     const branch = getBranchById(activeBranchId.current);
                     if (branch) {
-                        const knot = getKnotById(branch.parentKnotId);
-                        const contextStart = knot?.pos;
+                        const contextStart = activeConstraintStartRef.current ?? getKnotById(branch.parentKnotId)?.pos;
                         const resolved = moveJoint(
                             branch as any,
                             activeJointIdAtEnd,
@@ -321,9 +342,9 @@ export function useJointInteraction(enabled: boolean = true) {
                 } else if (activeKickstandId.current) {
                     const kickstand = getKickstandSnapshot().kickstands[activeKickstandId.current];
                     if (kickstand) {
-                        const root = getRootById(kickstand.rootId) ?? undefined;
-                        let contextStart: Vec3 | undefined;
-                        if (root) {
+                        const root = activeConstraintRootRef.current ?? getRootById(kickstand.rootId) ?? undefined;
+                        let contextStart = activeConstraintStartRef.current;
+                        if (!contextStart && root) {
                             const rPos = root.transform.pos;
                             const startZ = rPos.z + root.diskHeight + root.coneHeight;
                             contextStart = { x: rPos.x, y: rPos.y, z: startZ };
@@ -361,13 +382,12 @@ export function useJointInteraction(enabled: boolean = true) {
             activeTrunkId.current = null;
             activeBranchId.current = null;
             activeKickstandId.current = null;
-            activeMesh.current = undefined;
             initialTrunkSnapshot.current = null;
-            initialBranchSnapshot.current = null;
-            initialKickstandSnapshot.current = null;
             forceEndDragRef.current = false;
             lastAppliedDragPosRef.current = null;
             lastWarningEvalAtRef.current = 0;
+            activeConstraintRootRef.current = undefined;
+            activeConstraintStartRef.current = undefined;
             applyInteractionWarning(null); // Clear warning on release
             lastDragPos.current = null;
 
@@ -380,7 +400,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
             setJointDragInteractionLock(false);
         }
-    }, [isDragging, hit, camera, pointer, raycaster, scene, controls, setJointDragInteractionLock, applyInteractionWarning]);
+    }, [isDragging, hit, camera, pointer, raycaster, controls, setJointDragInteractionLock, applyInteractionWarning]);
 
     // Update loop
     useFrame(() => {
@@ -407,17 +427,9 @@ export function useJointInteraction(enabled: boolean = true) {
                     // Update trunk
                     const trunk = getTrunkById(activeTrunkId.current);
                     if (trunk) {
-                        // Resolve Context for constraints
-                        const root = getRootById(trunk.rootId) ?? undefined;
-                        let contextStart: Vec3 | undefined;
-                        if (root) {
-                            const bottomSegIndex = trunk.segments.findIndex((s) => s.topJoint?.id === activeJointId.current);
-                            if (bottomSegIndex !== -1) {
-                                const bottomSeg = trunk.segments[bottomSegIndex];
-                                const endpoints = getTrunkSegmentEndpoints(trunk, bottomSeg, bottomSegIndex, root);
-                                contextStart = endpoints?.start;
-                            }
-                        }
+                        // Resolve Context for constraints (cached from drag start)
+                        const root = activeConstraintRootRef.current ?? getRootById(trunk.rootId) ?? undefined;
+                        const contextStart = activeConstraintStartRef.current;
 
                         const newTrunk = moveJoint(
                             trunk,
@@ -428,7 +440,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart
                         );
-                        updateTrunk(newTrunk);
+                        updateTrunk(newTrunk, { skipDependentGeometry: true });
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -464,14 +476,7 @@ export function useJointInteraction(enabled: boolean = true) {
                     // Update branch
                     const branch = getBranchById(activeBranchId.current);
                     if (branch) {
-                        // Resolve Context
-                        const knot = getKnotById(branch.parentKnotId);
-                        let contextStart: Vec3 | undefined;
-                        if (knot) {
-                            contextStart = knot.pos;
-                        } else {
-                            console.warn('[JointInteraction] Warning: Parent Knot not found for branch', branch.id, branch.parentKnotId);
-                        }
+                        const contextStart = activeConstraintStartRef.current ?? getKnotById(branch.parentKnotId)?.pos;
 
                         const newBranch = moveJoint(
                             branch as any,
@@ -482,7 +487,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             undefined, // No root for branch?
                             contextStart
                         ) as unknown as Branch;
-                        updateBranch(newBranch);
+                        updateBranch(newBranch, { skipDependentGeometry: true });
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -517,9 +522,9 @@ export function useJointInteraction(enabled: boolean = true) {
                 } else if (activeKickstandId.current) {
                     const kickstand = getKickstandSnapshot().kickstands[activeKickstandId.current];
                     if (kickstand) {
-                        const root = getRootById(kickstand.rootId) ?? undefined;
-                        let contextStart: Vec3 | undefined;
-                        if (root) {
+                        const root = activeConstraintRootRef.current ?? getRootById(kickstand.rootId) ?? undefined;
+                        let contextStart = activeConstraintStartRef.current;
+                        if (!contextStart && root) {
                             const rPos = root.transform.pos;
                             const startZ = rPos.z + root.diskHeight + root.coneHeight;
                             contextStart = { x: rPos.x, y: rPos.y, z: startZ };

@@ -2370,7 +2370,9 @@ export function addTrunk(trunk: Trunk) {
     notify();
 }
 
-export function updateTrunk(trunk: Trunk) {
+export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: boolean }) {
+    const skipDependentGeometry = options?.skipDependentGeometry === true;
+
     // Update trunk
     const nextTrunks = { ...state.trunks, [trunk.id]: trunk };
 
@@ -2414,10 +2416,16 @@ export function updateTrunk(trunk: Trunk) {
         }
 
         if (knotsChanged) {
-            nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-            const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-            const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-            nextKnots = braceSeg.knots;
+            if (skipDependentGeometry) {
+                // Drag-time fast path: keep knot positions responsive, defer expensive
+                // leaf/brace dependent recomputations until drag commit.
+                nextKnots = updatedKnots;
+            } else {
+                nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+                const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+                nextKnots = braceSeg.knots;
+            }
         }
     }
 
@@ -2947,7 +2955,9 @@ export function removeBranch(branchId: string): { branches: Branch[]; braces: Br
     return snapshots;
 }
 
-export function updateBranch(branch: Branch) {
+export function updateBranch(branch: Branch, options?: { skipDependentGeometry?: boolean }) {
+    const skipDependentGeometry = options?.skipDependentGeometry === true;
+
     if (!state.branches[branch.id]) return;
 
     const nextBranches = { ...state.branches, [branch.id]: branch };
@@ -2979,10 +2989,15 @@ export function updateBranch(branch: Branch) {
         }
 
         if (knotsChanged) {
-            nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
-            const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
-            const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
-            nextKnots = braceSeg.knots;
+            if (skipDependentGeometry) {
+                // Drag-time fast path: defer expensive dependent recomputations until commit.
+                nextKnots = updatedKnots;
+            } else {
+                nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
+                const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, leafCone.knots);
+                nextKnots = braceSeg.knots;
+            }
         }
     }
 

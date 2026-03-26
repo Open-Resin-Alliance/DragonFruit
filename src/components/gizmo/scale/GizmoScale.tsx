@@ -72,7 +72,6 @@ export function GizmoScale({
   const [isDragging, setIsDragging] = useState(false);
   const [isUniformScale, setIsUniformScale] = useState(false);
   const startDistance = useRef<number>(0);
-  const rafId = useRef<number | null>(null);
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -223,24 +222,15 @@ export function GizmoScale({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      // Cancel any pending animation frame
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
-      
-      // Schedule update on next frame
-      rafId.current = requestAnimationFrame(() => {
-        // Convert gizmo 3D position to screen space
-        const gizmoScreenPos = gizmoPosition.clone().project(camera);
-        const canvas = gl.domElement;
-        const rect = canvas.getBoundingClientRect();
-        const gizmoCenterX = ((gizmoScreenPos.x + 1) / 2) * rect.width + rect.left;
-        const gizmoCenterY = ((-gizmoScreenPos.y + 1) / 2) * rect.height + rect.top;
-        
-        const factor = getScaleFactor(e.clientX, e.clientY, gizmoCenterX, gizmoCenterY);
-        onDrag(factor, isUniformScale);
-        rafId.current = null;
-      });
+      // Convert gizmo 3D position to screen space
+      const gizmoScreenPos = gizmoPosition.clone().project(camera);
+      const canvas = gl.domElement;
+      const rect = canvas.getBoundingClientRect();
+      const gizmoCenterX = ((gizmoScreenPos.x + 1) / 2) * rect.width + rect.left;
+      const gizmoCenterY = ((-gizmoScreenPos.y + 1) / 2) * rect.height + rect.top;
+
+      const factor = getScaleFactor(e.clientX, e.clientY, gizmoCenterX, gizmoCenterY);
+      onDrag(factor, isUniformScale);
     };
 
     const handleGlobalPointerUp = () => {
@@ -254,9 +244,6 @@ export function GizmoScale({
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
     };
   }, [isDragging, isUniformScale, onDrag, onDragEnd, getScaleFactor, gizmoPosition, camera, gl]);
 

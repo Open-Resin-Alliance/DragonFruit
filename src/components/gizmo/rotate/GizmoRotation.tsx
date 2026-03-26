@@ -49,7 +49,6 @@ export function GizmoRotation({
   const billboardRotationRef = useRef<number>(0);
   const lastMouseAngle = useRef<number>(0);
   const shouldFlipRef = useRef(false);
-  const rafId = useRef<number | null>(null);
   const rotatingArcRef = useRef<THREE.Group>(null);
   const handleRootRef = useRef<THREE.Group>(null);
   const billboardGroupRef = useRef<THREE.Group>(null);
@@ -232,44 +231,35 @@ export function GizmoRotation({
     if (!isDragging) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
-      // Cancel any pending animation frame
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
-      
-      // Schedule update on next frame
-      rafId.current = requestAnimationFrame(() => {
-        const currentMouseAngle = getMouseAngle(e.clientX, e.clientY);
-        let deltaAngle = currentMouseAngle - lastMouseAngle.current;
-        
-        // Handle angle wrapping (crossing -π/π boundary)
-        if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
-        if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
-        
-        // X and Z axes need inverted visual feedback, Y axis is correct as-is
-        let visualDelta = (axis === 'x' || axis === 'z') ? -deltaAngle : deltaAngle;
-        let objectDelta = deltaAngle;
-        
-        // If camera has flipped to the other side, invert both visual and object rotation
-        if (shouldFlipRef.current) {
-          visualDelta = -visualDelta;
-          objectDelta = -objectDelta;
-        }
-        
-        // Flip both visual and object to match mouse direction (all axes)
+      const currentMouseAngle = getMouseAngle(e.clientX, e.clientY);
+      let deltaAngle = currentMouseAngle - lastMouseAngle.current;
+
+      // Handle angle wrapping (crossing -π/π boundary)
+      if (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
+      if (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
+
+      // X and Z axes need inverted visual feedback, Y axis is correct as-is
+      let visualDelta = (axis === 'x' || axis === 'z') ? -deltaAngle : deltaAngle;
+      let objectDelta = deltaAngle;
+
+      // If camera has flipped to the other side, invert both visual and object rotation
+      if (shouldFlipRef.current) {
         visualDelta = -visualDelta;
         objectDelta = -objectDelta;
-        
-        // Update handle angle for visual feedback (ref-based)
-        handleAngleRef.current += visualDelta;
-        targetHandleAngleRef.current = handleAngleRef.current;
-        
-        // Send rotation delta to parent (object rotation)
-        onDrag(objectDelta);
-        
-        lastMouseAngle.current = currentMouseAngle;
-        rafId.current = null;
-      });
+      }
+
+      // Flip both visual and object to match mouse direction (all axes)
+      visualDelta = -visualDelta;
+      objectDelta = -objectDelta;
+
+      // Update handle angle for visual feedback (ref-based)
+      handleAngleRef.current += visualDelta;
+      targetHandleAngleRef.current = handleAngleRef.current;
+
+      // Send rotation delta to parent (object rotation)
+      onDrag(objectDelta);
+
+      lastMouseAngle.current = currentMouseAngle;
     };
 
     const handleGlobalPointerUp = () => {
@@ -283,9 +273,6 @@ export function GizmoRotation({
     return () => {
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-      }
     };
   }, [isDragging, onDrag, onDragEnd, getMouseAngle, axis]);
 
