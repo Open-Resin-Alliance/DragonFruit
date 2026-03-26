@@ -465,10 +465,18 @@ struct IslandScanParams {
     bbox_max_z: f64,
 }
 
-fn default_connectivity() -> u8 { 4 }
-fn default_min_island_area() -> f64 { 0.01 }
-fn default_overlap_px() -> i32 { 1 }
-fn default_neighborhood_px() -> i32 { 1 }
+fn default_connectivity() -> u8 {
+    4
+}
+fn default_min_island_area() -> f64 {
+    0.01
+}
+fn default_overlap_px() -> i32 {
+    1
+}
+fn default_neighborhood_px() -> i32 {
+    1
+}
 
 /// IPC result matching the TS `ScanResults` shape so the frontend overlay/voxel
 /// rendering works unchanged.
