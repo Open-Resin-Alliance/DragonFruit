@@ -43,10 +43,17 @@ export function GizmoMove({
   onPointerEnter,
   onPointerLeave,
 }: GizmoMoveProps) {
+  const MIN_AXIS_DELTA = 1e-7;
   const [isDragging, setIsDragging] = useState(false);
   const dragPlaneRef = useRef<THREE.Plane | null>(null);
   const lastPointRef = useRef<THREE.Vector3 | null>(null);
+  const pendingPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const rafIdRef = useRef<number | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
+  const ndcRef = useRef(new THREE.Vector2());
+  const intersectionRef = useRef(new THREE.Vector3());
+  const worldDeltaRef = useRef(new THREE.Vector3());
+  const axisDeltaRef = useRef(new THREE.Vector3());
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -117,7 +124,11 @@ export function GizmoMove({
     }
 
     setIsDragging(true);
-    lastPointRef.current = initialPoint;
+    if (!lastPointRef.current) {
+      lastPointRef.current = new THREE.Vector3(initialPoint.x, initialPoint.y, initialPoint.z);
+    } else {
+      lastPointRef.current.copy(initialPoint);
+    }
   };
 
   const handlePointerEnterLocal = (e: ThreeEvent<PointerEvent>) => {
@@ -130,7 +141,7 @@ export function GizmoMove({
     onPointerLeave();
   };
 
-  const getAxisDirection = useCallback((): THREE.Vector3 => {
+  const axisDirection = useMemo(() => {
     if (axis === 'x') return new THREE.Vector3(1, 0, 0);
     if (axis === 'y') return new THREE.Vector3(0, 1, 0);
     return new THREE.Vector3(0, 0, 1);
@@ -142,13 +153,16 @@ export function GizmoMove({
     const rect = gl.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
 
-    const x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    const y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    const ndc = ndcRef.current;
+    ndc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
 
     const raycaster = raycasterRef.current;
-    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+    raycaster.setFromCamera(ndc, camera);
 
-    const intersection = new THREE.Vector3();
+    const intersection = intersectionRef.current;
     const hitPoint = raycaster.ray.intersectPlane(dragPlaneRef.current, intersection);
     if (!hitPoint) return null;
     return intersection;
@@ -167,23 +181,43 @@ export function GizmoMove({
   useEffect(() => {
     if (!isDragging) return;
 
+    const processPendingPointerMove = () => {
+      rafIdRef.current = null;
+      const pending = pendingPointerRef.current;
+      pendingPointerRef.current = null;
+      if (!pending || !lastPointRef.current) return;
+
+      const nextPoint = getWorldPointFromMouse(pending.x, pending.y);
+      if (!nextPoint || !lastPointRef.current) return;
+
+      const worldDelta = worldDeltaRef.current.copy(nextPoint).sub(lastPointRef.current);
+      const axisMagnitude = worldDelta.dot(axisDirection);
+      if (Math.abs(axisMagnitude) < MIN_AXIS_DELTA) return;
+
+      const delta = axisDeltaRef.current.copy(axisDirection).multiplyScalar(axisMagnitude);
+      onDrag(delta);
+      lastPointRef.current.copy(nextPoint);
+
+      if (pendingPointerRef.current && rafIdRef.current === null) {
+        rafIdRef.current = window.requestAnimationFrame(processPendingPointerMove);
+      }
+    };
+
     const handleGlobalPointerMove = (e: PointerEvent) => {
       if (!lastPointRef.current) return;
 
-      const nextPoint = getWorldPointFromMouse(e.clientX, e.clientY);
-      if (!nextPoint || !lastPointRef.current) return;
-
-      const worldDelta = nextPoint.clone().sub(lastPointRef.current);
-      const axisDir = getAxisDirection().normalize();
-      const axisMagnitude = worldDelta.dot(axisDir);
-      if (Math.abs(axisMagnitude) < 1e-8) return;
-
-      const delta = axisDir.multiplyScalar(axisMagnitude);
-      onDrag(delta);
-      lastPointRef.current = nextPoint;
+      pendingPointerRef.current = { x: e.clientX, y: e.clientY };
+      if (rafIdRef.current === null) {
+        rafIdRef.current = window.requestAnimationFrame(processPendingPointerMove);
+      }
     };
 
     const handleGlobalPointerUp = () => {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingPointerRef.current = null;
       setIsDragging(false);
       lastPointRef.current = null;
       dragPlaneRef.current = null;
@@ -194,10 +228,15 @@ export function GizmoMove({
     window.addEventListener('pointerup', handleGlobalPointerUp);
     
     return () => {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingPointerRef.current = null;
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [getAxisDirection, getWorldPointFromMouse, isDragging, onDrag, onDragEnd]);
+  }, [axisDirection, getWorldPointFromMouse, isDragging, onDrag, onDragEnd]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
   const effectiveHovered = isPickingHovered || isHovered;

@@ -16,6 +16,7 @@ import { InstancedRootsGroup, type InstancedRoot } from './SupportPrimitives/Roo
 import { InstancedContactConeGroup, type InstancedContactCone } from './SupportPrimitives/ContactCone/InstancedContactConeGroup';
 import { useBracePlacementState } from './SupportTypes/Brace/bracePlacementState';
 import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore';
+import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
@@ -120,6 +121,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const kickstandState = useKickstandStoreState();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
+    const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
 
     const selectionEnabled = mode === 'support';
     const effectiveSelectedSupportIds = selectionEnabled ? resolvedSelection.selectedIds : [];
@@ -2417,7 +2419,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return;
         }
 
-        if (supportSelectionAndHoverSuppressed || braceAltActive) {
+        if (supportSelectionAndHoverSuppressed || braceAltActive || kickstandHotkeyActive) {
             const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
             const point = e.point
                 ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
@@ -2435,14 +2437,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive, kickstandHotkeyActive]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft, event: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
         const jointDragInteractionActive = typeof window !== 'undefined' && !!(window as any).__jointGizmoDragging;
-        const allowSuppressedShaftHoverForBracePreview = braceAltActive && mode === 'support' && !jointDragInteractionActive;
+        const allowSuppressedShaftHoverForPlacementPreview = (braceAltActive || kickstandHotkeyActive) && mode === 'support' && !jointDragInteractionActive;
 
         const sceneHoverWriteDecision = resolveSceneBatchedShaftHoverWriteDecision({
             supportId: shaft.supportId,
@@ -2460,9 +2462,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             : null;
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason !== 'interaction-suppressed') {
-            // When brace placement is active, always emit shaft-hover so the preview can track
+            // When placement hotkeys are active, always emit shaft-hover so previews can track
             // unselected shafts even when hover suppression logic would otherwise clear it.
-            if (allowSuppressedShaftHoverForBracePreview) {
+            if (allowSuppressedShaftHoverForPlacementPreview) {
                 window.dispatchEvent(new CustomEvent('shaft-hover', {
                     detail: { segmentId: shaft.id, point, intersection: event },
                 }));
@@ -2481,7 +2483,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason === 'interaction-suppressed') {
-            if (allowSuppressedShaftHoverForBracePreview) {
+            if (allowSuppressedShaftHoverForPlacementPreview) {
                 window.dispatchEvent(new CustomEvent('shaft-hover', {
                     detail: {
                         segmentId: shaft.id,
@@ -2519,7 +2521,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, mode, braceAltActive, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, mode, braceAltActive, kickstandHotkeyActive, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback((entity: { id: string } | null) => {
         if (!isPointerInteractable) return;

@@ -19,6 +19,10 @@ import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
  * It monitors the picking state and handles drag operations for any 'joint' object.
  */
 export function useJointInteraction(enabled: boolean = true) {
+    const MIN_DRAG_DELTA_SQ = 1e-4; // 0.01mm positional epsilon
+    const WARNING_DISTANCE_THRESHOLD = 0.05; // mm
+    const WARNING_EVAL_INTERVAL_MS = 48; // ~20Hz warning updates during drag
+
     const { isDragging, hit } = usePicking();
     const { camera, raycaster, pointer, controls } = useThree();
 
@@ -34,6 +38,9 @@ export function useJointInteraction(enabled: boolean = true) {
     const initialTrunkSnapshot = useRef<Trunk | null>(null);
     const initialBranchSnapshot = useRef<Branch | null>(null);
     const initialKickstandSnapshot = useRef<Kickstand | null>(null);
+    const lastAppliedDragPosRef = useRef<THREE.Vector3 | null>(null);
+    const lastWarningRef = useRef<string | null>(null);
+    const lastWarningEvalAtRef = useRef(0);
 
     const savedControlsEnabledRef = useRef<boolean | null>(null);
 
@@ -42,6 +49,12 @@ export function useJointInteraction(enabled: boolean = true) {
     const cloneTrunk = (trunk: Trunk): Trunk => JSON.parse(JSON.stringify(trunk));
     const cloneBranch = (branch: Branch): Branch => JSON.parse(JSON.stringify(branch));
     const cloneKickstand = (kickstand: Kickstand): Kickstand => JSON.parse(JSON.stringify(kickstand));
+
+    const applyInteractionWarning = useCallback((warning: 'SHAFT_ANGLE_TOO_FLAT' | null) => {
+        if (lastWarningRef.current === warning) return;
+        lastWarningRef.current = warning;
+        setInteractionWarning(warning);
+    }, []);
 
     const setJointDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -186,6 +199,9 @@ export function useJointInteraction(enabled: boolean = true) {
 
                 activeJointId.current = jointId;
                 setJointDragInteractionLock(true);
+                lastAppliedDragPosRef.current = null;
+                lastWarningRef.current = null;
+                lastWarningEvalAtRef.current = 0;
 
                 // While dragging a joint, disable OrbitControls so camera movement cannot
                 // influence drag math (which is computed from the camera ray).
@@ -350,7 +366,9 @@ export function useJointInteraction(enabled: boolean = true) {
             initialBranchSnapshot.current = null;
             initialKickstandSnapshot.current = null;
             forceEndDragRef.current = false;
-            setInteractionWarning(null); // Clear warning on release
+            lastAppliedDragPosRef.current = null;
+            lastWarningEvalAtRef.current = 0;
+            applyInteractionWarning(null); // Clear warning on release
             lastDragPos.current = null;
 
             // Restore OrbitControls enabled state
@@ -362,7 +380,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
             setJointDragInteractionLock(false);
         }
-    }, [isDragging, hit, camera, pointer, raycaster, scene, controls, setJointDragInteractionLock]);
+    }, [isDragging, hit, camera, pointer, raycaster, scene, controls, setJointDragInteractionLock, applyInteractionWarning]);
 
     // Update loop
     useFrame(() => {
@@ -374,8 +392,16 @@ export function useJointInteraction(enabled: boolean = true) {
             if (intersected) {
                 // Apply offset
                 const newPos = intersection.add(dragOffset.current);
+                if (lastAppliedDragPosRef.current && lastAppliedDragPosRef.current.distanceToSquared(newPos) < MIN_DRAG_DELTA_SQ) {
+                    return;
+                }
                 const newPosVec3 = { x: newPos.x, y: newPos.y, z: newPos.z };
                 lastDragPos.current = newPosVec3;
+                if (!lastAppliedDragPosRef.current) {
+                    lastAppliedDragPosRef.current = newPos.clone();
+                } else {
+                    lastAppliedDragPosRef.current.copy(newPos);
+                }
 
                 if (activeTrunkId.current) {
                     // Update trunk
@@ -404,19 +430,33 @@ export function useJointInteraction(enabled: boolean = true) {
                         );
                         updateTrunk(newTrunk);
 
-                        // Check for Clamping Warning
-                        let foundJointPos: Vec3 | null = null;
-                        for (const s of newTrunk.segments) {
-                            if (s.topJoint?.id === activeJointId.current) foundJointPos = s.topJoint.pos;
-                            if (s.bottomJoint?.id === activeJointId.current) foundJointPos = s.bottomJoint.pos;
-                        }
+                        const now = performance.now();
+                        if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
+                            lastWarningEvalAtRef.current = now;
 
-                        if (foundJointPos) {
-                            const dist = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z).distanceTo(newPos);
-                            if (dist > 0.05) { // 0.05mm tolerance
-                                setInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
-                            } else {
-                                setInteractionWarning(null);
+                            // Check for Clamping Warning (throttled)
+                            let foundJointPos: Vec3 | null = null;
+                            for (const s of newTrunk.segments) {
+                                if (s.topJoint?.id === activeJointId.current) {
+                                    foundJointPos = s.topJoint.pos;
+                                    break;
+                                }
+                                if (s.bottomJoint?.id === activeJointId.current) {
+                                    foundJointPos = s.bottomJoint.pos;
+                                    break;
+                                }
+                            }
+
+                            if (foundJointPos) {
+                                const dx = foundJointPos.x - newPos.x;
+                                const dy = foundJointPos.y - newPos.y;
+                                const dz = foundJointPos.z - newPos.z;
+                                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                                if (dist > WARNING_DISTANCE_THRESHOLD) {
+                                    applyInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
+                                } else {
+                                    applyInteractionWarning(null);
+                                }
                             }
                         }
                     }
@@ -444,19 +484,33 @@ export function useJointInteraction(enabled: boolean = true) {
                         ) as unknown as Branch;
                         updateBranch(newBranch);
 
-                        // Check for Clamping Warning
-                        let foundJointPos: Vec3 | null = null;
-                        for (const s of newBranch.segments) {
-                            if (s.topJoint?.id === activeJointId.current) foundJointPos = s.topJoint.pos;
-                            if (s.bottomJoint?.id === activeJointId.current) foundJointPos = s.bottomJoint.pos;
-                        }
+                        const now = performance.now();
+                        if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
+                            lastWarningEvalAtRef.current = now;
 
-                        if (foundJointPos) {
-                            const dist = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z).distanceTo(newPos);
-                            if (dist > 0.05) {
-                                setInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
-                            } else {
-                                setInteractionWarning(null);
+                            // Check for Clamping Warning (throttled)
+                            let foundJointPos: Vec3 | null = null;
+                            for (const s of newBranch.segments) {
+                                if (s.topJoint?.id === activeJointId.current) {
+                                    foundJointPos = s.topJoint.pos;
+                                    break;
+                                }
+                                if (s.bottomJoint?.id === activeJointId.current) {
+                                    foundJointPos = s.bottomJoint.pos;
+                                    break;
+                                }
+                            }
+
+                            if (foundJointPos) {
+                                const dx = foundJointPos.x - newPos.x;
+                                const dy = foundJointPos.y - newPos.y;
+                                const dz = foundJointPos.z - newPos.z;
+                                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                                if (dist > WARNING_DISTANCE_THRESHOLD) {
+                                    applyInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
+                                } else {
+                                    applyInteractionWarning(null);
+                                }
                             }
                         }
                     }
@@ -482,18 +536,32 @@ export function useJointInteraction(enabled: boolean = true) {
                         ) as unknown as Kickstand;
                         updateKickstand(newKickstand);
 
-                        let foundJointPos: Vec3 | null = null;
-                        for (const s of newKickstand.segments) {
-                            if (s.topJoint?.id === activeJointId.current) foundJointPos = s.topJoint.pos;
-                            if (s.bottomJoint?.id === activeJointId.current) foundJointPos = s.bottomJoint.pos;
-                        }
+                        const now = performance.now();
+                        if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
+                            lastWarningEvalAtRef.current = now;
 
-                        if (foundJointPos) {
-                            const dist = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z).distanceTo(newPos);
-                            if (dist > 0.05) {
-                                setInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
-                            } else {
-                                setInteractionWarning(null);
+                            let foundJointPos: Vec3 | null = null;
+                            for (const s of newKickstand.segments) {
+                                if (s.topJoint?.id === activeJointId.current) {
+                                    foundJointPos = s.topJoint.pos;
+                                    break;
+                                }
+                                if (s.bottomJoint?.id === activeJointId.current) {
+                                    foundJointPos = s.bottomJoint.pos;
+                                    break;
+                                }
+                            }
+
+                            if (foundJointPos) {
+                                const dx = foundJointPos.x - newPos.x;
+                                const dy = foundJointPos.y - newPos.y;
+                                const dz = foundJointPos.z - newPos.z;
+                                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                                if (dist > WARNING_DISTANCE_THRESHOLD) {
+                                    applyInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
+                                } else {
+                                    applyInteractionWarning(null);
+                                }
                             }
                         }
                     }

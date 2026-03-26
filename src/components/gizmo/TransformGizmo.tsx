@@ -183,12 +183,8 @@ export function TransformGizmo({
 
   const handleAxisMove = (axis: GizmoAxis, delta: THREE.Vector3) => {
     if (onMove) {
-      // Constrain delta to axis
-      const constrainedDelta = new THREE.Vector3();
-      if (axis === 'x') constrainedDelta.x = delta.x;
-      if (axis === 'y') constrainedDelta.y = delta.y;
-      if (axis === 'z') constrainedDelta.z = delta.z;
-      onMove(constrainedDelta, axis);
+      // Delta is already axis-constrained in GizmoMove.
+      onMove(delta, axis);
     }
   };
 

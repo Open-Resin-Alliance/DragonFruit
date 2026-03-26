@@ -62,7 +62,8 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
-    const enableSegmentInteraction = !!isInteractable && (isParentSelected || braceAltActive || kickstandHotkeyActive) === true;
+    const placementInteractionActive = braceAltActive || kickstandHotkeyActive;
+    const enableSegmentInteraction = (isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive);
 
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({
         category: 'segment',

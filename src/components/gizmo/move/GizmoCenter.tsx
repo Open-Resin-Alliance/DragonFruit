@@ -37,10 +37,16 @@ export function GizmoCenter({
   onPointerEnter,
   onPointerLeave,
 }: GizmoCenterProps) {
+  const MIN_DRAG_DELTA_SQ = 1e-10;
   const [isDragging, setIsDragging] = useState(false);
   const lastPointRef = useRef<THREE.Vector3 | null>(null);
   const dragPlane = useRef<THREE.Plane | null>(null);
+  const pendingPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const rafIdRef = useRef<number | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
+  const ndcRef = useRef(new THREE.Vector2());
+  const intersectionRef = useRef(new THREE.Vector3());
+  const deltaRef = useRef(new THREE.Vector3());
   const { camera, gl } = useThree();
 
   // GPU Picking registration
@@ -97,7 +103,11 @@ export function GizmoCenter({
     }
 
     setIsDragging(true);
-    lastPointRef.current = initialPoint;
+    if (!lastPointRef.current) {
+      lastPointRef.current = new THREE.Vector3(initialPoint.x, initialPoint.y, initialPoint.z);
+    } else {
+      lastPointRef.current.copy(initialPoint);
+    }
   };
 
   const getWorldPointFromMouse = useCallback((clientX: number, clientY: number): THREE.Vector3 | null => {
@@ -105,14 +115,17 @@ export function GizmoCenter({
     
     const rect = gl.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    const x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    const y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    const ndc = ndcRef.current;
+    ndc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
 
     const raycaster = raycasterRef.current;
-    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+    raycaster.setFromCamera(ndc, camera);
     
     // Intersect with drag plane
-    const intersection = new THREE.Vector3();
+    const intersection = intersectionRef.current;
     const hit = raycaster.ray.intersectPlane(dragPlane.current, intersection);
     if (!hit) return null;
     
@@ -142,24 +155,46 @@ export function GizmoCenter({
   useEffect(() => {
     if (!isDragging) return;
 
+    const processPendingPointerMove = () => {
+      rafIdRef.current = null;
+      const pending = pendingPointerRef.current;
+      pendingPointerRef.current = null;
+      if (!pending || !lastPointRef.current) return;
+
+      const worldPoint = getWorldPointFromMouse(pending.x, pending.y);
+      if (!worldPoint || !lastPointRef.current) return;
+
+      const delta = deltaRef.current.copy(worldPoint).sub(lastPointRef.current);
+      // Restrict movement to XY plane only (zero out Z component)
+      delta.z = 0;
+      if (delta.lengthSq() < MIN_DRAG_DELTA_SQ) return;
+
+      onDrag(delta);
+      lastPointRef.current.copy(worldPoint);
+
+      if (pendingPointerRef.current && rafIdRef.current === null) {
+        rafIdRef.current = window.requestAnimationFrame(processPendingPointerMove);
+      }
+    };
+
     const handleGlobalPointerMove = (e: PointerEvent) => {
       if (!lastPointRef.current) return;
 
-      const worldPoint = getWorldPointFromMouse(e.clientX, e.clientY);
-      if (!worldPoint || !lastPointRef.current) return;
-
-      const delta = worldPoint.clone().sub(lastPointRef.current);
-      // Restrict movement to XY plane only (zero out Z component)
-      delta.z = 0;
-      if (delta.lengthSq() < 1e-12) return;
-
-      onDrag(delta);
-      lastPointRef.current = worldPoint;
+      pendingPointerRef.current = { x: e.clientX, y: e.clientY };
+      if (rafIdRef.current === null) {
+        rafIdRef.current = window.requestAnimationFrame(processPendingPointerMove);
+      }
     };
 
     const handleGlobalPointerUp = () => {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingPointerRef.current = null;
       setIsDragging(false);
       lastPointRef.current = null;
+      dragPlane.current = null;
       onDragEnd();
     };
 
@@ -167,6 +202,11 @@ export function GizmoCenter({
     window.addEventListener('pointerup', handleGlobalPointerUp);
     
     return () => {
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingPointerRef.current = null;
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
