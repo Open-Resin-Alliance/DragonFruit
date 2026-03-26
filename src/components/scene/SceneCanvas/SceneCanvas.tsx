@@ -1216,7 +1216,8 @@ export function SceneCanvas({
     && !branchPlacementPreview
     && !suppressSupportPlacementPreviewRendering
     && !supportHoverTargetActive
-    && !!hoveredMeshModelId,
+    && !!hoveredMeshModelId
+    && isBranchPlacementActive,
   );
 
   const hasRaftSelection = !!committedActiveModelId || !!activeModelId || (selectedModelIds?.length ?? 0) > 0;

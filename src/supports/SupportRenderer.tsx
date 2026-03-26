@@ -2392,7 +2392,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             return;
         }
 
-        if (supportSelectionAndHoverSuppressed) {
+        if (supportSelectionAndHoverSuppressed || braceAltActive) {
             const e = event as unknown as { point?: THREE.Vector3 | { x: number; y: number; z: number } };
             const point = e.point
                 ? { x: (e.point as any).x, y: (e.point as any).y, z: (e.point as any).z }
@@ -2410,7 +2410,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         if (!shaft.supportId) return;
         handleSupportClick(event, shaft.supportId, isInteractable);
-    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, isPreparePointerInteractable, isInteractable, supportSelectionAndHoverSuppressed, braceAltActive]);
 
     const handleSceneBatchedShaftPointerMove = React.useCallback((shaft: InstancedShaft, event: { point?: { x: number; y: number; z: number } | THREE.Vector3 } | null) => {
         if (!isPointerInteractable) return;
@@ -2432,9 +2432,17 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             : null;
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason !== 'interaction-suppressed') {
-            window.dispatchEvent(new CustomEvent('shaft-leave', {
-                detail: { segmentId: shaft.id },
-            }));
+            // When brace placement is active, always emit shaft-hover so the preview can track
+            // unselected shafts even when hover suppression logic would otherwise clear it.
+            if (braceAltActive && mode === 'support') {
+                window.dispatchEvent(new CustomEvent('shaft-hover', {
+                    detail: { segmentId: shaft.id, point, intersection: event },
+                }));
+            } else {
+                window.dispatchEvent(new CustomEvent('shaft-leave', {
+                    detail: { segmentId: shaft.id },
+                }));
+            }
             applySceneHoverWriteDecision(
                 sceneHoverWriteDecision,
                 pendingSceneHoverClearFrameRef,
@@ -2477,7 +2485,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             setSceneHoveredSupportId,
             emitSupportModelPointerHover,
         );
-    }, [isPointerInteractable, mode, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
+    }, [isPointerInteractable, mode, braceAltActive, primitiveHoverOnSelectedSupport, primitiveHoverSuppressesSceneShaftHover, selectedCategory, selectedPrimitiveSupportId, selectedPrimitiveHoverActive, selectedSupportIdSet, supportSelectionAndHoverSuppressed]);
 
     const handleSceneBatchedShaftPointerOut = React.useCallback((entity: { id: string } | null) => {
         if (!isPointerInteractable) return;
