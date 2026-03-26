@@ -2542,7 +2542,14 @@ export function ProfileSettingsModal({
       >
         <div className="h-[136px] rounded-md border overflow-hidden flex items-center justify-center relative" style={{ borderColor: 'var(--border-subtle)', background: '#2b3039' }}>
           {preset.imageAssetPath ? (
-            <AutoTrimmedImage src={preset.imageAssetPath} alt={preset.name} className="h-full w-full object-contain" />
+            <img
+              src={preset.imageAssetPath}
+              alt={preset.name}
+              className="h-full w-full object-contain"
+              loading="eager"
+              decoding="async"
+              draggable={false}
+            />
           ) : (
             isGenericPreset
               ? <Printer className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />

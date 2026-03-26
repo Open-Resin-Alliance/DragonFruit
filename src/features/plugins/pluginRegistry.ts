@@ -216,6 +216,7 @@ const MAX_MATERIAL_TEMPLATES = 512;
 
 function shouldUseBundledAssetPaths(): boolean {
   if (typeof window === 'undefined') return false;
+  if (process.env.NODE_ENV !== 'production') return false;
   const protocol = window.location?.protocol ?? '';
   const hostname = window.location?.hostname ?? '';
   const hasTauriInternals = typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';

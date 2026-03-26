@@ -3,31 +3,23 @@
 import React from 'react';
 
 let jsmpegBundleLoadPromise: Promise<void> | null = null;
+const JSMPEG_SCRIPT_SOURCES = [
+  '/api/jsmpeg',
+  'https://cdn.jsdelivr.net/gh/phoboslab/jsmpeg@b5799bf/jsmpeg.min.js',
+] as const;
 
-function ensureJsmpegBundleLoaded(): Promise<void> {
-  if (typeof window === 'undefined') {
-    return Promise.resolve();
-  }
-
-  if (window.JSMpeg) {
-    return Promise.resolve();
-  }
-
-  if (jsmpegBundleLoadPromise) {
-    return jsmpegBundleLoadPromise;
-  }
-
-  jsmpegBundleLoadPromise = new Promise<void>((resolve, reject) => {
-    const existingScript = document.querySelector<HTMLScriptElement>('script[data-dragonfruit-jsmpeg="true"]');
+function loadJsmpegScriptFromSource(source: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const existingScript = document.querySelector<HTMLScriptElement>(`script[data-dragonfruit-jsmpeg-source="${source}"]`);
     if (existingScript) {
       const readyState = existingScript.getAttribute('data-loaded');
-      if (readyState === 'true' && window.JSMpeg) {
+      if (readyState === 'true') {
         resolve();
         return;
       }
 
       existingScript.addEventListener('load', () => resolve(), { once: true });
-      existingScript.addEventListener('error', () => reject(new Error('Failed to load local JSMpeg bundle.')), { once: true });
+      existingScript.addEventListener('error', () => reject(new Error(`Failed to load JSMpeg bundle from ${source}`)), { once: true });
       return;
     }
 
@@ -35,14 +27,48 @@ function ensureJsmpegBundleLoaded(): Promise<void> {
     script.async = true;
     script.defer = true;
     script.dataset.dragonfruitJsmpeg = 'true';
-    script.src = '/api/jsmpeg';
+    script.dataset.dragonfruitJsmpegSource = source;
+    script.src = source;
     script.onload = () => {
       script.setAttribute('data-loaded', 'true');
       resolve();
     };
-    script.onerror = () => reject(new Error('Failed to load local JSMpeg bundle.'));
+    script.onerror = () => reject(new Error(`Failed to load JSMpeg bundle from ${source}`));
     document.head.appendChild(script);
-  }).finally(() => {
+  });
+}
+
+function ensureJsmpegBundleLoaded(): Promise<void> {
+  if (typeof window === 'undefined') {
+    return Promise.resolve();
+  }
+
+  const browserWindow = window as WindowWithJsmpeg;
+
+  if (browserWindow.JSMpeg) {
+    return Promise.resolve();
+  }
+
+  if (jsmpegBundleLoadPromise) {
+    return jsmpegBundleLoadPromise;
+  }
+
+  jsmpegBundleLoadPromise = (async () => {
+    let lastError: Error | null = null;
+
+    for (const source of JSMPEG_SCRIPT_SOURCES) {
+      try {
+        await loadJsmpegScriptFromSource(source);
+        if (browserWindow.JSMpeg) {
+          return;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    throw lastError ?? new Error('Failed to load JSMpeg bundle.');
+  })().finally(() => {
     jsmpegBundleLoadPromise = null;
   });
 
@@ -55,6 +81,21 @@ type RtspRelayCanvasPlayerProps = {
   style?: React.CSSProperties;
   onLoaded?: (aspectRatio: number | null) => void;
   onError?: (message: string) => void;
+};
+
+type WindowWithJsmpeg = Window & {
+  JSMpeg?: {
+    Player: new (
+      url: string,
+      options: {
+        canvas: HTMLCanvasElement;
+        onVideoDecode?: () => void;
+        onSourceEstablished?: () => void;
+      },
+    ) => {
+      destroy?: () => void;
+    };
+  };
 };
 
 function readCanvasAspectRatio(canvas: HTMLCanvasElement): number | null {
@@ -109,6 +150,7 @@ export function RtspRelayCanvasPlayer({
   React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const browserWindow = window as WindowWithJsmpeg;
 
     const normalizedUrl = url.trim();
     if (!/^wss?:\/\//i.test(normalizedUrl)) {
@@ -123,6 +165,7 @@ export function RtspRelayCanvasPlayer({
     let lastVideoFrameAt = Date.now();
     let startupTimeoutId: number | null = null;
     let disconnectCheckIntervalId: number | null = null;
+    let lifecycleListenersAttached = false;
 
     const normalizePlayerErrorMessage = (error: unknown): string => {
       if (error instanceof Error) {
@@ -158,6 +201,12 @@ export function RtspRelayCanvasPlayer({
       if (destroyed) return;
       destroyed = true;
 
+      if (lifecycleListenersAttached) {
+        lifecycleListenersAttached = false;
+        window.removeEventListener('pagehide', handlePageLifecycleExit);
+        window.removeEventListener('beforeunload', handlePageLifecycleExit);
+      }
+
       if (startupTimeoutId != null) {
         window.clearTimeout(startupTimeoutId);
         startupTimeoutId = null;
@@ -178,6 +227,14 @@ export function RtspRelayCanvasPlayer({
       }
     };
 
+    const handlePageLifecycleExit = () => {
+      safeDestroyPlayer();
+    };
+
+    window.addEventListener('pagehide', handlePageLifecycleExit);
+    window.addEventListener('beforeunload', handlePageLifecycleExit);
+    lifecycleListenersAttached = true;
+
     void (async () => {
       try {
         await ensureJsmpegBundleLoaded();
@@ -189,7 +246,12 @@ export function RtspRelayCanvasPlayer({
           safeDestroyPlayer();
         }, 15_000);
 
-        const createdPlayer = new window.JSMpeg.Player(normalizedUrl, {
+        const JSMpeg = browserWindow.JSMpeg;
+        if (!JSMpeg) {
+          throw new Error('The local JSMpeg runtime was not available after loading.');
+        }
+
+        const createdPlayer = new JSMpeg.Player(normalizedUrl, {
           canvas,
           onVideoDecode: () => {
             if (disposed) return;
