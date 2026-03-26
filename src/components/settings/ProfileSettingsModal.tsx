@@ -413,7 +413,7 @@ export function ProfileSettingsModal({
   const [editingFleetUnitId, setEditingFleetUnitId] = React.useState<string | null>(null);
   const [editingFleetUnitNickname, setEditingFleetUnitNickname] = React.useState('');
   const [editingFleetUnitImageDataUrl, setEditingFleetUnitImageDataUrl] = React.useState<string | null>(null);
-  const [officialUpdateStatusMessage, setOfficialUpdateStatusMessage] = React.useState<string | null>(null);
+  const [showPrinterUpdateDiffModal, setShowPrinterUpdateDiffModal] = React.useState(false);
   const [printerDragId, setPrinterDragId] = React.useState<string | null>(null);
   const imageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
   const fleetUnitImageUploadInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -425,6 +425,10 @@ export function ProfileSettingsModal({
 
   const availablePrinterPresets = React.useMemo(() => getAvailablePrinterPresets(), [profileState]);
   const officialPrinterUpdates = React.useMemo(() => getOfficialPrinterProfileUpdates(profileState), [profileState]);
+  const officialPrinterUpdateIds = React.useMemo(
+    () => new Set(officialPrinterUpdates.map((update) => update.printerProfileId)),
+    [officialPrinterUpdates],
+  );
   const officialMaterialUpdates = React.useMemo(() => getOfficialMaterialProfileUpdates(profileState), [profileState]);
 
   const presetManufacturers = React.useMemo(() => {
@@ -851,6 +855,141 @@ export function ProfileSettingsModal({
 
     return fuzzyMatch ?? null;
   }, [availablePrinterPresets, selectedPrinter]);
+  const selectedPrinterUpdateDiffItems = React.useMemo(() => {
+    if (!selectedPrinter || !selectedPrinterPreset || !selectedPrinterUpdate) return [] as Array<{ label: string; current: string; next: string }>;
+
+    const preset = selectedPrinterPreset as any;
+    const profile = selectedPrinter;
+
+    const normalizeOutputFormat = (value: unknown): string => {
+      if (typeof value !== 'string') return '.lys';
+      const trimmed = value.trim().toLowerCase();
+      if (!trimmed) return '.lys';
+      return trimmed.startsWith('.') ? trimmed : `.${trimmed}`;
+    };
+
+    const nextComparable = {
+      name: preset.name,
+      manufacturer: preset.manufacturer,
+      imageDataUrl: typeof preset.imageAssetPath === 'string' && preset.imageAssetPath.trim().length > 0
+        ? preset.imageAssetPath
+        : profile.imageDataUrl,
+      antiAliasing: typeof preset.antiAliasing === 'boolean' ? preset.antiAliasing : undefined,
+      networkSupport: typeof preset.networkSupport === 'string' && preset.networkSupport.trim().length > 0
+        ? preset.networkSupport.trim().toLowerCase()
+        : undefined,
+      hasCamera: typeof preset.hasCamera === 'boolean' ? preset.hasCamera : undefined,
+      networkFilter: typeof preset.networkFilter === 'string' && preset.networkFilter.trim().length > 0
+        ? preset.networkFilter.trim()
+        : undefined,
+      platformBadge: preset.platformBadge,
+      pixelSize: preset.pixelSize,
+      bitDepth: preset.bitDepth,
+      buildDimensionMode: preset.buildDimensionMode === 'auto' || preset.buildDimensionMode === 'manual'
+        ? preset.buildDimensionMode
+        : 'manual',
+      officialPresetId: preset.presetId,
+      officialPresetVersion: selectedPrinterUpdate.latestVersion,
+      isOfficial: true,
+      isCustom: false,
+      buildVolumeMm: preset.buildVolumeMm,
+      display: {
+        resolutionX: Number(preset.display?.resolutionX),
+        resolutionY: Number(preset.display?.resolutionY),
+        outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
+        formatVersion: preset.display?.formatVersion,
+        settingsMode: preset.display?.settingsMode,
+        mirrorX: typeof preset.display?.mirrorX === 'boolean' ? preset.display.mirrorX : false,
+        mirrorY: typeof preset.display?.mirrorY === 'boolean' ? preset.display.mirrorY : false,
+      },
+    };
+
+    const currentComparable = {
+      name: profile.name,
+      manufacturer: profile.manufacturer,
+      imageDataUrl: profile.imageDataUrl,
+      antiAliasing: profile.antiAliasing,
+      networkSupport: profile.networkSupport,
+      hasCamera: profile.hasCamera,
+      networkFilter: profile.networkFilter,
+      platformBadge: profile.platformBadge,
+      pixelSize: profile.pixelSize,
+      bitDepth: profile.bitDepth,
+      buildDimensionMode: profile.buildDimensionMode,
+      officialPresetId: profile.officialPresetId,
+      officialPresetVersion: profile.officialPresetVersion,
+      isOfficial: profile.isOfficial,
+      isCustom: profile.isCustom,
+      buildVolumeMm: profile.buildVolumeMm,
+      display: {
+        resolutionX: profile.display.resolutionX,
+        resolutionY: profile.display.resolutionY,
+        outputFormat: profile.display.outputFormat,
+        formatVersion: profile.display.formatVersion,
+        settingsMode: profile.display.settingsMode,
+        mirrorX: profile.display.mirrorX,
+        mirrorY: profile.display.mirrorY,
+      },
+    };
+
+    const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    };
+
+    const toDisplayString = (value: unknown): string => {
+      if (value == null) return '—';
+      if (typeof value === 'boolean') return value ? 'Enabled' : 'Disabled';
+      if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '—';
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : '—';
+      }
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    };
+
+    const toFieldLabel = (path: string): string => {
+      return path
+        .split('.')
+        .map((segment) => segment
+          .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+          .replace(/[_-]+/g, ' ')
+          .replace(/^./, (char) => char.toUpperCase()))
+        .join(' › ');
+    };
+
+    const rows: Array<{ label: string; current: string; next: string }> = [];
+
+    const walkDiff = (currentValue: unknown, nextValue: unknown, path: string): void => {
+      if (isPlainObject(currentValue) && isPlainObject(nextValue)) {
+        const keys = Array.from(new Set([...Object.keys(currentValue), ...Object.keys(nextValue)])).sort((a, b) => a.localeCompare(b));
+        keys.forEach((key) => {
+          walkDiff(
+            (currentValue as Record<string, unknown>)[key],
+            (nextValue as Record<string, unknown>)[key],
+            path ? `${path}.${key}` : key,
+          );
+        });
+        return;
+      }
+
+      const currentSerialized = toDisplayString(currentValue);
+      const nextSerialized = toDisplayString(nextValue);
+      if (currentSerialized === nextSerialized) return;
+
+      rows.push({
+        label: toFieldLabel(path),
+        current: currentSerialized,
+        next: nextSerialized,
+      });
+    };
+
+    walkDiff(currentComparable, nextComparable, '');
+    return rows;
+  }, [selectedPrinter, selectedPrinterPreset, selectedPrinterUpdate]);
   const selectedPrinterNetworkFilterHint = React.useMemo(() => {
     const explicit = selectedPrinter?.networkFilter?.trim() || '';
     if (explicit.length > 0) return explicit;
@@ -1367,6 +1506,12 @@ export function ProfileSettingsModal({
       setIsNetworkSettingsOpen(false);
     }
   }, [selectedPrinterSupportsNetworkSettings]);
+
+  React.useEffect(() => {
+    if (!selectedPrinterUpdate) {
+      setShowPrinterUpdateDiffModal(false);
+    }
+  }, [selectedPrinterUpdate]);
 
   const loadRemoteMaterials = React.useCallback(async () => {
     if (!selectedPrinterResolvedId) return;
@@ -2384,46 +2529,12 @@ export function ProfileSettingsModal({
 
   const handleApplySelectedPrinterOfficialUpdate = React.useCallback(() => {
     if (!selectedPrinterUpdate) return;
-    const result = applyOfficialPrinterProfileUpdate(selectedPrinterUpdate.printerProfileId);
-
-    if (result === 'updated') {
-      setOfficialUpdateStatusMessage(`Updated printer profile to v${selectedPrinterUpdate.latestVersion}.`);
-      return;
-    }
-
-    if (result === 'version-bumped-custom') {
-      setOfficialUpdateStatusMessage('Custom profile kept unchanged for safety. Baseline version marker was updated.');
-      return;
-    }
-
-    if (result === 'already-latest') {
-      setOfficialUpdateStatusMessage('Selected printer profile is already on the latest official version.');
-      return;
-    }
-
-    setOfficialUpdateStatusMessage('Unable to apply printer update (profile is no longer linked to an official preset).');
+    applyOfficialPrinterProfileUpdate(selectedPrinterUpdate.printerProfileId);
   }, [selectedPrinterUpdate]);
 
   const handleApplySelectedMaterialOfficialUpdate = React.useCallback(() => {
     if (!selectedMaterialUpdate) return;
-    const result = applyOfficialMaterialProfileUpdate(selectedMaterialUpdate.materialProfileId);
-
-    if (result === 'updated') {
-      setOfficialUpdateStatusMessage(`Updated material profile to v${selectedMaterialUpdate.latestVersion}.`);
-      return;
-    }
-
-    if (result === 'version-bumped-custom') {
-      setOfficialUpdateStatusMessage('Custom material kept unchanged for safety. Baseline version marker was updated.');
-      return;
-    }
-
-    if (result === 'already-latest') {
-      setOfficialUpdateStatusMessage('Selected material profile is already on the latest official version.');
-      return;
-    }
-
-    setOfficialUpdateStatusMessage('Unable to apply material update (profile is no longer linked to an official template).');
+    applyOfficialMaterialProfileUpdate(selectedMaterialUpdate.materialProfileId);
   }, [selectedMaterialUpdate]);
 
   const handleDuplicateSelectedPrinterAsCustom = React.useCallback(() => {
@@ -2674,35 +2785,6 @@ export function ProfileSettingsModal({
               </span>
             </div>
           )}
-          {(officialPrinterUpdates.length > 0 || officialMaterialUpdates.length > 0) && (
-            <div
-              className="rounded-lg border px-3 py-2 text-xs flex items-start gap-2"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 34%)',
-                background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
-                color: 'var(--text-muted)',
-              }}
-            >
-              <Download className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--accent-secondary)' }} />
-              <span>
-                <strong style={{ color: 'var(--text-strong)' }}>Official profile updates found:</strong>{' '}
-                {officialPrinterUpdates.length} printer profile{officialPrinterUpdates.length === 1 ? '' : 's'} and{' '}
-                {officialMaterialUpdates.length} material profile{officialMaterialUpdates.length === 1 ? '' : 's'} have newer official versions available.
-              </span>
-            </div>
-          )}
-          {officialUpdateStatusMessage && (
-            <div
-              className="rounded-lg border px-3 py-2 text-xs"
-              style={{
-                borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 34%)',
-                background: 'color-mix(in srgb, var(--accent), var(--surface-1) 94%)',
-                color: 'var(--text-muted)',
-              }}
-            >
-              {officialUpdateStatusMessage}
-            </div>
-          )}
           {!hasPrinters && (
             <div
               className="rounded-xl border flex-1 h-full min-h-0 flex items-center justify-center px-4 py-10"
@@ -2760,11 +2842,6 @@ export function ProfileSettingsModal({
                       ? `Showing connected devices for ${selectedPrinter?.name ?? 'selected profile'}.`
                       : 'Each printer can store its own image and has a dedicated set of compatible resin/material profiles.'}
                   </p>
-                  {selectedPrinterUpdate && (
-                    <p className="text-[11px] mt-1" style={{ color: 'var(--accent-secondary)' }}>
-                      Update available for this printer profile (v{selectedPrinterUpdate.currentVersion} → v{selectedPrinterUpdate.latestVersion}).
-                    </p>
-                  )}
                 </div>
 
                 {!shouldRenderFleetRail && (
@@ -2928,9 +3005,11 @@ export function ProfileSettingsModal({
                   const platformBadge = printer.platformBadge?.text?.trim()
                     ? printer.platformBadge
                     : undefined;
+                  const hasOfficialUpdate = officialPrinterUpdateIds.has(printer.id);
                   const cardBadgeText = printer.isCustom
                     ? 'CUSTOM'
                     : platformBadge?.text;
+                  const resolvedCardBadgeText = hasOfficialUpdate ? 'UPDATE' : cardBadgeText;
                   const bitDepthBits = Number.isFinite(Number(printer.bitDepth?.bits))
                     ? Math.round(Number(printer.bitDepth?.bits))
                     : null;
@@ -3006,10 +3085,16 @@ export function ProfileSettingsModal({
                         {isNetworkConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
                       </span>
                     ) : null,
-                    topBadge: cardBadgeText ? (
+                    topBadge: resolvedCardBadgeText ? (
                       <span
                         className="pointer-events-none absolute top-1 right-1 z-10 inline-flex h-[18px] min-w-[44px] items-center justify-center whitespace-nowrap rounded-md px-1.5 text-[9px] font-bold leading-none"
-                        style={printer.isCustom
+                        style={hasOfficialUpdate
+                          ? {
+                              background: 'linear-gradient(135deg, #22c55e, #15803d)',
+                              color: '#ffffff',
+                              letterSpacing: '0.04em',
+                            }
+                          : printer.isCustom
                           ? {
                               background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
                               color: '#ffffff',
@@ -3021,7 +3106,7 @@ export function ProfileSettingsModal({
                               letterSpacing: '0.04em',
                             }}
                       >
-                        <span className="relative top-[0.5px]">{cardBadgeText}</span>
+                        <span className="relative top-[0.5px]">{resolvedCardBadgeText}</span>
                       </span>
                     ) : null,
                     title: printer.name,
@@ -3172,7 +3257,7 @@ export function ProfileSettingsModal({
                       {selectedPrinterUpdate && (
                         <button
                           type="button"
-                          onClick={handleApplySelectedPrinterOfficialUpdate}
+                          onClick={() => setShowPrinterUpdateDiffModal(true)}
                           className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center justify-center gap-1 rounded-md"
                           style={{
                             color: 'var(--accent-secondary)',
@@ -4400,6 +4485,91 @@ export function ProfileSettingsModal({
           onClose={() => setIsRemoteMaterialEditDialogOpen(false)}
           onSave={() => { void handleSaveRemoteMaterialEdits(); }}
         />
+
+        {showPrinterUpdateDiffModal && selectedPrinter && selectedPrinterUpdate && (
+          <div className="fixed inset-0 z-[74] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setShowPrinterUpdateDiffModal(false);
+            }
+          }}>
+            <div className="w-full max-w-[860px] max-h-[88vh] rounded-xl border shadow-2xl ui-modal-panel-enter flex flex-col overflow-hidden" style={{ borderColor: 'var(--border-strong)', background: 'var(--surface-0)' }}>
+              <div className="px-4 py-3 border-b flex items-center justify-between gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <div>
+                  <h3 className="text-sm font-semibold" style={{ color: 'var(--text-strong)' }}>
+                    Official Printer Update
+                  </h3>
+                  <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    {selectedPrinter.name} • v{selectedPrinterUpdate.currentVersion} → v{selectedPrinterUpdate.latestVersion}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPrinterUpdateDiffModal(false)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-md border"
+                  style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}
+                  aria-label="Close update preview"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3 overflow-y-auto custom-scrollbar flex-1 min-h-0 space-y-3">
+                <div className="rounded-lg border px-3 py-2 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                  Review the incoming changes before applying this official profile update.
+                </div>
+
+                {selectedPrinterUpdateDiffItems.length > 0 ? (
+                  <div className="rounded-lg border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
+                    <div className="grid grid-cols-[170px_minmax(0,1fr)_minmax(0,1fr)] gap-0 border-b text-[10px] font-semibold uppercase tracking-wide" style={{ borderColor: 'var(--border-subtle)', color: 'var(--text-muted)' }}>
+                      <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}>Field</div>
+                      <div className="px-2.5 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }}>Current</div>
+                      <div className="px-2.5 py-2">Update</div>
+                    </div>
+                    <div className="divide-y" style={{ borderColor: 'var(--border-subtle)' }}>
+                      {selectedPrinterUpdateDiffItems.map((item) => (
+                        <div key={item.label} className="grid grid-cols-[170px_minmax(0,1fr)_minmax(0,1fr)] text-xs">
+                          <div className="px-2.5 py-2 font-semibold" style={{ color: 'var(--text-strong)', borderRight: '1px solid var(--border-subtle)' }}>{item.label}</div>
+                          <div className="px-2.5 py-2" style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)' }}>{item.current}</div>
+                          <div className="px-2.5 py-2" style={{ color: 'var(--accent-secondary)' }}>{item.next}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border px-3 py-3 text-xs" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)', color: 'var(--text-muted)' }}>
+                    No profile field-level changes were detected, but the official version marker will still advance to v{selectedPrinterUpdate.latestVersion}.
+                  </div>
+                )}
+              </div>
+
+              <div className="px-4 pb-4 pt-2 border-t flex items-center justify-end gap-2" style={{ borderColor: 'var(--border-subtle)' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowPrinterUpdateDiffModal(false)}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleApplySelectedPrinterOfficialUpdate();
+                    setShowPrinterUpdateDiffModal(false);
+                  }}
+                  className="ui-button ui-button-secondary !h-8 !px-3 !py-0 text-xs inline-flex items-center gap-1 rounded-md"
+                  style={{
+                    color: 'var(--accent-secondary)',
+                    borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
+                    background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 92%)',
+                  }}
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Apply Update
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showOfficialLockDialog && (
           <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/60 p-4 ui-modal-backdrop-enter" onMouseDown={(event) => {
