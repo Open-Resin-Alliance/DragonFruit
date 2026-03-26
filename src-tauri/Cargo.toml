@@ -21,6 +21,7 @@ base64 = "0.22"
 sha2 = "0.10"
 tokio = { version = "1", features = ["sync", "fs"] }
 dragonfruit-slicer-v3 = { path = "../rust/dragonfruit-slicer-v3" }
+dragonfruit-islands = { path = "../rust/dragonfruit-islands" }
 
 [features]
 default = ["custom-protocol"]
