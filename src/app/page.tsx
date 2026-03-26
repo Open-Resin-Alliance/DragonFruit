@@ -998,6 +998,11 @@ export default function Home() {
   const printingMonitorWebcamReadinessTimeoutRef = React.useRef<number | null>(null);
   const printingMonitorStartFocusDeviceIdRef = React.useRef<string | null>(null);
   const printingMonitorRecentPlatesRequestIdRef = React.useRef(0);
+  const printingMonitorRecentPlatesCacheRef = React.useRef<Map<string, {
+    plates: PrintingMonitorRecentPlate[];
+    selectedPlateId: number | null;
+    error: string | null;
+  }>>(new Map());
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorWebcamSectionRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorWebcamFollowerHeightPxRef = React.useRef<number | null>(null);
@@ -3040,6 +3045,18 @@ export default function Home() {
     if (!monitoringDeviceId.includes('-')) return monitoringDeviceId;
     return monitoringDeviceId.split('-').pop() ?? monitoringDeviceId;
   }, [monitoringDeviceId]);
+  const printingMonitorRecentPlatesCacheKey = React.useMemo(() => {
+    if (!monitoringDeviceHost) return null;
+    const pluginId = (printingMonitoringAdapter.pluginId ?? '').trim();
+    if (!pluginId) return null;
+    return `${pluginId}|${monitoringDeviceId ?? 'unknown'}|${monitoringDeviceHost.toLowerCase()}:${monitoringDevicePort}|${printingMonitorPlatesStoragePath}`;
+  }, [
+    monitoringDeviceHost,
+    monitoringDeviceId,
+    monitoringDevicePort,
+    printingMonitorPlatesStoragePath,
+    printingMonitoringAdapter.pluginId,
+  ]);
 
   React.useEffect(() => {
     if (allReachabilityProbeTargets.length === 0) return;
@@ -4378,8 +4395,8 @@ export default function Home() {
     );
     if (!canLoadRecentPlates) {
       if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
-      setPrintingMonitorRecentPlates([]);
       setPrintingMonitorRecentPlatesError(null);
+      setIsPrintingMonitorRecentPlatesLoading(false);
       return;
     }
 
@@ -4387,8 +4404,8 @@ export default function Home() {
     const port = monitoringDevice?.port || 80;
     if (!host) {
       if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
-      setPrintingMonitorRecentPlates([]);
       setPrintingMonitorRecentPlatesError('No printer IP available for recent print files.');
+      setIsPrintingMonitorRecentPlatesLoading(false);
       return;
     }
 
@@ -4544,10 +4561,30 @@ export default function Home() {
         return parsed[0]?.plateId ?? null;
       });
       setPrintingMonitorRecentPlatesError(null);
+      if (printingMonitorRecentPlatesCacheKey) {
+        const resolvedSelectedPlateId = (
+          printingMonitorPlateId != null && parsed.some((plate: PrintingMonitorRecentPlate) => plate.plateId === printingMonitorPlateId)
+        )
+          ? printingMonitorPlateId
+          : (parsed[0]?.plateId ?? null);
+        printingMonitorRecentPlatesCacheRef.current.set(printingMonitorRecentPlatesCacheKey, {
+          plates: parsed,
+          selectedPlateId: resolvedSelectedPlateId,
+          error: null,
+        });
+      }
     } catch (error) {
       if (requestId !== printingMonitorRecentPlatesRequestIdRef.current) return;
       const message = error instanceof Error ? error.message : 'Failed to load recent print files.';
       setPrintingMonitorRecentPlatesError(message);
+      if (printingMonitorRecentPlatesCacheKey) {
+        const cached = printingMonitorRecentPlatesCacheRef.current.get(printingMonitorRecentPlatesCacheKey);
+        printingMonitorRecentPlatesCacheRef.current.set(printingMonitorRecentPlatesCacheKey, {
+          plates: cached?.plates ?? printingMonitorRecentPlates,
+          selectedPlateId: cached?.selectedPlateId ?? printingMonitorSelectedPlateId,
+          error: message,
+        });
+      }
       setPrintingMonitorDebugState((previous) => ({
         ...previous,
         plates: {
@@ -4568,27 +4605,49 @@ export default function Home() {
     printingMonitorModalOpen,
     printingMonitorPlateId,
     printingMonitorPlatesStoragePath,
+    printingMonitorRecentPlates,
+    printingMonitorRecentPlatesCacheKey,
+    printingMonitorSelectedPlateId,
     printingMonitoringAdapter,
   ]);
 
   const handlePrintingMonitorStoragePathChange = React.useCallback((nextPath: '/local/' | '/usb/') => {
     if (nextPath === printingMonitorPlatesStoragePath) return;
 
-    // Immediately flush stale rows so the panel never shows Local data while USB is loading (or vice versa).
+    // Switch immediately and hydrate from per-device cache (if available) while a fresh fetch runs.
     printingMonitorRecentPlatesRequestIdRef.current += 1;
-    setPrintingMonitorRecentPlates([]);
-    setPrintingMonitorRecentPlatesError(null);
-    setPrintingMonitorSelectedPlateId(null);
     setIsPrintingMonitorRecentPlatesLoading(true);
     setPrintingMonitorPlatesStoragePath(nextPath);
   }, [printingMonitorPlatesStoragePath]);
 
   React.useEffect(() => {
-    if (!printingMonitorModalOpen) {
-      printingMonitorRecentPlatesRequestIdRef.current += 1;
+    if (!printingMonitorModalOpen) return;
+
+    printingMonitorRecentPlatesRequestIdRef.current += 1;
+
+    if (!printingMonitorRecentPlatesCacheKey) {
       setPrintingMonitorRecentPlates([]);
       setPrintingMonitorRecentPlatesError(null);
       setPrintingMonitorSelectedPlateId(null);
+      return;
+    }
+
+    const cached = printingMonitorRecentPlatesCacheRef.current.get(printingMonitorRecentPlatesCacheKey);
+    if (!cached) {
+      setPrintingMonitorRecentPlates([]);
+      setPrintingMonitorRecentPlatesError(null);
+      setPrintingMonitorSelectedPlateId(null);
+      return;
+    }
+
+    setPrintingMonitorRecentPlates(cached.plates);
+    setPrintingMonitorRecentPlatesError(cached.error);
+    setPrintingMonitorSelectedPlateId(cached.selectedPlateId);
+  }, [printingMonitorModalOpen, printingMonitorRecentPlatesCacheKey]);
+
+  React.useEffect(() => {
+    if (!printingMonitorModalOpen) {
+      printingMonitorRecentPlatesRequestIdRef.current += 1;
       setIsPrintingMonitorRecentPlatesLoading(false);
       return;
     }
@@ -4973,6 +5032,30 @@ export default function Home() {
       printingMonitorWebcamReadinessTimeoutRef.current = null;
     }
   }, []);
+
+  React.useEffect(() => {
+    if (!printingMonitorModalOpen) return;
+
+    cancelPrintingMonitorWebcamReadinessCheck();
+    if (printingMonitorRelayAutoRetryTimeoutRef.current != null) {
+      window.clearTimeout(printingMonitorRelayAutoRetryTimeoutRef.current);
+      printingMonitorRelayAutoRetryTimeoutRef.current = null;
+    }
+
+    printingMonitorRelayAutoRetryCountRef.current = 0;
+    printingMonitorWebcamAutoPollBlockedRef.current = false;
+    printingMonitorWebcamBusyUntilEpochMsRef.current = 0;
+    printingMonitorWebcamConsecutiveTimeoutsRef.current = 0;
+
+    setPrintingMonitorRelayBaseWsUrl(null);
+    setPrintingMonitorRelaySetupError(null);
+    setPrintingMonitorRelayDebugTransport(null);
+    setPrintingMonitorRelayReclaimDebug(null);
+    setPrintingMonitorWebcamInfo(null);
+    setPrintingMonitorWebcamLoadError(null);
+    setIsPrintingMonitorWebcamLoaded(false);
+    setPrintingMonitorWebcamAspectRatio(null);
+  }, [cancelPrintingMonitorWebcamReadinessCheck, monitoringDeviceId, printingMonitorModalOpen]);
 
   const schedulePrintingMonitorMjpegReadinessCheck = React.useCallback((target: HTMLImageElement) => {
     cancelPrintingMonitorWebcamReadinessCheck();
