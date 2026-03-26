@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
@@ -30,6 +30,7 @@ export function useJointInteraction(enabled: boolean = true) {
     const dragPlane = useRef<THREE.Plane>(new THREE.Plane());
     const dragOffset = useRef<THREE.Vector3>(new THREE.Vector3());
     const lastDragPos = useRef<Vec3 | null>(null);
+    const forceEndDragRef = useRef(false);
     const initialTrunkSnapshot = useRef<Trunk | null>(null);
     const initialBranchSnapshot = useRef<Branch | null>(null);
     const initialKickstandSnapshot = useRef<Kickstand | null>(null);
@@ -41,6 +42,56 @@ export function useJointInteraction(enabled: boolean = true) {
     const cloneTrunk = (trunk: Trunk): Trunk => JSON.parse(JSON.stringify(trunk));
     const cloneBranch = (branch: Branch): Branch => JSON.parse(JSON.stringify(branch));
     const cloneKickstand = (kickstand: Kickstand): Kickstand => JSON.parse(JSON.stringify(kickstand));
+
+    const setJointDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
+        if (typeof window === 'undefined') return;
+
+        const w = window as any;
+        w.__jointGizmoDragging = isDragging;
+        w.__jointGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
+
+        window.dispatchEvent(new CustomEvent('joint-gizmo-interaction-lock', {
+            detail: {
+                active: isDragging,
+                guardUntil: w.__jointGizmoGuardUntil,
+            },
+        }));
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            setJointDragInteractionLock(false, 0);
+        };
+    }, [setJointDragInteractionLock]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const markForceEndDrag = () => {
+            if (!activeJointId.current) return;
+            forceEndDragRef.current = true;
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                markForceEndDrag();
+            }
+        };
+
+        window.addEventListener('pointerup', markForceEndDrag, true);
+        window.addEventListener('pointercancel', markForceEndDrag, true);
+        window.addEventListener('mouseup', markForceEndDrag, true);
+        window.addEventListener('blur', markForceEndDrag);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener('pointerup', markForceEndDrag, true);
+            window.removeEventListener('pointercancel', markForceEndDrag, true);
+            window.removeEventListener('mouseup', markForceEndDrag, true);
+            window.removeEventListener('blur', markForceEndDrag);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
 
     // Helper to find mesh by modelId
     const findMesh = (modelId: string): THREE.Mesh | undefined => {
@@ -55,10 +106,10 @@ export function useJointInteraction(enabled: boolean = true) {
 
     // Monitor drag state
     useEffect(() => {
-        if (!enabled) return;
+        if (!enabled && !activeJointId.current) return;
 
         // Start Drag
-        if (isDragging && hit.category === 'joint' && hit.objectId && !activeJointId.current) {
+        if (enabled && isDragging && hit.category === 'joint' && hit.objectId && !activeJointId.current) {
             const jointId = hit.objectId;
             const trunks = getTrunks();
             const branches = getBranches();
@@ -134,6 +185,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 if (!isAllowed) return;
 
                 activeJointId.current = jointId;
+                setJointDragInteractionLock(true);
 
                 // While dragging a joint, disable OrbitControls so camera movement cannot
                 // influence drag math (which is computed from the camera ray).
@@ -180,7 +232,12 @@ export function useJointInteraction(enabled: boolean = true) {
         }
 
         // End Drag
-        if (!isDragging && activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current)) {
+        const activeJointIdAtEnd = activeJointId.current;
+        const shouldEndDrag = (!isDragging || forceEndDragRef.current)
+            && activeJointIdAtEnd
+            && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current);
+
+        if (shouldEndDrag) {
             console.log(`[JointInteraction] Stopped dragging joint ${activeJointId.current}`);
 
             // On drag end, do one collision-aware recompute so diskLengthOverride only reflects
@@ -202,7 +259,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
                         const resolved = moveJoint(
                             trunk,
-                            activeJointId.current,
+                            activeJointIdAtEnd,
                             lastDragPos.current,
                             undefined,
                             false,
@@ -227,7 +284,7 @@ export function useJointInteraction(enabled: boolean = true) {
                         const contextStart = knot?.pos;
                         const resolved = moveJoint(
                             branch as any,
-                            activeJointId.current,
+                            activeJointIdAtEnd,
                             lastDragPos.current,
                             undefined,
                             false,
@@ -258,7 +315,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
                         const resolved = moveJoint(
                             kickstand as unknown as Trunk,
-                            activeJointId.current,
+                            activeJointIdAtEnd,
                             lastDragPos.current,
                             undefined,
                             false,
@@ -292,6 +349,7 @@ export function useJointInteraction(enabled: boolean = true) {
             initialTrunkSnapshot.current = null;
             initialBranchSnapshot.current = null;
             initialKickstandSnapshot.current = null;
+            forceEndDragRef.current = false;
             setInteractionWarning(null); // Clear warning on release
             lastDragPos.current = null;
 
@@ -301,8 +359,10 @@ export function useJointInteraction(enabled: boolean = true) {
                 c.enabled = savedControlsEnabledRef.current;
                 savedControlsEnabledRef.current = null;
             }
+
+            setJointDragInteractionLock(false);
         }
-    }, [isDragging, hit, camera, pointer, raycaster, scene, controls]);
+    }, [isDragging, hit, camera, pointer, raycaster, scene, controls, setJointDragInteractionLock]);
 
     // Update loop
     useFrame(() => {

@@ -79,6 +79,7 @@ export function KnotRenderer({
     }, [register, unregister, knot.id, enablePicking, isParentSelected]);
 
     const isTopPickedKnot = frontBlockingModelId === null
+        && isInteractable
         && hit.category === 'knot'
         && hit.objectId === knot.id
         && isParentSelected;
@@ -166,6 +167,16 @@ export function KnotRenderer({
             document.body.style.cursor = 'grab';
         }
     }, [isHovered, isInteractable]);
+
+    React.useEffect(() => {
+        if (isInteractable) return;
+
+        setPointerHoverActive((prev) => (prev ? false : prev));
+        if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
+            setHoveredCategory('none');
+            setHoveredId(null);
+        }
+    }, [isInteractable, knot.id, state.hoveredCategory, state.hoveredId]);
 
     React.useEffect(() => {
         if (!isParentSelected || !pointerHoverActive) return;

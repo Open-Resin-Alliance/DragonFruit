@@ -190,6 +190,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={isSegSelected}
                     onClick={() => selectPrimitiveById(seg.id)}
                 />
@@ -207,6 +208,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={isSegSelected}
                     onClick={() => selectPrimitiveById(seg.id)}
                 />

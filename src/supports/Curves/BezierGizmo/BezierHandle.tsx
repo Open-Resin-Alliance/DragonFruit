@@ -7,8 +7,10 @@ import { BezierHandleProps } from './types';
 
 import { useBezierHandleDrag } from './useBezierHandleDrag';
 
-const HANDLE_SCALE_FACTOR = 0.02; // Matches JointGizmo scale
-const SPHERE_RADIUS = GIZMO_SIZES.arrowHeadRadius * 2.2; // Increased for better visibility and interaction area
+const HANDLE_SCALE_FACTOR = 0.012;
+const MIN_HANDLE_SCALE = 0.55;
+const MAX_HANDLE_SCALE = 2.1;
+const SPHERE_RADIUS = GIZMO_SIZES.arrowHeadRadius * 1.25;
 
 export function BezierHandle({
     position,
@@ -27,6 +29,7 @@ export function BezierHandle({
     // Drag Hook
     const { isDragging, handlePointerDown } = useBezierHandleDrag({
         jointPosition, // Use joint as pivot plane origin
+        handlePosition: position,
         onDragStart,
         onDrag: (newPos) => {
             if (onDrag) onDrag(newPos);
@@ -38,7 +41,8 @@ export function BezierHandle({
     useFrame(() => {
         if (sphereRef.current) {
             const distance = camera.position.distanceTo(position);
-            setScale(distance * HANDLE_SCALE_FACTOR);
+            const next = THREE.MathUtils.clamp(distance * HANDLE_SCALE_FACTOR, MIN_HANDLE_SCALE, MAX_HANDLE_SCALE);
+            setScale((prev) => (Math.abs(prev - next) > 1e-4 ? next : prev));
         }
     });
 

@@ -123,6 +123,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={segmentSelected}
                     onClick={() => selectPrimitiveById(segment.id)}
                 />,
@@ -142,6 +143,7 @@ export const KickstandRenderer = React.memo(function KickstandRenderer({
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
                     isParentSelected={isSelected}
+                    isInteractable={isInteractable}
                     isSelected={segmentSelected}
                     onClick={() => selectPrimitiveById(segment.id)}
                 />,

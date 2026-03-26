@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore, useCallback, useMemo, useState, useRef } from 'react';
+import React, { useSyncExternalStore, useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, updateBrace, getTrunkById, getBranchById } from '../../state';
 import { Trunk, Branch, Twig, Stick, Brace, Segment, BezierSegment, Joint } from '../../types';
@@ -38,6 +38,27 @@ export function BezierGizmoManager() {
     const initialStickRef = useRef<Stick | null>(null);
     const initialBraceRef = useRef<Brace | null>(null);
     const initialKickstandRef = useRef<KickstandEntity | null>(null);
+
+    const setBezierGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
+        if (typeof window === 'undefined') return;
+
+        const w = window as any;
+        w.__bezierGizmoDragging = isDragging;
+        w.__bezierGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
+
+        window.dispatchEvent(new CustomEvent('bezier-gizmo-interaction-lock', {
+            detail: {
+                active: isDragging,
+                guardUntil: w.__bezierGizmoGuardUntil,
+            },
+        }));
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            setBezierGizmoInteractionFlags(false, 0);
+        };
+    }, [setBezierGizmoInteractionFlags]);
 
     // Helper to find all relevant handle contexts based on selection
     const findGizmoContexts = useCallback((): HandleContext[] => {
@@ -579,6 +600,7 @@ export function BezierGizmoManager() {
      */
     const handleDragStart = (ctx: HandleContext) => {
         curveInteractionStore.setIsDraggingHandle(true);
+        setBezierGizmoInteractionFlags(true);
         // Snapshot for history
         if (ctx.trunk) {
             initialTrunkRef.current = JSON.parse(JSON.stringify(ctx.trunk));
@@ -597,6 +619,7 @@ export function BezierGizmoManager() {
 
     const handleDragEnd = (ctx: HandleContext) => {
         curveInteractionStore.setIsDraggingHandle(false);
+        setBezierGizmoInteractionFlags(false);
         // Prevent canvas click (deselect)
         (window as any).__gizmoDragEndedThisFrame = true;
 

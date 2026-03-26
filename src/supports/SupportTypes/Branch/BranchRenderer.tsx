@@ -173,6 +173,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
+          isInteractable={isInteractable}
           isSelected={isSegSelected}
           onClick={() => selectPrimitiveById(seg.id)}
         />
@@ -190,6 +191,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
+          isInteractable={isInteractable}
           isSelected={isSegSelected}
           onClick={() => selectPrimitiveById(seg.id)}
         />

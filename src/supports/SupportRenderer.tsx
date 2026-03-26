@@ -345,10 +345,12 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             const w = window as any;
             const knotDragging = !!w.__knotGizmoDragging;
             const jointDragging = !!w.__jointGizmoDragging;
-            const dragging = knotDragging || jointDragging;
+            const bezierDragging = !!w.__bezierGizmoDragging;
+            const dragging = knotDragging || jointDragging || bezierDragging;
             const knotGuardUntil = typeof w.__knotGizmoGuardUntil === 'number' ? w.__knotGizmoGuardUntil : 0;
             const jointGuardUntil = typeof w.__jointGizmoGuardUntil === 'number' ? w.__jointGizmoGuardUntil : 0;
-            const guardUntil = Math.max(knotGuardUntil, jointGuardUntil);
+            const bezierGuardUntil = typeof w.__bezierGizmoGuardUntil === 'number' ? w.__bezierGizmoGuardUntil : 0;
+            const guardUntil = Math.max(knotGuardUntil, jointGuardUntil, bezierGuardUntil);
             const now = Date.now();
             const guardActive = guardUntil > now;
             const nextActive = dragging || guardActive;
@@ -410,12 +412,32 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             refreshFromGlobals();
         };
 
+        const handleBezierGizmoInteractionLock = (event: Event) => {
+            const detail = (event as CustomEvent<{ active?: boolean; guardUntil?: number }>).detail;
+            if (typeof detail?.active !== 'boolean') {
+                refreshFromGlobals();
+                return;
+            }
+
+            const w = window as any;
+            if (typeof detail.active === 'boolean') {
+                w.__bezierGizmoDragging = detail.active;
+            }
+            if (typeof detail.guardUntil === 'number') {
+                w.__bezierGizmoGuardUntil = detail.guardUntil;
+            }
+
+            refreshFromGlobals();
+        };
+
         refreshFromGlobals();
         window.addEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
         window.addEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+        window.addEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
         return () => {
             window.removeEventListener('knot-gizmo-interaction-lock', handleKnotGizmoInteractionLock as EventListener);
             window.removeEventListener('joint-gizmo-interaction-lock', handleJointGizmoInteractionLock as EventListener);
+            window.removeEventListener('bezier-gizmo-interaction-lock', handleBezierGizmoInteractionLock as EventListener);
             if (knotGizmoInteractionLockTimeoutRef.current != null) {
                 window.clearTimeout(knotGizmoInteractionLockTimeoutRef.current);
                 knotGizmoInteractionLockTimeoutRef.current = null;
@@ -586,7 +608,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         const w = window as any;
         const knotGuardUntil = typeof w.__knotGizmoGuardUntil === 'number' ? w.__knotGizmoGuardUntil : 0;
         const jointGuardUntil = typeof w.__jointGizmoGuardUntil === 'number' ? w.__jointGizmoGuardUntil : 0;
-        const guardUntil = Math.max(knotGuardUntil, jointGuardUntil);
+        const bezierGuardUntil = typeof w.__bezierGizmoGuardUntil === 'number' ? w.__bezierGizmoGuardUntil : 0;
+        const guardUntil = Math.max(knotGuardUntil, jointGuardUntil, bezierGuardUntil);
         w.__supportRendererDebug = {
             supportInteractionSuppressed,
             supportSelectionAndHoverSuppressed,
@@ -595,9 +618,11 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             jointCategoryHoverSuppressed,
             knotGizmoDragging: !!w.__knotGizmoDragging,
             jointGizmoDragging: !!w.__jointGizmoDragging,
+            bezierGizmoDragging: !!w.__bezierGizmoDragging,
             knotGizmoGuardUntil: guardUntil,
             knotOnlyGuardUntil: knotGuardUntil,
             jointOnlyGuardUntil: jointGuardUntil,
+            bezierOnlyGuardUntil: bezierGuardUntil,
             immediateModelHoverId,
             externalHoverModelId: hoverModelId,
             effectiveHoverModelId,
@@ -2416,6 +2441,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (!isPointerInteractable) return;
         if (orbitInteractionActiveRef.current) return;
 
+        const jointDragInteractionActive = typeof window !== 'undefined' && !!(window as any).__jointGizmoDragging;
+        const allowSuppressedShaftHoverForBracePreview = braceAltActive && mode === 'support' && !jointDragInteractionActive;
+
         const sceneHoverWriteDecision = resolveSceneBatchedShaftHoverWriteDecision({
             supportId: shaft.supportId,
             modelId: shaft.modelId,
@@ -2434,7 +2462,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason !== 'interaction-suppressed') {
             // When brace placement is active, always emit shaft-hover so the preview can track
             // unselected shafts even when hover suppression logic would otherwise clear it.
-            if (braceAltActive && mode === 'support') {
+            if (allowSuppressedShaftHoverForBracePreview) {
                 window.dispatchEvent(new CustomEvent('shaft-hover', {
                     detail: { segmentId: shaft.id, point, intersection: event },
                 }));
@@ -2453,13 +2481,19 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         if (sceneHoverWriteDecision.type === 'clear' && sceneHoverWriteDecision.reason === 'interaction-suppressed') {
-            window.dispatchEvent(new CustomEvent('shaft-hover', {
-                detail: {
-                    segmentId: shaft.id,
-                    point,
-                    intersection: event,
-                },
-            }));
+            if (allowSuppressedShaftHoverForBracePreview) {
+                window.dispatchEvent(new CustomEvent('shaft-hover', {
+                    detail: {
+                        segmentId: shaft.id,
+                        point,
+                        intersection: event,
+                    },
+                }));
+            } else {
+                window.dispatchEvent(new CustomEvent('shaft-leave', {
+                    detail: { segmentId: shaft.id },
+                }));
+            }
             applySceneHoverWriteDecision(
                 sceneHoverWriteDecision,
                 pendingSceneHoverClearFrameRef,

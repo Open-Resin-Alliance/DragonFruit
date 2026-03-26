@@ -192,6 +192,7 @@ export const StickRenderer = React.memo(function StickRenderer({
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
+          isInteractable={isInteractable}
           isSelected={isSegSelected}
           onClick={() => selectPrimitiveById(seg.id)}
         />
@@ -209,6 +210,7 @@ export const StickRenderer = React.memo(function StickRenderer({
           emissiveIntensity={visuals.emissiveIntensity}
           selectedColor={visuals.selectedColor}
           isParentSelected={isSelected}
+          isInteractable={isInteractable}
           isSelected={isSegSelected}
           onClick={() => selectPrimitiveById(seg.id)}
         />
