@@ -604,6 +604,16 @@ function normalizePrintingMonitorWebcamAspectRatio(value: number | null | undefi
   return value;
 }
 
+function resolvePrintingMonitorAbsoluteUrl(candidate: string, host: string, port: number): string | null {
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('//')) return `http:${trimmed}`;
+  const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
+  if (trimmed.startsWith('/')) return `${base}${trimmed}`;
+  return `${base}/${trimmed.replace(/^\/+/, '')}`;
+}
+
 export default function Home() {
   // 1. Scene & Geometry (Multi-Model)
   const scene = useSceneCollectionManager();
@@ -3249,20 +3259,30 @@ export default function Home() {
     return Math.round(candidate);
   }, [printingMonitorSnapshot?.plateId, printingReadyPlateId]);
   const printingMonitorThumbnailUrl = React.useMemo(() => {
-    if (!monitoringDevice || printingMonitorPlateId == null) return null;
+    if (!monitoringDevice) return null;
     const host = (monitoringDevice.ipAddress || '').trim();
     if (!host) return null;
     const port = monitoringDevice.port || 80;
+
+    const metadataThumbnail = typeof printingMonitorSnapshot?.thumbnailPath === 'string'
+      ? printingMonitorSnapshot.thumbnailPath.trim()
+      : '';
+    if (metadataThumbnail) {
+      const resolved = resolvePrintingMonitorAbsoluteUrl(metadataThumbnail, host, port);
+      if (resolved) return resolved;
+    }
+
+    if (printingMonitorPlateId == null) return null;
     const base = `http://${host}${port === 80 ? '' : `:${port}`}`;
     return `${base}/static/plates/${printingMonitorPlateId}/3d.png`;
-  }, [monitoringDevice, printingMonitorPlateId]);
+  }, [monitoringDevice, printingMonitorPlateId, printingMonitorSnapshot?.thumbnailPath]);
   const printingMonitorThumbnailCacheKey = React.useMemo(() => {
-    if (!monitoringDevice || printingMonitorPlateId == null) return null;
+    if (!monitoringDevice || !printingMonitorThumbnailUrl) return null;
     const host = (monitoringDevice.ipAddress || '').trim();
     if (!host) return null;
     const port = monitoringDevice.port || 80;
-    return `${host}:${port}|${printingMonitorPlateId}`;
-  }, [monitoringDevice, printingMonitorPlateId]);
+    return `${host}:${port}|${printingMonitorThumbnailUrl}`;
+  }, [monitoringDevice, printingMonitorThumbnailUrl]);
   const printingMonitorInlineWebcamUrl = React.useMemo(() => {
     const candidates = [
       printingMonitorWebcamInfo?.streamUrl,
