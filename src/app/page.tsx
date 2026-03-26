@@ -204,6 +204,8 @@ type PrintingMonitorDebugState = {
   status: PrintingMonitorDebugChannelState;
   webcam: PrintingMonitorDebugChannelState;
   plates: PrintingMonitorDebugChannelState;
+  taskHistory: PrintingMonitorDebugChannelState;
+  taskDetails: PrintingMonitorDebugChannelState;
 };
 
 type PrintingMonitorFeatureToggleResponse = {
@@ -216,7 +218,7 @@ type PrintingMonitorFeatureToggleResponse = {
   requestedAtEpochMs: number;
 };
 
-const PRINTING_MONITOR_DEBUG_CHANNELS = ['status', 'webcam', 'plates'] as const;
+const PRINTING_MONITOR_DEBUG_CHANNELS = ['status', 'webcam', 'plates', 'taskHistory', 'taskDetails'] as const;
 type PrintingMonitorDebugChannel = (typeof PRINTING_MONITOR_DEBUG_CHANNELS)[number];
 
 const EMPTY_SUPPORT_BOUNDS_BY_MODEL_ID = new Map<string, THREE.Box3>();
@@ -907,6 +909,22 @@ export default function Home() {
       error: null,
     },
     plates: {
+      requestedAtEpochMs: null,
+      request: null,
+      httpStatus: null,
+      rawPayload: null,
+      parsedPayload: null,
+      error: null,
+    },
+    taskHistory: {
+      requestedAtEpochMs: null,
+      request: null,
+      httpStatus: null,
+      rawPayload: null,
+      parsedPayload: null,
+      error: null,
+    },
+    taskDetails: {
       requestedAtEpochMs: null,
       request: null,
       httpStatus: null,
@@ -6555,6 +6573,94 @@ export default function Home() {
     printingMonitoringAdapter,
   ]);
 
+  const executePrintingMonitorSdcpDebugCommand = React.useCallback(async (
+    options: {
+      operation: string;
+      label: string;
+      channel: PrintingMonitorDebugChannel;
+      payload?: Record<string, unknown>;
+    },
+  ) => {
+    if (!printingMonitoringAdapter.pluginId) return;
+
+    const host = (monitoringDevice?.ipAddress || '').trim();
+    const port = monitoringDevice?.port || 80;
+    if (!host) {
+      setPrintingMonitorError(`No printer IP available for ${options.label}.`);
+      return;
+    }
+
+    const requestPayload = {
+      pluginId: printingMonitoringAdapter.pluginId,
+      operation: options.operation,
+      ipAddress: host,
+      port,
+      ...(options.payload ?? {}),
+    };
+
+    setPrintingMonitorActionBusy(null);
+    setPrintingMonitorActionStatus(null);
+
+    try {
+      const response = await pluginNetworkFetch(requestPayload);
+      const payload = await response.json().catch(() => ({} as any));
+
+      setPrintingMonitorDebugState((previous) => ({
+        ...previous,
+        [options.channel]: {
+          requestedAtEpochMs: Date.now(),
+          request: requestPayload,
+          httpStatus: response.status,
+          rawPayload: payload,
+          parsedPayload: payload,
+          error: (!response.ok || payload?.ok === false)
+            ? (typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
+            : null,
+        },
+      }));
+
+      const commandOk = typeof payload?.ok === 'boolean'
+        ? payload.ok
+        : response.ok;
+      setPrintingMonitorLastFeatureToggleResponse({
+        operation: options.operation,
+        httpStatus: response.status,
+        httpOk: response.ok,
+        commandOk,
+        payload,
+        error: (!response.ok || payload?.ok === false)
+          ? (typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`)
+          : null,
+        requestedAtEpochMs: Date.now(),
+      });
+
+      if (!response.ok || payload?.ok === false) {
+        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        throw new Error(reason);
+      }
+
+      setPrintingMonitorActionStatus(
+        typeof payload?.message === 'string' && payload.message.trim().length > 0
+          ? payload.message.trim()
+          : `${options.label} command accepted.`,
+      );
+      setPrintingMonitorError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `Failed to run ${options.label} command.`;
+      setPrintingMonitorError(message);
+      setPrintingMonitorActionStatus(null);
+      setPrintingMonitorLastFeatureToggleResponse((previous) => ({
+        operation: options.operation,
+        httpStatus: previous?.operation === options.operation ? previous.httpStatus : null,
+        httpOk: previous?.operation === options.operation ? previous.httpOk : false,
+        commandOk: false,
+        payload: previous?.operation === options.operation ? previous.payload : null,
+        error: message,
+        requestedAtEpochMs: Date.now(),
+      }));
+    }
+  }, [monitoringDevice?.ipAddress, monitoringDevice?.port, printingMonitoringAdapter.pluginId]);
+
   const handlePrintingMonitorControlAction = React.useCallback((
     action: 'pause' | 'resume' | 'cancel' | 'emergency-stop',
   ) => {
@@ -7579,6 +7685,8 @@ export default function Home() {
         status: channelSummary('status'),
         webcam: channelSummary('webcam'),
         plates: channelSummary('plates'),
+        taskHistory: channelSummary('taskHistory'),
+        taskDetails: channelSummary('taskDetails'),
       },
     };
   }, [
@@ -13814,7 +13922,7 @@ export default function Home() {
                     <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                       Manual SDCP commands
                     </div>
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       <button
                         type="button"
                         className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
@@ -13878,6 +13986,46 @@ export default function Home() {
                       >
                         <div className="font-semibold uppercase tracking-wide">Cmd 387</div>
                         <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Disable timelapse</div>
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
+                          color: 'var(--text-strong)',
+                        }}
+                        disabled={printingMonitorAnyActionBusy || printingMonitoringAdapter.pluginId !== 'sdcp-v3'}
+                        onClick={() => {
+                          void executePrintingMonitorSdcpDebugCommand({
+                            operation: 'sdcp/task/history/list',
+                            label: 'Task history',
+                            channel: 'taskHistory',
+                          });
+                        }}
+                      >
+                        <div className="font-semibold uppercase tracking-wide">Cmd 320</div>
+                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Fetch task history IDs</div>
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border px-2 py-1 text-left text-[10px] transition-colors"
+                        style={{
+                          borderColor: 'var(--border-subtle)',
+                          background: 'color-mix(in srgb, var(--surface-2), #000 6%)',
+                          color: 'var(--text-strong)',
+                        }}
+                        disabled={printingMonitorAnyActionBusy || printingMonitoringAdapter.pluginId !== 'sdcp-v3'}
+                        onClick={() => {
+                          void executePrintingMonitorSdcpDebugCommand({
+                            operation: 'sdcp/task/details',
+                            label: 'Task details',
+                            channel: 'taskDetails',
+                          });
+                        }}
+                      >
+                        <div className="font-semibold uppercase tracking-wide">Cmd 321</div>
+                        <div className="mt-0.5" style={{ color: 'var(--text-muted)' }}>Fetch task detail records</div>
                       </button>
                     </div>
                     <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
