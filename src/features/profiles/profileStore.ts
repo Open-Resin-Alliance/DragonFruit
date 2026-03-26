@@ -741,7 +741,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
               rawDisplay?.webcamRotationDeg
               ?? rawDisplay?.webcamOrientation
               ?? fallbackDisplay?.webcamRotationDeg
-              ?? fallbackDisplay?.webcamOrientation,
+              ?? (fallbackDisplay as { webcamOrientation?: unknown } | undefined)?.webcamOrientation,
               DEFAULT_WEBCAM_ROTATION_DEG,
             ),
             mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
