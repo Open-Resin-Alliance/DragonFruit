@@ -941,7 +941,7 @@ export function ProfileSettingsModal({
     [managedNetworkPrinters],
   );
   const selectedPrinterFleetCount = managedNetworkPrinters.length;
-  const canShowFleetRailMode = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
+  const canShowFleetRailMode = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 0;
   const shouldRenderFleetRail = selectedPrinterSupportsNetworkSettings && printerRailViewMode === 'fleet';
   const printerRailEntryCount = shouldRenderFleetRail ? managedNetworkPrinters.length : profileState.printerProfiles.length;
   const shouldConstrainPrinterRailHeight = printerRailEntryCount > 8;
@@ -949,8 +949,8 @@ export function ProfileSettingsModal({
     () => profileState.printerProfiles.findIndex((profile) => profile.id === selectedPrinter?.id),
     [profileState.printerProfiles, selectedPrinter?.id],
   );
-  const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 1 ? 'Manage Fleet' : 'Network Settings';
-  const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 1;
+  const networkSettingsActionLabel = connectedManagedNetworkPrinterCount > 0 ? 'Manage Fleet' : 'Network Settings';
+  const shouldShowFleetSwitchAction = selectedPrinterSupportsNetworkSettings && selectedPrinterFleetCount > 0;
   const regularNetworkActionLabel = shouldShowFleetSwitchAction ? 'Show Fleet' : 'Network Settings';
   const printerSectionTitle = shouldRenderFleetRail
     ? `${selectedPrinter?.name ?? 'Printer'} Fleet`
@@ -1186,7 +1186,7 @@ export function ProfileSettingsModal({
       return;
     }
 
-    if (selectedPrinterFleetCount > 1) {
+    if (selectedPrinterFleetCount > 0) {
       return;
     }
 
@@ -1201,7 +1201,7 @@ export function ProfileSettingsModal({
       return;
     }
 
-    if (selectedPrinterFleetCount > 1) {
+    if (selectedPrinterFleetCount > 0) {
       return;
     }
 
@@ -3026,7 +3026,7 @@ export function ProfileSettingsModal({
                         onClick={(event) => {
                           event.stopPropagation();
                           handlePickPrinter(printer.id);
-                          if (fleetCount > 1) {
+                          if (fleetCount > 0) {
                             setPrinterRailViewMode('fleet');
                             return;
                           }
@@ -3035,9 +3035,9 @@ export function ProfileSettingsModal({
                           setShowManualNetworkEntry(false);
                           setIsNetworkSettingsOpen(true);
                         }}
-                        aria-label={fleetCount > 1 ? `Open fleet view (${fleetCount})` : 'Add another networked device'}
+                        aria-label={fleetCount > 0 ? `Open fleet view (${fleetCount})` : 'Add another networked device'}
                         className="ui-button ui-button-secondary !h-7 !w-7 !px-0 !py-0 text-[11px] inline-flex items-center justify-center rounded-md shrink-0"
-                        style={fleetCount > 1
+                        style={fleetCount > 0
                           ? {
                               color: 'var(--text-strong)',
                               borderColor: 'color-mix(in srgb, var(--accent), var(--border-subtle) 42%)',
@@ -3048,9 +3048,9 @@ export function ProfileSettingsModal({
                               borderColor: 'color-mix(in srgb, var(--accent-secondary), var(--border-subtle) 42%)',
                               background: 'color-mix(in srgb, var(--accent-secondary), var(--surface-1) 93%)',
                             }}
-                        title={fleetCount > 1 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
+                        title={fleetCount > 0 ? `Switch to fleet view (${fleetCount})` : 'Add another networked device'}
                       >
-                        {fleetCount > 1 ? (
+                        {fleetCount > 0 ? (
                           <span className="grid h-full w-full place-items-center text-[12px] font-semibold leading-none tabular-nums">{fleetCount}</span>
                         ) : (
                           <Plus className="w-3.5 h-3.5" />
