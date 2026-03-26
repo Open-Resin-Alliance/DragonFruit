@@ -1,7 +1,7 @@
 [
   {
     "presetId": "concepts3d-athena1-8k-nanodlp",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Concepts3D",
     "family": "Athena",
     "name": "Athena 8K",
@@ -27,7 +27,7 @@
   },
   {
     "presetId": "concepts3d-athena1-12k-nanodlp",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Concepts3D",
     "family": "Athena",
     "name": "Athena 12K",
@@ -53,7 +53,7 @@
   },
   {
     "presetId": "concepts3d-athena2-12k-nanodlp",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Concepts3D",
     "family": "Athena II",
     "name": "Athena II 12K",
@@ -79,7 +79,7 @@
   },
   {
     "presetId": "concepts3d-athena2-16k3b-nanodlp",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Concepts3D",
     "family": "Athena II",
     "name": "Athena II 16K · 3-bit",
@@ -105,7 +105,7 @@
   },
   {
     "presetId": "concepts3d-athena2-16k8b-nanodlp",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Concepts3D",
     "family": "Athena II",
     "name": "Athena II 16K",
@@ -131,7 +131,7 @@
   },
   {
     "presetId": "concepts3d-athena2-16k8b-odyssey",
-    "profileVersion": 2,
+    "profileVersion": 3,
     "manufacturer": "Open Resin Alliance",
     "family": "Open Resin Alliance - Testing Only",
     "name": "Athena II 16K",
