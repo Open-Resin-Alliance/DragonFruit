@@ -14,9 +14,9 @@ import {
   normalizeOutputFormat,
   normalizeFormatVersion,
   normalizeSettingsMode,
-  normalizeWebcamOrientation,
+  normalizeWebcamRotationDeg,
   DEFAULT_OUTPUT_FORMAT,
-  DEFAULT_WEBCAM_ORIENTATION,
+  DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
 
 export type PrinterOutputFormat = string;
@@ -65,7 +65,7 @@ export type PrinterBitDepth = {
 };
 
 export type PrinterBuildDimensionMode = 'manual' | 'auto';
-export type PrinterWebcamOrientation = 'landscape' | 'portrait';
+export type PrinterWebcamRotationDeg = 0 | 90 | 180 | 270;
 
 export type PrinterPreset = {
   presetId: string;
@@ -93,7 +93,7 @@ export type PrinterPreset = {
     outputFormat: PrinterOutputFormat;
     formatVersion?: string;
     settingsMode?: string;
-    webcamOrientation?: PrinterWebcamOrientation;
+    webcamRotationDeg?: PrinterWebcamRotationDeg;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -127,7 +127,7 @@ export type PrinterProfile = {
     outputFormat: PrinterOutputFormat;
     formatVersion?: string;
     settingsMode?: string;
-    webcamOrientation?: PrinterWebcamOrientation;
+    webcamRotationDeg?: PrinterWebcamRotationDeg;
     mirrorX?: boolean;
     mirrorY?: boolean;
   };
@@ -528,7 +528,11 @@ const BUILTIN_PRINTER_PRESETS: PrinterPreset[] = (printerPresetsData as PrinterP
     outputFormat: normalizeOutputFormat(preset.display?.outputFormat),
     formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown } | undefined)?.formatVersion),
     settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown } | undefined)?.settingsMode),
-    webcamOrientation: normalizeWebcamOrientation((preset.display as { webcamOrientation?: unknown } | undefined)?.webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
+    webcamRotationDeg: normalizeWebcamRotationDeg(
+      (preset.display as { webcamRotationDeg?: unknown; webcamOrientation?: unknown } | undefined)?.webcamRotationDeg
+      ?? (preset.display as { webcamRotationDeg?: unknown; webcamOrientation?: unknown } | undefined)?.webcamOrientation,
+      DEFAULT_WEBCAM_ROTATION_DEG,
+    ),
     mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown } | undefined)?.mirrorX, false),
     mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown } | undefined)?.mirrorY, false),
   },
@@ -733,7 +737,13 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
             outputFormat: normalizeOutputFormat(rawDisplay?.outputFormat ?? fallbackDisplay?.outputFormat),
             formatVersion: normalizeFormatVersion(rawDisplay?.formatVersion ?? fallbackDisplay?.formatVersion),
             settingsMode: normalizeSettingsMode(rawDisplay?.settingsMode ?? fallbackDisplay?.settingsMode),
-            webcamOrientation: normalizeWebcamOrientation(rawDisplay?.webcamOrientation ?? fallbackDisplay?.webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
+            webcamRotationDeg: normalizeWebcamRotationDeg(
+              rawDisplay?.webcamRotationDeg
+              ?? rawDisplay?.webcamOrientation
+              ?? fallbackDisplay?.webcamRotationDeg
+              ?? fallbackDisplay?.webcamOrientation,
+              DEFAULT_WEBCAM_ROTATION_DEG,
+            ),
             mirrorX: normalizeMirrorFlag(rawDisplay?.mirrorX, normalizeMirrorFlag(fallbackDisplay?.mirrorX, false)),
             mirrorY: normalizeMirrorFlag(rawDisplay?.mirrorY, normalizeMirrorFlag(fallbackDisplay?.mirrorY, false)),
           },
@@ -1053,7 +1063,10 @@ export function addPrinterProfile(partial?: Partial<Omit<PrinterProfile, 'id'>>)
       outputFormat: normalizeOutputFormat(partial?.display?.outputFormat),
       formatVersion: normalizeFormatVersion(partial?.display?.formatVersion),
       settingsMode: normalizeSettingsMode(partial?.display?.settingsMode),
-      webcamOrientation: normalizeWebcamOrientation(partial?.display?.webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
+      webcamRotationDeg: normalizeWebcamRotationDeg(
+        partial?.display?.webcamRotationDeg ?? (partial?.display as { webcamOrientation?: unknown } | undefined)?.webcamOrientation,
+        DEFAULT_WEBCAM_ROTATION_DEG,
+      ),
       mirrorX: normalizeMirrorFlag(partial?.display?.mirrorX, false),
       mirrorY: normalizeMirrorFlag(partial?.display?.mirrorY, false),
     },
@@ -1120,7 +1133,11 @@ export function addPrinterProfileFromPreset(presetId: string): string {
       outputFormat: normalizeOutputFormat(preset.display.outputFormat),
       formatVersion: normalizeFormatVersion((preset.display as { formatVersion?: unknown }).formatVersion),
       settingsMode: normalizeSettingsMode((preset.display as { settingsMode?: unknown }).settingsMode),
-      webcamOrientation: normalizeWebcamOrientation((preset.display as { webcamOrientation?: unknown }).webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
+      webcamRotationDeg: normalizeWebcamRotationDeg(
+        (preset.display as { webcamRotationDeg?: unknown; webcamOrientation?: unknown }).webcamRotationDeg
+        ?? (preset.display as { webcamRotationDeg?: unknown; webcamOrientation?: unknown }).webcamOrientation,
+        DEFAULT_WEBCAM_ROTATION_DEG,
+      ),
       mirrorX: normalizeMirrorFlag((preset.display as { mirrorX?: unknown }).mirrorX, false),
       mirrorY: normalizeMirrorFlag((preset.display as { mirrorY?: unknown }).mirrorY, false),
     },
@@ -1202,8 +1219,11 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
       if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'formatVersion')) {
         nextDisplay.formatVersion = sourceUpdates.display.formatVersion;
       }
-      if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'webcamOrientation')) {
-        nextDisplay.webcamOrientation = sourceUpdates.display.webcamOrientation;
+      if (Object.prototype.hasOwnProperty.call(sourceUpdates.display, 'webcamRotationDeg')) {
+        nextDisplay.webcamRotationDeg = sourceUpdates.display.webcamRotationDeg;
+      }
+      if (Object.prototype.hasOwnProperty.call(sourceUpdates.display as Record<string, unknown>, 'webcamOrientation')) {
+        nextDisplay.webcamRotationDeg = (sourceUpdates.display as { webcamOrientation?: unknown }).webcamOrientation as PrinterWebcamRotationDeg;
       }
       if (Object.keys(nextDisplay).length > 0) {
         nextUpdates.display = nextDisplay as PrinterProfile['display'];
@@ -1301,7 +1321,13 @@ export function updatePrinterProfile(id: string, updates: Partial<Omit<PrinterPr
           outputFormat: normalizeOutputFormat(appliedUpdates.display.outputFormat ?? profile.display.outputFormat),
           formatVersion: normalizeFormatVersion(appliedUpdates.display.formatVersion ?? profile.display.formatVersion),
           settingsMode: normalizeSettingsMode(appliedUpdates.display.settingsMode ?? profile.display.settingsMode),
-          webcamOrientation: normalizeWebcamOrientation(appliedUpdates.display.webcamOrientation ?? profile.display.webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
+          webcamRotationDeg: normalizeWebcamRotationDeg(
+            appliedUpdates.display.webcamRotationDeg
+            ?? (appliedUpdates.display as { webcamOrientation?: unknown }).webcamOrientation
+            ?? profile.display.webcamRotationDeg
+            ?? (profile.display as { webcamOrientation?: unknown }).webcamOrientation,
+            DEFAULT_WEBCAM_ROTATION_DEG,
+          ),
           mirrorX: normalizeMirrorFlag(appliedUpdates.display.mirrorX, profile.display.mirrorX === true),
           mirrorY: normalizeMirrorFlag(appliedUpdates.display.mirrorY, profile.display.mirrorY === true),
         }
@@ -1632,7 +1658,10 @@ export function importPrinterBundle(payload: unknown): string {
       outputFormat: normalizeOutputFormat(sourcePrinter.display?.outputFormat),
       formatVersion: normalizeFormatVersion(sourcePrinter.display?.formatVersion),
       settingsMode: normalizeSettingsMode(sourcePrinter.display?.settingsMode),
-      webcamOrientation: normalizeWebcamOrientation(sourcePrinter.display?.webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
+      webcamRotationDeg: normalizeWebcamRotationDeg(
+        sourcePrinter.display?.webcamRotationDeg ?? (sourcePrinter.display as { webcamOrientation?: unknown } | undefined)?.webcamOrientation,
+        DEFAULT_WEBCAM_ROTATION_DEG,
+      ),
       mirrorX: normalizeMirrorFlag(sourcePrinter.display?.mirrorX, false),
       mirrorY: normalizeMirrorFlag(sourcePrinter.display?.mirrorY, false),
     },

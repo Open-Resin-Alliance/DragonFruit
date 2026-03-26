@@ -3477,23 +3477,38 @@ export default function Home() {
     if (!messageLower) return false;
     return messageLower.includes('stream limit') || messageLower.includes('simultaneous');
   }, [printingMonitorSupportsWebcamStreamSlotReset, printingMonitorWebcamInfo?.message]);
-  const shouldRotateMonitorWebcam = React.useMemo(() => {
-    return activePrinterProfile?.display.webcamOrientation === 'portrait';
-  }, [activePrinterProfile?.display.webcamOrientation]);
+  const monitorWebcamRotationDeg = React.useMemo(() => {
+    const candidate = Number(activePrinterProfile?.display.webcamRotationDeg ?? 0);
+    if (candidate === 0 || candidate === 90 || candidate === 180 || candidate === 270) {
+      return candidate as 0 | 90 | 180 | 270;
+    }
+    return 0;
+  }, [activePrinterProfile?.display.webcamRotationDeg]);
+  const shouldSwapMonitorWebcamAspect = React.useMemo(() => {
+    return monitorWebcamRotationDeg === 90 || monitorWebcamRotationDeg === 270;
+  }, [monitorWebcamRotationDeg]);
+  const monitorWebcamTransform = React.useMemo(() => {
+    const rotate = monitorWebcamRotationDeg !== 0
+      ? `rotate(${monitorWebcamRotationDeg}deg)`
+      : '';
+    const scale = shouldSwapMonitorWebcamAspect
+      ? ` scale(${printingMonitorWebcamAspectRatio ?? 1})`
+      : '';
+    const combined = `${rotate}${scale}`.trim();
+    return combined.length > 0 ? combined : undefined;
+  }, [monitorWebcamRotationDeg, printingMonitorWebcamAspectRatio, shouldSwapMonitorWebcamAspect]);
   const printingMonitorCanExpandWebcam = React.useMemo(() => {
     return Boolean(
       printingMonitorModalOpen
       && printingMonitorViewMode === 'detail'
       && printingMonitorUsesTwoColumnDetailLayout
       && printingMonitorHasCamera
-      && !shouldRotateMonitorWebcam,
     );
   }, [
     printingMonitorHasCamera,
     printingMonitorModalOpen,
     printingMonitorUsesTwoColumnDetailLayout,
     printingMonitorViewMode,
-    shouldRotateMonitorWebcam,
   ]);
   const printingMonitorDetailWebcamExpanded = printingMonitorCanExpandWebcam && printingMonitorWebcamExpanded;
   const monitorWebcamDisplayAspectRatio = React.useMemo(() => {
@@ -3501,10 +3516,10 @@ export default function Home() {
     if (normalizedAspect == null) {
       return null;
     }
-    return shouldRotateMonitorWebcam
+    return shouldSwapMonitorWebcamAspect
       ? (1 / normalizedAspect)
       : normalizedAspect;
-  }, [printingMonitorWebcamAspectRatio, shouldRotateMonitorWebcam]);
+  }, [printingMonitorWebcamAspectRatio, shouldSwapMonitorWebcamAspect]);
   const printingMonitorStateTextNormalized = React.useMemo(() => {
     return String(printingMonitorSnapshot?.stateText ?? '').trim().toLowerCase();
   }, [printingMonitorSnapshot?.stateText]);
@@ -13532,9 +13547,7 @@ export default function Home() {
                               className="block h-full w-full object-contain transition-opacity duration-150"
                               style={{
                                 opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
-                                transform: shouldRotateMonitorWebcam
-                                  ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
-                                  : undefined,
+                                transform: monitorWebcamTransform,
                                 transformOrigin: 'center center',
                               }}
                               onLoaded={(ratio) => {
@@ -13587,9 +13600,7 @@ export default function Home() {
                               className="block h-full w-full object-contain transition-opacity duration-150"
                               style={{
                                 opacity: isPrintingMonitorWebcamLoaded ? 1 : 0,
-                                transform: shouldRotateMonitorWebcam
-                                  ? `rotate(90deg) scale(${printingMonitorWebcamAspectRatio ?? 1})`
-                                  : undefined,
+                                transform: monitorWebcamTransform,
                                 transformOrigin: 'center center',
                               }}
                               onLoad={(event) => {

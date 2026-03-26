@@ -16,7 +16,7 @@
       "resolutionX": 7680,
       "resolutionY": 4320,
       "outputFormat": ".nanodlp",
-      "webcamOrientation": "portrait",
+      "webcamRotationDeg": 90,
       "mirrorX": true,
       "mirrorY": false
     },
@@ -42,7 +42,7 @@
       "resolutionX": 11520,
       "resolutionY": 5120,
       "outputFormat": ".nanodlp",
-      "webcamOrientation": "portrait",
+      "webcamRotationDeg": 90,
       "mirrorX": true,
       "mirrorY": false
     },
@@ -68,7 +68,7 @@
       "resolutionX": 11520,
       "resolutionY": 5120,
       "outputFormat": ".nanodlp",
-      "webcamOrientation": "portrait",
+      "webcamRotationDeg": 90,
       "mirrorX": true,
       "mirrorY": false
     },
@@ -94,7 +94,7 @@
       "resolutionX": 15136,
       "resolutionY": 6230,
       "outputFormat": ".nanodlp",
-      "webcamOrientation": "portrait",
+      "webcamRotationDeg": 90,
       "mirrorX": true,
       "mirrorY": false
     },
@@ -120,7 +120,7 @@
       "resolutionX": 15120,
       "resolutionY": 6230,
       "outputFormat": ".nanodlp",
-      "webcamOrientation": "portrait",
+      "webcamRotationDeg": 90,
       "mirrorX": true,
       "mirrorY": false
     },
@@ -146,7 +146,7 @@
       "resolutionX": 15120,
       "resolutionY": 6230,
       "outputFormat": ".lumen",
-      "webcamOrientation": "portrait",
+      "webcamRotationDeg": 90,
       "mirrorX": true,
       "mirrorY": false
     },
