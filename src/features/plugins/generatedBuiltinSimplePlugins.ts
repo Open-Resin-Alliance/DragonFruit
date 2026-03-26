@@ -225,7 +225,7 @@ const GENERATED_BUILTIN_SIMPLE_PLUGIN_MANIFESTS_RAW = Object.freeze([
       },
       {
         "presetId": "elegoo-mars-5-ultra-ctb",
-        "profileVersion": 1,
+        "profileVersion": 2,
         "manufacturer": "ELEGOO",
         "family": "Mars",
         "name": "Mars 5 Ultra",
@@ -248,7 +248,7 @@ const GENERATED_BUILTIN_SIMPLE_PLUGIN_MANIFESTS_RAW = Object.freeze([
           "resolutionY": 4320,
           "outputFormat": ".ctb",
           "formatVersion": "v5enc",
-          "settingsMode": "twostage",
+          "settingsMode": "simple",
           "mirrorX": true,
           "mirrorY": false
         }
@@ -405,7 +405,7 @@ const GENERATED_BUILTIN_SIMPLE_PLUGIN_MANIFESTS_RAW = Object.freeze([
       },
       {
         "presetId": "elegoo-saturn-4-ultra-ctb",
-        "profileVersion": 1,
+        "profileVersion": 2,
         "manufacturer": "ELEGOO",
         "family": "Saturn",
         "name": "Saturn 4 Ultra",
@@ -428,14 +428,14 @@ const GENERATED_BUILTIN_SIMPLE_PLUGIN_MANIFESTS_RAW = Object.freeze([
           "resolutionY": 5120,
           "outputFormat": ".ctb",
           "formatVersion": "v5enc",
-          "settingsMode": "twostage",
+          "settingsMode": "simple",
           "mirrorX": true,
           "mirrorY": false
         }
       },
       {
         "presetId": "elegoo-saturn-4-ultra-16k-ctb",
-        "profileVersion": 1,
+        "profileVersion": 2,
         "manufacturer": "ELEGOO",
         "family": "Saturn",
         "name": "Saturn 4 Ultra 16K",
@@ -458,7 +458,7 @@ const GENERATED_BUILTIN_SIMPLE_PLUGIN_MANIFESTS_RAW = Object.freeze([
           "resolutionY": 6230,
           "outputFormat": ".ctb",
           "formatVersion": "v5enc",
-          "settingsMode": "twostage",
+          "settingsMode": "simple",
           "mirrorX": true,
           "mirrorY": false
         }
