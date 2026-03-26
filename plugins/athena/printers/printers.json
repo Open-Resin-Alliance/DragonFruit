@@ -8,8 +8,18 @@
     "platformBadge": { "text": "NanoDLP", "color": "#00AEEF" },
     "imageAssetPath": "./assets/athena1.png",
     "pixelSize": { "x": 28.5, "y": 28.5 },
-    "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
-    "display": { "resolutionX": 7680, "resolutionY": 4320, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "bitDepth": {
+      "bits": 8,
+      "description": "8-bit color depth for enhanced grayscale precision"
+    },
+    "display": {
+      "resolutionX": 7680,
+      "resolutionY": 4320,
+      "outputFormat": ".nanodlp",
+      "webcamOrientation": "portrait",
+      "mirrorX": true,
+      "mirrorY": false
+    },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp",
@@ -24,8 +34,18 @@
     "platformBadge": { "text": "NanoDLP", "color": "#00AEEF" },
     "imageAssetPath": "./assets/athena1.png",
     "pixelSize": { "x": 19, "y": 24 },
-    "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
-    "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "bitDepth": {
+      "bits": 8,
+      "description": "8-bit color depth for enhanced grayscale precision"
+    },
+    "display": {
+      "resolutionX": 11520,
+      "resolutionY": 5120,
+      "outputFormat": ".nanodlp",
+      "webcamOrientation": "portrait",
+      "mirrorX": true,
+      "mirrorY": false
+    },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp",
@@ -40,8 +60,18 @@
     "platformBadge": { "text": "NanoDLP", "color": "#00AEEF" },
     "imageAssetPath": "./assets/athena2.png",
     "pixelSize": { "x": 19, "y": 24 },
-    "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
-    "display": { "resolutionX": 11520, "resolutionY": 5120, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "bitDepth": {
+      "bits": 8,
+      "description": "8-bit color depth for enhanced grayscale precision"
+    },
+    "display": {
+      "resolutionX": 11520,
+      "resolutionY": 5120,
+      "outputFormat": ".nanodlp",
+      "webcamOrientation": "portrait",
+      "mirrorX": true,
+      "mirrorY": false
+    },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp",
@@ -56,8 +86,18 @@
     "platformBadge": { "text": "NanoDLP", "color": "#00AEEF" },
     "imageAssetPath": "./assets/athena2.png",
     "pixelSize": { "x": 14, "y": 19 },
-    "bitDepth": { "bits": 3, "description": "3-bit color depth, suboptimal for grayscale" },
-    "display": { "resolutionX": 15136, "resolutionY": 6230, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "bitDepth": {
+      "bits": 3,
+      "description": "3-bit color depth, suboptimal for grayscale"
+    },
+    "display": {
+      "resolutionX": 15136,
+      "resolutionY": 6230,
+      "outputFormat": ".nanodlp",
+      "webcamOrientation": "portrait",
+      "mirrorX": true,
+      "mirrorY": false
+    },
     "antiAliasing": false,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp",
@@ -72,8 +112,18 @@
     "platformBadge": { "text": "NanoDLP", "color": "#00AEEF" },
     "imageAssetPath": "./assets/athena2.png",
     "pixelSize": { "x": 14, "y": 19 },
-    "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
-    "display": { "resolutionX": 15120, "resolutionY": 6230, "outputFormat": ".nanodlp", "mirrorX": true , "mirrorY": false },
+    "bitDepth": {
+      "bits": 8,
+      "description": "8-bit color depth for enhanced grayscale precision"
+    },
+    "display": {
+      "resolutionX": 15120,
+      "resolutionY": 6230,
+      "outputFormat": ".nanodlp",
+      "webcamOrientation": "portrait",
+      "mirrorX": true,
+      "mirrorY": false
+    },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "nanodlp",
@@ -88,8 +138,18 @@
     "platformBadge": { "text": "Odyssey", "color": "#592ABF" },
     "imageAssetPath": "./assets/athena2.png",
     "pixelSize": { "x": 14, "y": 19 },
-    "bitDepth": { "bits": 8, "description": "8-bit color depth for enhanced grayscale precision" },
-    "display": { "resolutionX": 15120, "resolutionY": 6230, "outputFormat": ".lumen", "mirrorX": true , "mirrorY": false },
+    "bitDepth": {
+      "bits": 8,
+      "description": "8-bit color depth for enhanced grayscale precision"
+    },
+    "display": {
+      "resolutionX": 15120,
+      "resolutionY": 6230,
+      "outputFormat": ".lumen",
+      "webcamOrientation": "portrait",
+      "mirrorX": true,
+      "mirrorY": false
+    },
     "antiAliasing": true,
     "buildVolumeMm": { "width": null, "depth": null, "height": 235 },
     "networkSupport": "odyssey"

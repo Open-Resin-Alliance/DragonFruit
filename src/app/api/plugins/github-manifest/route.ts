@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
-import { normalizeFormatVersion, normalizeOutputFormat, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
+import { normalizeFormatVersion, normalizeOutputFormat, normalizeSettingsMode, normalizeWebcamOrientation, DEFAULT_WEBCAM_ORIENTATION } from '@/features/profiles/outputFormatUtils';
 
 type GithubRepoRef = {
   owner: string;
@@ -86,6 +86,7 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
       outputFormat: parseOutputFormat((value as any).display?.outputFormat),
       formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
       settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
+      webcamOrientation: normalizeWebcamOrientation((value as any).display?.webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,

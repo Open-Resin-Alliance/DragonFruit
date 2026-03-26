@@ -10,7 +10,7 @@ import type {
 } from '@/features/plugins/complexPluginContracts';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { BUILTIN_SIMPLE_PLUGIN_MANIFESTS } from '@/features/plugins/builtinSimplePlugins';
-import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode } from '@/features/profiles/outputFormatUtils';
+import { normalizeOutputFormat, normalizeFormatVersion, normalizeSettingsMode, normalizeWebcamOrientation, DEFAULT_WEBCAM_ORIENTATION } from '@/features/profiles/outputFormatUtils';
 
 export type PluginSource = 'builtin' | 'github';
 export type PluginInstallTrust = 'allowlisted' | 'unverified-user-approved';
@@ -379,6 +379,7 @@ function sanitizePrinterPreset(input: unknown): PrinterPreset | null {
       outputFormat: sanitizeOutputFormat((value as any).display?.outputFormat),
       formatVersion: normalizeFormatVersion((value as any).display?.formatVersion),
       settingsMode: normalizeSettingsMode((value as any).display?.settingsMode),
+      webcamOrientation: normalizeWebcamOrientation((value as any).display?.webcamOrientation, DEFAULT_WEBCAM_ORIENTATION),
       mirrorX: typeof (value as any).display?.mirrorX === 'boolean'
         ? (value as any).display.mirrorX
         : undefined,

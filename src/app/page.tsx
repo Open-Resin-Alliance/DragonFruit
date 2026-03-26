@@ -2947,6 +2947,58 @@ export default function Home() {
     return fleet.filter((device) => (device.ipAddress || '').trim().length > 0);
   }, [activePrinterProfile?.networkFleet]);
 
+  const allReachabilityProbeTargets = React.useMemo(() => {
+    const targets = new Map<string, {
+      id: string;
+      host: string;
+      port: number;
+      pluginId: string;
+      operation: string;
+      adapter: ReturnType<typeof getProfileMonitoringUiAdapter>;
+    }>();
+
+    for (const printer of profileState.printerProfiles) {
+      if (!printer.networkSupport) continue;
+
+      const adapter = getProfileMonitoringUiAdapter(printer.networkSupport);
+      if (!adapter.available || !adapter.pluginId || !adapter.operations?.status) continue;
+
+      const fleet = Array.isArray(printer.networkFleet) ? printer.networkFleet : [];
+      if (fleet.length > 0) {
+        for (const device of fleet) {
+          const host = (device.ipAddress || '').trim();
+          const id = (device.id || '').trim();
+          if (!host || !id) continue;
+
+          targets.set(id, {
+            id,
+            host,
+            port: device.port || 80,
+            pluginId: adapter.pluginId,
+            operation: adapter.operations.status,
+            adapter,
+          });
+        }
+        continue;
+      }
+
+      const host = (printer.networkConnection?.ipAddress || printer.network?.ipAddress || '').trim();
+      const id = (printer.activeNetworkDeviceId || printer.id || '').trim();
+      if (!host || !id) continue;
+
+      targets.set(id, {
+        id,
+        host,
+        port: printer.networkConnection?.port || 80,
+        pluginId: adapter.pluginId,
+        operation: adapter.operations.status,
+        adapter,
+      });
+    }
+
+    return Array.from(targets.values());
+  }, [profileState.printerProfiles]);
+
   const dashboardMonitorDevices = React.useMemo(() => {
     if (monitorSelectableDevices.length === 0) return [] as PrinterNetworkDevice[];
 
@@ -2986,6 +3038,91 @@ export default function Home() {
     if (!monitoringDeviceId.includes('-')) return monitoringDeviceId;
     return monitoringDeviceId.split('-').pop() ?? monitoringDeviceId;
   }, [monitoringDeviceId]);
+
+  React.useEffect(() => {
+    if (allReachabilityProbeTargets.length === 0) return;
+
+    let cancelled = false;
+    let burstIntervalId: number | null = null;
+    let steadyIntervalId: number | null = null;
+    let burstTransitionTimeoutId: number | null = null;
+
+    const pollAllReachability = async () => {
+      const entries = await Promise.all(
+        allReachabilityProbeTargets.map(async (target) => {
+          try {
+            const response = await pluginNetworkFetch({
+              pluginId: target.pluginId,
+              operation: target.operation,
+              ipAddress: target.host,
+              port: target.port,
+            });
+
+            const payload = await response.json().catch(() => ({} as any));
+            if (!response.ok) return [target.id, false] as const;
+
+            if (payload && typeof payload.ok === 'boolean') {
+              return [target.id, payload.ok === true] as const;
+            }
+
+            try {
+              const snapshot = target.adapter.parseStatusPayload(payload, `${target.host}:${target.port}`);
+              if (snapshot && typeof snapshot.connected === 'boolean') {
+                return [target.id, snapshot.connected] as const;
+              }
+            } catch {
+              // Fall back to transport success.
+            }
+
+            return [target.id, true] as const;
+          } catch {
+            return [target.id, false] as const;
+          }
+        }),
+      );
+
+      if (cancelled) return;
+
+      const nextMap = { ...getPrinterReachabilitySnapshot() };
+      for (const [deviceId, reachable] of entries) {
+        nextMap[deviceId] = reachable;
+      }
+
+      setPrinterReachabilityMap(nextMap);
+    };
+
+    void pollAllReachability();
+
+    burstIntervalId = window.setInterval(() => {
+      void pollAllReachability();
+    }, 2000);
+
+    burstTransitionTimeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      if (burstIntervalId != null) {
+        window.clearInterval(burstIntervalId);
+        burstIntervalId = null;
+      }
+
+      steadyIntervalId = window.setInterval(() => {
+        void pollAllReachability();
+      }, 15_000);
+    }, 12_000);
+
+    return () => {
+      cancelled = true;
+      if (burstIntervalId != null) {
+        window.clearInterval(burstIntervalId);
+      }
+      if (steadyIntervalId != null) {
+        window.clearInterval(steadyIntervalId);
+      }
+      if (burstTransitionTimeoutId != null) {
+        window.clearTimeout(burstTransitionTimeoutId);
+      }
+    };
+  }, [allReachabilityProbeTargets]);
+
   const printingTargetMaterialGroups = React.useMemo(() => {
     const groups = new Map<string, FleetUploadMaterialOption[]>();
     for (const material of printingTargetMaterialOptions) {
@@ -3322,32 +3459,8 @@ export default function Home() {
     return messageLower.includes('stream limit') || messageLower.includes('simultaneous');
   }, [printingMonitorSupportsWebcamStreamSlotReset, printingMonitorWebcamInfo?.message]);
   const shouldRotateMonitorWebcam = React.useMemo(() => {
-    const fingerprint = [
-      activePrinterProfile?.manufacturer,
-      activePrinterProfile?.name,
-      monitoringDevice?.displayName,
-      monitoringDevice?.hostName,
-      monitoringDevice?.ipAddress,
-    ]
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      .join(' ')
-      .toLowerCase();
-
-    const hasMonitoringAdapter = Boolean(
-      printingMonitoringAdapter.available
-      && printingMonitoringAdapter.pluginId,
-    );
-    if (!hasMonitoringAdapter) return false;
-    return /\bathena\b/.test(fingerprint);
-  }, [
-    activePrinterProfile?.manufacturer,
-    activePrinterProfile?.name,
-    monitoringDevice?.displayName,
-    monitoringDevice?.hostName,
-    monitoringDevice?.ipAddress,
-    printingMonitoringAdapter.available,
-    printingMonitoringAdapter.pluginId,
-  ]);
+    return activePrinterProfile?.display.webcamOrientation === 'portrait';
+  }, [activePrinterProfile?.display.webcamOrientation]);
   const monitorWebcamDisplayAspectRatio = React.useMemo(() => {
     const normalizedAspect = normalizePrintingMonitorWebcamAspectRatio(printingMonitorWebcamAspectRatio);
     if (normalizedAspect == null) {

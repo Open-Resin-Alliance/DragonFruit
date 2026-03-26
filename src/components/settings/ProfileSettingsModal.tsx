@@ -89,6 +89,10 @@ type MaterialDraft = Omit<MaterialProfile, 'id' | 'printerProfileId'>;
 type LocalSettingsByOutputDraft = NonNullable<MaterialProfile['localSettingsByOutput']>;
 
 const OUTPUT_FORMAT_OPTIONS = getAvailableOutputFormatOptions();
+const WEBCAM_ORIENTATION_OPTIONS = [
+  { value: 'landscape', label: 'Landscape' },
+  { value: 'portrait', label: 'Portrait' },
+];
 
 const RESIN_FAMILY_OPTIONS: Array<{ value: MaterialProfile['resinFamily']; label: string }> = [
   { value: 'standard', label: 'Standard' },
@@ -3929,7 +3933,7 @@ export function ProfileSettingsModal({
                           Official Profile — Edits Limited!
                         </div>
                         <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                          You can change Output Format, Network Support, Format Version, and Webcam Support here. Everything else stays locked unless you make a custom copy.
+                          You can change Output Format, Network Support, Format Version, Webcam Support, and Webcam Orientation here. Everything else stays locked unless you make a custom copy.
                         </div>
                         <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
                           <strong style={{ color: 'var(--text-strong)' }}>Warning:</strong> Custom, non-official profiles may increase the risk of print failure and can potentially damage the machine or cause personal injury.
@@ -4167,6 +4171,15 @@ export function ProfileSettingsModal({
                       checked={selectedPrinter.hasCamera !== false}
                       onChange={(checked) => updatePrinterProfile(selectedPrinter.id, { hasCamera: checked })}
                     />
+
+                    {selectedPrinter.hasCamera !== false && (
+                      <LabeledSelectInput
+                        label="Webcam Orientation"
+                        value={selectedPrinter.display.webcamOrientation ?? 'landscape'}
+                        options={WEBCAM_ORIENTATION_OPTIONS}
+                        onChange={(value) => handlePrinterDisplayChange({ webcamOrientation: value as NonNullable<PrinterProfile['display']['webcamOrientation']> })}
+                      />
+                    )}
 
                     {selectedFormatVersionOptions.length > 0 && (
                       <SelectDropdown
