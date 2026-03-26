@@ -18,7 +18,8 @@ import { isContactDiskHudInteractionActive, shouldSuppressContactDiskHudPlacemen
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
-import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
+import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 
 interface ShaftHoverDetail {
@@ -29,6 +30,7 @@ interface ShaftHoverDetail {
 export function LeafPlacementController() {
     const { isActive, stage, tipPosition, surfaceNormal, modelId } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
+    const kickstandState = useKickstandStoreState();
     const { getHotkey } = useHotkeyConfig();
     const leafBinding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
 
@@ -53,12 +55,15 @@ export function LeafPlacementController() {
     const allTargets = useMemo(() => {
         if (stage !== 'awaitingBase') return [];
 
-        return buildSupportPathSnapTargets(supportState, {
-            includeTrunks: true,
-            includeBranches: true,
-            includeBraces: true,
-        });
-    }, [stage, supportState]);
+        return [
+            ...buildSupportPathSnapTargets(supportState, {
+                includeTrunks: true,
+                includeBranches: true,
+                includeBraces: true,
+            }),
+            ...buildKickstandPathSnapTargets(kickstandState),
+        ];
+    }, [stage, supportState, kickstandState]);
 
     const targetById = useMemo(() => {
         return buildPrimarySnapTargetIndex(allTargets);
