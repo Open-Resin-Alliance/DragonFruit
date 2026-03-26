@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, Redo2, RefreshCw, Trash2, Undo2, X } from 'lucide-react';
 import { SceneCanvas } from '@/components/scene/SceneCanvas';
 import { FloatingPanelStack } from '@/components/layout/FloatingPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
@@ -862,6 +862,7 @@ export default function Home() {
   const [printingMonitorWebcamRefreshNonce, setPrintingMonitorWebcamRefreshNonce] = React.useState(0);
   const [isPrintingMonitorWebcamResetBusy, setIsPrintingMonitorWebcamResetBusy] = React.useState(false);
   const [isPrintingMonitorWebcamSnapshotSaving, setIsPrintingMonitorWebcamSnapshotSaving] = React.useState(false);
+  const [printingMonitorWebcamExpanded, setPrintingMonitorWebcamExpanded] = React.useState(false);
   const [printingMonitorRecentPlates, setPrintingMonitorRecentPlates] = React.useState<PrintingMonitorRecentPlate[]>([]);
   const [isPrintingMonitorRecentPlatesLoading, setIsPrintingMonitorRecentPlatesLoading] = React.useState(false);
   const [printingMonitorRecentPlatesError, setPrintingMonitorRecentPlatesError] = React.useState<string | null>(null);
@@ -999,6 +1000,7 @@ export default function Home() {
   const printingMonitorRecentPlatesRequestIdRef = React.useRef(0);
   const printingMonitorLeftColumnRef = React.useRef<HTMLElement | null>(null);
   const printingMonitorWebcamSectionRef = React.useRef<HTMLElement | null>(null);
+  const printingMonitorWebcamFollowerHeightPxRef = React.useRef<number | null>(null);
   const monitorReachabilityInconclusiveCountsRef = React.useRef<Record<string, number>>({});
   const topbarPrinterOfflineCacheByDeviceIdRef = React.useRef<Record<string, boolean>>({});
   const [selectedPrinterMonitorSnapshot, setSelectedPrinterMonitorSnapshot] = React.useState<PrinterMonitoringSnapshot | null>(null);
@@ -3461,6 +3463,22 @@ export default function Home() {
   const shouldRotateMonitorWebcam = React.useMemo(() => {
     return activePrinterProfile?.display.webcamOrientation === 'portrait';
   }, [activePrinterProfile?.display.webcamOrientation]);
+  const printingMonitorCanExpandWebcam = React.useMemo(() => {
+    return Boolean(
+      printingMonitorModalOpen
+      && printingMonitorViewMode === 'detail'
+      && printingMonitorUsesTwoColumnDetailLayout
+      && printingMonitorHasCamera
+      && !shouldRotateMonitorWebcam,
+    );
+  }, [
+    printingMonitorHasCamera,
+    printingMonitorModalOpen,
+    printingMonitorUsesTwoColumnDetailLayout,
+    printingMonitorViewMode,
+    shouldRotateMonitorWebcam,
+  ]);
+  const printingMonitorDetailWebcamExpanded = printingMonitorCanExpandWebcam && printingMonitorWebcamExpanded;
   const monitorWebcamDisplayAspectRatio = React.useMemo(() => {
     const normalizedAspect = normalizePrintingMonitorWebcamAspectRatio(printingMonitorWebcamAspectRatio);
     if (normalizedAspect == null) {
@@ -4597,8 +4615,24 @@ export default function Home() {
       webcamSection?.style.removeProperty('max-height');
     };
 
-    if (!printingMonitorModalOpen || printingMonitorViewMode !== 'detail' || !printingMonitorUsesTwoColumnDetailLayout || !printingMonitorHasCamera) {
+    if (
+      !printingMonitorModalOpen
+      || printingMonitorViewMode !== 'detail'
+      || !printingMonitorUsesTwoColumnDetailLayout
+      || !printingMonitorHasCamera
+    ) {
       clearSizing();
+      return;
+    }
+
+    if (printingMonitorDetailWebcamExpanded) {
+      const cachedHeightPx = printingMonitorWebcamFollowerHeightPxRef.current;
+      if (cachedHeightPx && cachedHeightPx > 0 && webcamSection) {
+        webcamSection.style.height = `${cachedHeightPx}px`;
+        webcamSection.style.maxHeight = `${cachedHeightPx}px`;
+      } else {
+        clearSizing();
+      }
       return;
     }
 
@@ -4613,6 +4647,7 @@ export default function Home() {
       const measured = Math.max(0, Math.round(leftColumn.getBoundingClientRect().height));
       if (measured <= 0) return;
 
+      printingMonitorWebcamFollowerHeightPxRef.current = measured;
       rightColumn.style.height = `${measured}px`;
       rightColumn.style.maxHeight = `${measured}px`;
     };
@@ -4644,10 +4679,16 @@ export default function Home() {
     };
   }, [
     printingMonitorHasCamera,
+    printingMonitorDetailWebcamExpanded,
     printingMonitorModalOpen,
     printingMonitorUsesTwoColumnDetailLayout,
     printingMonitorViewMode,
   ]);
+
+  React.useEffect(() => {
+    if (printingMonitorCanExpandWebcam) return;
+    setPrintingMonitorWebcamExpanded(false);
+  }, [printingMonitorCanExpandWebcam]);
 
   React.useEffect(() => {
     if (printingMonitorPlateId == null) return;
@@ -12934,8 +12975,21 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <div className={`p-4 grid gap-3 ${printingMonitorUsesTwoColumnDetailLayout ? 'grid-cols-1 items-start lg:grid-cols-[minmax(340px,1fr)_minmax(420px,1fr)] lg:items-stretch' : 'grid-cols-1 items-start'}`}>
-                <section ref={printingMonitorLeftColumnRef} className="grid gap-3 grid-rows-[auto_1fr]">
+              <div
+                className={`p-4 grid grid-cols-1 items-start ${printingMonitorDetailWebcamExpanded ? 'gap-y-3 lg:gap-x-0' : 'gap-3'} ${printingMonitorUsesTwoColumnDetailLayout ? 'lg:items-stretch lg:[grid-template-columns:var(--printing-monitor-detail-columns)]' : ''}`}
+                style={printingMonitorUsesTwoColumnDetailLayout
+                  ? ({
+                      '--printing-monitor-detail-columns': printingMonitorDetailWebcamExpanded
+                        ? 'minmax(0,0fr) minmax(420px,1fr)'
+                        : 'minmax(340px,1fr) minmax(420px,1fr)',
+                    } as React.CSSProperties)
+                  : undefined}
+              >
+                <section
+                  ref={printingMonitorLeftColumnRef}
+                  className={`grid gap-3 grid-rows-[auto_1fr] overflow-hidden transition-[opacity,transform] duration-140 ease-out motion-reduce:transition-none ${printingMonitorDetailWebcamExpanded ? 'pointer-events-none opacity-0 -translate-y-1' : 'opacity-100 translate-y-0'}`}
+                  aria-hidden={printingMonitorDetailWebcamExpanded ? true : undefined}
+                >
                 <div className="w-full min-w-0 max-w-full overflow-hidden rounded-md border p-2" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
                     <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -13256,30 +13310,43 @@ export default function Home() {
                 {printingMonitorHasCamera && (
                 <section
                   ref={printingMonitorWebcamSectionRef}
-                  className="rounded-md border p-2 flex flex-col min-h-0 overflow-hidden self-stretch h-[min(62vh,520px)] lg:h-full"
+                  className={`rounded-md border p-2 flex flex-col min-h-0 overflow-hidden self-stretch h-[min(62vh,520px)] lg:h-full transition-opacity duration-150 ease-out motion-reduce:transition-none ${printingMonitorDetailWebcamExpanded ? 'opacity-100' : 'opacity-[0.985]'}`}
                   style={{
                     borderColor: 'var(--border-subtle)',
                     background: 'color-mix(in srgb, var(--surface-1), #000 4%)',
                   }}
                 >
-                <div className="grid min-h-[34px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-1">
+                <div className="grid min-h-[34px] grid-cols-[1fr_auto] items-center gap-2 px-1">
                   <div className="justify-self-start text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
                     Webcam
                   </div>
-                  <div className="justify-self-center" />
-                  <IconButton
-                    onClick={() => {
-                      void handleSavePrintingMonitorWebcamSnapshot();
-                    }}
-                    disabled={isPrintingMonitorWebcamSnapshotSaving || !printingMonitorWebcamUrl || !isPrintingMonitorWebcamLoaded}
-                    className="!p-1.5 justify-self-end"
-                    title="Save webcam snapshot"
-                    aria-label="Save webcam snapshot"
-                  >
-                    {isPrintingMonitorWebcamSnapshotSaving
-                      ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      : <Download className="w-3.5 h-3.5" />}
-                  </IconButton>
+                  <div className="justify-self-end inline-flex items-center gap-1.5">
+                    {printingMonitorCanExpandWebcam && (
+                      <IconButton
+                        onClick={() => setPrintingMonitorWebcamExpanded((previous) => !previous)}
+                        className="!p-1.5"
+                        title={printingMonitorDetailWebcamExpanded ? 'Collapse webcam view' : 'Expand webcam view'}
+                        aria-label={printingMonitorDetailWebcamExpanded ? 'Collapse webcam view' : 'Expand webcam view'}
+                      >
+                        {printingMonitorDetailWebcamExpanded
+                          ? <Minimize2 className="w-3.5 h-3.5" />
+                          : <Maximize2 className="w-3.5 h-3.5" />}
+                      </IconButton>
+                    )}
+                    <IconButton
+                      onClick={() => {
+                        void handleSavePrintingMonitorWebcamSnapshot();
+                      }}
+                      disabled={isPrintingMonitorWebcamSnapshotSaving || !printingMonitorWebcamUrl || !isPrintingMonitorWebcamLoaded}
+                      className="!p-1.5"
+                      title="Save webcam snapshot"
+                      aria-label="Save webcam snapshot"
+                    >
+                      {isPrintingMonitorWebcamSnapshotSaving
+                        ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        : <Download className="w-3.5 h-3.5" />}
+                    </IconButton>
+                  </div>
                 </div>
                 {printingMonitorWebcamUrl ? (
                   <div className="mt-1.5 flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden">
