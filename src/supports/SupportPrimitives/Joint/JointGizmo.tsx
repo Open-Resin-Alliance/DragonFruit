@@ -1,7 +1,6 @@
 import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'react';
 import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
 import { subscribe, getSnapshot, updateTrunk, updateBranch, updateTwig, updateStick, getTrunkById, getBranchById, getTwigById, getStickById } from '../../state';
-import { moveJoint } from './jointUtils';
 import * as THREE from 'three';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
@@ -13,6 +12,7 @@ import { getKickstandSnapshot, useKickstandStoreState, updateKickstand } from '.
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { useJointDragPosition } from '../../interaction/jointDragPosition';
 import { clearSupportDragPreview, emitSupportDragPreview, setJointInteractionLock } from './jointDragRuntime';
+import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDragSupportPreview } from './jointDragController';
 
 export function JointGizmo() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -279,17 +279,29 @@ export function JointGizmo() {
             if (!initialTrunkRef.current) {
                 initialTrunkRef.current = cloneObj(trunk);
             }
-            const newTrunk = moveJoint(trunk, joint.id, newPos, undefined, isCurveMode, state.roots[trunk.rootId]);
+            const newTrunk = computeJointDragSupportPreview({
+                kind: 'trunk',
+                support: trunk,
+                jointId: joint.id,
+                newPos,
+                isCurveMode,
+                root: state.roots[trunk.rootId],
+            });
             liveTrunkPreviewRef.current = newTrunk;
-            emitSupportDragPreview('trunk', newTrunk.id, newTrunk);
+            publishJointDragSupportPreview('trunk', newTrunk);
         } else if (branch) {
             if (!initialBranchRef.current) {
                 initialBranchRef.current = cloneObj(branch);
             }
-            // moveJoint works on any object with segments array
-            const newBranch = moveJoint(branch as any, joint.id, newPos, undefined, false) as unknown as Branch;
+            const newBranch = computeJointDragSupportPreview({
+                kind: 'branch',
+                support: branch,
+                jointId: joint.id,
+                newPos,
+                isCurveMode: false,
+            }) as Branch;
             liveBranchPreviewRef.current = newBranch;
-            emitSupportDragPreview('branch', newBranch.id, newBranch);
+            publishJointDragSupportPreview('branch', newBranch);
         } else if (twig) {
             const newTwig: Twig = {
                 ...twig,
@@ -324,17 +336,17 @@ export function JointGizmo() {
                 }
                 : undefined;
 
-            const newKickstand = moveJoint(
-                kickstand as unknown as Trunk,
-                joint.id,
+            const newKickstand = computeJointDragSupportPreview({
+                kind: 'kickstand',
+                support: kickstand,
+                jointId: joint.id,
                 newPos,
-                undefined,
                 isCurveMode,
                 root,
                 contextStart,
-            ) as unknown as Kickstand;
+            });
             liveKickstandPreviewRef.current = newKickstand;
-            emitSupportDragPreview('kickstand', newKickstand.id, newKickstand);
+            publishJointDragSupportPreview('kickstand', newKickstand);
         }
     };
 
@@ -347,13 +359,12 @@ export function JointGizmo() {
         if (initialTrunkRef.current && trunk) {
             const committedTrunk = liveTrunkPreviewRef.current ?? getTrunkById(trunk.id);
             if (committedTrunk) {
-                updateTrunk(committedTrunk);
-                clearSupportDragPreview('trunk', trunk.id);
+                const appliedTrunk = commitJointDragSupport('trunk', committedTrunk);
                 pushHistory({
                     type: SUPPORT_UPDATE_TRUNK,
                     payload: {
                         before: initialTrunkRef.current,
-                        after: cloneObj(committedTrunk),
+                        after: cloneObj(appliedTrunk),
                     },
                 });
             }
@@ -364,9 +375,8 @@ export function JointGizmo() {
             if (branch) {
                 const committedBranch = liveBranchPreviewRef.current ?? getBranchById(branch.id);
                 if (committedBranch) {
-                    updateBranch(committedBranch);
+                    commitJointDragSupport('branch', committedBranch as Branch);
                 }
-                clearSupportDragPreview('branch', branch.id);
                 pushSupportEditHistory('Move branch joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (twig) {
                 const committedTwig = liveTwigPreviewRef.current ?? getTwigById(twig.id);
@@ -385,9 +395,8 @@ export function JointGizmo() {
             } else if (kickstand) {
                 const committedKickstand = liveKickstandPreviewRef.current ?? getKickstandSnapshot().kickstands[kickstand.id];
                 if (committedKickstand) {
-                    updateKickstand(committedKickstand);
+                    commitJointDragSupport('kickstand', committedKickstand);
                 }
-                clearSupportDragPreview('kickstand', kickstand.id);
                 pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             }
             initialEditSnapshotRef.current = null;

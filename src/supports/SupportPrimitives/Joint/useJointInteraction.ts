@@ -2,16 +2,16 @@ import { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { getTrunks, getBranches, updateTrunk, updateBranch, getSelectedId, getTrunkById, getRootById, getBranchById, getKnotById, setInteractionWarning } from '../../state';
-import { moveJoint } from './jointUtils';
+import { getTrunks, getBranches, getSelectedId, getTrunkById, getRootById, getBranchById, getKnotById, setInteractionWarning } from '../../state';
 import { getTrunkSegmentEndpoints } from '../Knot/knotUtils';
 import { Vec3, Trunk, Branch, Roots } from '../../types';
-import { getKickstandSnapshot, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
+import { getKickstandSnapshot } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
-import { clearJointDragPositionPreview, clearSupportDragPreview, emitJointDragPositionPreview, emitSupportDragPreview, isJointInteractionLocked, setJointInteractionLock } from './jointDragRuntime';
+import { clearJointDragPositionPreview, emitJointDragPositionPreview, isJointInteractionLocked, setJointInteractionLock } from './jointDragRuntime';
+import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDragSupportPreview } from './jointDragController';
 
 /**
  * Hook to handle joint interaction (dragging/moving).
@@ -291,51 +291,32 @@ export function useJointInteraction(enabled: boolean = true) {
                         const root = activeConstraintRootRef.current ?? getRootById(trunk.rootId) ?? undefined;
                         const contextStart = activeConstraintStartRef.current;
 
-                        const resolved = moveJoint(
-                            trunk,
-                            activeJointIdAtEnd,
-                            lastDragPos.current,
-                            undefined,
-                            false,
+                        const resolved = computeJointDragSupportPreview({
+                            kind: 'trunk',
+                            support: trunk,
+                            jointId: activeJointIdAtEnd,
+                            newPos: lastDragPos.current,
+                            isCurveMode: false,
                             root,
-                            contextStart
-                        );
-                        const resolvedWithoutOverride: Trunk = resolved.contactCone
-                            ? {
-                                ...resolved,
-                                contactCone: {
-                                    ...resolved.contactCone,
-                                    diskLengthOverride: undefined,
-                                },
-                            }
-                            : resolved;
-                        clearSupportDragPreview('trunk', resolvedWithoutOverride.id);
-                        updateTrunk(resolvedWithoutOverride);
+                            contextStart,
+                        });
+
+                        commitJointDragSupport('trunk', resolved, { stripDiskLengthOverride: true });
                     }
                 } else if (activeBranchId.current) {
                     const branch = getBranchById(activeBranchId.current);
                     if (branch) {
                         const contextStart = activeConstraintStartRef.current ?? getKnotById(branch.parentKnotId)?.pos;
-                        const resolved = moveJoint(
-                            branch as any,
-                            activeJointIdAtEnd,
-                            lastDragPos.current,
-                            undefined,
-                            false,
-                            undefined,
-                            contextStart
-                        ) as unknown as Branch;
-                        const resolvedWithoutOverride: Branch = resolved.contactCone
-                            ? {
-                                ...resolved,
-                                contactCone: {
-                                    ...resolved.contactCone,
-                                    diskLengthOverride: undefined,
-                                },
-                            }
-                            : resolved;
-                        clearSupportDragPreview('branch', resolvedWithoutOverride.id);
-                        updateBranch(resolvedWithoutOverride);
+                        const resolved = computeJointDragSupportPreview({
+                            kind: 'branch',
+                            support: branch,
+                            jointId: activeJointIdAtEnd,
+                            newPos: lastDragPos.current,
+                            isCurveMode: false,
+                            contextStart,
+                        });
+
+                        commitJointDragSupport('branch', resolved, { stripDiskLengthOverride: true });
                     }
                 } else if (activeKickstandId.current) {
                     const kickstand = getKickstandSnapshot().kickstands[activeKickstandId.current];
@@ -348,17 +329,16 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart = { x: rPos.x, y: rPos.y, z: startZ };
                         }
 
-                        const resolved = moveJoint(
-                            kickstand as unknown as Trunk,
-                            activeJointIdAtEnd,
-                            lastDragPos.current,
-                            undefined,
-                            false,
+                        const resolved = computeJointDragSupportPreview({
+                            kind: 'kickstand',
+                            support: kickstand,
+                            jointId: activeJointIdAtEnd,
+                            newPos: lastDragPos.current,
+                            isCurveMode: false,
                             root,
                             contextStart,
-                        ) as unknown as Kickstand;
-                        clearSupportDragPreview('kickstand', resolved.id);
-                        updateKickstand(resolved);
+                        });
+                        commitJointDragSupport('kickstand', resolved);
                     }
                 }
             }
@@ -383,11 +363,6 @@ export function useJointInteraction(enabled: boolean = true) {
                     pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
                 }
             }
-
-            if (activeKickstandId.current) {
-                clearSupportDragPreview('kickstand', activeKickstandId.current);
-            }
-
             activeJointId.current = null;
             activeTrunkId.current = null;
             activeBranchId.current = null;
@@ -446,17 +421,17 @@ export function useJointInteraction(enabled: boolean = true) {
                         const root = activeConstraintRootRef.current ?? getRootById(trunk.rootId) ?? undefined;
                         const contextStart = activeConstraintStartRef.current;
 
-                        const newTrunk = moveJoint(
-                            trunk,
-                            activeJointId.current!,
-                            newPosVec3,
-                            undefined,
-                            false,
+                        const newTrunk = computeJointDragSupportPreview({
+                            kind: 'trunk',
+                            support: trunk,
+                            jointId: activeJointId.current!,
+                            newPos: newPosVec3,
+                            isCurveMode: false,
                             root,
-                            contextStart
-                        );
+                            contextStart,
+                        });
                         liveTrunkPreviewRef.current = newTrunk;
-                        emitSupportDragPreview('trunk', newTrunk.id, newTrunk);
+                        publishJointDragSupportPreview('trunk', newTrunk);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -494,17 +469,16 @@ export function useJointInteraction(enabled: boolean = true) {
                     if (branch) {
                         const contextStart = activeConstraintStartRef.current ?? getKnotById(branch.parentKnotId)?.pos;
 
-                        const newBranch = moveJoint(
-                            branch as any,
-                            activeJointId.current!,
-                            newPosVec3,
-                            undefined,
-                            false,
-                            undefined, // No root for branch?
-                            contextStart
-                        ) as unknown as Branch;
+                        const newBranch = computeJointDragSupportPreview({
+                            kind: 'branch',
+                            support: branch,
+                            jointId: activeJointId.current!,
+                            newPos: newPosVec3,
+                            isCurveMode: false,
+                            contextStart,
+                        });
                         liveBranchPreviewRef.current = newBranch;
-                        emitSupportDragPreview('branch', newBranch.id, newBranch);
+                        publishJointDragSupportPreview('branch', newBranch);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -547,16 +521,16 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart = { x: rPos.x, y: rPos.y, z: startZ };
                         }
 
-                        const newKickstand = moveJoint(
-                            kickstand as unknown as Trunk,
-                            activeJointId.current!,
-                            newPosVec3,
-                            undefined,
-                            false,
+                        const newKickstand = computeJointDragSupportPreview({
+                            kind: 'kickstand',
+                            support: kickstand,
+                            jointId: activeJointId.current!,
+                            newPos: newPosVec3,
+                            isCurveMode: false,
                             root,
                             contextStart,
-                        ) as unknown as Kickstand;
-                        emitSupportDragPreview('kickstand', newKickstand.id, newKickstand);
+                        });
+                        publishJointDragSupportPreview('kickstand', newKickstand);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
