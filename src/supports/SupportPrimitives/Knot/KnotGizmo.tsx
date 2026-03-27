@@ -485,11 +485,14 @@ export function KnotGizmo() {
                 enableScale={false}
                 showCenter={false}
                 axisLock={dominantAxis}
+                moveHandleBidirectional={true}
+                moveHandleLengthScale={0.62}
+                moveHandleThicknessScale={0.72}
                 onMoveStart={handleMoveStart}
                 onMove={handleMove}
                 onMoveEnd={handleMoveEnd}
                 scaleFactor={0.02}
-                handleScale={3.0}
+                handleScale={2.35}
             />
         </>
     );

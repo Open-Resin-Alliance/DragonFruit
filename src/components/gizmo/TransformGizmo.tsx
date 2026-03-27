@@ -51,6 +51,9 @@ export function TransformGizmo({
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
   handleScale = 1.0, // New prop
+  moveHandleBidirectional = false,
+  moveHandleLengthScale = 1.0,
+  moveHandleThicknessScale = 1.0,
   suppressAxisAnimations = false,
   onMoveStart,
   onMove,
@@ -255,6 +258,9 @@ export function TransformGizmo({
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
+              moveHandleBidirectional={moveHandleBidirectional}
+              moveHandleLengthScale={moveHandleLengthScale}
+              moveHandleThicknessScale={moveHandleThicknessScale}
               onDragStart={() => handleDragStart('axis-x')}
               onDrag={(delta: THREE.Vector3) => handleAxisMove('x', delta)}
               onDragEnd={handleDragEnd}
@@ -272,6 +278,9 @@ export function TransformGizmo({
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
+              moveHandleBidirectional={moveHandleBidirectional}
+              moveHandleLengthScale={moveHandleLengthScale}
+              moveHandleThicknessScale={moveHandleThicknessScale}
               onDragStart={() => handleDragStart('axis-y')}
               onDrag={(delta: THREE.Vector3) => handleAxisMove('y', delta)}
               onDragEnd={handleDragEnd}
@@ -289,6 +298,9 @@ export function TransformGizmo({
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
+              moveHandleBidirectional={moveHandleBidirectional}
+              moveHandleLengthScale={moveHandleLengthScale}
+              moveHandleThicknessScale={moveHandleThicknessScale}
               onDragStart={() => handleDragStart('axis-z')}
               onDrag={(delta: THREE.Vector3) => handleAxisMove('z', delta)}
               onDragEnd={handleDragEnd}

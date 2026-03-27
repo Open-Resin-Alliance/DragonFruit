@@ -154,26 +154,29 @@ export function KnotRenderer({
 
         e.stopPropagation();
 
-        // Restore select-first behavior:
-        // first click selects the knot (and shows knot gizmo),
-        // subsequent drags (while selected) move it directly.
+        const beginDirectDrag = () => {
+            onDragStart();
+            document.body.style.cursor = 'grabbing';
+
+            const handlePointerUp = () => {
+                onDragEnd();
+                document.body.style.cursor = 'grab';
+                window.removeEventListener('pointerup', handlePointerUp, true);
+                window.removeEventListener('pointercancel', handlePointerUp, true);
+                window.removeEventListener('mouseup', handlePointerUp, true);
+            };
+
+            window.addEventListener('pointerup', handlePointerUp, true);
+            window.addEventListener('pointercancel', handlePointerUp, true);
+            window.addEventListener('mouseup', handlePointerUp, true);
+        };
+
+        // Select the knot if needed, but allow immediate direct drag on first pointer-down.
         if (!isSelected) {
             selectPrimitiveById(knot.id);
-            document.body.style.cursor = 'grab';
-            return;
         }
 
-        // Start drag operation
-        onDragStart();
-        document.body.style.cursor = 'grabbing';
-
-        // Global mouse up to end drag
-        const handleMouseUp = () => {
-            onDragEnd();
-            document.body.style.cursor = 'grab';
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-        window.addEventListener('mouseup', handleMouseUp);
+        beginDirectDrag();
     };
 
     // Grab cursor on hover when parent is selected
