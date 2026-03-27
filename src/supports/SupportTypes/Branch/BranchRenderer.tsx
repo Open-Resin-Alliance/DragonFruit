@@ -1,4 +1,4 @@
-import React, { useSyncExternalStore } from 'react';
+import React from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Branch, Knot } from '../../types';
@@ -12,8 +12,9 @@ import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDra
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
+import { useJointDragPreview } from '../../interaction/jointDragPreview';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
-import { getSnapshot, subscribe, updateBranch } from '../../state';
+import { updateBranch } from '../../state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface BranchRendererProps {
@@ -54,10 +55,10 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   onContactDiskHudHoverChange,
 }: BranchRendererProps) {
   const { camera, scene, gl } = useThree();
-  const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
+  const previewBranch = useJointDragPreview<Branch>('branch', branch.id);
   const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
   const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
   const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
@@ -133,14 +134,16 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const batchedStraightShafts: InstancedShaft[] = [];
   const joints: React.ReactNode[] = [];
 
-  branch.segments.forEach((seg, index) => {
+  const effectiveBranch = previewBranch ?? branch;
+
+  effectiveBranch.segments.forEach((seg, index) => {
     let endPoint: THREE.Vector3;
 
     if (seg.topJoint) {
       endPoint = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-    } else if (branch.contactCone) {
+    } else if (effectiveBranch.contactCone) {
       // Shaft ends at the cone's socket position
-      const socketPos = getFinalSocketPosition(branch.contactCone);
+      const socketPos = getFinalSocketPosition(effectiveBranch.contactCone);
       endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
     } else {
       endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 5));
@@ -227,10 +230,10 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   });
 
   // --- Render Contact Cone (if present) ---
-  const effectiveCone = liveDragConeRef.current ?? branch.contactCone;
+  const effectiveCone = liveDragConeRef.current ?? effectiveBranch.contactCone;
   let coneRender = null;
   if (effectiveCone && !deferContactConesToSceneBatch) {
-    const isConeSelected = !!effectiveCone.id && supportState.selectedId === effectiveCone.id;
+    const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
     coneRender = (
       <ContactConeRenderer
         contactDiskId={effectiveCone.id}

@@ -1,4 +1,4 @@
-import React, { useMemo, useSyncExternalStore } from 'react';
+import React, { useMemo } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Stick } from '../../types';
@@ -13,7 +13,7 @@ import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDra
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
-import { getSnapshot, subscribe, updateStick } from '../../state';
+import { getSnapshot, updateStick } from '../../state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface StickRendererProps {
@@ -50,7 +50,6 @@ export const StickRenderer = React.memo(function StickRenderer({
   onContactDiskHudHoverChange,
 }: StickRendererProps) {
   const { camera, scene, gl } = useThree();
-  const supportState = useSyncExternalStore(subscribe, getSnapshot);
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
@@ -228,8 +227,8 @@ export const StickRenderer = React.memo(function StickRenderer({
 
   const effectiveConeA = liveDragConeARef.current ?? stick.contactConeA;
   const effectiveConeB = liveDragConeBRef.current ?? stick.contactConeB;
-  const isConeASelected = !!effectiveConeA.id && supportState.selectedId === effectiveConeA.id;
-  const isConeBSelected = !!effectiveConeB.id && supportState.selectedId === effectiveConeB.id;
+  const isConeASelected = !!effectiveConeA.id && selectedId === effectiveConeA.id;
+  const isConeBSelected = !!effectiveConeB.id && selectedId === effectiveConeB.id;
 
   const coneA = !deferContactConesToSceneBatch && (
     <ContactConeRenderer

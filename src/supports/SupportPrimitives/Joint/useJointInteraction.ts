@@ -11,6 +11,7 @@ import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
+import { clearJointDragPreview, emitJointDragPreview } from '../../interaction/jointDragPreview';
 
 /**
  * Hook to handle joint interaction (dragging/moving).
@@ -38,6 +39,8 @@ export function useJointInteraction(enabled: boolean = true) {
     const initialTrunkSnapshot = useRef<Trunk | null>(null);
     const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const lastAppliedDragPosRef = useRef<THREE.Vector3 | null>(null);
+    const liveTrunkPreviewRef = useRef<Trunk | null>(null);
+    const liveBranchPreviewRef = useRef<Branch | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
     const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'kickstand'; supportId: string }>>(new Map());
@@ -229,6 +232,7 @@ export function useJointInteraction(enabled: boolean = true) {
                     activeTrunkId.current = foundTrunk.id;
                     // Keep a direct immutable reference; trunk updates are copy-on-write.
                     initialTrunkSnapshot.current = foundTrunk;
+                    liveTrunkPreviewRef.current = foundTrunk;
 
                     const root = getRootById(foundTrunk.rootId) ?? undefined;
                     activeConstraintRootRef.current = root;
@@ -243,6 +247,7 @@ export function useJointInteraction(enabled: boolean = true) {
                     }
                 } else if (foundBranch) {
                     activeBranchId.current = foundBranch.id;
+                    liveBranchPreviewRef.current = foundBranch;
                     activeConstraintRootRef.current = undefined;
                     activeConstraintStartRef.current = getKnotById(foundBranch.parentKnotId)?.pos;
                     initialEditSnapshotRef.current = captureSupportEditSnapshot();
@@ -317,6 +322,7 @@ export function useJointInteraction(enabled: boolean = true) {
                                 },
                             }
                             : resolved;
+                        clearJointDragPreview('trunk', resolvedWithoutOverride.id);
                         updateTrunk(resolvedWithoutOverride);
                     }
                 } else if (activeBranchId.current) {
@@ -341,6 +347,7 @@ export function useJointInteraction(enabled: boolean = true) {
                                 },
                             }
                             : resolved;
+                        clearJointDragPreview('branch', resolvedWithoutOverride.id);
                         updateBranch(resolvedWithoutOverride);
                     }
                 } else if (activeKickstandId.current) {
@@ -395,6 +402,8 @@ export function useJointInteraction(enabled: boolean = true) {
             activeKickstandId.current = null;
             initialTrunkSnapshot.current = null;
             initialEditSnapshotRef.current = null;
+            liveTrunkPreviewRef.current = null;
+            liveBranchPreviewRef.current = null;
             forceEndDragRef.current = false;
             lastAppliedDragPosRef.current = null;
             lastWarningEvalAtRef.current = 0;
@@ -452,7 +461,8 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart
                         );
-                        updateTrunk(newTrunk, { skipDependentGeometry: true });
+                        liveTrunkPreviewRef.current = newTrunk;
+                        emitJointDragPreview({ kind: 'trunk', supportId: newTrunk.id, support: newTrunk });
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -499,7 +509,8 @@ export function useJointInteraction(enabled: boolean = true) {
                             undefined, // No root for branch?
                             contextStart
                         ) as unknown as Branch;
-                        updateBranch(newBranch, { skipDependentGeometry: true });
+                        liveBranchPreviewRef.current = newBranch;
+                        emitJointDragPreview({ kind: 'branch', supportId: newBranch.id, support: newBranch });
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {

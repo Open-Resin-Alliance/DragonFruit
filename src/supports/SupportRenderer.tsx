@@ -19,6 +19,7 @@ import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore'
 import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
+import { buildJointDragPreviewKnots, useActiveJointDragPreview } from './interaction/jointDragPreview';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
@@ -119,6 +120,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const kickstandState = useKickstandStoreState();
+    const activeJointDragPreview = useActiveJointDragPreview();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
@@ -906,6 +908,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return selected;
     }, [state.sticks, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
+    const previewKnotOverrides = useMemo(() => {
+        return buildJointDragPreviewKnots(activeJointDragPreview, {
+            roots: state.roots,
+            knots: state.knots,
+        });
+    }, [activeJointDragPreview, state.roots, state.knots]);
+
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();
         const hasSingleSelection = !!selectedId;
@@ -1019,7 +1028,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         for (const branch of Object.values(state.branches)) {
             if (!isModelVisible(branch.modelId, branch.id)) continue;
-            const parentKnot = state.knots[branch.parentKnotId];
+            const parentKnot = previewKnotOverrides[branch.parentKnotId] ?? state.knots[branch.parentKnotId];
             if (!parentKnot) continue;
 
             const shafts: InstancedShaft[] = [];
@@ -1064,7 +1073,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.branches, state.knots, isModelVisible]);
+    }, [state.branches, state.knots, previewKnotOverrides, isModelVisible]);
 
     const braceShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
@@ -1073,8 +1082,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(brace.modelId, brace.id)) continue;
             if (brace.curve?.type === 'bezier') continue;
 
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
+            const startKnot = previewKnotOverrides[brace.startKnotId] ?? state.knots[brace.startKnotId];
+            const endKnot = previewKnotOverrides[brace.endKnotId] ?? state.knots[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
             const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
@@ -1093,7 +1102,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [state.braces, state.knots, isModelVisible]);
+    }, [state.braces, state.knots, previewKnotOverrides, isModelVisible]);
 
     const twigShaftsBySupport = useMemo(() => {
         if (!enableTwigSceneBatching) {
@@ -1228,7 +1237,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             if (!isModelVisible(kickstand.modelId, kickstand.id)) continue;
 
             const root = kickstandState.roots[kickstand.rootId];
-            const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+            const hostKnot = previewKnotOverrides[kickstand.hostKnotId] ?? kickstandState.knots[kickstand.hostKnotId];
             if (!root || !hostKnot) continue;
 
             const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
@@ -1281,7 +1290,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
+    }, [kickstandState.kickstands, kickstandState.roots, kickstandState.knots, previewKnotOverrides, isModelVisible, raftSettings.bottomMode, raftSettings.thickness]);
 
     const segmentModelIdById = useMemo(() => {
         const map = new Map<string, string | undefined>();
@@ -2972,7 +2981,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {Object.values(state.branches).map(branch => {
                 if (!isModelVisible(branch.modelId, branch.id)) return null;
-                const knot = state.knots[branch.parentKnotId];
+                const knot = previewKnotOverrides[branch.parentKnotId] ?? state.knots[branch.parentKnotId];
                 if (!knot) return null;
 
                 const effectiveSelected = selectedBranchIds.has(branch.id);
@@ -3010,7 +3019,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {/* Render Leaves */}
             {Object.values(state.leaves).map(leaf => {
                 if (!isModelVisible(leaf.modelId, leaf.id)) return null;
-                const knot = state.knots[leaf.parentKnotId];
+                const knot = previewKnotOverrides[leaf.parentKnotId] ?? state.knots[leaf.parentKnotId];
                 if (!knot) return null;
 
                 const effectiveSelected = selectedLeafIds.has(leaf.id);
@@ -3023,6 +3032,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                         key={leaf.id}
                         leaf={leaf}
                         parentKnot={knot}
+                        selectedId={selectedId}
                         isSelected={effectiveSelected}
                         dimNonSelected={dimNonSelected}
                         baseColor={resolveBaseColor(leaf.modelId)}
@@ -3146,8 +3156,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
             {Object.values(state.braces).map(brace => {
                 if (!isModelVisible(brace.modelId, brace.id)) return null;
-                const startKnot = state.knots[brace.startKnotId];
-                const endKnot = state.knots[brace.endKnotId];
+                const startKnot = previewKnotOverrides[brace.startKnotId] ?? state.knots[brace.startKnotId];
+                const endKnot = previewKnotOverrides[brace.endKnotId] ?? state.knots[brace.endKnotId];
                 if (!startKnot || !endKnot) return null;
 
                 const effectiveSelected = selectedBraceIds.has(brace.id);
@@ -3186,7 +3196,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             {Object.values(kickstandState.kickstands).map((kickstand) => {
                 if (!isModelVisible(kickstand.modelId, kickstand.id)) return null;
                 const root = kickstandState.roots[kickstand.rootId];
-                const hostKnot = kickstandState.knots[kickstand.hostKnotId];
+                const hostKnot = previewKnotOverrides[kickstand.hostKnotId] ?? kickstandState.knots[kickstand.hostKnotId];
                 if (!root || !hostKnot) return null;
 
                 const effectiveSelected = selectedKickstandIds.has(kickstand.id);

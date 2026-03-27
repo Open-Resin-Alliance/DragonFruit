@@ -1,7 +1,7 @@
-import React, { useSyncExternalStore } from 'react';
+import React from 'react';
 import { useThree } from '@react-three/fiber';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { getSnapshot, subscribe, updateLeaf } from '../../state';
+import { updateLeaf } from '../../state';
 import { Leaf, Knot } from '../../types';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
@@ -16,6 +16,7 @@ import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../histor
 interface LeafRendererProps {
     leaf: Leaf;
     parentKnot: Knot;
+    selectedId?: string | null;
     isSelected?: boolean;
     dimNonSelected?: boolean;
     showKnots?: boolean;
@@ -54,6 +55,7 @@ interface LeafRendererPointerEvent {
 export const LeafRenderer = React.memo(function LeafRenderer({
     leaf,
     parentKnot,
+    selectedId,
     isSelected,
     dimNonSelected,
     showKnots,
@@ -69,7 +71,6 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     const { camera, scene, gl } = useThree();
     const { getHotkey } = useHotkeyConfig();
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
-    const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const highDetailPrimitiveSegments = 24;
     const lowDetailPrimitiveSegments = 8;
     const useLowDetailPrimitives = !isSelected && !propHovered;
@@ -161,7 +162,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
                 {(() => {
                     const effectiveCone = liveDragConeRef.current ?? leaf.contactCone;
                     if (!effectiveCone || deferContactConesToSceneBatch) return null;
-                    const isConeSelected = !!effectiveCone.id && supportState.selectedId === effectiveCone.id;
+                    const isConeSelected = !!effectiveCone.id && selectedId === effectiveCone.id;
                     return (
                         <ContactConeRenderer
                             contactDiskId={effectiveCone.id}
