@@ -15,6 +15,7 @@ import { clearSupportDragPreview, emitSupportDragPreview, setJointInteractionLoc
 import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDragSupportPreview } from './jointDragController';
 
 export function JointGizmo() {
+    const MOVE_DELTA_EPS_SQ = 1e-12;
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
     const selectedId = state.selectedId;
@@ -29,6 +30,8 @@ export function JointGizmo() {
     const liveTwigPreviewRef = useRef<Twig | null>(null);
     const liveStickPreviewRef = useRef<Stick | null>(null);
     const liveKickstandPreviewRef = useRef<Kickstand | null>(null);
+    const pendingDeltaRef = useRef<THREE.Vector3>(new THREE.Vector3());
+    const moveRafRef = useRef<number | null>(null);
     const gizmoTargetRef = useRef<THREE.Group>(null);
     const jointDragPosition = useJointDragPosition(selectedId ?? '');
 
@@ -37,6 +40,10 @@ export function JointGizmo() {
     useEffect(() => {
         return () => {
             if (typeof window === 'undefined') return;
+            if (moveRafRef.current !== null) {
+                window.cancelAnimationFrame(moveRafRef.current);
+                moveRafRef.current = null;
+            }
             setJointInteractionLock(false, 0);
         };
     }, []);
@@ -242,21 +249,25 @@ export function JointGizmo() {
     }, [jointDragPosition]);
 
     const result = findJointAndParent();
-    if (!result) return null;
-    const { joint, trunk, branch, twig, stick, kickstand } = result;
+    const joint = result?.joint ?? null;
+    const trunk = result?.trunk;
+    const branch = result?.branch;
+    const twig = result?.twig;
+    const stick = result?.stick;
+    const kickstand = result?.kickstand;
 
     const handleMoveStart = () => {
+        if (!joint) return;
         setJointInteractionLock(true);
-        if (joint) {
-            dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
-        }
+        dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
 
         if (branch || twig || stick || kickstand) {
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
         }
     };
 
-    const handleMove = (delta: THREE.Vector3) => {
+    const applyMoveDelta = useCallback((delta: THREE.Vector3) => {
+        if (!joint) return;
         if (!dragPosRef.current) {
             // Fallback if move start missed (shouldn't happen)
             dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
@@ -287,8 +298,10 @@ export function JointGizmo() {
                 isCurveMode,
                 root: state.roots[trunk.rootId],
             });
-            liveTrunkPreviewRef.current = newTrunk;
-            publishJointDragSupportPreview('trunk', newTrunk);
+            if (liveTrunkPreviewRef.current !== newTrunk) {
+                liveTrunkPreviewRef.current = newTrunk;
+                publishJointDragSupportPreview('trunk', newTrunk);
+            }
         } else if (branch) {
             if (!initialBranchRef.current) {
                 initialBranchRef.current = cloneObj(branch);
@@ -300,8 +313,10 @@ export function JointGizmo() {
                 newPos,
                 isCurveMode: false,
             }) as Branch;
-            liveBranchPreviewRef.current = newBranch;
-            publishJointDragSupportPreview('branch', newBranch);
+            if (liveBranchPreviewRef.current !== newBranch) {
+                liveBranchPreviewRef.current = newBranch;
+                publishJointDragSupportPreview('branch', newBranch);
+            }
         } else if (twig) {
             const newTwig: Twig = {
                 ...twig,
@@ -345,16 +360,67 @@ export function JointGizmo() {
                 root,
                 contextStart,
             });
-            liveKickstandPreviewRef.current = newKickstand;
-            publishJointDragSupportPreview('kickstand', newKickstand);
+            if (liveKickstandPreviewRef.current !== newKickstand) {
+                liveKickstandPreviewRef.current = newKickstand;
+                publishJointDragSupportPreview('kickstand', newKickstand);
+            }
         }
+    }, [
+        branch,
+        isCurveMode,
+        joint?.id,
+        joint?.pos.x,
+        joint?.pos.y,
+        joint?.pos.z,
+        kickstand,
+        state.roots,
+        stick,
+        trunk,
+        twig,
+        updateSegmentsJointPos,
+        recomputeConeForSocket,
+    ]);
+
+    const flushPendingMove = useCallback(() => {
+        if (pendingDeltaRef.current.lengthSq() <= MOVE_DELTA_EPS_SQ) return;
+        const delta = pendingDeltaRef.current.clone();
+        pendingDeltaRef.current.set(0, 0, 0);
+        applyMoveDelta(delta);
+    }, [applyMoveDelta]);
+
+    const scheduleMoveFlush = useCallback(() => {
+        if (typeof window === 'undefined') return;
+        if (moveRafRef.current !== null) return;
+
+        moveRafRef.current = window.requestAnimationFrame(() => {
+            moveRafRef.current = null;
+            flushPendingMove();
+
+            if (pendingDeltaRef.current.lengthSq() > MOVE_DELTA_EPS_SQ) {
+                scheduleMoveFlush();
+            }
+        });
+    }, [flushPendingMove]);
+
+    const handleMove = (delta: THREE.Vector3) => {
+        if (!joint) return;
+        pendingDeltaRef.current.add(delta);
+        scheduleMoveFlush();
     };
 
     const handleMoveEnd = () => {
+        if (!joint) return;
+        if (typeof window !== 'undefined' && moveRafRef.current !== null) {
+            window.cancelAnimationFrame(moveRafRef.current);
+            moveRafRef.current = null;
+        }
+        flushPendingMove();
+
         setJointInteractionLock(false);
         // Prevent the canvas click handler from deselecting the joint
         window.__gizmoDragEndedThisFrame = true;
         dragPosRef.current = null;
+        pendingDeltaRef.current.set(0, 0, 0);
 
         if (initialTrunkRef.current && trunk) {
             const committedTrunk = liveTrunkPreviewRef.current ?? getTrunkById(trunk.id);
@@ -409,6 +475,8 @@ export function JointGizmo() {
         liveStickPreviewRef.current = null;
         liveKickstandPreviewRef.current = null;
     };
+
+    if (!joint) return null;
 
     return (
         <>

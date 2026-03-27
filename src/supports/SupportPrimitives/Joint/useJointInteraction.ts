@@ -21,7 +21,8 @@ import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDra
  * It monitors the picking state and handles drag operations for any 'joint' object.
  */
 export function useJointInteraction(enabled: boolean = true) {
-    const MIN_DRAG_DELTA_SQ = 1e-8; // 0.0001mm positional epsilon (noise-only)
+    const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm positional epsilon to drop high-frequency jitter churn
+    const FAST_DRAG_DELTA_SQ = 0.04; // >0.2mm/frame considered fast sweep; decimate heavy preview recomputes
     const WARNING_DISTANCE_THRESHOLD = 0.05; // mm
     const WARNING_EVAL_INTERVAL_MS = 48; // ~20Hz warning updates during drag
 
@@ -34,6 +35,7 @@ export function useJointInteraction(enabled: boolean = true) {
     const activeKickstandId = useRef<string | null>(null);
     const dragPlane = useRef<THREE.Plane>(new THREE.Plane());
     const dragOffset = useRef<THREE.Vector3>(new THREE.Vector3());
+    const planeIntersectionRef = useRef<THREE.Vector3>(new THREE.Vector3());
     const lastDragPos = useRef<Vec3 | null>(null);
     const forceEndDragRef = useRef(false);
     const initialTrunkSnapshot = useRef<Trunk | null>(null);
@@ -43,6 +45,7 @@ export function useJointInteraction(enabled: boolean = true) {
     const liveBranchPreviewRef = useRef<Branch | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
+    const fastDragFrameSkipToggleRef = useRef(false);
     const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'kickstand'; supportId: string }>>(new Map());
     const activeConstraintRootRef = useRef<Roots | undefined>(undefined);
     const activeConstraintStartRef = useRef<Vec3 | undefined>(undefined);
@@ -204,6 +207,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 lastAppliedDragPosRef.current = null;
                 lastWarningRef.current = null;
                 lastWarningEvalAtRef.current = 0;
+                fastDragFrameSkipToggleRef.current = false;
 
                 // While dragging a joint, disable OrbitControls so camera movement cannot
                 // influence drag math (which is computed from the camera ray).
@@ -374,6 +378,7 @@ export function useJointInteraction(enabled: boolean = true) {
             forceEndDragRef.current = false;
             lastAppliedDragPosRef.current = null;
             lastWarningEvalAtRef.current = 0;
+            fastDragFrameSkipToggleRef.current = false;
             activeConstraintRootRef.current = undefined;
             activeConstraintStartRef.current = undefined;
             applyInteractionWarning(null); // Clear warning on release
@@ -395,13 +400,18 @@ export function useJointInteraction(enabled: boolean = true) {
     useFrame(() => {
         if (activeJointId.current && (activeTrunkId.current || activeBranchId.current || activeKickstandId.current)) {
             raycaster.setFromCamera(pointer, camera);
-            const intersection = new THREE.Vector3();
+            const intersection = planeIntersectionRef.current;
             const intersected = raycaster.ray.intersectPlane(dragPlane.current, intersection);
 
             if (intersected) {
                 // Apply offset
                 const newPos = intersection.add(dragOffset.current);
-                if (lastAppliedDragPosRef.current && lastAppliedDragPosRef.current.distanceToSquared(newPos) < MIN_DRAG_DELTA_SQ) {
+                const hasLastAppliedPos = !!lastAppliedDragPosRef.current;
+                const deltaSq = hasLastAppliedPos
+                    ? lastAppliedDragPosRef.current!.distanceToSquared(newPos)
+                    : 0;
+
+                if (hasLastAppliedPos && deltaSq < MIN_DRAG_DELTA_SQ) {
                     return;
                 }
                 const newPosVec3 = { x: newPos.x, y: newPos.y, z: newPos.z };
@@ -411,6 +421,16 @@ export function useJointInteraction(enabled: boolean = true) {
                     lastAppliedDragPosRef.current = newPos.clone();
                 } else {
                     lastAppliedDragPosRef.current.copy(newPos);
+                }
+
+                const shouldDecimateHeavyPreview = hasLastAppliedPos && deltaSq > FAST_DRAG_DELTA_SQ;
+                if (shouldDecimateHeavyPreview) {
+                    fastDragFrameSkipToggleRef.current = !fastDragFrameSkipToggleRef.current;
+                    if (fastDragFrameSkipToggleRef.current) {
+                        return;
+                    }
+                } else {
+                    fastDragFrameSkipToggleRef.current = false;
                 }
 
                 if (activeTrunkId.current) {
@@ -430,8 +450,10 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart,
                         });
-                        liveTrunkPreviewRef.current = newTrunk;
-                        publishJointDragSupportPreview('trunk', newTrunk);
+                        if (liveTrunkPreviewRef.current !== newTrunk) {
+                            liveTrunkPreviewRef.current = newTrunk;
+                            publishJointDragSupportPreview('trunk', newTrunk);
+                        }
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -477,8 +499,10 @@ export function useJointInteraction(enabled: boolean = true) {
                             isCurveMode: false,
                             contextStart,
                         });
-                        liveBranchPreviewRef.current = newBranch;
-                        publishJointDragSupportPreview('branch', newBranch);
+                        if (liveBranchPreviewRef.current !== newBranch) {
+                            liveBranchPreviewRef.current = newBranch;
+                            publishJointDragSupportPreview('branch', newBranch);
+                        }
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -530,7 +554,9 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart,
                         });
-                        publishJointDragSupportPreview('kickstand', newKickstand);
+                        if (getKickstandSnapshot().kickstands[activeKickstandId.current] !== newKickstand) {
+                            publishJointDragSupportPreview('kickstand', newKickstand);
+                        }
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {

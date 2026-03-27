@@ -558,6 +558,30 @@ export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: TH
     // Update newPos to the clamped result
     newPos = clampedPos;
 
+    // Fast path: if constraint solving snaps to the already-committed joint position,
+    // skip all downstream cone/curve work to avoid no-op drag churn.
+    let currentJointPos: Vec3 | null = null;
+    for (const seg of trunk.segments) {
+        if (seg.topJoint?.id === jointId) {
+            currentJointPos = seg.topJoint.pos;
+            break;
+        }
+        if (seg.bottomJoint?.id === jointId) {
+            currentJointPos = seg.bottomJoint.pos;
+            break;
+        }
+    }
+
+    if (currentJointPos) {
+        const dx = currentJointPos.x - newPos.x;
+        const dy = currentJointPos.y - newPos.y;
+        const dz = currentJointPos.z - newPos.z;
+        const samePosEpsSq = 1e-10;
+        if ((dx * dx) + (dy * dy) + (dz * dz) <= samePosEpsSq) {
+            return trunk;
+        }
+    }
+
     // Check if we are moving the Contact Cone's Socket Joint
     let newContactCone = trunk.contactCone;
 
@@ -751,7 +775,6 @@ export function moveJoint(trunk: Trunk, jointId: string, newPos: Vec3, mesh?: TH
     const shouldUpdateCurves = isCurveMode || connectedAreBezier;
 
     if (shouldUpdateCurves && root) {
-        console.log('[JointUtils] Calling updateCurvesAtJoint. Root:', root.id);
         return updateCurvesAtJoint(trunkWithMovedJoint, jointId, root, isCurveMode);
     } else if (shouldUpdateCurves && !root) {
         console.warn('[JointUtils] CurveMode active but NO ROOT provided to moveJoint');
