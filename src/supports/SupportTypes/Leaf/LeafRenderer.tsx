@@ -1,7 +1,7 @@
 import React from 'react';
 import { useThree } from '@react-three/fiber';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
-import { updateLeaf } from '../../state';
+import { getSnapshot, updateLeaf } from '../../state';
 import { Leaf, Knot } from '../../types';
 import { ContactConeRenderer, getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
