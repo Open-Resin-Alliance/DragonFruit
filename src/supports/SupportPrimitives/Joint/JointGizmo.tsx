@@ -9,7 +9,7 @@ import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../histor
 import { useCurveInteractionState } from '../../Curves/curveInteractionState';
 import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { Trunk, Branch, Twig, Stick, Joint } from '../../types';
-import { useKickstandStoreState, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
+import { getKickstandSnapshot, useKickstandStoreState, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { clearJointDragPreview, emitJointDragPreview } from '../../interaction/jointDragPreview';
 
@@ -25,6 +25,7 @@ export function JointGizmo() {
     const { isActive: isCurveMode } = useCurveInteractionState();
     const liveTrunkPreviewRef = useRef<Trunk | null>(null);
     const liveBranchPreviewRef = useRef<Branch | null>(null);
+    const liveKickstandPreviewRef = useRef<Kickstand | null>(null);
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
 
@@ -327,7 +328,8 @@ export function JointGizmo() {
                 root,
                 contextStart,
             ) as unknown as Kickstand;
-            updateKickstand(newKickstand);
+            liveKickstandPreviewRef.current = newKickstand;
+            emitJointDragPreview({ kind: 'kickstand', supportId: newKickstand.id, support: newKickstand });
         }
     };
 
@@ -366,6 +368,11 @@ export function JointGizmo() {
             } else if (stick) {
                 pushSupportEditHistory('Move stick joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (kickstand) {
+                const committedKickstand = liveKickstandPreviewRef.current ?? getKickstandSnapshot().kickstands[kickstand.id];
+                if (committedKickstand) {
+                    updateKickstand(committedKickstand);
+                }
+                clearJointDragPreview('kickstand', kickstand.id);
                 pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             }
             initialEditSnapshotRef.current = null;
@@ -374,6 +381,7 @@ export function JointGizmo() {
         initialBranchRef.current = null;
         liveTrunkPreviewRef.current = null;
         liveBranchPreviewRef.current = null;
+        liveKickstandPreviewRef.current = null;
     };
 
     return (

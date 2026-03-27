@@ -6,6 +6,7 @@ interface JointDragPreviewWorkerRequest {
   preview: JointDragPreviewSnapshot | null;
   root?: Roots | null;
   parentKnot?: Knot | null;
+  hostKnot?: Knot | null;
   candidateKnots: Record<string, Knot>;
 }
 
@@ -21,7 +22,7 @@ self.onmessage = (event: MessageEvent<JointDragPreviewWorkerRequest>) => {
   try {
     const previewKnots = computeJointDragPreviewKnots(
       msg.preview,
-      { root: msg.root ?? null, parentKnot: msg.parentKnot ?? null },
+      { root: msg.root ?? null, parentKnot: msg.parentKnot ?? null, hostKnot: msg.hostKnot ?? null },
       msg.candidateKnots,
     );
 

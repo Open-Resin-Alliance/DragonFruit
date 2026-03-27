@@ -28,6 +28,7 @@ interface BezierRendererProps {
     isSelected?: boolean;
     isParentSelected?: boolean;
     isInteractable?: boolean;
+    suppressPlacementInteraction?: boolean;
     onClick?: (e: any) => void;
 }
 
@@ -50,6 +51,7 @@ export function BezierRenderer({
     isSelected,
     isParentSelected,
     isInteractable = true,
+    suppressPlacementInteraction = false,
     onClick
 }: BezierRendererProps) {
     const groupRef = useRef<THREE.Group>(null);
@@ -76,7 +78,7 @@ export function BezierRenderer({
     const visualEndRadius = endRadius * selectedVisualScale;
     const pickRadius = Math.max(Math.max(visualStartRadius, visualEndRadius) * PICK_RADIUS_MULTIPLIER, MIN_PICK_RADIUS_MM);
     const { altActive: braceAltActive } = useBracePlacementState();
-    const enableSegmentInteraction = !!isInteractable && (isParentSelected || braceAltActive) === true;
+    const enableSegmentInteraction = !!isInteractable && (isParentSelected || (!suppressPlacementInteraction && braceAltActive)) === true;
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
 
     const geometry = useMemo(() => {

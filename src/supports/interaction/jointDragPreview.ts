@@ -12,6 +12,7 @@ interface JointDragPreviewWorkerResponse {
 interface UseJointDragPreviewOverridesOptions {
   roots: Record<string, Roots>;
   knots: Record<string, Knot>;
+  kickstandKnots?: Record<string, Knot>;
   candidateKnots: JointDragPreviewCandidateKnots;
 }
 
@@ -81,7 +82,7 @@ export function useActiveJointDragPreview() {
   return preview;
 }
 
-export function useJointDragPreviewOverrides({ roots, knots, candidateKnots }: UseJointDragPreviewOverridesOptions) {
+export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, candidateKnots }: UseJointDragPreviewOverridesOptions) {
   const preview = useActiveJointDragPreview();
   const [previewKnots, setPreviewKnots] = React.useState<Record<string, Knot>>({});
   const workerRef = React.useRef<Worker | null>(null);
@@ -124,10 +125,17 @@ export function useJointDragPreviewOverrides({ roots, knots, candidateKnots }: U
 
     const context: JointDragPreviewContext = preview.kind === 'trunk'
       ? { root: roots[preview.support.rootId] ?? null }
-      : { parentKnot: knots[preview.support.parentKnotId] ?? null };
+      : preview.kind === 'kickstand'
+        ? {
+          root: roots[preview.support.rootId] ?? null,
+          hostKnot: kickstandKnots?.[preview.support.hostKnotId] ?? knots[preview.support.hostKnotId] ?? null,
+        }
+        : { parentKnot: knots[preview.support.parentKnotId] ?? null };
+
+    const immediatePreviewKnots = computeJointDragPreviewKnots(preview, context, candidateKnots);
+    setPreviewKnots(immediatePreviewKnots);
 
     if (!workerReadyRef.current || !workerRef.current) {
-      setPreviewKnots(computeJointDragPreviewKnots(preview, context, candidateKnots));
       return;
     }
 
@@ -138,7 +146,7 @@ export function useJointDragPreviewOverrides({ roots, knots, candidateKnots }: U
       ...context,
       candidateKnots,
     });
-  }, [preview, roots, knots, candidateKnots]);
+  }, [preview, roots, knots, kickstandKnots, candidateKnots]);
 
   return previewKnots;
 }

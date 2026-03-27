@@ -24,6 +24,7 @@ interface ShaftRendererProps {
     raycast?: any;
     enablePicking?: boolean;
     isInteractable?: boolean;
+    suppressPlacementInteraction?: boolean;
     isSelected?: boolean;
     isParentSelected?: boolean;
     onClick?: (e: any) => void;
@@ -46,6 +47,7 @@ export function ShaftRenderer({
     raycast,
     enablePicking = true,
     isInteractable = true,
+    suppressPlacementInteraction = false,
     isSelected,
     isParentSelected,
     onClick,
@@ -62,7 +64,7 @@ export function ShaftRenderer({
 
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
-    const placementInteractionActive = braceAltActive || kickstandHotkeyActive;
+    const placementInteractionActive = !suppressPlacementInteraction && (braceAltActive || kickstandHotkeyActive);
     const enableSegmentInteraction = (isParentSelected || placementInteractionActive) && (isInteractable || placementInteractionActive);
 
     const { isHovered: isPickingHovered, pickRef } = usePickingSubscription({

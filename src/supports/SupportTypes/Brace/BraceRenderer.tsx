@@ -22,6 +22,8 @@ interface BraceRendererProps {
     startKnot: Knot;
     endKnot: Knot;
     isSelected?: boolean;
+    ghosted?: boolean;
+    ghostOpacity?: number;
     dimNonSelected?: boolean;
     showKnots?: boolean;
     isHovered?: boolean;
@@ -49,6 +51,8 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     startKnot,
     endKnot,
     isSelected,
+    ghosted = false,
+    ghostOpacity = 1,
     dimNonSelected,
     showKnots,
     isHovered: propHovered,
@@ -64,6 +68,9 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const { getHotkey } = useHotkeyConfig();
     const branchFamilyBinding = getHotkey('SUPPORTS', 'BRANCH_PLACEMENT');
     const segmentId = `braceSegment:${brace.id}`;
+    const effectiveInteractable = isInteractable && !ghosted;
+    const shaftOpacity = ghosted ? Math.max(0.18, Math.min(ghostOpacity, 0.35)) : 1;
+    const shaftTransparent = ghosted ? shaftOpacity < 0.999 : false;
     const debugColor = debugSectionColors && brace.debugSection
         ? DEBUG_SECTION_COLORS[brace.debugSection] ?? baseColor
         : null;
@@ -71,7 +78,7 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     const { pickRef, visuals } = useHighlight({
         id: brace.id,
         category: 'support',
-        enabled: !!isInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
+        enabled: !!effectiveInteractable && !suppressHover && !deferInteractionToSceneBatch && !isSelected,
         isSelected,
         suppressHover,
         externalHover: propHovered,
@@ -100,6 +107,8 @@ export const BraceRenderer = React.memo(function BraceRenderer({
     }, [isSelected, isBezierBrace, deferStraightShaftToSceneBatch, segmentId, startKnot.pos, endKnot.pos, uniformBraceDiameter]);
 
     const handleClick = (e: BraceRendererClickEvent) => {
+        if (!effectiveInteractable) return;
+
         const branchFamilyHeld = branchPlacementStore.getSnapshot().altActive
             || isSupportPlacementBindingSatisfiedByModifierState(branchFamilyBinding, getSupportPlacementModifierState(e));
         if (branchFamilyHeld) {
@@ -153,6 +162,8 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                         color={shaftColor}
                         emissive={visuals.emissive}
                         emissiveIntensity={visuals.emissiveIntensity}
+                        transparent={shaftTransparent}
+                        opacity={shaftOpacity}
                     />
                     {isSelected && isBezierBrace ? (
                         <BezierRenderer
@@ -170,8 +181,11 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             emissiveIntensity={visuals.emissiveIntensity}
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
-                            isInteractable={isInteractable}
+                            isInteractable={effectiveInteractable}
+                            suppressPlacementInteraction={ghosted}
                             isSelected={false}
+                            transparent={shaftTransparent}
+                            opacity={shaftOpacity}
                             onClick={() => selectPrimitiveById(segmentId)}
                         />
                     ) : isSelected ? (
@@ -187,8 +201,11 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                             emissiveIntensity={visuals.emissiveIntensity}
                             selectedColor={visuals.selectedColor}
                             isParentSelected={!!isSelected}
-                            isInteractable={isInteractable}
+                            isInteractable={effectiveInteractable}
+                            suppressPlacementInteraction={ghosted}
                             isSelected={false}
+                            transparent={shaftTransparent}
+                            opacity={shaftOpacity}
                             onClick={() => selectPrimitiveById(segmentId)}
                         />
                     ) : null}
@@ -202,8 +219,11 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
-                    isInteractable={isInteractable}
+                    isInteractable={effectiveInteractable}
                     isParentSelected={!!isSelected}
+                    enablePicking={effectiveInteractable}
+                    transparent={shaftTransparent}
+                    opacity={shaftOpacity}
                 />
             )}
             {showKnots !== false && isSelected && (
@@ -213,8 +233,11 @@ export const BraceRenderer = React.memo(function BraceRenderer({
                     emissive={visuals.emissive}
                     emissiveIntensity={visuals.emissiveIntensity}
                     selectedColor={visuals.selectedColor}
-                    isInteractable={isInteractable}
+                    isInteractable={effectiveInteractable}
                     isParentSelected={!!isSelected}
+                    enablePicking={effectiveInteractable}
+                    transparent={shaftTransparent}
+                    opacity={shaftOpacity}
                 />
             )}
         </group>

@@ -370,6 +370,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart,
                         ) as unknown as Kickstand;
+                        clearJointDragPreview('kickstand', resolved.id);
                         updateKickstand(resolved);
                     }
                 }
@@ -394,6 +395,10 @@ export function useJointInteraction(enabled: boolean = true) {
                 } else if (activeKickstandId.current) {
                     pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
                 }
+            }
+
+            if (activeKickstandId.current) {
+                clearJointDragPreview('kickstand', activeKickstandId.current);
             }
 
             activeJointId.current = null;
@@ -562,7 +567,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart,
                         ) as unknown as Kickstand;
-                        updateKickstand(newKickstand);
+                        emitJointDragPreview({ kind: 'kickstand', supportId: newKickstand.id, support: newKickstand });
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {

@@ -46,6 +46,12 @@ export function SATHoverPicker({
   const cursorPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const lastHoveredModelIdRef = useRef<string | null>(null);
 
+  const isSupportGizmoDragging = useCallback(() => {
+    if (typeof window === 'undefined') return false;
+    const w = window as any;
+    return !!(w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging);
+  }, []);
+
   // Cache key combines geometry UUID + support hull key + transform
   const getHullCacheKey = useCallback((modelId: string): string => {
     const transform = getModelTransform(modelId);
@@ -216,6 +222,16 @@ export function SATHoverPicker({
   }, [camera, canvasSize]);
 
   const runHoverCheck = useCallback(() => {
+    if (isSupportGizmoDragging()) {
+      if (lastHoveredModelIdRef.current !== null) {
+        lastHoveredModelIdRef.current = null;
+        window.dispatchEvent(new CustomEvent('sat-hover-model-changed', {
+          detail: { modelId: null },
+        }));
+      }
+      return;
+    }
+
     const cursorWorld = screenToWorld2D(cursorPosRef.current.x, cursorPosRef.current.y);
 
     let hoveredModelId: string | null = null;
@@ -240,7 +256,7 @@ export function SATHoverPicker({
         detail: { modelId: hoveredModelId },
       }));
     }
-  }, [checkSATOverlap, getOrBuildHull, screenToWorld2D, visibleModelIds]);
+  }, [checkSATOverlap, getOrBuildHull, isSupportGizmoDragging, screenToWorld2D, visibleModelIds]);
 
   // Event-driven hover checks (no continuous polling)
   useEffect(() => {
@@ -265,6 +281,7 @@ export function SATHoverPicker({
     };
 
     const onMouseMove = (event: MouseEvent) => {
+      if (isSupportGizmoDragging()) return;
       cursorPosRef.current = { x: event.clientX, y: event.clientY };
       scheduleCheck();
     };
@@ -279,7 +296,7 @@ export function SATHoverPicker({
         window.cancelAnimationFrame(rafId);
       }
     };
-  }, [enabled, runHoverCheck, visibleModelIds]);
+  }, [enabled, isSupportGizmoDragging, runHoverCheck, visibleModelIds]);
 
   return null;
 }

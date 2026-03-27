@@ -40,6 +40,9 @@ export function hasFrontBlockingModel(event: PointerEventLike | null | undefined
 export function emitImmediateModelHover(modelId: string | null) {
     if (typeof window === 'undefined') return;
 
+    const w = window as any;
+    if (w.__jointGizmoDragging || w.__knotGizmoDragging || w.__bezierGizmoDragging) return;
+
     window.dispatchEvent(new CustomEvent('model-pointer-hover-immediate', {
         detail: { modelId }
     }));
