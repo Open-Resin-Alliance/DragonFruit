@@ -1,13 +1,11 @@
 import React from 'react';
 import type { Knot, Roots } from '../types';
 import { computeJointDragPreviewKnots, type JointDragPreviewCandidateKnots, type JointDragPreviewContext, type JointDragPreviewKind, type JointDragPreviewPayload, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
+import type { PartDragPreviewPayload } from './partDragPreview';
 
 const EVENT_NAME = 'dragonfruit-joint-drag-preview';
-
-interface JointDragPreviewWorkerResponse {
-  requestId: number;
-  previewKnots: Record<string, Knot>;
-}
+const PART_EVENT_NAME = 'dragonfruit-part-drag-update';
+const EMPTY_PREVIEW_KNOTS: Record<string, Knot> = {};
 
 interface UseJointDragPreviewOverridesOptions {
   roots: Record<string, Roots>;
@@ -52,75 +50,68 @@ export function useActiveJointDragPreview() {
   const pendingPreviewRef = React.useRef<JointDragPreviewSnapshot | null>(null);
   const frameRef = React.useRef<number | null>(null);
 
+  const schedulePreview = React.useCallback((nextPreview: JointDragPreviewSnapshot | null) => {
+    pendingPreviewRef.current = nextPreview;
+    if (frameRef.current !== null) return;
+
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      setPreview(pendingPreviewRef.current);
+    });
+  }, []);
+
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    const isJointPreviewKind = (kind: string): kind is JointDragPreviewKind => {
+      return kind === 'trunk' || kind === 'branch' || kind === 'kickstand';
+    };
 
     const handlePreview = (event: Event) => {
       const detail = (event as CustomEvent<JointDragPreviewPayload<unknown>>).detail;
       if (!detail) return;
 
-      pendingPreviewRef.current = detail.support ? (detail as JointDragPreviewSnapshot) : null;
-      if (frameRef.current !== null) return;
+      schedulePreview(detail.support ? (detail as JointDragPreviewSnapshot) : null);
+    };
 
-      frameRef.current = window.requestAnimationFrame(() => {
-        frameRef.current = null;
-        setPreview(pendingPreviewRef.current);
-      });
+    const handlePartPreview = (event: Event) => {
+      const detail = (event as CustomEvent<PartDragPreviewPayload<unknown>>).detail;
+      if (!detail) return;
+      if (!isJointPreviewKind(detail.kind)) return;
+
+      const nextPreview: JointDragPreviewSnapshot | null = detail.support
+        ? {
+          kind: detail.kind,
+          supportId: detail.supportId,
+          support: detail.support as JointDragPreviewSnapshot['support'],
+        }
+        : null;
+
+      schedulePreview(nextPreview);
     };
 
     window.addEventListener(EVENT_NAME, handlePreview as EventListener);
+    window.addEventListener(PART_EVENT_NAME, handlePartPreview as EventListener);
     return () => {
       window.removeEventListener(EVENT_NAME, handlePreview as EventListener);
+      window.removeEventListener(PART_EVENT_NAME, handlePartPreview as EventListener);
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
       }
       pendingPreviewRef.current = null;
     };
-  }, []);
+  }, [schedulePreview]);
 
   return preview;
 }
 
 export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, candidateKnots }: UseJointDragPreviewOverridesOptions) {
   const preview = useActiveJointDragPreview();
-  const [previewKnots, setPreviewKnots] = React.useState<Record<string, Knot>>({});
-  const workerRef = React.useRef<Worker | null>(null);
-  const workerReadyRef = React.useRef(false);
-  const requestSeqRef = React.useRef(1);
-  const latestAppliedRequestRef = React.useRef(0);
 
-  React.useEffect(() => {
-    if (typeof Worker === 'undefined') return;
-
-    const worker = new Worker(new URL('./jointDragPreview.worker.ts', import.meta.url), { type: 'module' });
-    workerRef.current = worker;
-    workerReadyRef.current = true;
-
-    worker.onmessage = (event: MessageEvent<JointDragPreviewWorkerResponse>) => {
-      const msg = event.data;
-      if (!msg || msg.requestId < latestAppliedRequestRef.current) return;
-      latestAppliedRequestRef.current = msg.requestId;
-      setPreviewKnots(msg.previewKnots);
-    };
-
-    worker.onerror = (event) => {
-      console.error('[JointDragPreview] Worker failed', event.message || event.error || event);
-      workerReadyRef.current = false;
-      workerRef.current = null;
-    };
-
-    return () => {
-      worker.terminate();
-      workerReadyRef.current = false;
-      workerRef.current = null;
-    };
-  }, []);
-
-  React.useEffect(() => {
+  return React.useMemo(() => {
     if (!preview) {
-      setPreviewKnots({});
-      return;
+      return EMPTY_PREVIEW_KNOTS;
     }
 
     const context: JointDragPreviewContext = preview.kind === 'trunk'
@@ -132,21 +123,6 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
         }
         : { parentKnot: knots[preview.support.parentKnotId] ?? null };
 
-    const immediatePreviewKnots = computeJointDragPreviewKnots(preview, context, candidateKnots);
-    setPreviewKnots(immediatePreviewKnots);
-
-    if (!workerReadyRef.current || !workerRef.current) {
-      return;
-    }
-
-    const requestId = requestSeqRef.current++;
-    workerRef.current.postMessage({
-      requestId,
-      preview,
-      ...context,
-      candidateKnots,
-    });
+    return computeJointDragPreviewKnots(preview, context, candidateKnots);
   }, [preview, roots, knots, kickstandKnots, candidateKnots]);
-
-  return previewKnots;
 }

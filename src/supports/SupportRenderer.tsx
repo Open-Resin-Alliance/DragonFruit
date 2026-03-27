@@ -282,12 +282,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
             kickstands: kickstandState.kickstands,
             knots: kickstandState.knots,
         },
-        activePreviewSupport: activeJointDragPreview ? {
-            kind: activeJointDragPreview.kind,
-            support: activeJointDragPreview.support ? {
-                segments: activeJointDragPreview.support.segments.map((segment) => ({ id: segment.id })),
-            } : null,
-        } : null,
+        // Keep worker lookups driven by committed state only.
+        // Drag previews are resolved locally in this renderer to avoid per-frame
+        // structured-clone payload churn during joint dragging.
+        activePreviewSupport: null,
     }), [
         state.roots,
         state.trunks,
@@ -299,7 +297,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         state.knots,
         kickstandState.kickstands,
         kickstandState.knots,
-        activeJointDragPreview,
     ]);
     const supportRenderLookup = useSupportRenderLookup(supportRenderLookupInput);
 

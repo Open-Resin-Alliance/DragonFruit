@@ -11,7 +11,7 @@ import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
-import { clearJointDragPreview, emitJointDragPreview } from '../../interaction/jointDragPreview';
+import { clearJointDragPositionPreview, clearSupportDragPreview, emitJointDragPositionPreview, emitSupportDragPreview, isJointInteractionLocked, setJointInteractionLock } from './jointDragRuntime';
 
 /**
  * Hook to handle joint interaction (dragging/moving).
@@ -57,26 +57,11 @@ export function useJointInteraction(enabled: boolean = true) {
         setInteractionWarning(warning);
     }, []);
 
-    const setJointDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
-        if (typeof window === 'undefined') return;
-
-        const w = window as any;
-        w.__jointGizmoDragging = isDragging;
-        w.__jointGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
-
-        window.dispatchEvent(new CustomEvent('joint-gizmo-interaction-lock', {
-            detail: {
-                active: isDragging,
-                guardUntil: w.__jointGizmoGuardUntil,
-            },
-        }));
-    }, []);
-
     useEffect(() => {
         return () => {
-            setJointDragInteractionLock(false, 0);
+            setJointInteractionLock(false, 0);
         };
-    }, [setJointDragInteractionLock]);
+    }, []);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -112,7 +97,7 @@ export function useJointInteraction(enabled: boolean = true) {
         if (!enabled && !activeJointId.current) return;
 
         // Start Drag
-        if (enabled && isDragging && hit.category === 'joint' && hit.objectId && !activeJointId.current) {
+        if (enabled && !isJointInteractionLocked() && isDragging && hit.category === 'joint' && hit.objectId && !activeJointId.current) {
             const jointId = hit.objectId;
 
             // Find trunk/branch and joint
@@ -215,7 +200,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 if (!isAllowed) return;
 
                 activeJointId.current = jointId;
-                setJointDragInteractionLock(true);
+                setJointInteractionLock(true);
                 lastAppliedDragPosRef.current = null;
                 lastWarningRef.current = null;
                 lastWarningEvalAtRef.current = 0;
@@ -263,6 +248,8 @@ export function useJointInteraction(enabled: boolean = true) {
                     }
                     initialEditSnapshotRef.current = captureSupportEditSnapshot();
                 }
+
+                emitJointDragPositionPreview(jointId, foundJointPos);
 
                 const jointVec = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z);
 
@@ -322,7 +309,7 @@ export function useJointInteraction(enabled: boolean = true) {
                                 },
                             }
                             : resolved;
-                        clearJointDragPreview('trunk', resolvedWithoutOverride.id);
+                        clearSupportDragPreview('trunk', resolvedWithoutOverride.id);
                         updateTrunk(resolvedWithoutOverride);
                     }
                 } else if (activeBranchId.current) {
@@ -347,7 +334,7 @@ export function useJointInteraction(enabled: boolean = true) {
                                 },
                             }
                             : resolved;
-                        clearJointDragPreview('branch', resolvedWithoutOverride.id);
+                        clearSupportDragPreview('branch', resolvedWithoutOverride.id);
                         updateBranch(resolvedWithoutOverride);
                     }
                 } else if (activeKickstandId.current) {
@@ -370,7 +357,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart,
                         ) as unknown as Kickstand;
-                        clearJointDragPreview('kickstand', resolved.id);
+                        clearSupportDragPreview('kickstand', resolved.id);
                         updateKickstand(resolved);
                     }
                 }
@@ -398,7 +385,7 @@ export function useJointInteraction(enabled: boolean = true) {
             }
 
             if (activeKickstandId.current) {
-                clearJointDragPreview('kickstand', activeKickstandId.current);
+                clearSupportDragPreview('kickstand', activeKickstandId.current);
             }
 
             activeJointId.current = null;
@@ -416,6 +403,7 @@ export function useJointInteraction(enabled: boolean = true) {
             activeConstraintStartRef.current = undefined;
             applyInteractionWarning(null); // Clear warning on release
             lastDragPos.current = null;
+            clearJointDragPositionPreview(activeJointIdAtEnd);
 
             // Restore OrbitControls enabled state
             if (controls && savedControlsEnabledRef.current !== null) {
@@ -424,9 +412,9 @@ export function useJointInteraction(enabled: boolean = true) {
                 savedControlsEnabledRef.current = null;
             }
 
-            setJointDragInteractionLock(false);
+            setJointInteractionLock(false);
         }
-    }, [isDragging, hit, camera, pointer, raycaster, controls, setJointDragInteractionLock, applyInteractionWarning]);
+    }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning]);
 
     // Update loop
     useFrame(() => {
@@ -443,6 +431,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 }
                 const newPosVec3 = { x: newPos.x, y: newPos.y, z: newPos.z };
                 lastDragPos.current = newPosVec3;
+                emitJointDragPositionPreview(activeJointId.current!, newPosVec3);
                 if (!lastAppliedDragPosRef.current) {
                     lastAppliedDragPosRef.current = newPos.clone();
                 } else {
@@ -467,7 +456,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart
                         );
                         liveTrunkPreviewRef.current = newTrunk;
-                        emitJointDragPreview({ kind: 'trunk', supportId: newTrunk.id, support: newTrunk });
+                        emitSupportDragPreview('trunk', newTrunk.id, newTrunk);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -515,7 +504,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart
                         ) as unknown as Branch;
                         liveBranchPreviewRef.current = newBranch;
-                        emitJointDragPreview({ kind: 'branch', supportId: newBranch.id, support: newBranch });
+                        emitSupportDragPreview('branch', newBranch.id, newBranch);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -567,7 +556,7 @@ export function useJointInteraction(enabled: boolean = true) {
                             root,
                             contextStart,
                         ) as unknown as Kickstand;
-                        emitJointDragPreview({ kind: 'kickstand', supportId: newKickstand.id, support: newKickstand });
+                        emitSupportDragPreview('kickstand', newKickstand.id, newKickstand);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {

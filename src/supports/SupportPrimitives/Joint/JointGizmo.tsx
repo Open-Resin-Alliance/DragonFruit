@@ -11,7 +11,8 @@ import { calculateDiskThickness } from '../ContactDisk/contactDiskUtils';
 import { Trunk, Branch, Twig, Stick, Joint } from '../../types';
 import { getKickstandSnapshot, useKickstandStoreState, updateKickstand } from '../../SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
-import { clearJointDragPreview, emitJointDragPreview } from '../../interaction/jointDragPreview';
+import { useJointDragPosition } from '../../interaction/jointDragPosition';
+import { clearSupportDragPreview, emitSupportDragPreview, setJointInteractionLock } from './jointDragRuntime';
 
 export function JointGizmo() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -25,29 +26,20 @@ export function JointGizmo() {
     const { isActive: isCurveMode } = useCurveInteractionState();
     const liveTrunkPreviewRef = useRef<Trunk | null>(null);
     const liveBranchPreviewRef = useRef<Branch | null>(null);
+    const liveTwigPreviewRef = useRef<Twig | null>(null);
+    const liveStickPreviewRef = useRef<Stick | null>(null);
     const liveKickstandPreviewRef = useRef<Kickstand | null>(null);
+    const gizmoTargetRef = useRef<THREE.Group>(null);
+    const jointDragPosition = useJointDragPosition(selectedId ?? '');
 
     const cloneObj = <T,>(obj: T | null | undefined): T | null => obj ? JSON.parse(JSON.stringify(obj)) : null;
-
-    const setJointGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
-        const w = window as any;
-        w.__jointGizmoDragging = isDragging;
-        w.__jointGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
-
-        window.dispatchEvent(new CustomEvent('joint-gizmo-interaction-lock', {
-            detail: {
-                active: isDragging,
-                guardUntil: w.__jointGizmoGuardUntil,
-            },
-        }));
-    }, []);
 
     useEffect(() => {
         return () => {
             if (typeof window === 'undefined') return;
-            setJointGizmoInteractionFlags(false, 0);
+            setJointInteractionLock(false, 0);
         };
-    }, [setJointGizmoInteractionFlags]);
+    }, []);
 
      const updateSegmentsJointPos = useCallback((segments: any[], jointId: string, pos: { x: number; y: number; z: number }) => {
          return segments.map(seg => {
@@ -242,12 +234,19 @@ export function JointGizmo() {
         return null;
     }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, kickstandState.kickstands]);
 
+    useEffect(() => {
+        if (!jointDragPosition) return;
+        if (gizmoTargetRef.current) {
+            gizmoTargetRef.current.position.set(jointDragPosition.x, jointDragPosition.y, jointDragPosition.z);
+        }
+    }, [jointDragPosition]);
+
     const result = findJointAndParent();
     if (!result) return null;
     const { joint, trunk, branch, twig, stick, kickstand } = result;
 
     const handleMoveStart = () => {
-        setJointGizmoInteractionFlags(true);
+        setJointInteractionLock(true);
         if (joint) {
             dragPosRef.current = new THREE.Vector3(joint.pos.x, joint.pos.y, joint.pos.z);
         }
@@ -272,13 +271,17 @@ export function JointGizmo() {
             z: dragPosRef.current.z 
         };
 
+        if (gizmoTargetRef.current) {
+            gizmoTargetRef.current.position.set(newPos.x, newPos.y, newPos.z);
+        }
+
         if (trunk) {
             if (!initialTrunkRef.current) {
                 initialTrunkRef.current = cloneObj(trunk);
             }
             const newTrunk = moveJoint(trunk, joint.id, newPos, undefined, isCurveMode, state.roots[trunk.rootId]);
             liveTrunkPreviewRef.current = newTrunk;
-            emitJointDragPreview({ kind: 'trunk', supportId: newTrunk.id, support: newTrunk });
+            emitSupportDragPreview('trunk', newTrunk.id, newTrunk);
         } else if (branch) {
             if (!initialBranchRef.current) {
                 initialBranchRef.current = cloneObj(branch);
@@ -286,13 +289,14 @@ export function JointGizmo() {
             // moveJoint works on any object with segments array
             const newBranch = moveJoint(branch as any, joint.id, newPos, undefined, false) as unknown as Branch;
             liveBranchPreviewRef.current = newBranch;
-            emitJointDragPreview({ kind: 'branch', supportId: newBranch.id, support: newBranch });
+            emitSupportDragPreview('branch', newBranch.id, newBranch);
         } else if (twig) {
             const newTwig: Twig = {
                 ...twig,
                 segments: updateSegmentsJointPos(twig.segments as any[], joint.id, newPos) as any,
             };
-            updateTwig(newTwig);
+            liveTwigPreviewRef.current = newTwig;
+            emitSupportDragPreview('twig', newTwig.id, newTwig);
         } else if (stick) {
             const nextSegments = updateSegmentsJointPos(stick.segments as any[], joint.id, newPos) as any;
             const nextConeA = stick.contactConeA?.socketJointId === joint.id
@@ -308,7 +312,8 @@ export function JointGizmo() {
                 contactConeA: nextConeA,
                 contactConeB: nextConeB,
             };
-            updateStick(newStick);
+            liveStickPreviewRef.current = newStick;
+            emitSupportDragPreview('stick', newStick.id, newStick);
         } else if (kickstand) {
             const root = state.roots[kickstand.rootId];
             const contextStart = root
@@ -329,12 +334,12 @@ export function JointGizmo() {
                 contextStart,
             ) as unknown as Kickstand;
             liveKickstandPreviewRef.current = newKickstand;
-            emitJointDragPreview({ kind: 'kickstand', supportId: newKickstand.id, support: newKickstand });
+            emitSupportDragPreview('kickstand', newKickstand.id, newKickstand);
         }
     };
 
     const handleMoveEnd = () => {
-        setJointGizmoInteractionFlags(false);
+        setJointInteractionLock(false);
         // Prevent the canvas click handler from deselecting the joint
         window.__gizmoDragEndedThisFrame = true;
         dragPosRef.current = null;
@@ -343,7 +348,7 @@ export function JointGizmo() {
             const committedTrunk = liveTrunkPreviewRef.current ?? getTrunkById(trunk.id);
             if (committedTrunk) {
                 updateTrunk(committedTrunk);
-                clearJointDragPreview('trunk', trunk.id);
+                clearSupportDragPreview('trunk', trunk.id);
                 pushHistory({
                     type: SUPPORT_UPDATE_TRUNK,
                     payload: {
@@ -361,18 +366,28 @@ export function JointGizmo() {
                 if (committedBranch) {
                     updateBranch(committedBranch);
                 }
-                clearJointDragPreview('branch', branch.id);
+                clearSupportDragPreview('branch', branch.id);
                 pushSupportEditHistory('Move branch joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (twig) {
+                const committedTwig = liveTwigPreviewRef.current ?? getTwigById(twig.id);
+                if (committedTwig) {
+                    updateTwig(committedTwig);
+                }
+                clearSupportDragPreview('twig', twig.id);
                 pushSupportEditHistory('Move twig joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (stick) {
+                const committedStick = liveStickPreviewRef.current ?? getStickById(stick.id);
+                if (committedStick) {
+                    updateStick(committedStick);
+                }
+                clearSupportDragPreview('stick', stick.id);
                 pushSupportEditHistory('Move stick joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (kickstand) {
                 const committedKickstand = liveKickstandPreviewRef.current ?? getKickstandSnapshot().kickstands[kickstand.id];
                 if (committedKickstand) {
                     updateKickstand(committedKickstand);
                 }
-                clearJointDragPreview('kickstand', kickstand.id);
+                clearSupportDragPreview('kickstand', kickstand.id);
                 pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             }
             initialEditSnapshotRef.current = null;
@@ -381,21 +396,27 @@ export function JointGizmo() {
         initialBranchRef.current = null;
         liveTrunkPreviewRef.current = null;
         liveBranchPreviewRef.current = null;
+        liveTwigPreviewRef.current = null;
+        liveStickPreviewRef.current = null;
         liveKickstandPreviewRef.current = null;
     };
 
     return (
-        <ScreenSpaceGizmo
-            position={[joint.pos.x, joint.pos.y, joint.pos.z]}
-            enableMove={true}
-            enableRotate={false}
-            enableScale={false}
-            onMoveStart={handleMoveStart}
-            onMove={handleMove}
-            onMoveEnd={handleMoveEnd}
-            scaleFactor={0.02} // Half the default size for joint gizmo
-            handleScale={3.0} // Double handle size for visibility
-            showCenter={false} // Prefer axis movement
-        />
+        <>
+            <group ref={gizmoTargetRef as React.MutableRefObject<THREE.Group>} position={[joint.pos.x, joint.pos.y, joint.pos.z]} />
+            <ScreenSpaceGizmo
+                meshRef={gizmoTargetRef as React.RefObject<THREE.Group>}
+                position={[joint.pos.x, joint.pos.y, joint.pos.z]}
+                enableMove={true}
+                enableRotate={false}
+                enableScale={false}
+                onMoveStart={handleMoveStart}
+                onMove={handleMove}
+                onMoveEnd={handleMoveEnd}
+                scaleFactor={0.02} // Half the default size for joint gizmo
+                handleScale={3.0} // Double handle size for visibility
+                showCenter={false} // Prefer axis movement
+            />
+        </>
     );
 }

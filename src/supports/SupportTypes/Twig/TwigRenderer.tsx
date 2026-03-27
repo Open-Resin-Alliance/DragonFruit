@@ -10,6 +10,7 @@ import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/cont
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
+import { usePartDragUpdate } from '../../interaction/partDragPreview';
 
 interface TwigRendererProps {
   twig: Twig;
@@ -27,7 +28,7 @@ interface TwigRendererProps {
 }
 
 export const TwigRenderer = React.memo(function TwigRenderer({
-  twig,
+  twig: baseTwig,
   isSelected,
   selectedId,
   dimNonSelected,
@@ -43,6 +44,9 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
   const useLowDetailPrimitives = !isSelected && !propHovered;
+
+  const previewTwig = usePartDragUpdate<Twig>('twig', baseTwig.id);
+  const twig = previewTwig ?? baseTwig;
 
   const { pickRef, visuals, isPickingHovered } = useHighlight({
     id: twig.id,

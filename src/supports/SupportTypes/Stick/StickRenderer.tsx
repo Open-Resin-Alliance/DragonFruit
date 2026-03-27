@@ -13,6 +13,7 @@ import { isPrimaryPointerPress, startContactDiskDragSession, type ContactDiskDra
 import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
+import { usePartDragUpdate } from '../../interaction/partDragPreview';
 import { getSnapshot, updateStick } from '../../state';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
@@ -34,7 +35,7 @@ interface StickRendererProps {
 }
 
 export const StickRenderer = React.memo(function StickRenderer({
-  stick,
+  stick: baseStick,
   isSelected,
   selectedId,
   dimNonSelected,
@@ -49,6 +50,9 @@ export const StickRenderer = React.memo(function StickRenderer({
   selectedColor = '#80fffd',
   onContactDiskHudHoverChange,
 }: StickRendererProps) {
+  const previewStick = usePartDragUpdate<Stick>('stick', baseStick.id);
+  const stick = previewStick ?? baseStick;
+  
   const { camera, scene, gl } = useThree();
   const highDetailPrimitiveSegments = 24;
   const lowDetailPrimitiveSegments = 8;
