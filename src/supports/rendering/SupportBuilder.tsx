@@ -70,12 +70,12 @@ interface SupportBuilderProps {
 const PREVIEW_COLOR = '#00ff00';
 const PREVIEW_ERROR_COLOR = '#ff0000'; // Red for invalid placement
 const PREVIEW_WARNING_COLOR = '#ffcc00'; // Yellow for warning
-const PREVIEW_ORANGE_COLOR = '#ff6600'; // Orange for steep vertical warning
+const PREVIEW_ORANGE_COLOR = '#c7722f'; // Orange for steep vertical warning
 const PREVIEW_OPACITY = 0.5;
 const PREVIEW_ERROR_OPACITY = 0.15;
 
 // Normal material settings
-const NORMAL_COLOR = '#ff8800';
+const NORMAL_COLOR = '#c8752a';
 const SELECTED_COLOR = '#80fffd';
 
 /**
@@ -179,7 +179,7 @@ export function SupportBuilder({
     const color = getBaseColor();
     const opacity = getOpacity();
     const emissive = isSelected ? '#80fffd' : '#000000';
-    const emissiveIntensity = isSelected ? 0.3 : 0;
+    const emissiveIntensity = isSelected ? 0.16 : 0;
 
     // Handle click on the support
     const handleClick = (e: any) => {

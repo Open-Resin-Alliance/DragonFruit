@@ -55,7 +55,7 @@ export function ContactConeRenderer({
     surfaceNormal,
     diskLengthOverride,
     profile = DEFAULT_TIP_PROFILE,
-    color = '#ff8800',
+    color = '#c8752a',
     emissive = '#000000',
     emissiveIntensity = 0,
     jointColor = '#888888',
@@ -125,8 +125,8 @@ export function ContactConeRenderer({
     // Calculate cone center (based on shifted start position)
     const center = getConeCenterPosition(coneStartPos, normal, profile);
     const quaternion = getConeQuaternion(normal);
-    const displayEmissive = hoverVisible ? '#ffffff' : emissive;
-    const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.35) : emissiveIntensity;
+    const displayEmissive = hoverVisible ? '#efd8c2' : emissive;
+    const displayEmissiveIntensity = hoverVisible ? Math.max(emissiveIntensity, 0.16) : emissiveIntensity;
 
     const handleConeClick = (e: any) => {
         const intersections = Array.isArray(e?.intersections) ? e.intersections : [];

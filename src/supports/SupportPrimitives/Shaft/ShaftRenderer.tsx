@@ -39,7 +39,7 @@ export function ShaftRenderer({
     diameter, 
     diameterStart,
     diameterEnd,
-    color = '#ff8800', 
+    color = '#c8752a', 
     emissive = '#000000', 
     emissiveIntensity = 0,
     transparent = false,
@@ -160,9 +160,9 @@ export function ShaftRenderer({
         }
     };
 
-    const finalColor = isSelected ? '#ffffff' : (isHovered ? '#ffffff' : color);
-    const finalEmissive = isSelected ? '#444444' : (isHovered ? '#ffffff' : emissive);
-    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.5 : emissiveIntensity);
+    const finalColor = isSelected ? '#f4f4f4' : (isHovered ? '#efd8c2' : color);
+    const finalEmissive = isSelected ? '#3a3a3a' : (isHovered ? '#efd8c2' : emissive);
+    const finalEmissiveIntensity = isSelected ? 0.2 : (isHovered ? 0.18 : emissiveIntensity);
     
     // Handle pointer move for branch placement preview
     const handlePointerMove = (e: any) => {

@@ -26,7 +26,7 @@ interface KnotRendererProps {
 
 export function KnotRenderer({
     knot,
-    color: propColor = '#ff8800',
+    color: propColor = '#c8752a',
     emissive: propEmissive = '#000000',
     emissiveIntensity: propEmissiveIntensity = 0,
     selectedColor: _selectedColor,
@@ -92,9 +92,9 @@ export function KnotRenderer({
         && isParentSelected;
     const isHovered = (isTopPickedKnot || pointerHoverActive) && !isSelected;
 
-    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#00ff00' : propColor));
-    const displayEmissive = isHovered ? '#ffffff' : propEmissive;
-    const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
+    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#7fc56a' : propColor));
+    const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
+    const displayEmissiveIntensity = isHovered ? 0.18 : propEmissiveIntensity;
 
     const isPointerOverThisKnot = (e: any): boolean => {
         if (!groupRef.current) return false;

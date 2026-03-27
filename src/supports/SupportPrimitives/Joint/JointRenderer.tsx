@@ -28,7 +28,7 @@ interface JointRendererProps {
 
 export function JointRenderer({ 
     joint, 
-    color: propColor = '#ff8800', 
+    color: propColor = '#c8752a', 
     emissive: propEmissive = '#000000', 
     emissiveIntensity: propEmissiveIntensity = 0,
     selectedColor: _selectedColor,
@@ -94,9 +94,9 @@ export function JointRenderer({
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
-    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#888888' : propColor));
-    const displayEmissive = isHovered ? '#ffffff' : propEmissive;
-    const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
+    const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#888888' : propColor));
+    const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
+    const displayEmissiveIntensity = isHovered ? 0.18 : propEmissiveIntensity;
 
     const jointDragPosition = useJointDragPosition(joint.id);
     const effectiveJointPos = jointDragPosition ?? joint.pos;

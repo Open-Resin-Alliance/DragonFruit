@@ -219,7 +219,7 @@ const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
 const PLACEMENT_PREVIEW_COLOR = '#00ff00';
 const PLACEMENT_PREVIEW_ERROR_COLOR = '#ff0000';
 const PLACEMENT_PREVIEW_WARNING_COLOR = '#ffcc00';
-const PLACEMENT_PREVIEW_ORANGE_COLOR = '#ff6600';
+const PLACEMENT_PREVIEW_ORANGE_COLOR = '#c7722f';
 const PLACEMENT_PREVIEW_OPACITY = 0.5;
 const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
 
@@ -1115,13 +1115,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const clippingPlanes = clippingPlanesRef.current;
 
     const resolveBaseColor = useMemo(() => {
-        const baseHex = '#a3a3a3';
-        const hoverTintHex = '#ff8800';
-        const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.5).getStyle();
+        const baseHex = '#9a9a9a';
+        const selectedHex = '#c8752a';
+        const hoverTintHex = '#d18a4a';
+        const hoveredColor = new THREE.Color(baseHex).lerp(new THREE.Color(hoverTintHex), 0.35).getStyle();
 
         return (modelId?: string) => {
             const isSelectedModelSupport = !!modelId && (modelId === effectiveVisualActiveModelId || selectedModelIdSet.has(modelId));
-            if (isSelectedModelSupport) return '#ff8800';
+            if (isSelectedModelSupport) return selectedHex;
 
             const isHoveredModelSupport = !!effectiveHoverModelId && !!modelId && modelId === effectiveHoverModelId;
             if (isHoveredModelSupport) return hoveredColor;
@@ -3407,7 +3408,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                             shafts={batch.shafts}
                             color={batch.color}
                             emissive={batch.color}
-                            emissiveIntensity={0.2}
+                            emissiveIntensity={0.08}
                             transparent
                             opacity={batch.opacity}
                             radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
@@ -3418,7 +3419,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                             joints={batch.joints}
                             color={batch.color}
                             emissive={batch.color}
-                            emissiveIntensity={0.2}
+                            emissiveIntensity={0.08}
                             transparent
                             opacity={batch.opacity}
                             widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
@@ -3430,7 +3431,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                             roots={batch.roots}
                             color={batch.color}
                             emissive={batch.color}
-                            emissiveIntensity={0.2}
+                            emissiveIntensity={0.08}
                             transparent
                             opacity={batch.opacity}
                         />
@@ -3440,7 +3441,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                             cones={batch.cones}
                             color={batch.color}
                             emissive={batch.color}
-                            emissiveIntensity={0.2}
+                            emissiveIntensity={0.08}
                             transparent
                             opacity={batch.opacity}
                         />
@@ -3454,7 +3455,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={hoveredSupportOverlayShafts}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportShaftSet.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
@@ -3470,7 +3471,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     cones={hoveredSupportOverlayCones}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportConeSet.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
@@ -3485,7 +3486,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     joints={hoveredSupportOverlayJoints}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportJointSet.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
@@ -3502,7 +3503,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     roots={hoveredSupportOverlayRoots}
                     color={dimNonSelected ? '#666666' : resolveBaseColor(hoveredSupportOverlayRoots[0]?.modelId)}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}
@@ -3517,7 +3518,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     shafts={marqueeHoveredOverlayShafts}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
@@ -3533,7 +3534,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     cones={marqueeHoveredOverlayCones}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onConeClick={isPointerInteractable ? handleSceneBatchedConeClick : undefined}
@@ -3548,7 +3549,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     joints={marqueeHoveredOverlayJoints}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
@@ -3565,7 +3566,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     roots={marqueeHoveredOverlayRoots}
                     color={BULK_MULTI_SELECTED_COLOR}
                     emissive="#ffffff"
-                    emissiveIntensity={0.3}
+                    emissiveIntensity={0.12}
                     transparent={ghostTransparent}
                     opacity={ghostOpacityClamped}
                     onRootClick={isPointerInteractable ? handleSceneBatchedRootClick : undefined}

@@ -42,7 +42,7 @@ export function BezierRenderer({
     diameterStart,
     diameterEnd,
     resolution = 16,
-    color = '#ff8800',
+    color = '#c8752a',
     emissive = '#000000',
     emissiveIntensity = 0,
     transparent = false,
@@ -244,9 +244,9 @@ export function BezierRenderer({
         }));
     };
 
-    const finalColor = isSelected ? '#ff80ff' : (isHovered ? '#ffffff' : color);
-    const finalEmissive = isSelected ? '#440044' : (isHovered ? '#ffffff' : emissive);
-    const finalEmissiveIntensity = isSelected ? 0.5 : (isHovered ? 0.5 : emissiveIntensity);
+    const finalColor = isSelected ? '#ff80ff' : (isHovered ? '#efd8c2' : color);
+    const finalEmissive = isSelected ? '#440044' : (isHovered ? '#efd8c2' : emissive);
+    const finalEmissiveIntensity = isSelected ? 0.22 : (isHovered ? 0.18 : emissiveIntensity);
 
     return (
         <group ref={groupRef}>
