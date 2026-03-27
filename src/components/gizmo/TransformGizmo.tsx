@@ -222,6 +222,8 @@ export function TransformGizmo({
     return activePart !== null && activePart !== part;
   };
 
+  const isAxisAllowed = (axis: GizmoAxis) => !axisLock || axisLock === axis;
+
   return (
     <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
       {/* Center plane - XY movement only */}
@@ -243,51 +245,57 @@ export function TransformGizmo({
       {/* Axis arrows - constrained movement */}
       {enableMove && (
         <>
-          <GizmoMove
-            axis="x"
-            isHovered={hoveredPart === 'axis-x'}
-            isActive={activePart === 'axis-x'}
-            isDimmed={isDimmed('axis-x')}
-            isHidden={isHidden('axis-x')}
-            enableLighting={enableLighting}
-            gizmoPosition={posVec}
-            handleScale={handleScale}
-            onDragStart={() => handleDragStart('axis-x')}
-            onDrag={(delta: THREE.Vector3) => handleAxisMove('x', delta)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('axis-x')}
-            onPointerLeave={handlePointerLeave}
-          />
-          <GizmoMove
-            axis="y"
-            isHovered={hoveredPart === 'axis-y'}
-            isActive={activePart === 'axis-y'}
-            isDimmed={isDimmed('axis-y')}
-            isHidden={isHidden('axis-y')}
-            enableLighting={enableLighting}
-            gizmoPosition={posVec}
-            handleScale={handleScale}
-            onDragStart={() => handleDragStart('axis-y')}
-            onDrag={(delta: THREE.Vector3) => handleAxisMove('y', delta)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('axis-y')}
-            onPointerLeave={handlePointerLeave}
-          />
-          <GizmoMove
-            axis="z"
-            isHovered={hoveredPart === 'axis-z'}
-            isActive={activePart === 'axis-z'}
-            isDimmed={isDimmed('axis-z')}
-            isHidden={isHidden('axis-z')}
-            enableLighting={enableLighting}
-            gizmoPosition={posVec}
-            handleScale={handleScale}
-            onDragStart={() => handleDragStart('axis-z')}
-            onDrag={(delta: THREE.Vector3) => handleAxisMove('z', delta)}
-            onDragEnd={handleDragEnd}
-            onPointerEnter={() => handlePointerEnter('axis-z')}
-            onPointerLeave={handlePointerLeave}
-          />
+          {isAxisAllowed('x') && (
+            <GizmoMove
+              axis="x"
+              isHovered={hoveredPart === 'axis-x'}
+              isActive={activePart === 'axis-x'}
+              isDimmed={isDimmed('axis-x')}
+              isHidden={isHidden('axis-x')}
+              enableLighting={enableLighting}
+              gizmoPosition={posVec}
+              handleScale={handleScale}
+              onDragStart={() => handleDragStart('axis-x')}
+              onDrag={(delta: THREE.Vector3) => handleAxisMove('x', delta)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('axis-x')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
+          {isAxisAllowed('y') && (
+            <GizmoMove
+              axis="y"
+              isHovered={hoveredPart === 'axis-y'}
+              isActive={activePart === 'axis-y'}
+              isDimmed={isDimmed('axis-y')}
+              isHidden={isHidden('axis-y')}
+              enableLighting={enableLighting}
+              gizmoPosition={posVec}
+              handleScale={handleScale}
+              onDragStart={() => handleDragStart('axis-y')}
+              onDrag={(delta: THREE.Vector3) => handleAxisMove('y', delta)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('axis-y')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
+          {isAxisAllowed('z') && (
+            <GizmoMove
+              axis="z"
+              isHovered={hoveredPart === 'axis-z'}
+              isActive={activePart === 'axis-z'}
+              isDimmed={isDimmed('axis-z')}
+              isHidden={isHidden('axis-z')}
+              enableLighting={enableLighting}
+              gizmoPosition={posVec}
+              handleScale={handleScale}
+              onDragStart={() => handleDragStart('axis-z')}
+              onDrag={(delta: THREE.Vector3) => handleAxisMove('z', delta)}
+              onDragEnd={handleDragEnd}
+              onPointerEnter={() => handlePointerEnter('axis-z')}
+              onPointerLeave={handlePointerLeave}
+            />
+          )}
         </>
       )}
 

@@ -1,19 +1,43 @@
 import React, { useSyncExternalStore, useCallback, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
-import { subscribe, getSnapshot, getKnotById, getTrunks, getBranches, getTwigs, getSticks, getRootById, updateKnot, updateBranch, getBranchById, getTrunkById, getTwigById, getStickById } from '../../state';
+import { ScreenSpaceGizmo } from '@/components/gizmo/ScreenSpaceGizmo';
+import {
+    subscribe,
+    getSnapshot,
+    getKnotById,
+    getTrunks,
+    getBranches,
+    getTwigs,
+    getSticks,
+    getRootById,
+    updateKnot,
+    updateBranch,
+    getBranchById,
+    getTrunkById,
+    getTwigById,
+    getStickById,
+} from '../../state';
 import { Knot } from '../../types';
 import { getTrunkSegmentEndpoints, getBranchSegmentEndpoints, projectOntoSegment } from './knotUtils';
-import { usePicking } from '@/components/picking';
 import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogic/ElasticChainSolver';
 import { getSettings } from '../../Settings';
 import { getSocketPosition } from '../ContactCone';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
+type KnotGizmoWindowState = Window & {
+    __knotGizmoDragging?: boolean;
+    __knotGizmoGuardUntil?: number;
+    __gizmoDragEndedThisFrame?: boolean;
+};
+
+const getKnotGizmoWindowState = () => window as unknown as KnotGizmoWindowState;
+
 /**
- * KnotGizmo - A gizmo for moving knots along their parent shaft
- * 
- * Shows two arrows (up/down along shaft) that can be dragged to slide the knot.
+ * KnotGizmo redesigned to match JointGizmo architecture:
+ * - Screen-space transform gizmo visuals
+ * - constrained single-axis motion along parent shaft
+ * - existing knot + elastic chain constraint solver retained
  */
 export function KnotGizmo() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
@@ -33,15 +57,15 @@ export function KnotGizmo() {
         segmentIndex: number;
     } | null>(null);
     const beforeHistoryRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
+    const dragEndedResetTimeoutRef = useRef<number | null>(null);
+    const gizmoTargetRef = useRef<THREE.Group>(null);
+    const dragProjectionOffsetTRef = useRef(0);
 
     // Elastic chain state - captured at drag start
     const elasticStateRef = useRef<Record<string, ElasticChainInitialState>>({});
 
-    const [hoveredArrow, setHoveredArrow] = React.useState<'up' | 'down' | null>(null);
-    const [scale, setScale] = React.useState(1);
-
     const setKnotGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
-        const w = window as any;
+        const w = getKnotGizmoWindowState();
         w.__knotGizmoDragging = isDragging;
         w.__knotGizmoGuardUntil = isDragging ? 0 : (Date.now() + postGuardMs);
 
@@ -53,45 +77,22 @@ export function KnotGizmo() {
         }));
     }, []);
 
-    // Picking registration for gizmo handles
-    const upArrowRef = useRef<THREE.Group>(null);
-    const downArrowRef = useRef<THREE.Group>(null);
-    const { register, unregister, hit } = usePicking();
-    const upPickIdRef = useRef<number | null>(null);
-    const downPickIdRef = useRef<number | null>(null);
+    const getDominantAxis = useCallback((axis: THREE.Vector3): 'x' | 'y' | 'z' => {
+        const absX = Math.abs(axis.x);
+        const absY = Math.abs(axis.y);
+        const absZ = Math.abs(axis.z);
+        if (absX >= absY && absX >= absZ) return 'x';
+        if (absY >= absX && absY >= absZ) return 'y';
+        return 'z';
+    }, []);
 
-    // Register arrows with picking system
-    useEffect(() => {
-        if (upArrowRef.current && selectedCategory === 'knot') {
-            upPickIdRef.current = register({
-                category: 'gizmo',
-                objectId: 'knot-gizmo-up',
-                object: upArrowRef.current,
-            });
-        }
-        return () => {
-            if (upPickIdRef.current !== null) {
-                unregister(upPickIdRef.current);
-                upPickIdRef.current = null;
-            }
-        };
-    }, [register, unregister, selectedCategory]);
-
-    useEffect(() => {
-        if (downArrowRef.current && selectedCategory === 'knot') {
-            downPickIdRef.current = register({
-                category: 'gizmo',
-                objectId: 'knot-gizmo-down',
-                object: downArrowRef.current,
-            });
-        }
-        return () => {
-            if (downPickIdRef.current !== null) {
-                unregister(downPickIdRef.current);
-                downPickIdRef.current = null;
-            }
-        };
-    }, [register, unregister, selectedCategory]);
+    const computeTOnSegment = useCallback((point: THREE.Vector3, start: THREE.Vector3, end: THREE.Vector3) => {
+        const lineVec = new THREE.Vector3().subVectors(end, start);
+        const lenSq = lineVec.lengthSq();
+        if (lenSq <= 0.000001) return 0;
+        const knotVec = new THREE.Vector3().subVectors(point, start);
+        return THREE.MathUtils.clamp(knotVec.dot(lineVec) / lenSq, 0, 1);
+    }, []);
 
     // Find the selected knot and its parent shaft
     const findKnotAndShaft = useCallback((): {
@@ -206,45 +207,45 @@ export function KnotGizmo() {
             }
         }
 
-         // Find parent shaft in twigs
-         const twigs = getTwigs();
-         for (const twig of twigs) {
-             const idx = twig.segments.findIndex(s => s.id === knot.parentShaftId);
-             if (idx === -1) continue;
-             const seg = twig.segments[idx];
-             if (!seg.bottomJoint || !seg.topJoint) continue;
-             const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-             const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-             const axis = new THREE.Vector3().subVectors(end, start).normalize();
-             selectedKnotParentRef.current = {
-                 selectedId,
-                 parentShaftId: knot.parentShaftId,
-                 kind: 'twig',
-                 supportId: twig.id,
-                 segmentIndex: idx,
-             };
-             return { knot, start, end, axis };
-         }
+        // Find parent shaft in twigs
+        const twigs = getTwigs();
+        for (const twig of twigs) {
+            const idx = twig.segments.findIndex(s => s.id === knot.parentShaftId);
+            if (idx === -1) continue;
+            const seg = twig.segments[idx];
+            if (!seg.bottomJoint || !seg.topJoint) continue;
+            const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
+            const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
+            const axis = new THREE.Vector3().subVectors(end, start).normalize();
+            selectedKnotParentRef.current = {
+                selectedId,
+                parentShaftId: knot.parentShaftId,
+                kind: 'twig',
+                supportId: twig.id,
+                segmentIndex: idx,
+            };
+            return { knot, start, end, axis };
+        }
 
-         // Find parent shaft in sticks
-         const sticks = getSticks();
-         for (const stick of sticks) {
-             const idx = stick.segments.findIndex(s => s.id === knot.parentShaftId);
-             if (idx === -1) continue;
-             const seg = stick.segments[idx];
-             if (!seg.bottomJoint || !seg.topJoint) continue;
-             const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
-             const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
-             const axis = new THREE.Vector3().subVectors(end, start).normalize();
-             selectedKnotParentRef.current = {
-                 selectedId,
-                 parentShaftId: knot.parentShaftId,
-                 kind: 'stick',
-                 supportId: stick.id,
-                 segmentIndex: idx,
-             };
-             return { knot, start, end, axis };
-         }
+        // Find parent shaft in sticks
+        const sticks = getSticks();
+        for (const stick of sticks) {
+            const idx = stick.segments.findIndex(s => s.id === knot.parentShaftId);
+            if (idx === -1) continue;
+            const seg = stick.segments[idx];
+            if (!seg.bottomJoint || !seg.topJoint) continue;
+            const start = new THREE.Vector3(seg.bottomJoint.pos.x, seg.bottomJoint.pos.y, seg.bottomJoint.pos.z);
+            const end = new THREE.Vector3(seg.topJoint.pos.x, seg.topJoint.pos.y, seg.topJoint.pos.z);
+            const axis = new THREE.Vector3().subVectors(end, start).normalize();
+            selectedKnotParentRef.current = {
+                selectedId,
+                parentShaftId: knot.parentShaftId,
+                kind: 'stick',
+                supportId: stick.id,
+                segmentIndex: idx,
+            };
+            return { knot, start, end, axis };
+        }
 
         selectedKnotParentRef.current = null;
         return null;
@@ -253,20 +254,19 @@ export function KnotGizmo() {
 
     const result = findKnotAndShaft();
 
-    // Update scale based on camera distance
     useFrame(() => {
-        // Only show gizmo when a knot is selected
+        // Only show/update gizmo when a knot is selected
         if (selectedCategory !== 'knot') return;
         if (!result) return;
-        const knotPos = new THREE.Vector3(result.knot.pos.x, result.knot.pos.y, result.knot.pos.z);
-        const distance = camera.position.distanceTo(knotPos);
-        const nextScale = distance * 0.03;
-        setScale((prev) => (Math.abs(prev - nextScale) > 0.01 ? nextScale : prev));
 
-        // Update refs for drag
+        // Update refs for drag solving
         shaftAxisRef.current.copy(result.axis);
         shaftStartRef.current.copy(result.start);
         shaftEndRef.current.copy(result.end);
+
+        if (gizmoTargetRef.current) {
+            gizmoTargetRef.current.position.set(result.knot.pos.x, result.knot.pos.y, result.knot.pos.z);
+        }
     });
 
     // Handle drag with elastic chain constraints
@@ -280,17 +280,21 @@ export function KnotGizmo() {
             shaftEndRef.current
         );
 
+        const projectedTWithOffset = THREE.MathUtils.clamp(projected.t + dragProjectionOffsetTRef.current, 0, 1);
+        const shaftLineVec = new THREE.Vector3().subVectors(shaftEndRef.current, shaftStartRef.current);
+        const projectedPointWithOffset = shaftStartRef.current.clone().add(shaftLineVec.multiplyScalar(projectedTWithOffset));
+
         // Apply elastic chain constraints
         const settings = getSettings();
         const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
 
-        let finalKnotPos = projected.point;
+        let finalKnotPos = { x: projectedPointWithOffset.x, y: projectedPointWithOffset.y, z: projectedPointWithOffset.z };
         let wasLocked = false;
 
         // Run elastic solver for each attached branch
         for (const branchId in elasticStateRef.current) {
-            const state = elasticStateRef.current[branchId];
-            const res = solveElasticChain(finalKnotPos, state, maxAngleDeg);
+            const initialState = elasticStateRef.current[branchId];
+            const res = solveElasticChain(finalKnotPos, initialState, maxAngleDeg);
 
             // If solver clamped the knot, use the clamped position
             if (res.isLocked && res.knotPos.z < finalKnotPos.z) {
@@ -339,7 +343,7 @@ export function KnotGizmo() {
         // Recalculate t based on final position
         const lineVec = new THREE.Vector3().subVectors(shaftEndRef.current, shaftStartRef.current);
         const lenSq = lineVec.lengthSq();
-        let t = projected.t;
+        let t = projectedTWithOffset;
         if (lenSq > 0.0001 && wasLocked) {
             const knotVec = new THREE.Vector3(finalKnotPos.x, finalKnotPos.y, finalKnotPos.z).sub(shaftStartRef.current);
             t = knotVec.dot(lineVec) / lenSq;
@@ -349,43 +353,114 @@ export function KnotGizmo() {
         const updated: Knot = {
             ...result.knot,
             pos: finalKnotPos,
-            t: t,
+            t,
         };
         updateKnot(updated);
     });
 
-    // Global mouseup listener to catch releases outside the arrows
-    useEffect(() => {
-        const handleGlobalMouseUp = () => {
-            if (isDraggingRef.current) {
-                isDraggingRef.current = false;
-                setKnotGizmoInteractionFlags(false);
-                // Set flag to prevent canvas click from deselecting
-                (window as any).__gizmoDragEndedThisFrame = true;
-                // Clear flag after a short delay
-                setTimeout(() => {
-                    (window as any).__gizmoDragEndedThisFrame = false;
-                }, 100);
-                // Reset cursor
-                document.body.style.cursor = '';
+    const handleMoveStart = useCallback((axis?: 'x' | 'y' | 'z') => {
+        if (!result) return false;
 
-                if (beforeHistoryRef.current) {
-                    const description =
-                        selectedKnotParentRef.current?.kind === 'branch'
-                            ? 'Move branch knot'
-                            : selectedKnotParentRef.current?.kind === 'twig'
-                                ? 'Move twig knot'
-                                : selectedKnotParentRef.current?.kind === 'stick'
-                                    ? 'Move stick knot'
-                                    : 'Move support knot';
-                    pushSupportEditHistory(description, beforeHistoryRef.current, captureSupportEditSnapshot());
+        const dominantAxis = getDominantAxis(result.axis);
+        if (axis && axis !== dominantAxis) {
+            return false;
+        }
+
+        isDraggingRef.current = true;
+        setKnotGizmoInteractionFlags(true);
+        getKnotGizmoWindowState().__gizmoDragEndedThisFrame = false;
+        document.body.style.cursor = 'grabbing';
+        beforeHistoryRef.current = captureSupportEditSnapshot();
+
+        // Preserve click offset so the knot doesn't snap to the raw pointer projection on first drag frame.
+        const currentKnotPos = new THREE.Vector3(result.knot.pos.x, result.knot.pos.y, result.knot.pos.z);
+        const currentT = computeTOnSegment(currentKnotPos, result.start, result.end);
+        raycaster.setFromCamera(pointer, camera);
+        const projectedAtStart = projectOntoSegment(raycaster.ray, result.start, result.end);
+        dragProjectionOffsetTRef.current = currentT - projectedAtStart.t;
+
+        // Capture elastic state for attached branches
+        const allBranches = getBranches();
+        const attached = allBranches.filter(b => b.parentKnotId === result.knot.id);
+        const nextState: Record<string, ElasticChainInitialState> = {};
+
+        for (const branch of attached) {
+            const joints: { id: string; pos: { x: number, y: number, z: number } }[] = [];
+
+            for (let i = 0; i < branch.segments.length; i++) {
+                const seg = branch.segments[i];
+                let joint = seg.topJoint;
+                if (!joint && i < branch.segments.length - 1) {
+                    joint = branch.segments[i + 1].bottomJoint;
                 }
-                beforeHistoryRef.current = null;
+                if (joint) {
+                    joints.push({ id: joint.id, pos: { ...joint.pos } });
+                }
             }
-        };
-        window.addEventListener('mouseup', handleGlobalMouseUp);
+
+            nextState[branch.id] = {
+                branchId: branch.id,
+                knotPos: { ...result.knot.pos },
+                joints,
+                // Use SOCKET position (where shaft connects), not TIP position (where cone touches model)
+                contactCone: branch.contactCone ? {
+                    pos: getSocketPosition(branch.contactCone.pos, branch.contactCone.normal, branch.contactCone.profile),
+                } : undefined,
+            };
+        }
+
+        elasticStateRef.current = nextState;
+        return true;
+    }, [camera, computeTOnSegment, getDominantAxis, pointer, raycaster, result, setKnotGizmoInteractionFlags]);
+
+    const handleMove = useCallback(() => {
+        // Intentionally no-op:
+        // Knot drag is solved per-frame using pointer projection onto host shaft.
+        // onMoveStart/onMoveEnd toggle that solver lifecycle.
+    }, []);
+
+    const handleMoveEnd = useCallback(() => {
+        if (!isDraggingRef.current) return;
+
+        isDraggingRef.current = false;
+        setKnotGizmoInteractionFlags(false);
+        elasticStateRef.current = {};
+        dragProjectionOffsetTRef.current = 0;
+
+        // Prevent canvas click deselect on drag release
+        getKnotGizmoWindowState().__gizmoDragEndedThisFrame = true;
+        if (dragEndedResetTimeoutRef.current !== null) {
+            window.clearTimeout(dragEndedResetTimeoutRef.current);
+            dragEndedResetTimeoutRef.current = null;
+        }
+        dragEndedResetTimeoutRef.current = window.setTimeout(() => {
+            getKnotGizmoWindowState().__gizmoDragEndedThisFrame = false;
+            dragEndedResetTimeoutRef.current = null;
+        }, 100);
+
+        document.body.style.cursor = '';
+
+        if (beforeHistoryRef.current) {
+            const description =
+                selectedKnotParentRef.current?.kind === 'branch'
+                    ? 'Move branch knot'
+                    : selectedKnotParentRef.current?.kind === 'twig'
+                        ? 'Move twig knot'
+                        : selectedKnotParentRef.current?.kind === 'stick'
+                            ? 'Move stick knot'
+                            : 'Move support knot';
+            pushSupportEditHistory(description, beforeHistoryRef.current, captureSupportEditSnapshot());
+        }
+        beforeHistoryRef.current = null;
+    }, [setKnotGizmoInteractionFlags]);
+
+    useEffect(() => {
         return () => {
-            window.removeEventListener('mouseup', handleGlobalMouseUp);
+            if (dragEndedResetTimeoutRef.current !== null) {
+                window.clearTimeout(dragEndedResetTimeoutRef.current);
+                dragEndedResetTimeoutRef.current = null;
+            }
+            dragProjectionOffsetTRef.current = 0;
             setKnotGizmoInteractionFlags(false, 0);
         };
     }, [setKnotGizmoInteractionFlags]);
@@ -394,200 +469,28 @@ export function KnotGizmo() {
     if (selectedCategory !== 'knot' || !result) return null;
 
     const { knot, axis } = result;
-    const knotPos = new THREE.Vector3(knot.pos.x, knot.pos.y, knot.pos.z);
-
-    // Use a minimum scale to ensure visibility
-    const effectiveScale = Math.max(scale, 2);
-
-    // Arrow positions along the axis
-    const arrowOffset = effectiveScale * 1.5;
-    const upArrowPos = knotPos.clone().add(axis.clone().multiplyScalar(arrowOffset));
-    const downArrowPos = knotPos.clone().add(axis.clone().multiplyScalar(-arrowOffset));
-
-    // Calculate rotation to align arrows with shaft axis
-    const upQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
-    const downQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.clone().negate());
-
-    const handlePointerDown = (e: any) => {
-        e.stopPropagation();
-        if (e.nativeEvent) {
-            e.nativeEvent.stopPropagation();
-            e.nativeEvent.stopImmediatePropagation();
-        }
-        isDraggingRef.current = true;
-        setKnotGizmoInteractionFlags(true);
-        (window as any).__gizmoDragEndedThisFrame = false;
-        document.body.style.cursor = 'grabbing';
-        beforeHistoryRef.current = captureSupportEditSnapshot();
-
-        // Capture elastic state for attached branches
-        if (result) {
-            const allBranches = getBranches();
-            const attached = allBranches.filter(b => b.parentKnotId === result.knot.id);
-            const state: Record<string, ElasticChainInitialState> = {};
-
-            for (const b of attached) {
-                const joints: { id: string; pos: { x: number, y: number, z: number } }[] = [];
-
-                for (let i = 0; i < b.segments.length; i++) {
-                    const seg = b.segments[i];
-                    let joint = seg.topJoint;
-                    if (!joint && i < b.segments.length - 1) {
-                        joint = b.segments[i + 1].bottomJoint;
-                    }
-                    if (joint) {
-                        joints.push({ id: joint.id, pos: { ...joint.pos } });
-                    }
-                }
-
-                state[b.id] = {
-                    branchId: b.id,
-                    knotPos: { ...result.knot.pos },
-                    joints,
-                    // Use SOCKET position (where shaft connects), not TIP position (where cone touches model)
-                    contactCone: b.contactCone ? {
-                        pos: getSocketPosition(b.contactCone.pos, b.contactCone.normal, b.contactCone.profile)
-                    } : undefined
-                };
-            }
-
-            elasticStateRef.current = state;
-            console.log('[KnotGizmo] Captured elastic state for', Object.keys(state).length, 'branches');
-        }
-    };
-
-    const handlePointerUp = (e: any) => {
-        if (e) {
-            e.stopPropagation();
-            if (e.nativeEvent) {
-                e.nativeEvent.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation();
-            }
-        }
-        if (isDraggingRef.current) {
-            isDraggingRef.current = false;
-            setKnotGizmoInteractionFlags(false);
-            // Set flag to prevent canvas click from deselecting
-            (window as any).__gizmoDragEndedThisFrame = true;
-            // Also set a short timeout to ensure the flag persists
-            setTimeout(() => {
-                (window as any).__gizmoDragEndedThisFrame = false;
-            }, 100);
-        }
-        document.body.style.cursor = '';
-    };
-
-    const handlePointerEnterGizmo = () => {
-        document.body.style.cursor = 'grab';
-    };
-
-    const handlePointerLeaveGizmo = () => {
-        if (!isDraggingRef.current) {
-            document.body.style.cursor = '';
-        }
-    };
-
-    // Prevent click from propagating to supports underneath
-    const handleClick = (e: any) => {
-        e.stopPropagation();
-        if (e.nativeEvent) {
-            e.nativeEvent.stopPropagation();
-            e.nativeEvent.stopImmediatePropagation();
-        }
-    };
-
-    // Arrow geometry - use effectiveScale for sizing (smaller arrows)
-    const arrowLength = effectiveScale * 0.4;
-    const arrowRadius = effectiveScale * 0.08;
-    const coneLength = effectiveScale * 0.25;
-    const coneRadius = effectiveScale * 0.15;
-
-    // Offset from knot center - arrows start just outside the knot
-    const knotRadius = (knot.diameter ?? 1.2) / 2;
-    const gapFromKnot = knotRadius + 0.2; // Small gap from knot surface
-
+    const dominantAxis = getDominantAxis(axis);
 
     return (
-        <group renderOrder={999}>
-            {/* Central grab sphere - allows grabbing the knot directly */}
-            <mesh
-                position={[knotPos.x, knotPos.y, knotPos.z]}
-                onClick={handleClick}
-                onPointerDown={handlePointerDown}
-                onPointerUp={handlePointerUp}
-                onPointerEnter={handlePointerEnterGizmo}
-                onPointerLeave={handlePointerLeaveGizmo}
-                renderOrder={999}
-            >
-                <sphereGeometry args={[knotRadius * 1.5, 16, 16]} />
-                <meshBasicMaterial transparent opacity={0} depthTest={false} />
-            </mesh>
-
-            {/* Up arrow (towards tip) - starts from knot, points along axis */}
+        <>
             <group
-                ref={upArrowRef}
-                position={[knotPos.x, knotPos.y, knotPos.z]}
-                quaternion={upQuat}
-                onClick={handleClick}
-                onPointerDown={handlePointerDown}
-                onPointerUp={handlePointerUp}
-                onPointerEnter={() => { setHoveredArrow('up'); handlePointerEnterGizmo(); }}
-                onPointerLeave={() => { setHoveredArrow(null); handlePointerLeaveGizmo(); }}
-            >
-                {/* Shaft - offset from knot center */}
-                <mesh position={[0, gapFromKnot + arrowLength / 2, 0]} renderOrder={999}>
-                    <cylinderGeometry args={[arrowRadius, arrowRadius, arrowLength, 8]} />
-                    <meshBasicMaterial
-                        color={hoveredArrow === 'up' ? '#80ffff' : '#ffffff'}
-                        depthTest={false}
-                        transparent
-                        opacity={hoveredArrow === 'up' ? 1.0 : 0.85}
-                    />
-                </mesh>
-                {/* Cone */}
-                <mesh position={[0, gapFromKnot + arrowLength + coneLength / 2, 0]} renderOrder={999}>
-                    <coneGeometry args={[coneRadius, coneLength, 8]} />
-                    <meshBasicMaterial
-                        color={hoveredArrow === 'up' ? '#80ffff' : '#ffffff'}
-                        depthTest={false}
-                        transparent
-                        opacity={hoveredArrow === 'up' ? 1.0 : 0.85}
-                    />
-                </mesh>
-            </group>
-
-            {/* Down arrow (towards base) - starts from knot, points opposite to axis */}
-            <group
-                ref={downArrowRef}
-                position={[knotPos.x, knotPos.y, knotPos.z]}
-                quaternion={downQuat}
-                onClick={handleClick}
-                onPointerDown={handlePointerDown}
-                onPointerUp={handlePointerUp}
-                onPointerEnter={() => { setHoveredArrow('down'); handlePointerEnterGizmo(); }}
-                onPointerLeave={() => { setHoveredArrow(null); handlePointerLeaveGizmo(); }}
-            >
-                {/* Shaft - offset from knot center */}
-                <mesh position={[0, gapFromKnot + arrowLength / 2, 0]} renderOrder={999}>
-                    <cylinderGeometry args={[arrowRadius, arrowRadius, arrowLength, 8]} />
-                    <meshBasicMaterial
-                        color={hoveredArrow === 'down' ? '#80ffff' : '#ffffff'}
-                        depthTest={false}
-                        transparent
-                        opacity={hoveredArrow === 'down' ? 1.0 : 0.85}
-                    />
-                </mesh>
-                {/* Cone */}
-                <mesh position={[0, gapFromKnot + arrowLength + coneLength / 2, 0]} renderOrder={999}>
-                    <coneGeometry args={[coneRadius, coneLength, 8]} />
-                    <meshBasicMaterial
-                        color={hoveredArrow === 'down' ? '#80ffff' : '#ffffff'}
-                        depthTest={false}
-                        transparent
-                        opacity={hoveredArrow === 'down' ? 1.0 : 0.85}
-                    />
-                </mesh>
-            </group>
-        </group>
+                ref={gizmoTargetRef as React.MutableRefObject<THREE.Group>}
+                position={[knot.pos.x, knot.pos.y, knot.pos.z]}
+            />
+            <ScreenSpaceGizmo
+                meshRef={gizmoTargetRef as React.RefObject<THREE.Group>}
+                position={[knot.pos.x, knot.pos.y, knot.pos.z]}
+                enableMove={true}
+                enableRotate={false}
+                enableScale={false}
+                showCenter={false}
+                axisLock={dominantAxis}
+                onMoveStart={handleMoveStart}
+                onMove={handleMove}
+                onMoveEnd={handleMoveEnd}
+                scaleFactor={0.02}
+                handleScale={3.0}
+            />
+        </>
     );
 }

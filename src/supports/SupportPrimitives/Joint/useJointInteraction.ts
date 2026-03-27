@@ -43,6 +43,7 @@ export function useJointInteraction(enabled: boolean = true) {
     const lastAppliedDragPosRef = useRef<THREE.Vector3 | null>(null);
     const liveTrunkPreviewRef = useRef<Trunk | null>(null);
     const liveBranchPreviewRef = useRef<Branch | null>(null);
+    const lastResolvedJointPosRef = useRef<Vec3 | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
     const fastDragFrameSkipToggleRef = useRef(false);
@@ -205,6 +206,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 activeJointId.current = jointId;
                 setJointInteractionLock(true);
                 lastAppliedDragPosRef.current = null;
+                lastResolvedJointPosRef.current = null;
                 lastWarningRef.current = null;
                 lastWarningEvalAtRef.current = 0;
                 fastDragFrameSkipToggleRef.current = false;
@@ -254,6 +256,7 @@ export function useJointInteraction(enabled: boolean = true) {
                 }
 
                 emitJointDragPositionPreview(jointId, foundJointPos);
+                lastResolvedJointPosRef.current = { x: foundJointPos.x, y: foundJointPos.y, z: foundJointPos.z };
 
                 const jointVec = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z);
 
@@ -377,6 +380,7 @@ export function useJointInteraction(enabled: boolean = true) {
             liveBranchPreviewRef.current = null;
             forceEndDragRef.current = false;
             lastAppliedDragPosRef.current = null;
+            lastResolvedJointPosRef.current = null;
             lastWarningEvalAtRef.current = 0;
             fastDragFrameSkipToggleRef.current = false;
             activeConstraintRootRef.current = undefined;
@@ -395,6 +399,23 @@ export function useJointInteraction(enabled: boolean = true) {
             setJointInteractionLock(false);
         }
     }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning]);
+
+    const PREVIEW_COMPUTE_INTERVAL_MS = 6; // throttle heavy support recompute to ~165Hz target
+    const lastPreviewComputeAtRef = useRef(0);
+
+    const resolveJointPosById = (segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>, jointId: string): Vec3 | null => {
+        for (const s of segments) {
+            if (s.topJoint?.id === jointId) return s.topJoint.pos;
+            if (s.bottomJoint?.id === jointId) return s.bottomJoint.pos;
+        }
+        return null;
+    };
+
+    const emitPreviewJointPos = (clampedPos: Vec3 | null, rawPos: Vec3) => {
+        const stablePos = clampedPos ?? lastResolvedJointPosRef.current ?? rawPos;
+        lastResolvedJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
+        emitJointDragPositionPreview(activeJointId.current!, stablePos);
+    };
 
     // Update loop
     useFrame(() => {
@@ -416,21 +437,25 @@ export function useJointInteraction(enabled: boolean = true) {
                 }
                 const newPosVec3 = { x: newPos.x, y: newPos.y, z: newPos.z };
                 lastDragPos.current = newPosVec3;
-                emitJointDragPositionPreview(activeJointId.current!, newPosVec3);
+                // Emit once after clamped preview is calculated further below
                 if (!lastAppliedDragPosRef.current) {
                     lastAppliedDragPosRef.current = newPos.clone();
                 } else {
                     lastAppliedDragPosRef.current.copy(newPos);
                 }
 
-                const shouldDecimateHeavyPreview = hasLastAppliedPos && deltaSq > FAST_DRAG_DELTA_SQ;
-                if (shouldDecimateHeavyPreview) {
-                    fastDragFrameSkipToggleRef.current = !fastDragFrameSkipToggleRef.current;
-                    if (fastDragFrameSkipToggleRef.current) {
-                        return;
-                    }
-                } else {
-                    fastDragFrameSkipToggleRef.current = false;
+                // The gizmo is updated every frame from jointDragPosition, but the support preview path
+                // can be very expensive if recomputed at full render rate on complex trunks/branches.
+                // Throttle expensive preview recomputes to 60Hz while still updating joint/gizmo position every frame.
+                const frameNow = performance.now();
+                const shouldComputePreview = frameNow - lastPreviewComputeAtRef.current >= PREVIEW_COMPUTE_INTERVAL_MS;
+                if (shouldComputePreview) {
+                    lastPreviewComputeAtRef.current = frameNow;
+                }
+
+                if (!shouldComputePreview) {
+                    emitPreviewJointPos(null, newPosVec3);
+                    return;
                 }
 
                 if (activeTrunkId.current) {
@@ -454,6 +479,9 @@ export function useJointInteraction(enabled: boolean = true) {
                             liveTrunkPreviewRef.current = newTrunk;
                             publishJointDragSupportPreview('trunk', newTrunk);
                         }
+
+                        const clampedTrunkJointPos = resolveJointPosById(newTrunk.segments, activeJointId.current!);
+                        emitPreviewJointPos(clampedTrunkJointPos, newPosVec3);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -503,6 +531,9 @@ export function useJointInteraction(enabled: boolean = true) {
                             liveBranchPreviewRef.current = newBranch;
                             publishJointDragSupportPreview('branch', newBranch);
                         }
+
+                        const clampedBranchJointPos = resolveJointPosById(newBranch.segments, activeJointId.current!);
+                        emitPreviewJointPos(clampedBranchJointPos, newPosVec3);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
@@ -557,6 +588,9 @@ export function useJointInteraction(enabled: boolean = true) {
                         if (getKickstandSnapshot().kickstands[activeKickstandId.current] !== newKickstand) {
                             publishJointDragSupportPreview('kickstand', newKickstand);
                         }
+
+                        const clampedKickstandJointPos = resolveJointPosById(newKickstand.segments, activeJointId.current!);
+                        emitPreviewJointPos(clampedKickstandJointPos, newPosVec3);
 
                         const now = performance.now();
                         if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {

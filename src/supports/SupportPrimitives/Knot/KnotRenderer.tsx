@@ -6,6 +6,7 @@ import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getSnapshot, setHoveredCategory, setHoveredId, subscribe } from '../../state';
 import { handleKnotClick } from '../../interaction/clickHandlers';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 
 interface KnotRendererProps {
     knot: Knot;
@@ -146,6 +147,15 @@ export function KnotRenderer({
         if (!isParentSelected || !isInteractable || !pointerOverKnot) return;
 
         e.stopPropagation();
+
+        // Restore select-first behavior:
+        // first click selects the knot (and shows knot gizmo),
+        // subsequent drags (while selected) move it directly.
+        if (!isSelected) {
+            selectPrimitiveById(knot.id);
+            document.body.style.cursor = 'grab';
+            return;
+        }
 
         // Start drag operation
         onDragStart();

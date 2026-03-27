@@ -67,6 +67,14 @@ export function JointGizmo() {
          });
      }, []);
 
+    const getJointPosInSegments = useCallback((segments: any[], jointId: string): { x: number; y: number; z: number } | null => {
+        for (const seg of segments) {
+            if (seg.topJoint?.id === jointId) return seg.topJoint.pos;
+            if (seg.bottomJoint?.id === jointId) return seg.bottomJoint.pos;
+        }
+        return null;
+    }, []);
+
      const recomputeConeForSocket = useCallback((cone: any, socketPos: { x: number; y: number; z: number }) => {
          const effectiveSurfaceNormal = cone.surfaceNormal || cone.normal;
          let axis = new THREE.Vector3(cone.normal.x, cone.normal.y, cone.normal.z);
@@ -282,9 +290,7 @@ export function JointGizmo() {
             z: dragPosRef.current.z 
         };
 
-        if (gizmoTargetRef.current) {
-            gizmoTargetRef.current.position.set(newPos.x, newPos.y, newPos.z);
-        }
+        let gizmoPos = newPos;
 
         if (trunk) {
             if (!initialTrunkRef.current) {
@@ -302,7 +308,26 @@ export function JointGizmo() {
                 liveTrunkPreviewRef.current = newTrunk;
                 publishJointDragSupportPreview('trunk', newTrunk);
             }
+            const clamped = getJointPosInSegments(newTrunk.segments as any[], joint.id);
+            if (clamped) gizmoPos = clamped;
         } else if (branch) {
+            if (!initialBranchRef.current) {
+                initialBranchRef.current = cloneObj(branch);
+            }
+            const newBranch = computeJointDragSupportPreview({
+                kind: 'branch',
+                support: branch,
+                jointId: joint.id,
+                newPos,
+                isCurveMode: false,
+            }) as Branch;
+            if (liveBranchPreviewRef.current !== newBranch) {
+                liveBranchPreviewRef.current = newBranch;
+                publishJointDragSupportPreview('branch', newBranch);
+            }
+            const clamped = getJointPosInSegments(newBranch.segments as any[], joint.id);
+            if (clamped) gizmoPos = clamped;
+        } else if (twig) {
             if (!initialBranchRef.current) {
                 initialBranchRef.current = cloneObj(branch);
             }
@@ -364,6 +389,11 @@ export function JointGizmo() {
                 liveKickstandPreviewRef.current = newKickstand;
                 publishJointDragSupportPreview('kickstand', newKickstand);
             }
+        }
+
+        if (gizmoTargetRef.current) {
+            const effectivePos = gizmoPos ?? newPos;
+            gizmoTargetRef.current.position.set(effectivePos.x, effectivePos.y, effectivePos.z);
         }
     }, [
         branch,

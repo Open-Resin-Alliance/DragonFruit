@@ -7,6 +7,7 @@ import { subscribe, getSnapshot, setHoveredId, setHoveredCategory } from '../../
 import { handleJointClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { emitImmediateModelHover, getFrontBlockingModelId } from '../../interaction/pointerOcclusion';
+import { useJointDragPosition } from '../../interaction/jointDragPosition';
 
 interface JointRendererProps {
     joint: Joint;
@@ -96,6 +97,9 @@ export function JointRenderer({
     const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#ffffff' : (isParentSelected ? '#888888' : propColor));
     const displayEmissive = isHovered ? '#ffffff' : propEmissive;
     const displayEmissiveIntensity = isHovered ? 0.5 : propEmissiveIntensity;
+
+    const jointDragPosition = useJointDragPosition(joint.id);
+    const effectiveJointPos = jointDragPosition ?? joint.pos;
 
     const isPointerOverThisJoint = (e: any): boolean => {
         if (!groupRef.current) return false;
@@ -240,7 +244,7 @@ export function JointRenderer({
     return (
         <group 
             ref={groupRef}
-            position={[joint.pos.x, joint.pos.y, joint.pos.z]}
+            position={[effectiveJointPos.x, effectiveJointPos.y, effectiveJointPos.z]}
             userData={{ supportPrimitiveType: 'joint' }}
             onClick={handleClick}
             onPointerDown={handlePointerDown}
