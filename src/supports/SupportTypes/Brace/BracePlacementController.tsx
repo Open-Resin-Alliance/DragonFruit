@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -26,6 +26,7 @@ import {
 } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -60,6 +61,7 @@ export function BracePlacementController() {
 
     const { raycaster, camera, pointer } = useThree();
     const hoveredShaftRef = useMemo(() => ({ current: null as ShaftHoverDetail | null }), []);
+    const supportEditSuppressedRef = useRef(false);
 
     const segmentMeta = useMemo(() => {
         const map = new Map<string, { modelId: string; supportKey: string; isBezier: boolean }>();
@@ -303,6 +305,18 @@ export function BracePlacementController() {
     }, [hoveredShaftRef, resolveSnapFromClick]);
 
     useFrame(() => {
+        if (isSupportEditInteractionActive()) {
+            if (!supportEditSuppressedRef.current) {
+                supportEditSuppressedRef.current = true;
+                bracePlacementStore.setSnapTarget(null);
+                bracePlacementStore.setPreview(null);
+                resetSnapping();
+            }
+            return;
+        }
+
+        supportEditSuppressedRef.current = false;
+
         if (!altActive && stage === 'idle') return;
 
         const resolvedSnap = updateAndGetResolvedSnap();

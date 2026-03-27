@@ -20,6 +20,7 @@ import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacement
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildKickstandSnapTargetMetaIndex, type KickstandSnapTargetMeta } from '../../interaction/shared/placement/snapping/kickstandSnapTargets';
 import { getSnapPathPointAtT, projectPointToSnapPath } from '../../interaction/shared/placement/snapping/pathProjection';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 type DesiredBand = 'left' | 'right' | 'front';
 
@@ -273,6 +274,7 @@ export function KickstandPlacementController() {
     const hoveredSegmentIdRef = useRef<string | null>(null);
     const desiredBandRef = useRef<DesiredBand>('front');
     const lastPreviewSegmentIdRef = useRef<string | null>(null);
+    const supportEditSuppressedRef = useRef(false);
     const placementBindings = useMemo(() => resolveSupportPlacementHotkeyBindings(getHotkey), [getHotkey]);
 
     const targetMetaById = useMemo(() => {
@@ -389,6 +391,19 @@ export function KickstandPlacementController() {
     }, []);
 
     useFrame(() => {
+        if (isSupportEditInteractionActive()) {
+            if (!supportEditSuppressedRef.current) {
+                supportEditSuppressedRef.current = true;
+                kickstandPlacementStore.clearPreview();
+                desiredBandRef.current = 'front';
+                lastPreviewSegmentIdRef.current = null;
+                resetSnapping();
+            }
+            return;
+        }
+
+        supportEditSuppressedRef.current = false;
+
         if (!hotkeyActive) {
             kickstandPlacementStore.clearPreview();
             desiredBandRef.current = 'front';

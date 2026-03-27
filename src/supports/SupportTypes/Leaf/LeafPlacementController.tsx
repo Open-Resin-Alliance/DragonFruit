@@ -21,6 +21,7 @@ import { usePlacementSnappingSession } from '../../interaction/shared/placement/
 import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { useKickstandStoreState } from '../Kickstand/kickstandStore';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -38,6 +39,7 @@ export function LeafPlacementController() {
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const rearmFrameRef = useRef<number | null>(null);
+    const supportEditSuppressedRef = useRef(false);
 
     useEffect(() => {
         const meshes: THREE.Object3D[] = [];
@@ -125,6 +127,19 @@ export function LeafPlacementController() {
             leafPlacementStore.setSnapTarget(null);
             return;
         }
+
+        if (isSupportEditInteractionActive()) {
+            if (!supportEditSuppressedRef.current) {
+                supportEditSuppressedRef.current = true;
+                leafPlacementStore.setHoverPosition(null);
+                leafPlacementStore.setPreviewData(null);
+                leafPlacementStore.setSnapTarget(null);
+                resetSnapping();
+            }
+            return;
+        }
+
+        supportEditSuppressedRef.current = false;
 
         // Read directly from the store to avoid stale closure during rearm.
         const snap = leafPlacementStore.getSnapshot();

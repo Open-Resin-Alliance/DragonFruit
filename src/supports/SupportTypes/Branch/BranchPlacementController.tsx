@@ -40,6 +40,7 @@ import { isSupportTargetHoverCategory } from '../../interaction/shared/hover/sup
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
+import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -59,6 +60,7 @@ export function BranchPlacementController() {
     const meshKindRef = useRef<'twig' | 'stick' | null>(null);
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const pointerFreshSinceIdleActivationRef = useRef(false);
+    const supportEditSuppressedRef = useRef(false);
 
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
 
@@ -252,6 +254,21 @@ export function BranchPlacementController() {
             meshKindRef.current = null;
             return;
         }
+
+        if (isSupportEditInteractionActive()) {
+            if (!supportEditSuppressedRef.current) {
+                supportEditSuppressedRef.current = true;
+                branchPlacementStore.setHoverPosition(null);
+                branchPlacementStore.setPreviewData(null);
+                branchPlacementStore.setSnapTarget(null);
+                meshHoverRef.current = null;
+                meshKindRef.current = null;
+                resetSnapping();
+            }
+            return;
+        }
+
+        supportEditSuppressedRef.current = false;
 
         if (altActive && stage === 'idle') {
             if (!pointerFreshSinceIdleActivationRef.current) {
