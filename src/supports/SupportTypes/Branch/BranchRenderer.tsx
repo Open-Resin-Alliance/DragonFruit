@@ -14,6 +14,7 @@ import { selectPrimitiveById } from '../../interaction/shared/selection/selectio
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { getSnapshot, subscribe, updateBranch } from '../../state';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface BranchRendererProps {
   branch: Branch;
@@ -59,6 +60,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
   const useLowDetailPrimitives = !isSelected && !propHovered;
   const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
   const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+  const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
   const [, setDragTick] = React.useState(0);
 
   // Use universal highlight hook (matches TrunkRenderer pattern)
@@ -85,6 +87,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
     if (!isPrimaryPointerPress(e)) return;
 
     const socketAnchor = getFinalSocketPosition(branch.contactCone);
+    beforeHistoryRef.current = captureSupportEditSnapshot();
 
     dragSessionRef.current?.stop();
     dragSessionRef.current = startContactDiskDragSession({
@@ -103,9 +106,13 @@ export const BranchRenderer = React.memo(function BranchRenderer({
         if (liveDragConeRef.current) {
           const latest = getSnapshot().branches[branch.id];
           if (latest) updateBranch({ ...latest, contactCone: liveDragConeRef.current });
+          if (beforeHistoryRef.current) {
+            pushSupportEditHistory('Move branch tip', beforeHistoryRef.current, captureSupportEditSnapshot());
+          }
         }
         liveDragConeRef.current = null;
         dragSessionRef.current = null;
+        beforeHistoryRef.current = null;
       },
     });
   }, [branch.id, branch.contactCone, branch.modelId, camera, gl.domElement, isSelected, scene]);

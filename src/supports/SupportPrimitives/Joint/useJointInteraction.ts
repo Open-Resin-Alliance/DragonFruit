@@ -10,6 +10,7 @@ import { getKickstandSnapshot, updateKickstand } from '../../SupportTypes/Kickst
 import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 /**
  * Hook to handle joint interaction (dragging/moving).
@@ -35,6 +36,7 @@ export function useJointInteraction(enabled: boolean = true) {
     const lastDragPos = useRef<Vec3 | null>(null);
     const forceEndDragRef = useRef(false);
     const initialTrunkSnapshot = useRef<Trunk | null>(null);
+    const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const lastAppliedDragPosRef = useRef<THREE.Vector3 | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
@@ -243,6 +245,7 @@ export function useJointInteraction(enabled: boolean = true) {
                     activeBranchId.current = foundBranch.id;
                     activeConstraintRootRef.current = undefined;
                     activeConstraintStartRef.current = getKnotById(foundBranch.parentKnotId)?.pos;
+                    initialEditSnapshotRef.current = captureSupportEditSnapshot();
                 } else if (foundKickstand) {
                     activeKickstandId.current = foundKickstand.id;
                     const root = getRootById(foundKickstand.rootId) ?? undefined;
@@ -253,6 +256,7 @@ export function useJointInteraction(enabled: boolean = true) {
                         const startZ = rPos.z + root.diskHeight + root.coneHeight;
                         activeConstraintStartRef.current = { x: rPos.x, y: rPos.y, z: startZ };
                     }
+                    initialEditSnapshotRef.current = captureSupportEditSnapshot();
                 }
 
                 const jointVec = new THREE.Vector3(foundJointPos.x, foundJointPos.y, foundJointPos.z);
@@ -376,13 +380,21 @@ export function useJointInteraction(enabled: boolean = true) {
                     });
                 }
             }
-            // Note: Branch history not implemented yet, but drag still works
+
+            if (initialEditSnapshotRef.current) {
+                if (activeBranchId.current) {
+                    pushSupportEditHistory('Move branch joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+                } else if (activeKickstandId.current) {
+                    pushSupportEditHistory('Move kickstand joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+                }
+            }
 
             activeJointId.current = null;
             activeTrunkId.current = null;
             activeBranchId.current = null;
             activeKickstandId.current = null;
             initialTrunkSnapshot.current = null;
+            initialEditSnapshotRef.current = null;
             forceEndDragRef.current = false;
             lastAppliedDragPosRef.current = null;
             lastWarningEvalAtRef.current = 0;

@@ -13,6 +13,7 @@ import { ElasticChainInitialState, solveElasticChain } from '../../PlacementLogi
 import { getFinalSocketPosition, getSocketPosition } from '../ContactCone';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
 import { getBezierPointAtT } from '../../Curves/BezierUtils';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface ActiveHost {
     segmentId: string;
@@ -41,6 +42,7 @@ export function useKnotInteraction(enabled: boolean = true) {
     const activeKnotId = useRef<string | null>(null);
     const activeHost = useRef<ActiveHost | null>(null);
     const forceEndDragRef = useRef(false);
+    const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
 
     const leafClampWarningTimeout = useRef<number | null>(null);
 
@@ -673,6 +675,7 @@ export function useKnotInteraction(enabled: boolean = true) {
             resolveEndpoints(host);
             activeKnotId.current = knot.id;
             activeHost.current = host;
+            initialEditSnapshotRef.current = captureSupportEditSnapshot();
             setKnotDragInteractionLock(true);
 
             // Capture State
@@ -683,10 +686,24 @@ export function useKnotInteraction(enabled: boolean = true) {
 
         if (shouldEndDrag) {
             console.log('[useKnotInteraction] Drag ended, clearing state');
+
+            if (activeHost.current && initialEditSnapshotRef.current) {
+                const description =
+                    activeHost.current.containerType === 'leafCone'
+                        ? 'Move tip knot'
+                        : activeHost.current.containerType === 'brace'
+                            ? 'Move brace knot'
+                            : activeHost.current.containerType === 'kickstand'
+                                ? 'Move kickstand host knot'
+                                : 'Move support knot';
+                pushSupportEditHistory(description, initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            }
+
             activeKnotId.current = null;
             activeHost.current = null;
             elasticState.current = {};
             forceEndDragRef.current = false;
+            initialEditSnapshotRef.current = null;
             setKnotDragInteractionLock(false);
 
             if (leafClampWarningTimeout.current) {

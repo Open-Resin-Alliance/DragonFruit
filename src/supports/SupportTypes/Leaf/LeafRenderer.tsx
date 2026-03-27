@@ -11,6 +11,7 @@ import { getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByM
 import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface LeafRendererProps {
     leaf: Leaf;
@@ -74,6 +75,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     const useLowDetailPrimitives = !isSelected && !propHovered;
     const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
     const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const [, setDragTick] = React.useState(0);
 
     const { pickRef, visuals } = useHighlight({
@@ -117,6 +119,8 @@ export const LeafRenderer = React.memo(function LeafRenderer({
 
         const socketAnchor = getFinalSocketPosition(leaf.contactCone);
 
+        beforeHistoryRef.current = captureSupportEditSnapshot();
+
         dragSessionRef.current?.stop();
         dragSessionRef.current = startContactDiskDragSession({
             camera,
@@ -133,10 +137,16 @@ export const LeafRenderer = React.memo(function LeafRenderer({
             onEnd: () => {
                 if (liveDragConeRef.current) {
                     const latest = getSnapshot().leaves[leaf.id];
-                    if (latest) updateLeaf({ ...latest, contactCone: liveDragConeRef.current });
+                    if (latest) {
+                        updateLeaf({ ...latest, contactCone: liveDragConeRef.current });
+                        if (beforeHistoryRef.current) {
+                            pushSupportEditHistory('Move leaf tip', beforeHistoryRef.current, captureSupportEditSnapshot());
+                        }
+                    }
                 }
                 liveDragConeRef.current = null;
                 dragSessionRef.current = null;
+                beforeHistoryRef.current = null;
             },
         });
     }, [camera, gl.domElement, isSelected, leaf.id, leaf.contactCone, leaf.modelId, scene]);

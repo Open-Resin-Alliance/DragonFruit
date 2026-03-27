@@ -16,6 +16,7 @@ import { selectPrimitiveById } from '../../interaction/shared/selection/selectio
 import { useHighlight } from '../../interaction/useHighlight';
 import { getSnapshot, subscribe, updateTrunk } from '../../state';
 import { subscribeToSettings, getSettingsSnapshot } from '../../Settings';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface TrunkRendererProps {
     trunk: Trunk;
@@ -45,6 +46,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
     const useLowDetailPrimitives = !isSelected && !propHovered;
     const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
     const liveDragConeRef = React.useRef<import('../../SupportPrimitives/ContactCone/types').ContactCone | null>(null);
+    const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
     const [, setDragTick] = React.useState(0);
 
     // Use universal highlight hook
@@ -77,6 +79,7 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
         if (!isPrimaryPointerPress(e)) return;
 
         const socketAnchor = getFinalSocketPosition(trunk.contactCone);
+        beforeHistoryRef.current = captureSupportEditSnapshot();
 
         dragSessionRef.current?.stop();
         dragSessionRef.current = startContactDiskDragSession({
@@ -95,9 +98,13 @@ export const TrunkRenderer = React.memo(function TrunkRenderer({ trunk, root, is
                 if (liveDragConeRef.current) {
                     const latest = getSnapshot().trunks[trunk.id];
                     if (latest) updateTrunk({ ...latest, contactCone: liveDragConeRef.current });
+                    if (beforeHistoryRef.current) {
+                        pushSupportEditHistory('Move trunk tip', beforeHistoryRef.current, captureSupportEditSnapshot());
+                    }
                 }
                 liveDragConeRef.current = null;
                 dragSessionRef.current = null;
+                beforeHistoryRef.current = null;
             },
         });
     }, [camera, gl.domElement, isSelected, scene, trunk.id, trunk.contactCone, trunk.modelId]);

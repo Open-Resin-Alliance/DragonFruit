@@ -14,6 +14,7 @@ import { handleSupportClick } from '../../interaction/clickHandlers';
 import { selectPrimitiveById } from '../../interaction/shared/selection/selectionController';
 import { useHighlight } from '../../interaction/useHighlight';
 import { getSnapshot, subscribe, updateStick } from '../../state';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 
 interface StickRendererProps {
   stick: Stick;
@@ -56,6 +57,7 @@ export const StickRenderer = React.memo(function StickRenderer({
   const dragSessionRef = React.useRef<ContactDiskDragSession | null>(null);
   const liveDragConeARef = React.useRef<ContactCone | null>(null);
   const liveDragConeBRef = React.useRef<ContactCone | null>(null);
+  const beforeHistoryRef = React.useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
   const [, setDragTick] = React.useState(0);
 
   const { pickRef, visuals } = useHighlight({
@@ -78,6 +80,8 @@ export const StickRenderer = React.memo(function StickRenderer({
     const cone = stick[coneKey];
     if (!cone) return;
     const socketAnchor = getFinalSocketPosition(cone);
+
+    beforeHistoryRef.current = captureSupportEditSnapshot();
 
     dragSessionRef.current?.stop();
     dragSessionRef.current = startContactDiskDragSession({
@@ -106,11 +110,15 @@ export const StickRenderer = React.memo(function StickRenderer({
               ...(dragA ? { contactConeA: dragA } : {}),
               ...(dragB ? { contactConeB: dragB } : {}),
             });
+            if (beforeHistoryRef.current) {
+              pushSupportEditHistory('Move stick tip', beforeHistoryRef.current, captureSupportEditSnapshot());
+            }
           }
         }
         liveDragConeARef.current = null;
         liveDragConeBRef.current = null;
         dragSessionRef.current = null;
+        beforeHistoryRef.current = null;
       },
     });
   }, [camera, gl.domElement, scene, stick.id, stick.contactConeA, stick.contactConeB, stick.modelId]);

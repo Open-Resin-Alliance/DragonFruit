@@ -9,6 +9,7 @@ import { calculateControlPoint } from './utils';
 import { useCurveInteractionState, curveInteractionStore } from '../../Curves/curveInteractionState';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
+import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 
 interface HandleContext {
@@ -38,6 +39,7 @@ export function BezierGizmoManager() {
     const initialStickRef = useRef<Stick | null>(null);
     const initialBraceRef = useRef<Brace | null>(null);
     const initialKickstandRef = useRef<KickstandEntity | null>(null);
+    const initialEditSnapshotRef = useRef<ReturnType<typeof captureSupportEditSnapshot> | null>(null);
 
     const setBezierGizmoInteractionFlags = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -615,6 +617,10 @@ export function BezierGizmoManager() {
         } else if (ctx.kickstand) {
             initialKickstandRef.current = JSON.parse(JSON.stringify(ctx.kickstand));
         }
+
+        if (ctx.branch || ctx.twig || ctx.stick || ctx.brace || ctx.kickstand) {
+            initialEditSnapshotRef.current = captureSupportEditSnapshot();
+        }
     };
 
     const handleDragEnd = (ctx: HandleContext) => {
@@ -637,7 +643,22 @@ export function BezierGizmoManager() {
             }
             initialTrunkRef.current = null;
         }
-        // Note: Branch history not implemented yet
+
+        if (initialEditSnapshotRef.current) {
+            if (ctx.branch) {
+                pushSupportEditHistory('Edit branch curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            } else if (ctx.twig) {
+                pushSupportEditHistory('Edit twig curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            } else if (ctx.stick) {
+                pushSupportEditHistory('Edit stick curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            } else if (ctx.brace) {
+                pushSupportEditHistory('Edit brace curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            } else if (ctx.kickstand) {
+                pushSupportEditHistory('Edit kickstand curve', initialEditSnapshotRef.current, captureSupportEditSnapshot());
+            }
+            initialEditSnapshotRef.current = null;
+        }
+
         initialBranchRef.current = null;
         initialTwigRef.current = null;
         initialStickRef.current = null;
