@@ -39,9 +39,15 @@ export function KnotRenderer({
     raycast,
     enablePicking = true,
 }: KnotRendererProps) {
+    const SELECTABLE_KNOT_VISUAL_SCALE = 1.15;
+    const SELECTABLE_KNOT_HITBOX_SCALE = 1.9;
+    const MIN_SELECTABLE_KNOT_HITBOX_RADIUS = 0.9;
+
     const resolvedDiameter = knot.diameter ?? 1.2;
     const blendedDiameter = Math.max(0.001, resolvedDiameter - JOINT_DIAMETER_OFFSET_MM);
-    const displayDiameter = isParentSelected ? resolvedDiameter : blendedDiameter;
+    const displayDiameter = isParentSelected
+        ? resolvedDiameter * SELECTABLE_KNOT_VISUAL_SCALE
+        : blendedDiameter;
     const radius = displayDiameter / 2;
     const groupRef = useRef<THREE.Group>(null);
     const [frontBlockingModelId, setFrontBlockingModelId] = useState<string | null>(null);
@@ -234,7 +240,9 @@ export function KnotRenderer({
         document.body.style.cursor = '';
     };
 
-    const hitboxRadius = isParentSelected ? radius * 1.2 : radius;
+    const hitboxRadius = isParentSelected
+        ? Math.max(radius * SELECTABLE_KNOT_HITBOX_SCALE, MIN_SELECTABLE_KNOT_HITBOX_RADIUS)
+        : radius;
 
     return (
         <group

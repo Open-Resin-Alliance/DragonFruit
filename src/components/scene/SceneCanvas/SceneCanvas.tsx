@@ -21,7 +21,6 @@ import type { BasinFillSimulator } from '@/volumeAnalysis/islandVolume/steps/exp
 import type { BasinFillProxy } from '@/volumeAnalysis/islandVolume/steps/expansion/BasinFillProxy';
 import type { TransformMode, ModelTransform } from '@/hooks/useModelTransform';
 import type { SupportMode } from '@/supports/types';
-import { SupportBuilder } from '@/supports/rendering';
 import type { SupportData } from '@/supports/rendering';
 import { subscribe as subscribeSupportState, getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { getModelIdForSupportEntityId } from '@/supports/state';
@@ -39,7 +38,6 @@ import { BranchPlacementController } from '@/supports/SupportTypes/Branch/Branch
 import { LeafPlacementController } from '@/supports/SupportTypes/Leaf/LeafPlacementController';
 import { BracePlacementController } from '@/supports/SupportTypes/Brace/BracePlacementController';
 import { KickstandPlacementController } from '@/supports/SupportTypes/Kickstand/KickstandPlacementController';
-import { BracePreviewRenderer } from '@/supports/SupportTypes/Brace/BracePreviewRenderer';
 import { clearSupportSelection } from '@/supports/interaction/shared/selection/selectionController';
 import { isSupportTargetHoverCategory } from '@/supports/interaction/shared/hover/supportHoverResolver';
 import { useSceneHoveredSupportId } from '@/supports/interaction/shared/hover/sceneHoverStore';
@@ -2705,6 +2703,52 @@ export function SceneCanvas({
   const { isDraggingHandle } = useCurveInteractionState();
   const interactionWarning = useInteractionWarning();
 
+  const trunkPlacementPreviewForRenderer = (
+    trunkPlacementPreview
+    && !suppressSupportPlacementPreviewRendering
+    && !blockSupportPlacement
+    && !isDraggingHandle
+    && !isBranchPlacementActive
+    && !isLeafPlacementActive
+    && !isKickstandPlacementActive
+    && !branchPlacementPreview
+  )
+    ? trunkPlacementPreview
+    : null;
+
+  const branchPlacementPreviewForRenderer = (
+    branchPlacementPreview
+    && isBranchPlacementActive
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? branchPlacementPreview
+    : null;
+
+  const leafPlacementPreviewForRenderer = (
+    leafPlacementPreview
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? leafPlacementPreview
+    : null;
+
+  const bracePlacementPreviewForRenderer = (
+    bracePlacementPreview
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? bracePlacementPreview
+    : null;
+
+  const kickstandPlacementPreviewForRenderer = (
+    kickstandPlacementPreview
+    && !isDraggingHandle
+    && !suppressSupportPlacementPreviewRendering
+  )
+    ? kickstandPlacementPreview
+    : null;
+
   // Listen for selection events to show/hide gizmo
   React.useEffect(() => {
     const handleModelClicked = () => setIsModelSelected(true);
@@ -3995,6 +4039,11 @@ export function SceneCanvas({
                   onModelPointerSelect={(modelId) => selectModelFromPointerHit(modelId)}
                   supportRendererRef={supportsRef as React.Ref<THREE.Group>}
                   supportRenderRefreshNonce={supportRenderRefreshNonce}
+                  trunkPlacementPreview={trunkPlacementPreviewForRenderer}
+                  branchPlacementPreview={branchPlacementPreviewForRenderer}
+                  leafPlacementPreview={leafPlacementPreviewForRenderer}
+                  bracePlacementPreview={bracePlacementPreviewForRenderer}
+                  kickstandPlacementPreview={kickstandPlacementPreviewForRenderer}
                 />
               )}
               </group>{/* end supportDragGroupRef */}
@@ -4641,18 +4690,6 @@ export function SceneCanvas({
                 />
               )}
 
-              {/* Render V2 Trunk Placement Preview (hide when in branch/leaf mode) */}
-              {trunkPlacementPreview &&
-                !suppressSupportPlacementPreviewRendering &&
-                !blockSupportPlacement &&
-                !isDraggingHandle &&
-                !isBranchPlacementActive &&
-                !isLeafPlacementActive &&
-                !isKickstandPlacementActive &&
-                !branchPlacementPreview && (
-                  <SupportBuilder data={trunkPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
-                )}
-
               {/* Render Branch Hover Preview Dot - shows when Alt is held before first click */}
               {/* Uses tip contact diameter to match actual tip size */}
               {branchHoverDotVisible && branchHoverPosition && (
@@ -4677,12 +4714,6 @@ export function SceneCanvas({
                 </mesh>
               )}
 
-              {/* Render Branch Placement Preview - ALWAYS show when data exists */}
-              {/* Don't check blockSupportPlacement - branch placement needs to work while hovering supports */}
-              {branchPlacementPreview && isBranchPlacementActive && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
-                <SupportBuilder data={branchPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
-              )}
-
               {/* Render Leaf Hover Preview Dot - shows when Alt+Shift is held before first click */}
               {/* Uses tip contact diameter to match actual tip size */}
               {leafHoverPosition && !leafTipPosition && !leafPlacementPreview && !suppressSupportPlacementPreviewRendering && (
@@ -4705,24 +4736,6 @@ export function SceneCanvas({
                   <sphereGeometry args={[DEFAULT_TIP_CONTACT_DIAMETER_MM / 2, 16, 16]} />
                   <meshStandardMaterial color="#00ff00" transparent opacity={0.7} />
                 </mesh>
-              )}
-
-              {/* Render Leaf Placement Preview - ALWAYS show when data exists */}
-              {/* Don't check blockSupportPlacement - leaf placement needs to work while hovering supports */}
-              {leafPlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
-                <SupportBuilder data={leafPlacementPreview} isPreview hidePlateContactPrimitives={hidePlateContactPrimitives} />
-              )}
-
-              {/* Render Brace Placement Preview */}
-              {bracePlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && <BracePreviewRenderer preview={bracePlacementPreview} />}
-
-              {/* Render Kickstand Placement Preview */}
-              {kickstandPlacementPreview && !isDraggingHandle && !suppressSupportPlacementPreviewRendering && (
-                <SupportBuilder
-                  data={kickstandPlacementPreview}
-                  isPreview
-                  hidePlateContactPrimitives={hidePlateContactPrimitives}
-                />
               )}
 
               {/* Render V2 Joint Placement Preview */}

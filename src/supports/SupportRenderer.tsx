@@ -27,6 +27,8 @@ import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
 import { ContactDisk, SupportMode, BezierSegment, type Knot, type Leaf } from './types';
 import { bezierToLineSegments } from './Curves/BezierUtils';
+import type { SupportData } from './rendering';
+import type { BracePreviewData } from './SupportTypes/Brace/bracePlacementState';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
 import { subscribeToSettings, getSettingsSnapshot } from './Settings/state';
@@ -66,6 +68,21 @@ interface SupportRendererProps {
     disableSelectionAndHover?: boolean;
     ghostOpacity?: number;
     ghostRenderOrder?: number;
+    trunkPlacementPreview?: SupportData | null;
+    branchPlacementPreview?: SupportData | null;
+    leafPlacementPreview?: SupportData | null;
+    bracePlacementPreview?: BracePreviewData | null;
+    kickstandPlacementPreview?: SupportData | null;
+}
+
+interface PlacementPreviewBatch {
+    id: string;
+    color: string;
+    opacity: number;
+    shafts: InstancedShaft[];
+    joints: InstancedJoint[];
+    roots: InstancedRoot[];
+    cones: InstancedContactCone[];
 }
 
 /** Tessellate a bezier segment into multiple straight InstancedShaft entries for batched rendering. */
@@ -199,7 +216,265 @@ const BULK_MULTI_SELECTED_COLOR = '#80fffd';
 const SCENE_JOINT_DIAMETER_BLEND_MM = JOINT_DIAMETER_OFFSET_MM * 0.75;
 const EMPTY_SUPPORT_ID_LIST: readonly string[] = Object.freeze([]);
 
-export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0 }, ref) => {
+const PLACEMENT_PREVIEW_COLOR = '#00ff00';
+const PLACEMENT_PREVIEW_ERROR_COLOR = '#ff0000';
+const PLACEMENT_PREVIEW_WARNING_COLOR = '#ffcc00';
+const PLACEMENT_PREVIEW_ORANGE_COLOR = '#ff6600';
+const PLACEMENT_PREVIEW_OPACITY = 0.5;
+const PLACEMENT_PREVIEW_ERROR_OPACITY = 0.15;
+
+function resolvePlacementPreviewMaterial(preview: SupportData): { color: string; opacity: number } {
+    if (preview.error) {
+        return {
+            color: PLACEMENT_PREVIEW_ERROR_COLOR,
+            opacity: PLACEMENT_PREVIEW_ERROR_OPACITY,
+        };
+    }
+
+    let angle = preview.angle;
+    if (angle === undefined && preview.contactCone) {
+        const normal = new THREE.Vector3(
+            preview.contactCone.normal.x,
+            preview.contactCone.normal.y,
+            preview.contactCone.normal.z,
+        );
+        const up = new THREE.Vector3(0, 0, 1);
+        angle = normal.angleTo(up) * (180 / Math.PI);
+    }
+
+    if (angle !== undefined) {
+        const startAngle = 91;
+        const midAngle = 120;
+        const endAngle = 180;
+
+        let finalColor: THREE.Color;
+        if (angle <= midAngle) {
+            const t = Math.max(0, (angle - startAngle) / (midAngle - startAngle));
+            const c1 = new THREE.Color(PLACEMENT_PREVIEW_ORANGE_COLOR);
+            const c2 = new THREE.Color(PLACEMENT_PREVIEW_WARNING_COLOR);
+            finalColor = c1.lerp(c2, t);
+        } else {
+            const t = Math.min(1, (angle - midAngle) / (endAngle - midAngle));
+            const c1 = new THREE.Color(PLACEMENT_PREVIEW_WARNING_COLOR);
+            const c2 = new THREE.Color(PLACEMENT_PREVIEW_COLOR);
+            finalColor = c1.lerp(c2, t);
+        }
+
+        return {
+            color: `#${finalColor.getHexString()}`,
+            opacity: PLACEMENT_PREVIEW_OPACITY,
+        };
+    }
+
+    if (preview.warning) {
+        return {
+            color: PLACEMENT_PREVIEW_WARNING_COLOR,
+            opacity: PLACEMENT_PREVIEW_OPACITY,
+        };
+    }
+
+    return {
+        color: PLACEMENT_PREVIEW_COLOR,
+        opacity: PLACEMENT_PREVIEW_OPACITY,
+    };
+}
+
+function buildSupportPlacementPreviewBatch(
+    id: string,
+    preview: SupportData,
+    hasSolidBottom: boolean,
+    raftThickness: number,
+): PlacementPreviewBatch | null {
+    const shafts: InstancedShaft[] = [];
+    const jointsMap = new Map<string, InstancedJoint>();
+    const roots: InstancedRoot[] = [];
+    const cones: InstancedContactCone[] = [];
+
+    let currentStart: THREE.Vector3;
+
+    if (preview.roots) {
+        const root = preview.roots;
+        const basePos = new THREE.Vector3(root.transform.pos.x, root.transform.pos.y, root.transform.pos.z);
+        const effectiveDiskHeight = hasSolidBottom ? 0.05 : Math.max(0.001, root.diskHeight);
+        const verticalOffset = hasSolidBottom ? Math.max(raftThickness - effectiveDiskHeight, 0) : 0;
+        const shaftDiameter = Math.max(0.001, preview.segments[0]?.diameter ?? root.diameter);
+
+        roots.push({
+            id: root.id,
+            supportId: id,
+            modelId: root.modelId,
+            basePos: {
+                x: basePos.x,
+                y: basePos.y,
+                z: basePos.z + verticalOffset,
+            },
+            bottomRadius: Math.max(0.001, root.diameter / 2),
+            topRadius: shaftDiameter / 2,
+            effectiveDiskHeight,
+            coneHeight: Math.max(0, root.coneHeight),
+        });
+
+        currentStart = basePos.clone().add(new THREE.Vector3(0, 0, verticalOffset + effectiveDiskHeight + Math.max(0, root.coneHeight)));
+    } else if (preview.startPos) {
+        currentStart = new THREE.Vector3(preview.startPos.x, preview.startPos.y, preview.startPos.z);
+    } else if (preview.contactCones && preview.contactCones.length > 0) {
+        const socketPos = getFinalSocketPosition(preview.contactCones[0]);
+        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+    } else if (preview.contactCone) {
+        const socketPos = getFinalSocketPosition(preview.contactCone);
+        currentStart = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+    } else if (preview.segments[0]?.bottomJoint) {
+        const p = preview.segments[0].bottomJoint.pos;
+        currentStart = new THREE.Vector3(p.x, p.y, p.z);
+    } else {
+        currentStart = new THREE.Vector3(0, 0, 0);
+    }
+
+    for (const segment of preview.segments) {
+        if (segment.bottomJoint) {
+            jointsMap.set(segment.bottomJoint.id, {
+                id: segment.bottomJoint.id,
+                pos: segment.bottomJoint.pos,
+                diameter: segment.bottomJoint.diameter,
+                supportId: id,
+            });
+        }
+        if (segment.topJoint) {
+            jointsMap.set(segment.topJoint.id, {
+                id: segment.topJoint.id,
+                pos: segment.topJoint.pos,
+                diameter: segment.topJoint.diameter,
+                supportId: id,
+            });
+        }
+    }
+
+    const lastSegmentIndex = preview.segments.length - 1;
+    preview.segments.forEach((segment, index) => {
+        if (segment.bottomJoint) {
+            currentStart = new THREE.Vector3(segment.bottomJoint.pos.x, segment.bottomJoint.pos.y, segment.bottomJoint.pos.z);
+        }
+
+        let endPoint: THREE.Vector3;
+        if (segment.topJoint) {
+            endPoint = new THREE.Vector3(segment.topJoint.pos.x, segment.topJoint.pos.y, segment.topJoint.pos.z);
+        } else if (preview.contactCone && index === lastSegmentIndex) {
+            const socketPos = getFinalSocketPosition(preview.contactCone);
+            endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+        } else if (preview.contactCones && preview.contactCones.length > 0 && index === lastSegmentIndex) {
+            const socketPos = getFinalSocketPosition(preview.contactCones[preview.contactCones.length - 1]);
+            endPoint = new THREE.Vector3(socketPos.x, socketPos.y, socketPos.z);
+        } else {
+            endPoint = currentStart.clone().add(new THREE.Vector3(0, 0, 10));
+        }
+
+        if (segment.type === 'bezier') {
+            shafts.push(
+                ...tesselllateBezierToShafts(
+                    segment as BezierSegment,
+                    { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                    { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                    id,
+                ),
+            );
+        } else {
+            shafts.push({
+                id: segment.id,
+                start: { x: currentStart.x, y: currentStart.y, z: currentStart.z },
+                end: { x: endPoint.x, y: endPoint.y, z: endPoint.z },
+                diameter: segment.diameter,
+                supportId: id,
+            });
+        }
+
+        currentStart = endPoint;
+    });
+
+    const allCones = preview.contactCones?.length
+        ? preview.contactCones
+        : preview.contactCone
+            ? [preview.contactCone]
+            : [];
+
+    allCones.forEach((cone, index) => {
+        cones.push({
+            id: cone.id ?? `${id}:cone:${index}`,
+            supportId: id,
+            pos: cone.pos,
+            normal: cone.normal,
+            surfaceNormal: cone.surfaceNormal,
+            diskLengthOverride: cone.diskLengthOverride,
+            profile: cone.profile,
+        });
+    });
+
+    if (shafts.length === 0 && jointsMap.size === 0 && roots.length === 0 && cones.length === 0) {
+        return null;
+    }
+
+    const { color, opacity } = resolvePlacementPreviewMaterial(preview);
+    return {
+        id,
+        color,
+        opacity,
+        shafts,
+        joints: Array.from(jointsMap.values()),
+        roots,
+        cones,
+    };
+}
+
+function buildBracePlacementPreviewBatch(id: string, preview: BracePreviewData): PlacementPreviewBatch | null {
+    const start = preview.start;
+    const end = preview.end;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const lenSq = dx * dx + dy * dy + dz * dz;
+    const startDiameter = Math.max(0.001, preview.startDiameterMm);
+    const endDiameter = Math.max(0.001, preview.endDiameterMm);
+    const knotStartDiameter = Math.max(0.001, preview.startDiameterMm + 0.1);
+    const knotEndDiameter = Math.max(0.001, preview.endDiameterMm + 0.1);
+
+    const joints: InstancedJoint[] = [
+        {
+            id: `${id}:start-joint`,
+            pos: start,
+            diameter: knotStartDiameter,
+            supportId: id,
+        },
+    ];
+
+    const shafts: InstancedShaft[] = [];
+    if (lenSq >= 1e-6) {
+        shafts.push({
+            id: `${id}:shaft`,
+            start,
+            end,
+            diameter: (startDiameter + endDiameter) / 2,
+            supportId: id,
+        });
+
+        joints.push({
+            id: `${id}:end-joint`,
+            pos: end,
+            diameter: knotEndDiameter,
+            supportId: id,
+        });
+    }
+
+    return {
+        id,
+        color: PLACEMENT_PREVIEW_COLOR,
+        opacity: PLACEMENT_PREVIEW_OPACITY,
+        shafts,
+        joints,
+        roots: [],
+        cones: [],
+    };
+}
+
+export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ mode, navigationLodActive = false, hidePlateContactPrimitives = false, clipLower, clipUpper, activeModelId = null, selectedModelIds = [], hoverModelId = null, modelDropOffsetsById, modelFilterId = null, excludeModelId = null, excludeModelIds = [], passive = false, disableSelectionAndHover = false, ghostOpacity = 1, ghostRenderOrder = 0, trunkPlacementPreview = null, branchPlacementPreview = null, leafPlacementPreview = null, bracePlacementPreview = null, kickstandPlacementPreview = null }, ref) => {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const resolvedSelection = useResolvedSelectionState();
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
@@ -633,6 +908,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         marqueeHoveredSupportId,
         hoveredSupportIdFromPicking,
         sceneHoveredSupportId,
+        hoveredCategoryForVisual,
         selectedPrimitiveHoverActive,
         suppressSupportHoverForSelectedKnotSupport,
         selectedSupportIdSet,
@@ -2423,6 +2699,53 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ? BATCHED_SHAFT_LOW_RADIAL_SEGMENTS
         : BATCHED_SHAFT_RADIAL_SEGMENTS;
 
+    const placementPreviewBatches = useMemo(() => {
+        if (mode !== 'support') return [] as PlacementPreviewBatch[];
+
+        const hasSolidBottom = raftSettings.bottomMode === 'solid';
+        const raftThickness = raftSettings.thickness ?? 0;
+        const next: PlacementPreviewBatch[] = [];
+
+        const pushSupportPreview = (id: string, preview: SupportData | null) => {
+            if (!preview) return;
+            const batch = buildSupportPlacementPreviewBatch(id, preview, hasSolidBottom, raftThickness);
+            if (!batch) return;
+
+            if (hidePlateContactPrimitivesEffective) {
+                next.push({
+                    ...batch,
+                    roots: [],
+                    cones: [],
+                });
+                return;
+            }
+
+            next.push(batch);
+        };
+
+        pushSupportPreview('placement-preview:trunk', trunkPlacementPreview);
+        pushSupportPreview('placement-preview:branch', branchPlacementPreview);
+        pushSupportPreview('placement-preview:leaf', leafPlacementPreview);
+        pushSupportPreview('placement-preview:kickstand', kickstandPlacementPreview);
+
+        if (bracePlacementPreview) {
+            const braceBatch = buildBracePlacementPreviewBatch('placement-preview:brace', bracePlacementPreview);
+            if (braceBatch) next.push(braceBatch);
+        }
+
+        return next;
+    }, [
+        mode,
+        trunkPlacementPreview,
+        branchPlacementPreview,
+        leafPlacementPreview,
+        bracePlacementPreview,
+        kickstandPlacementPreview,
+        raftSettings.bottomMode,
+        raftSettings.thickness,
+        hidePlateContactPrimitivesEffective,
+    ]);
+
     const hoveredSupportShaftSet = useMemo(() => {
         if (!isInteractable) return null;
         if (hoveredSupportIsSelected) return null;
@@ -2940,6 +3263,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         };
 
         const applyMaterialGhostOpacity = (material: THREE.Material) => {
+            if (!ghostTransparent && Math.abs(ghostOpacityClamped - 1) <= 1e-4) {
+                return;
+            }
+
             const renderMaterial = material as THREE.Material & {
                 transparent?: boolean;
                 opacity?: number;
@@ -3071,6 +3398,54 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     onConePointerMove={isPointerInteractable ? handleSceneBatchedConePointerMove : undefined}
                     onConePointerOut={isPointerInteractable ? handleSceneBatchedShaftPointerOut : undefined}
                 />
+            ))}
+
+            {placementPreviewBatches.map((batch) => (
+                <group key={`${batch.id}:${batch.color}:${batch.opacity}`}>
+                    {batch.shafts.length > 0 && (
+                        <InstancedShaftGroup
+                            shafts={batch.shafts}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.2}
+                            transparent
+                            opacity={batch.opacity}
+                            radialSegments={BATCHED_SHAFT_RADIAL_SEGMENTS}
+                        />
+                    )}
+                    {batch.joints.length > 0 && (
+                        <InstancedJointGroup
+                            joints={batch.joints}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.2}
+                            transparent
+                            opacity={batch.opacity}
+                            widthSegments={BATCHED_JOINT_WIDTH_SEGMENTS}
+                            heightSegments={BATCHED_JOINT_HEIGHT_SEGMENTS}
+                        />
+                    )}
+                    {batch.roots.length > 0 && (
+                        <InstancedRootsGroup
+                            roots={batch.roots}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.2}
+                            transparent
+                            opacity={batch.opacity}
+                        />
+                    )}
+                    {batch.cones.length > 0 && (
+                        <InstancedContactConeGroup
+                            cones={batch.cones}
+                            color={batch.color}
+                            emissive={batch.color}
+                            emissiveIntensity={0.2}
+                            transparent
+                            opacity={batch.opacity}
+                        />
+                    )}
+                </group>
             ))}
 
             {hoveredSupportOverlayShafts.length > 0 && hoveredSupportShaftSet && (
