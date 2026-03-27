@@ -1,19 +1,21 @@
 import React from 'react';
-import { calculateKnotPositionOnSegmentFromT, getBranchSegmentEndpoints, getTrunkSegmentEndpoints } from '../SupportPrimitives/Knot/knotUtils';
-import type { Branch, Knot, Trunk } from '../types';
-import type { SupportState } from '../types';
-
-export type JointDragPreviewKind = 'trunk' | 'branch';
-
-export interface JointDragPreviewPayload<TSupport = unknown> {
-  kind: JointDragPreviewKind;
-  supportId: string;
-  support: TSupport | null;
-}
-
-export type JointDragPreviewSnapshot = JointDragPreviewPayload<Trunk | Branch>;
+import type { Knot, Roots } from '../types';
+import { computeJointDragPreviewKnots, type JointDragPreviewCandidateKnots, type JointDragPreviewContext, type JointDragPreviewKind, type JointDragPreviewPayload, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
 
 const EVENT_NAME = 'dragonfruit-joint-drag-preview';
+
+interface JointDragPreviewWorkerResponse {
+  requestId: number;
+  previewKnots: Record<string, Knot>;
+}
+
+interface UseJointDragPreviewOverridesOptions {
+  roots: Record<string, Roots>;
+  knots: Record<string, Knot>;
+  candidateKnots: JointDragPreviewCandidateKnots;
+}
+
+export type { JointDragPreviewKind, JointDragPreviewPayload, JointDragPreviewSnapshot } from './jointDragPreviewMath';
 
 export function emitJointDragPreview<TSupport>(payload: JointDragPreviewPayload<TSupport>) {
   if (typeof window === 'undefined') return;
@@ -53,10 +55,10 @@ export function useActiveJointDragPreview() {
     if (typeof window === 'undefined') return;
 
     const handlePreview = (event: Event) => {
-      const detail = (event as CustomEvent<JointDragPreviewPayload<Trunk | Branch>>).detail;
+      const detail = (event as CustomEvent<JointDragPreviewPayload<unknown>>).detail;
       if (!detail) return;
 
-      pendingPreviewRef.current = detail.support ? detail : null;
+      pendingPreviewRef.current = detail.support ? (detail as JointDragPreviewSnapshot) : null;
       if (frameRef.current !== null) return;
 
       frameRef.current = window.requestAnimationFrame(() => {
@@ -79,59 +81,64 @@ export function useActiveJointDragPreview() {
   return preview;
 }
 
-function getSupportPreviewKnotsFromTrunk(trunk: Trunk, state: Pick<SupportState, 'roots' | 'knots'>) {
-  const nextKnots: Record<string, Knot> = {};
-  const root = state.roots[trunk.rootId];
-  if (!root) return nextKnots;
+export function useJointDragPreviewOverrides({ roots, knots, candidateKnots }: UseJointDragPreviewOverridesOptions) {
+  const preview = useActiveJointDragPreview();
+  const [previewKnots, setPreviewKnots] = React.useState<Record<string, Knot>>({});
+  const workerRef = React.useRef<Worker | null>(null);
+  const workerReadyRef = React.useRef(false);
+  const requestSeqRef = React.useRef(1);
+  const latestAppliedRequestRef = React.useRef(0);
 
-  for (const knot of Object.values(state.knots)) {
-    const segIndex = trunk.segments.findIndex((segment) => segment.id === knot.parentShaftId);
-    if (segIndex === -1) continue;
+  React.useEffect(() => {
+    if (typeof Worker === 'undefined') return;
 
-    const segment = trunk.segments[segIndex];
-    const endpoints = getTrunkSegmentEndpoints(trunk, segment, segIndex, root);
-    if (!endpoints || knot.t === undefined) continue;
+    const worker = new Worker(new URL('./jointDragPreview.worker.ts', import.meta.url), { type: 'module' });
+    workerRef.current = worker;
+    workerReadyRef.current = true;
 
-    const nextPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, knot.t);
-    nextKnots[knot.id] = {
-      ...knot,
-      pos: nextPos,
-      diameter: segment.diameter + 0.1,
+    worker.onmessage = (event: MessageEvent<JointDragPreviewWorkerResponse>) => {
+      const msg = event.data;
+      if (!msg || msg.requestId < latestAppliedRequestRef.current) return;
+      latestAppliedRequestRef.current = msg.requestId;
+      setPreviewKnots(msg.previewKnots);
     };
-  }
 
-  return nextKnots;
-}
-
-function getSupportPreviewKnotsFromBranch(branch: Branch, state: Pick<SupportState, 'knots'>) {
-  const nextKnots: Record<string, Knot> = {};
-  const parentKnot = state.knots[branch.parentKnotId];
-  if (!parentKnot) return nextKnots;
-
-  for (const knot of Object.values(state.knots)) {
-    const segIndex = branch.segments.findIndex((segment) => segment.id === knot.parentShaftId);
-    if (segIndex === -1) continue;
-
-    const segment = branch.segments[segIndex];
-    const endpoints = getBranchSegmentEndpoints(branch, segment, segIndex, parentKnot);
-    if (!endpoints || knot.t === undefined) continue;
-
-    nextKnots[knot.id] = {
-      ...knot,
-      pos: calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, knot.t),
+    worker.onerror = (event) => {
+      console.error('[JointDragPreview] Worker failed', event.message || event.error || event);
+      workerReadyRef.current = false;
+      workerRef.current = null;
     };
-  }
 
-  return nextKnots;
-}
+    return () => {
+      worker.terminate();
+      workerReadyRef.current = false;
+      workerRef.current = null;
+    };
+  }, []);
 
-export function buildJointDragPreviewKnots(
-  preview: JointDragPreviewSnapshot | null,
-  state: Pick<SupportState, 'roots' | 'knots'>
-) {
-  if (!preview?.support) return {};
-  if (preview.kind === 'trunk') {
-    return getSupportPreviewKnotsFromTrunk(preview.support, state);
-  }
-  return getSupportPreviewKnotsFromBranch(preview.support, state);
+  React.useEffect(() => {
+    if (!preview) {
+      setPreviewKnots({});
+      return;
+    }
+
+    const context: JointDragPreviewContext = preview.kind === 'trunk'
+      ? { root: roots[preview.support.rootId] ?? null }
+      : { parentKnot: knots[preview.support.parentKnotId] ?? null };
+
+    if (!workerReadyRef.current || !workerRef.current) {
+      setPreviewKnots(computeJointDragPreviewKnots(preview, context, candidateKnots));
+      return;
+    }
+
+    const requestId = requestSeqRef.current++;
+    workerRef.current.postMessage({
+      requestId,
+      preview,
+      ...context,
+      candidateKnots,
+    });
+  }, [preview, roots, knots, candidateKnots]);
+
+  return previewKnots;
 }

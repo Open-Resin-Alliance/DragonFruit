@@ -338,14 +338,15 @@ export function JointGizmo() {
         dragPosRef.current = null;
 
         if (initialTrunkRef.current && trunk) {
-            const latestTrunk = selectedId ? getTrunkById(trunk.id) : null;
-            if (latestTrunk) {
+            const committedTrunk = liveTrunkPreviewRef.current ?? getTrunkById(trunk.id);
+            if (committedTrunk) {
+                updateTrunk(committedTrunk);
                 clearJointDragPreview('trunk', trunk.id);
                 pushHistory({
                     type: SUPPORT_UPDATE_TRUNK,
                     payload: {
                         before: initialTrunkRef.current,
-                        after: cloneObj(latestTrunk),
+                        after: cloneObj(committedTrunk),
                     },
                 });
             }
@@ -354,6 +355,10 @@ export function JointGizmo() {
 
         if (initialEditSnapshotRef.current) {
             if (branch) {
+                const committedBranch = liveBranchPreviewRef.current ?? getBranchById(branch.id);
+                if (committedBranch) {
+                    updateBranch(committedBranch);
+                }
                 clearJointDragPreview('branch', branch.id);
                 pushSupportEditHistory('Move branch joint', initialEditSnapshotRef.current, captureSupportEditSnapshot());
             } else if (twig) {

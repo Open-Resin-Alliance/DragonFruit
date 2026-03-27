@@ -19,12 +19,12 @@ import { useKickstandStoreState } from './SupportTypes/Kickstand/kickstandStore'
 import { useKickstandPlacementState } from './SupportTypes/Kickstand/kickstandPlacementState';
 import { useJointInteraction } from './SupportPrimitives/Joint/useJointInteraction';
 import { useKnotInteraction } from './SupportPrimitives/Knot/useKnotInteraction';
-import { buildJointDragPreviewKnots, useActiveJointDragPreview } from './interaction/jointDragPreview';
+import { useActiveJointDragPreview, useJointDragPreviewOverrides } from './interaction/jointDragPreview';
 import { JointCreationManager } from './SupportPrimitives/Joint/JointCreationManager';
 import { JointGizmo } from './SupportPrimitives/Joint/JointGizmo';
 import { KnotGizmo } from './SupportPrimitives/Knot/KnotGizmo';
 import { BezierGizmoManager } from './Curves/BezierGizmo/BezierGizmoManager';
-import { ContactDisk, SupportMode, BezierSegment } from './types';
+import { ContactDisk, SupportMode, BezierSegment, type Knot } from './types';
 import { bezierToLineSegments } from './Curves/BezierUtils';
 import { useJointCreationState } from './SupportPrimitives/Joint/jointCreationState';
 import { useSupportHistoryHandlers } from './history/useSupportHistoryHandlers';
@@ -120,7 +120,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const settings = useSyncExternalStore(subscribeToSettings, getSettingsSnapshot, getSettingsSnapshot);
     const raftSettings = useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
     const kickstandState = useKickstandStoreState();
-    const activeJointDragPreview = useActiveJointDragPreview();
     const { isActive: isJointCreationActive } = useJointCreationState();
     const { altActive: braceAltActive } = useBracePlacementState();
     const { hotkeyActive: kickstandHotkeyActive } = useKickstandPlacementState();
@@ -908,13 +907,6 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return selected;
     }, [state.sticks, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
-    const previewKnotOverrides = useMemo(() => {
-        return buildJointDragPreviewKnots(activeJointDragPreview, {
-            roots: state.roots,
-            knots: state.knots,
-        });
-    }, [activeJointDragPreview, state.roots, state.knots]);
-
     const selectedKickstandIds = useMemo(() => {
         const selected = new Set<string>();
         const hasSingleSelection = !!selectedId;
@@ -961,6 +953,64 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return selected;
     }, [state.leaves, selectedId, selectedCategory, selectedSupportIdSet, useMultiSelectionDetail]);
 
+    const activeJointDragPreview = useActiveJointDragPreview();
+
+    const knotIdsByParentShaftId = useMemo(() => {
+        const map = new Map<string, string[]>();
+
+        for (const knot of Object.values(state.knots)) {
+            const list = map.get(knot.parentShaftId) ?? [];
+            list.push(knot.id);
+            map.set(knot.parentShaftId, list);
+        }
+
+        return map;
+    }, [state.knots]);
+
+    const kickstandKnotIdsByParentShaftId = useMemo(() => {
+        const map = new Map<string, string[]>();
+
+        for (const knot of Object.values(kickstandState.knots)) {
+            const list = map.get(knot.parentShaftId) ?? [];
+            list.push(knot.id);
+            map.set(knot.parentShaftId, list);
+        }
+
+        return map;
+    }, [kickstandState.knots]);
+
+    const previewCandidateKnots = useMemo(() => {
+        const result: Record<string, Knot> = {};
+        const previewSupport = activeJointDragPreview?.support;
+        if (!previewSupport) return result;
+
+        for (const segment of previewSupport.segments) {
+            const sharedIds = knotIdsByParentShaftId.get(segment.id) ?? [];
+            for (const knotId of sharedIds) {
+                const knot = state.knots[knotId];
+                if (knot) result[knotId] = knot;
+            }
+
+            const kickstandIds = kickstandKnotIdsByParentShaftId.get(segment.id) ?? [];
+            for (const knotId of kickstandIds) {
+                const knot = kickstandState.knots[knotId];
+                if (knot) result[knotId] = knot;
+            }
+        }
+
+        return result;
+    }, [activeJointDragPreview, knotIdsByParentShaftId, kickstandKnotIdsByParentShaftId, state.knots, kickstandState.knots]);
+
+    const previewKnotOverrides = useJointDragPreviewOverrides({
+        roots: state.roots,
+        knots: state.knots,
+        candidateKnots: previewCandidateKnots,
+    });
+
+    const resolvePreviewKnot = React.useCallback((knotId: string) => {
+        return previewKnotOverrides[knotId] ?? state.knots[knotId] ?? kickstandState.knots[knotId] ?? null;
+    }, [previewKnotOverrides, state.knots, kickstandState.knots]);
+
     const trunkShaftsBySupport = useMemo(() => {
         const result = new Map<string, SupportShaftSet>();
         const hasSolidBottom = raftSettings.bottomMode === 'solid';
@@ -968,6 +1018,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         for (const trunk of Object.values(state.trunks)) {
             if (!isModelVisible(trunk.modelId, trunk.id)) continue;
+
             const root = state.roots[trunk.rootId];
             if (!root) continue;
 
