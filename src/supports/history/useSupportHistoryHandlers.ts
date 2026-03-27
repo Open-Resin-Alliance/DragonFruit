@@ -265,6 +265,7 @@ export function useSupportHistoryHandlers(enabled = true) {
       registerHistoryHandler(SUPPORT_UPDATE_TRUNK, (action, direction) => {
         const payload = action.payload as SupportTrunkUpdatePayload | undefined;
         if (!payload?.before || !payload?.after) return false;
+        clearSupportSelection();
         if (direction === 'undo') {
           updateTrunk(payload.before);
         } else {
@@ -275,6 +276,7 @@ export function useSupportHistoryHandlers(enabled = true) {
       registerHistoryHandler(SUPPORT_UPDATE_BRANCH, (action, direction) => {
         const payload = action.payload as SupportBranchUpdatePayload | undefined;
         if (!payload?.before || !payload?.after) return false;
+        clearSupportSelection();
         if (direction === 'undo') {
           updateBranch(payload.before);
         } else {

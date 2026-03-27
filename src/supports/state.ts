@@ -724,6 +724,44 @@ function notify() {
     listeners.forEach((l) => l());
 }
 
+function syncKickstandHostKnotsFromSharedKnots(sharedKnots: Record<string, Knot>) {
+    const kickstandState = getKickstandSnapshot();
+    let nextKnots = kickstandState.knots;
+    let changed = false;
+
+    for (const kickstand of Object.values(kickstandState.kickstands)) {
+        const hostKnot = sharedKnots[kickstand.hostKnotId];
+        if (!hostKnot) continue;
+
+        const existing = nextKnots[hostKnot.id];
+        if (
+            existing
+            && existing.pos.x === hostKnot.pos.x
+            && existing.pos.y === hostKnot.pos.y
+            && existing.pos.z === hostKnot.pos.z
+            && existing.t === hostKnot.t
+            && existing.diameter === hostKnot.diameter
+            && existing.parentShaftId === hostKnot.parentShaftId
+        ) {
+            continue;
+        }
+
+        if (!changed) {
+            nextKnots = { ...kickstandState.knots };
+            changed = true;
+        }
+
+        nextKnots[hostKnot.id] = { ...hostKnot };
+    }
+
+    if (!changed) return;
+
+    setKickstandSnapshot({
+        ...kickstandState,
+        knots: nextKnots,
+    });
+}
+
 export function subscribe(listener: () => void) {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
@@ -2418,8 +2456,10 @@ export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: bo
         if (knotsChanged) {
             if (skipDependentGeometry) {
                 // Drag-time fast path: keep knot positions responsive, defer expensive
-                // leaf/brace dependent recomputations until drag commit.
-                nextKnots = updatedKnots;
+                // leaf dependent recomputations until drag commit, but keep braces in sync
+                // so they don't visually snap after trunk/branch moves.
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, updatedKnots);
+                nextKnots = braceSeg.knots;
             } else {
                 nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
                 const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
@@ -2435,6 +2475,8 @@ export function updateTrunk(trunk: Trunk, options?: { skipDependentGeometry?: bo
         knots: nextKnots,
         leaves: nextLeaves,
     };
+
+    syncKickstandHostKnotsFromSharedKnots(nextKnots);
 
     notify();
 }
@@ -2990,8 +3032,10 @@ export function updateBranch(branch: Branch, options?: { skipDependentGeometry?:
 
         if (knotsChanged) {
             if (skipDependentGeometry) {
-                // Drag-time fast path: defer expensive dependent recomputations until commit.
-                nextKnots = updatedKnots;
+                // Drag-time fast path: defer expensive leaf dependent recomputations until commit,
+                // but keep brace geometry current so it stays anchored to the moving branch.
+                const braceSeg = recomputeBraceSegmentKnotGeometry(state.braces, updatedKnots);
+                nextKnots = braceSeg.knots;
             } else {
                 nextLeaves = recomputeKnotDependentGeometry(state.leaves, updatedKnotPosById);
                 const leafCone = recomputeLeafConeKnotGeometry(nextLeaves, updatedKnots);
@@ -3007,6 +3051,9 @@ export function updateBranch(branch: Branch, options?: { skipDependentGeometry?:
         knots: nextKnots,
         leaves: nextLeaves,
     };
+
+    syncKickstandHostKnotsFromSharedKnots(nextKnots);
+
     notify();
 }
 
