@@ -22,8 +22,13 @@ export interface SupportRenderLookupInput {
   } | null;
 }
 
-export function computeSupportRenderLookup(input: SupportRenderLookupInput): SupportRenderLookupSnapshot {
+export interface SupportRenderLookupComputeOptions {
+  shouldAbort?: () => boolean;
+}
+
+export function computeSupportRenderLookup(input: SupportRenderLookupInput, options?: SupportRenderLookupComputeOptions): SupportRenderLookupSnapshot {
   const { state, kickstandState, activePreviewSupport } = input;
+  const shouldAbort = options?.shouldAbort;
 
   const supportIdBySegmentId: Record<string, string> = {};
   const supportIdByJointId: Record<string, string> = {};
@@ -40,7 +45,9 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput): Sup
   };
 
   for (const trunk of Object.values(state.trunks)) {
+    if (shouldAbort?.()) break;
     for (const segment of trunk.segments) {
+      if (shouldAbort?.()) break;
       supportIdBySegmentId[segment.id] = trunk.id;
       entitySegmentModelIdById[segment.id] = trunk.modelId;
       if (segment.topJoint?.id) supportIdByJointId[segment.topJoint.id] = trunk.id;
@@ -50,7 +57,9 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput): Sup
   }
 
   for (const branch of Object.values(state.branches)) {
+    if (shouldAbort?.()) break;
     for (const segment of branch.segments) {
+      if (shouldAbort?.()) break;
       supportIdBySegmentId[segment.id] = branch.id;
       entitySegmentModelIdById[segment.id] = branch.modelId;
       if (segment.topJoint?.id) supportIdByJointId[segment.topJoint.id] = branch.id;
@@ -63,13 +72,16 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput): Sup
   }
 
   for (const leaf of Object.values(state.leaves)) {
+    if (shouldAbort?.()) break;
     supportIdByKnotId[leaf.parentKnotId] = leaf.id;
     entityModelIdByKnotId[leaf.parentKnotId] = leaf.modelId;
     if (leaf.contactCone?.id) supportIdByContactDiskId[leaf.contactCone.id] = leaf.id;
   }
 
   for (const twig of Object.values(state.twigs)) {
+    if (shouldAbort?.()) break;
     for (const segment of twig.segments) {
+      if (shouldAbort?.()) break;
       supportIdBySegmentId[segment.id] = twig.id;
       entitySegmentModelIdById[segment.id] = twig.modelId;
       if (segment.topJoint?.id) supportIdByJointId[segment.topJoint.id] = twig.id;
@@ -80,7 +92,9 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput): Sup
   }
 
   for (const stick of Object.values(state.sticks)) {
+    if (shouldAbort?.()) break;
     for (const segment of stick.segments) {
+      if (shouldAbort?.()) break;
       supportIdBySegmentId[segment.id] = stick.id;
       entitySegmentModelIdById[segment.id] = stick.modelId;
       if (segment.topJoint?.id) supportIdByJointId[segment.topJoint.id] = stick.id;
@@ -91,11 +105,13 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput): Sup
   }
 
   for (const brace of Object.values(state.braces)) {
+    if (shouldAbort?.()) break;
     supportIdByKnotId[brace.startKnotId] = brace.id;
     supportIdByKnotId[brace.endKnotId] = brace.id;
   }
 
   for (const knot of Object.values(state.knots)) {
+    if (shouldAbort?.()) break;
     const parentSupportId = supportIdBySegmentId[knot.parentShaftId];
     if (parentSupportId) {
       supportIdByKnotId[knot.id] = parentSupportId;
@@ -114,6 +130,7 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput): Sup
   }
 
   for (const knot of Object.values(kickstandState.knots)) {
+    if (shouldAbort?.()) break;
     const parentShaftId = knot.parentShaftId;
     entityModelIdByKnotId[knot.id] = parentShaftId.startsWith('braceSegment:')
       ? state.braces[parentShaftId.slice('braceSegment:'.length)]?.modelId
@@ -133,14 +150,17 @@ export function computeSupportRenderLookup(input: SupportRenderLookupInput): Sup
   const previewSupport = activePreviewSupport?.support;
   if (activePreviewSupport && previewSupport) {
     for (const segment of previewSupport.segments) {
+      if (shouldAbort?.()) break;
       const sharedIds = knotIdsByParentShaftId[segment.id] ?? [];
       for (const knotId of sharedIds) {
+        if (shouldAbort?.()) break;
         const knot = state.knots[knotId];
         if (knot) previewCandidateKnots[knotId] = knot;
       }
 
       const kickstandIds = kickstandKnotIdsByParentShaftId[segment.id] ?? [];
       for (const knotId of kickstandIds) {
+        if (shouldAbort?.()) break;
         const knot = kickstandState.knots[knotId];
         if (knot) previewCandidateKnots[knotId] = knot;
       }

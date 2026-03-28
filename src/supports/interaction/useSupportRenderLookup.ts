@@ -1,8 +1,9 @@
 import React from 'react';
 import type { SupportState } from '../types';
 import type { KickstandState } from '../SupportTypes/Kickstand/types';
-import type { SupportRenderLookupInput, SupportRenderLookupSnapshot } from './supportRenderLookupMath';
+import { computeSupportRenderLookup, type SupportRenderLookupInput, type SupportRenderLookupSnapshot } from './supportRenderLookupMath';
 import { isSupportEditInteractionActive } from './gizmoInteractionLock';
+import { getSupportWorkerRuntimeCapabilities } from './supportWorkerCapabilities';
 
 interface UseSupportRenderLookupOptions {
   state: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'knots'>;
@@ -16,6 +17,8 @@ interface UseSupportRenderLookupOptions {
 type WorkerRequest = {
   requestId: number;
   input: SupportRenderLookupInput;
+  cancelSignal?: SharedArrayBuffer;
+  cancelEpoch?: number;
 };
 
 type WorkerResponse = {
@@ -39,9 +42,12 @@ const EMPTY_LOOKUP: SupportRenderLookupSnapshot = {
 };
 
 export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): SupportRenderLookupSnapshot {
+  const workerCapabilities = React.useMemo(() => getSupportWorkerRuntimeCapabilities(), []);
   const [lookup, setLookup] = React.useState<SupportRenderLookupSnapshot>(EMPTY_LOOKUP);
 
   const workerRef = React.useRef<Worker | null>(null);
+  const cancelSignalRef = React.useRef<SharedArrayBuffer | null>(null);
+  const cancelSignalViewRef = React.useRef<Int32Array | null>(null);
   const latestOptionsRef = React.useRef<SupportRenderLookupInput>(options);
   const latestAppliedRequestIdRef = React.useRef(0);
   const nextRequestIdRef = React.useRef(1);
@@ -58,14 +64,23 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     }
   }, []);
 
+  const cancelOutstandingWorkerRequest = React.useCallback(() => {
+    const cancelView = cancelSignalViewRef.current;
+    if (!cancelView || typeof Atomics === 'undefined') return;
+    Atomics.add(cancelView, 0, 1);
+  }, []);
+
   const terminateWorker = React.useCallback(() => {
+    cancelOutstandingWorkerRequest();
     clearRequestTimeout();
     if (workerRef.current) {
       workerRef.current.terminate();
       workerRef.current = null;
     }
+    cancelSignalRef.current = null;
+    cancelSignalViewRef.current = null;
     inFlightRequestIdRef.current = null;
-  }, [clearRequestTimeout]);
+  }, [cancelOutstandingWorkerRequest, clearRequestTimeout]);
 
   const postLatestRequestRef = React.useRef<(() => void) | null>(null);
 
@@ -98,6 +113,16 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
 
   const createWorker = React.useCallback(() => {
     const worker = new Worker(new URL('./supportRenderLookup.worker.ts', import.meta.url), { type: 'module' });
+
+    if (workerCapabilities.sharedMemoryWorkersEnabled) {
+      const cancelSignal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      cancelSignalRef.current = cancelSignal;
+      cancelSignalViewRef.current = new Int32Array(cancelSignal);
+      Atomics.store(cancelSignalViewRef.current, 0, 0);
+    } else {
+      cancelSignalRef.current = null;
+      cancelSignalViewRef.current = null;
+    }
 
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       const data = event.data;
@@ -142,12 +167,17 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     };
 
     return worker;
-  }, [clearRequestTimeout, terminateWorker]);
+  }, [clearRequestTimeout, terminateWorker, workerCapabilities]);
 
   const postLatestRequest = React.useCallback(() => {
     if (isSupportEditInteractionActive()) {
       hasQueuedWorkRef.current = true;
       scheduleFlushAfterInteraction();
+      return;
+    }
+
+    if (!workerCapabilities.hasWorker || typeof Worker === 'undefined') {
+      setLookup(computeSupportRenderLookup(latestOptionsRef.current));
       return;
     }
 
@@ -161,9 +191,16 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     }
 
     const requestId = nextRequestIdRef.current++;
+    const cancelSignalView = cancelSignalViewRef.current;
+    const cancelEpoch = cancelSignalView && typeof Atomics !== 'undefined'
+      ? (Atomics.add(cancelSignalView, 0, 1) + 1)
+      : undefined;
+
     const request: WorkerRequest = {
       requestId,
       input: latestOptionsRef.current,
+      cancelSignal: cancelSignalRef.current ?? undefined,
+      cancelEpoch,
     };
 
     try {
@@ -196,7 +233,7 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
         postLatestRequestRef.current();
       }
     }
-  }, [clearRequestTimeout, createWorker, scheduleFlushAfterInteraction, terminateWorker]);
+  }, [clearRequestTimeout, createWorker, scheduleFlushAfterInteraction, terminateWorker, workerCapabilities]);
 
   React.useEffect(() => {
     postLatestRequestRef.current = postLatestRequest;

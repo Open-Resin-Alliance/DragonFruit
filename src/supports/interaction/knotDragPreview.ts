@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Branch, Knot } from '../types';
+import { subscribeSupportInteractionReset } from './supportInteractionReset';
 
 const EVENT_NAME = 'dragonfruit-knot-drag-preview';
 
@@ -43,7 +44,17 @@ export function useActiveKnotDragPreview() {
     };
 
     window.addEventListener(EVENT_NAME, handlePreview as EventListener);
+    const unsubscribeReset = subscribeSupportInteractionReset(() => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      pendingPreviewRef.current = null;
+      setPreview(null);
+    });
+
     return () => {
+      unsubscribeReset();
       window.removeEventListener(EVENT_NAME, handlePreview as EventListener);
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);

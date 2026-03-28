@@ -4,6 +4,7 @@ import { getBranchSegmentEndpoints, getTrunkSegmentEndpoints, calculateKnotPosit
 import type { SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
+import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
 import { JOINT_DIAMETER_OFFSET_MM } from './constants';
 import { addKickstand, getKickstandSnapshot, reassignAllKickstandModelIds, removeKickstand, resetKickstandStore, setKickstandSnapshot, transformAllKickstands, transformKickstandsForModel, updateKickstand } from './SupportTypes/Kickstand/kickstandStore';
 import type { Kickstand, KickstandBuildResult, KickstandRemoveResult } from './SupportTypes/Kickstand/types';
@@ -1002,6 +1003,7 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
 
 export function setSnapshot(next: SupportState) {
     state = next;
+    emitSupportInteractionReset('setSnapshot');
     notify();
 }
 
@@ -1911,6 +1913,7 @@ export function toggleSegmentCurve(segmentId: string) {
 export function resetStore() {
     state = { ...initialState };
     resetKickstandStore();
+    emitSupportInteractionReset('resetStore');
     notify();
 }
 
@@ -1992,6 +1995,7 @@ export function loadFromLychee(data: DragonfruitImportFormat) {
     newState.leaves = normalized.leaves;
 
     state = newState;
+    emitSupportInteractionReset('loadFromLychee');
     console.log('[SupportStore] Loaded from Lychee:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,
@@ -2307,6 +2311,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
     merged.leaves = normalized.leaves;
 
     state = merged;
+    emitSupportInteractionReset('mergeFromLychee');
     console.log('[SupportStore] Merged from Lychee:', {
         roots: Object.keys(state.roots).length,
         trunks: Object.keys(state.trunks).length,

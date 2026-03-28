@@ -10,8 +10,9 @@ import type { Kickstand } from '../../SupportTypes/Kickstand/types';
 import { pushHistory } from '@/history/historyStore';
 import { SUPPORT_UPDATE_TRUNK } from '../../history/actionTypes';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '../../history/supportEditHistory';
-import { clearJointDragPositionPreview, emitJointDragPositionPreview, isJointInteractionLocked, setJointInteractionLock } from './jointDragRuntime';
+import { clearJointDragPositionPreview, clearSupportDragPreview, emitJointDragPositionPreview, isJointInteractionLocked, setJointInteractionLock } from './jointDragRuntime';
 import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDragSupportPreview } from './jointDragController';
+import { subscribeSupportInteractionReset } from '../../interaction/supportInteractionReset';
 
 /**
  * Hook to handle joint interaction (dragging/moving).
@@ -22,8 +23,10 @@ import { commitJointDragSupport, computeJointDragSupportPreview, publishJointDra
  */
 export function useJointInteraction(enabled: boolean = true) {
     const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm positional epsilon to drop high-frequency jitter churn
+    const MIN_PUBLISHED_CLAMPED_DELTA_SQ = 1e-8;
     const WARNING_DISTANCE_THRESHOLD = 0.05; // mm
     const WARNING_EVAL_INTERVAL_MS = 48; // ~20Hz warning updates during drag
+    const JOINT_PARENT_CACHE_MAX_ENTRIES = 12000;
 
     const { isDragging, hit } = usePicking();
     const { camera, raycaster, pointer, controls } = useThree();
@@ -43,11 +46,15 @@ export function useJointInteraction(enabled: boolean = true) {
     const liveTrunkPreviewRef = useRef<Trunk | null>(null);
     const liveBranchPreviewRef = useRef<Branch | null>(null);
     const lastResolvedJointPosRef = useRef<Vec3 | null>(null);
+    const lastPublishedClampedJointPosRef = useRef<Vec3 | null>(null);
     const lastWarningRef = useRef<string | null>(null);
     const lastWarningEvalAtRef = useRef(0);
     const jointParentCacheRef = useRef<Map<string, { kind: 'trunk' | 'branch' | 'kickstand'; supportId: string }>>(new Map());
+    const activeJointBindingRef = useRef<{ jointId: string; segmentIndex: number; jointKey: 'topJoint' | 'bottomJoint' } | null>(null);
     const activeConstraintRootRef = useRef<Roots | undefined>(undefined);
     const activeConstraintStartRef = useRef<Vec3 | undefined>(undefined);
+    const dragGestureSelectionAtStartRef = useRef<string | null>(null);
+    const wasDraggingRef = useRef(false);
 
     const savedControlsEnabledRef = useRef<boolean | null>(null);
 
@@ -59,10 +66,134 @@ export function useJointInteraction(enabled: boolean = true) {
         setInteractionWarning(warning);
     }, []);
 
+    const resolveJointBinding = useCallback((
+        segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>,
+        targetJointId: string,
+    ) => {
+        for (let index = 0; index < segments.length; index += 1) {
+            const segment = segments[index];
+            if (segment.topJoint?.id === targetJointId) {
+                return { jointId: targetJointId, segmentIndex: index, jointKey: 'topJoint' as const };
+            }
+            if (segment.bottomJoint?.id === targetJointId) {
+                return { jointId: targetJointId, segmentIndex: index, jointKey: 'bottomJoint' as const };
+            }
+        }
+        return null;
+    }, []);
+
+    const resolveJointPosById = useCallback((
+        segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>,
+        jointId: string,
+    ): Vec3 | null => {
+        const binding = activeJointBindingRef.current;
+        if (binding && binding.jointId === jointId) {
+            const segment = segments[binding.segmentIndex];
+            const fastJoint = segment?.[binding.jointKey];
+            if (fastJoint?.id === jointId) {
+                return fastJoint.pos;
+            }
+        }
+
+        const nextBinding = resolveJointBinding(segments, jointId);
+        if (!nextBinding) {
+            activeJointBindingRef.current = null;
+            return null;
+        }
+
+        activeJointBindingRef.current = nextBinding;
+        const segment = segments[nextBinding.segmentIndex];
+        return segment?.[nextBinding.jointKey]?.pos ?? null;
+    }, [resolveJointBinding]);
+
+    const shouldPublishForClampedPos = useCallback((clampedPos: Vec3 | null) => {
+        if (!clampedPos) return true;
+        const prev = lastPublishedClampedJointPosRef.current;
+        if (!prev) return true;
+
+        const dx = clampedPos.x - prev.x;
+        const dy = clampedPos.y - prev.y;
+        const dz = clampedPos.z - prev.z;
+        return (dx * dx + dy * dy + dz * dz) >= MIN_PUBLISHED_CLAMPED_DELTA_SQ;
+    }, [MIN_PUBLISHED_CLAMPED_DELTA_SQ]);
+
+    const markPublishedClampedPos = useCallback((clampedPos: Vec3 | null) => {
+        if (!clampedPos) {
+            lastPublishedClampedJointPosRef.current = null;
+            return;
+        }
+        lastPublishedClampedJointPosRef.current = { x: clampedPos.x, y: clampedPos.y, z: clampedPos.z };
+    }, []);
+
+    const applyWarningForDragDelta = useCallback((clampedPos: Vec3 | null, rawPos: Vec3) => {
+        if (!clampedPos) return;
+        const now = performance.now();
+        if (now - lastWarningEvalAtRef.current < WARNING_EVAL_INTERVAL_MS) return;
+        lastWarningEvalAtRef.current = now;
+
+        const dx = clampedPos.x - rawPos.x;
+        const dy = clampedPos.y - rawPos.y;
+        const dz = clampedPos.z - rawPos.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist > WARNING_DISTANCE_THRESHOLD) {
+            applyInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
+        } else {
+            applyInteractionWarning(null);
+        }
+    }, [WARNING_DISTANCE_THRESHOLD, WARNING_EVAL_INTERVAL_MS, applyInteractionWarning]);
+
+    const hardResetInteractionSession = useCallback(() => {
+        const activeJointIdAtReset = activeJointId.current;
+        if (activeJointIdAtReset) {
+            clearJointDragPositionPreview(activeJointIdAtReset);
+        }
+
+        if (activeTrunkId.current) {
+            clearSupportDragPreview('trunk', activeTrunkId.current);
+        }
+        if (activeBranchId.current) {
+            clearSupportDragPreview('branch', activeBranchId.current);
+        }
+        if (activeKickstandId.current) {
+            clearSupportDragPreview('kickstand', activeKickstandId.current);
+        }
+
+        activeJointId.current = null;
+        activeTrunkId.current = null;
+        activeBranchId.current = null;
+        activeKickstandId.current = null;
+        initialTrunkSnapshot.current = null;
+        initialEditSnapshotRef.current = null;
+        liveTrunkPreviewRef.current = null;
+        liveBranchPreviewRef.current = null;
+        forceEndDragRef.current = false;
+        lastAppliedDragPosRef.current = null;
+        lastResolvedJointPosRef.current = null;
+        lastPublishedClampedJointPosRef.current = null;
+        lastWarningEvalAtRef.current = 0;
+        activeConstraintRootRef.current = undefined;
+        activeConstraintStartRef.current = undefined;
+        activeJointBindingRef.current = null;
+        lastDragPos.current = null;
+        applyInteractionWarning(null);
+
+        if (controls && savedControlsEnabledRef.current !== null) {
+            const c: any = controls;
+            c.enabled = savedControlsEnabledRef.current;
+            savedControlsEnabledRef.current = null;
+        }
+
+        setJointInteractionLock(false, 0);
+    }, [controls, applyInteractionWarning]);
+
     useEffect(() => {
         if (!enabled) return;
         if (isDragging || activeJointId.current) return;
         if (hit.category !== 'joint' || !hit.objectId) return;
+
+        if (jointParentCacheRef.current.size > JOINT_PARENT_CACHE_MAX_ENTRIES) {
+            jointParentCacheRef.current.clear();
+        }
 
         const jointId = hit.objectId;
         if (jointParentCacheRef.current.has(jointId)) return;
@@ -95,13 +226,20 @@ export function useJointInteraction(enabled: boolean = true) {
                 return;
             }
         }
-    }, [enabled, isDragging, hit.category, hit.objectId]);
+    }, [enabled, isDragging, hit.category, hit.objectId, JOINT_PARENT_CACHE_MAX_ENTRIES]);
 
     useEffect(() => {
         return () => {
-            setJointInteractionLock(false, 0);
+            hardResetInteractionSession();
         };
-    }, []);
+    }, [hardResetInteractionSession]);
+
+    useEffect(() => {
+        return subscribeSupportInteractionReset(() => {
+            jointParentCacheRef.current.clear();
+            hardResetInteractionSession();
+        });
+    }, [hardResetInteractionSession]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -131,6 +269,18 @@ export function useJointInteraction(enabled: boolean = true) {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
     }, []);
+
+    useEffect(() => {
+        if (isDragging && !wasDraggingRef.current) {
+            // Snapshot selection at pointer-drag gesture start to avoid
+            // select-and-drag races starting a joint drag in the same gesture.
+            dragGestureSelectionAtStartRef.current = getSelectedId();
+        } else if (!isDragging) {
+            dragGestureSelectionAtStartRef.current = null;
+        }
+
+        wasDraggingRef.current = isDragging;
+    }, [isDragging]);
 
     // Monitor drag state
     useEffect(() => {
@@ -239,12 +389,20 @@ export function useJointInteraction(enabled: boolean = true) {
 
                 if (!isAllowed) return;
 
+                // If this gesture began before the parent/joint was selected,
+                // skip drag activation and require the next gesture.
+                const selectionAtDragStart = dragGestureSelectionAtStartRef.current;
+                const hadEligibleSelectionAtGestureStart = selectionAtDragStart === foundParent.id || selectionAtDragStart === jointId;
+                if (!hadEligibleSelectionAtGestureStart) return;
+
                 activeJointId.current = jointId;
                 setJointInteractionLock(true);
                 lastAppliedDragPosRef.current = null;
                 lastResolvedJointPosRef.current = null;
+                lastPublishedClampedJointPosRef.current = null;
                 lastWarningRef.current = null;
                 lastWarningEvalAtRef.current = 0;
+                activeJointBindingRef.current = resolveJointBinding((foundParent as { segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }> }).segments, jointId);
 
                 // While dragging a joint, disable OrbitControls so camera movement cannot
                 // influence drag math (which is computed from the camera ray).
@@ -416,9 +574,11 @@ export function useJointInteraction(enabled: boolean = true) {
             forceEndDragRef.current = false;
             lastAppliedDragPosRef.current = null;
             lastResolvedJointPosRef.current = null;
+            lastPublishedClampedJointPosRef.current = null;
             lastWarningEvalAtRef.current = 0;
             activeConstraintRootRef.current = undefined;
             activeConstraintStartRef.current = undefined;
+            activeJointBindingRef.current = null;
             applyInteractionWarning(null); // Clear warning on release
             lastDragPos.current = null;
             clearJointDragPositionPreview(activeJointIdAtEnd);
@@ -432,15 +592,7 @@ export function useJointInteraction(enabled: boolean = true) {
 
             setJointInteractionLock(false);
         }
-    }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning]);
-
-    const resolveJointPosById = (segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>, jointId: string): Vec3 | null => {
-        for (const s of segments) {
-            if (s.topJoint?.id === jointId) return s.topJoint.pos;
-            if (s.bottomJoint?.id === jointId) return s.bottomJoint.pos;
-        }
-        return null;
-    };
+    }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning, resolveJointBinding]);
 
     const emitPreviewJointPos = (clampedPos: Vec3 | null, rawPos: Vec3) => {
         const stablePos = clampedPos ?? lastResolvedJointPosRef.current ?? rawPos;
@@ -493,43 +645,17 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart,
                             skipContactConeSolve: true,
                         });
-                        if (liveTrunkPreviewRef.current !== newTrunk) {
-                            liveTrunkPreviewRef.current = newTrunk;
-                            publishJointDragSupportPreview('trunk', newTrunk);
-                        }
 
                         const clampedTrunkJointPos = resolveJointPosById(newTrunk.segments, activeJointId.current!);
-                        emitPreviewJointPos(clampedTrunkJointPos, newPosVec3);
-
-                        const now = performance.now();
-                        if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
-                            lastWarningEvalAtRef.current = now;
-
-                            // Check for Clamping Warning (throttled)
-                            let foundJointPos: Vec3 | null = null;
-                            for (const s of newTrunk.segments) {
-                                if (s.topJoint?.id === activeJointId.current) {
-                                    foundJointPos = s.topJoint.pos;
-                                    break;
-                                }
-                                if (s.bottomJoint?.id === activeJointId.current) {
-                                    foundJointPos = s.bottomJoint.pos;
-                                    break;
-                                }
-                            }
-
-                            if (foundJointPos) {
-                                const dx = foundJointPos.x - newPos.x;
-                                const dy = foundJointPos.y - newPos.y;
-                                const dz = foundJointPos.z - newPos.z;
-                                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                                if (dist > WARNING_DISTANCE_THRESHOLD) {
-                                    applyInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
-                                } else {
-                                    applyInteractionWarning(null);
-                                }
-                            }
+                        const shouldPublish = shouldPublishForClampedPos(clampedTrunkJointPos);
+                        if (liveTrunkPreviewRef.current !== newTrunk && shouldPublish) {
+                            liveTrunkPreviewRef.current = newTrunk;
+                            publishJointDragSupportPreview('trunk', newTrunk);
+                            markPublishedClampedPos(clampedTrunkJointPos);
                         }
+
+                        emitPreviewJointPos(clampedTrunkJointPos, newPosVec3);
+                        applyWarningForDragDelta(clampedTrunkJointPos, newPosVec3);
                     }
                 } else if (activeBranchId.current) {
                     // Update branch
@@ -546,43 +672,17 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart,
                             skipContactConeSolve: true,
                         });
-                        if (liveBranchPreviewRef.current !== newBranch) {
-                            liveBranchPreviewRef.current = newBranch;
-                            publishJointDragSupportPreview('branch', newBranch);
-                        }
 
                         const clampedBranchJointPos = resolveJointPosById(newBranch.segments, activeJointId.current!);
-                        emitPreviewJointPos(clampedBranchJointPos, newPosVec3);
-
-                        const now = performance.now();
-                        if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
-                            lastWarningEvalAtRef.current = now;
-
-                            // Check for Clamping Warning (throttled)
-                            let foundJointPos: Vec3 | null = null;
-                            for (const s of newBranch.segments) {
-                                if (s.topJoint?.id === activeJointId.current) {
-                                    foundJointPos = s.topJoint.pos;
-                                    break;
-                                }
-                                if (s.bottomJoint?.id === activeJointId.current) {
-                                    foundJointPos = s.bottomJoint.pos;
-                                    break;
-                                }
-                            }
-
-                            if (foundJointPos) {
-                                const dx = foundJointPos.x - newPos.x;
-                                const dy = foundJointPos.y - newPos.y;
-                                const dz = foundJointPos.z - newPos.z;
-                                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                                if (dist > WARNING_DISTANCE_THRESHOLD) {
-                                    applyInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
-                                } else {
-                                    applyInteractionWarning(null);
-                                }
-                            }
+                        const shouldPublish = shouldPublishForClampedPos(clampedBranchJointPos);
+                        if (liveBranchPreviewRef.current !== newBranch && shouldPublish) {
+                            liveBranchPreviewRef.current = newBranch;
+                            publishJointDragSupportPreview('branch', newBranch);
+                            markPublishedClampedPos(clampedBranchJointPos);
                         }
+
+                        emitPreviewJointPos(clampedBranchJointPos, newPosVec3);
+                        applyWarningForDragDelta(clampedBranchJointPos, newPosVec3);
                     }
                 } else if (activeKickstandId.current) {
                     const kickstand = getKickstandSnapshot().kickstands[activeKickstandId.current];
@@ -605,41 +705,16 @@ export function useJointInteraction(enabled: boolean = true) {
                             contextStart,
                             skipContactConeSolve: true,
                         });
-                        if (getKickstandSnapshot().kickstands[activeKickstandId.current] !== newKickstand) {
-                            publishJointDragSupportPreview('kickstand', newKickstand);
-                        }
 
                         const clampedKickstandJointPos = resolveJointPosById(newKickstand.segments, activeJointId.current!);
-                        emitPreviewJointPos(clampedKickstandJointPos, newPosVec3);
-
-                        const now = performance.now();
-                        if (now - lastWarningEvalAtRef.current >= WARNING_EVAL_INTERVAL_MS) {
-                            lastWarningEvalAtRef.current = now;
-
-                            let foundJointPos: Vec3 | null = null;
-                            for (const s of newKickstand.segments) {
-                                if (s.topJoint?.id === activeJointId.current) {
-                                    foundJointPos = s.topJoint.pos;
-                                    break;
-                                }
-                                if (s.bottomJoint?.id === activeJointId.current) {
-                                    foundJointPos = s.bottomJoint.pos;
-                                    break;
-                                }
-                            }
-
-                            if (foundJointPos) {
-                                const dx = foundJointPos.x - newPos.x;
-                                const dy = foundJointPos.y - newPos.y;
-                                const dz = foundJointPos.z - newPos.z;
-                                const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                                if (dist > WARNING_DISTANCE_THRESHOLD) {
-                                    applyInteractionWarning('SHAFT_ANGLE_TOO_FLAT');
-                                } else {
-                                    applyInteractionWarning(null);
-                                }
-                            }
+                        const shouldPublish = shouldPublishForClampedPos(clampedKickstandJointPos);
+                        if (getKickstandSnapshot().kickstands[activeKickstandId.current] !== newKickstand && shouldPublish) {
+                            publishJointDragSupportPreview('kickstand', newKickstand);
+                            markPublishedClampedPos(clampedKickstandJointPos);
                         }
+
+                        emitPreviewJointPos(clampedKickstandJointPos, newPosVec3);
+                        applyWarningForDragDelta(clampedKickstandJointPos, newPosVec3);
                     }
                 }
             }

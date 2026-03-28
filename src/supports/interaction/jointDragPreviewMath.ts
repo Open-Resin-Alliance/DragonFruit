@@ -18,6 +18,10 @@ export interface JointDragPreviewContext {
   hostKnot?: Knot | null;
 }
 
+export interface JointDragPreviewComputeOptions {
+  shouldAbort?: () => boolean;
+}
+
 export type JointDragPreviewCandidateKnots = Record<string, Knot>;
 
 function buildCandidateKnotIdsByParentShaftId(candidateKnots: JointDragPreviewCandidateKnots) {
@@ -67,7 +71,9 @@ export function computeJointDragPreviewKnots(
   preview: JointDragPreviewSnapshot | null,
   context: JointDragPreviewContext,
   candidateKnots: JointDragPreviewCandidateKnots,
+  options?: JointDragPreviewComputeOptions,
 ) {
+  const shouldAbort = options?.shouldAbort;
   const support = preview?.support;
   if (!support) return {} as Record<string, Knot>;
 
@@ -81,6 +87,7 @@ export function computeJointDragPreviewKnots(
     if (!root) return nextKnots;
 
     for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
+      if (shouldAbort?.()) return nextKnots;
       const segment = support.segments[segIndex];
       const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
       if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
@@ -89,6 +96,7 @@ export function computeJointDragPreviewKnots(
       if (!endpoints) continue;
 
       for (const knotId of segmentKnotIds) {
+        if (shouldAbort?.()) return nextKnots;
         const knot = candidateKnots[knotId];
         if (!knot || knot.t === undefined) continue;
 
@@ -111,6 +119,7 @@ export function computeJointDragPreviewKnots(
     if (!root || !hostKnot) return nextKnots;
 
     for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
+      if (shouldAbort?.()) return nextKnots;
       const segment = support.segments[segIndex];
       const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
       if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
@@ -119,6 +128,7 @@ export function computeJointDragPreviewKnots(
       if (!endpoints) continue;
 
       for (const knotId of segmentKnotIds) {
+        if (shouldAbort?.()) return nextKnots;
         const knot = candidateKnots[knotId];
         if (!knot || knot.t === undefined) continue;
 
@@ -137,6 +147,7 @@ export function computeJointDragPreviewKnots(
   if (!parentKnot) return nextKnots;
 
   for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
+    if (shouldAbort?.()) return nextKnots;
     const segment = support.segments[segIndex];
     const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
     if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
@@ -145,6 +156,7 @@ export function computeJointDragPreviewKnots(
     if (!endpoints) continue;
 
     for (const knotId of segmentKnotIds) {
+      if (shouldAbort?.()) return nextKnots;
       const knot = candidateKnots[knotId];
       if (!knot || knot.t === undefined) continue;
 

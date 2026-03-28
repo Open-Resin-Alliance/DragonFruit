@@ -1575,6 +1575,13 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         return knots;
     }, [kickstandState.knots, previewKnotOverrides, previewKnotOverrideIds, hasPreviewKnotOverrides]);
 
+    const activeKnotDragPreviewKnotId = activeKnotDragPreview?.knot.id ?? null;
+    const enableBraceLivePreviewForActiveBraceEdit = !!activeKnotDragPreviewKnotId
+        && (braceIdsByKnotId.get(activeKnotDragPreviewKnotId)?.length ?? 0) > 0;
+    const braceRenderKnotsById = useMemo(() => {
+        return enableBraceLivePreviewForActiveBraceEdit ? renderKnotsById : state.knots;
+    }, [enableBraceLivePreviewForActiveBraceEdit, renderKnotsById, state.knots]);
+
     const knotDragPreviewBranchSegmentsById = activeKnotDragPreview?.branchSegmentsById ?? EMPTY_KNOT_DRAG_BRANCH_SEGMENTS_BY_ID;
     const knotDragPreviewBranchIds = useMemo(() => Object.keys(knotDragPreviewBranchSegmentsById), [knotDragPreviewBranchSegmentsById]);
     const branchListWithKnotDragPreview = useMemo(() => {
@@ -1768,10 +1775,10 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         for (const brace of renderBraceList) {
             if (!isModelVisible(brace.modelId, brace.id)) continue;
 
-            // Keep brace geometry anchored to committed knots during drag previews.
-            // Braces are intentionally ghosted while dependencies are in flux.
-            const startKnot = state.knots[brace.startKnotId];
-            const endKnot = state.knots[brace.endKnotId];
+            // Keep braces anchored to committed knots during non-brace edits,
+            // but allow live preview while the user is directly editing a brace knot.
+            const startKnot = braceRenderKnotsById[brace.startKnotId];
+            const endKnot = braceRenderKnotsById[brace.endKnotId];
             if (!startKnot || !endKnot) continue;
 
             const diameter = Math.max(0.001, brace.profile?.diameter ?? 1.0);
@@ -1804,7 +1811,7 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         }
 
         return result;
-    }, [renderBraceList, state.knots, isModelVisible]);
+    }, [renderBraceList, braceRenderKnotsById, isModelVisible]);
 
     const twigShaftsBySupport = useMemo(() => {
         if (!enableTwigSceneBatching) {
@@ -3965,8 +3972,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
                     || marqueeHoveredSupportIdSet.has(brace.id);
                 const deferBraceInteractionToSceneBatch = !effectiveSelected && isBraceBatchable;
                 const showKnots = !hideUnselectedKnots || effectiveSelected;
-                const braceStartKnot = state.knots[brace.startKnotId];
-                const braceEndKnot = state.knots[brace.endKnotId];
+                const braceStartKnot = braceRenderKnotsById[brace.startKnotId];
+                const braceEndKnot = braceRenderKnotsById[brace.endKnotId];
                 if (!braceStartKnot || !braceEndKnot) return null;
 
                 return (

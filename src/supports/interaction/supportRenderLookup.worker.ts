@@ -3,6 +3,8 @@ import { computeSupportRenderLookup, type SupportRenderLookupInput, type Support
 type RequestMessage = {
   requestId: number;
   input: SupportRenderLookupInput;
+  cancelSignal?: SharedArrayBuffer;
+  cancelEpoch?: number;
 };
 
 type ResponseMessage = {
@@ -17,11 +19,20 @@ self.onmessage = (event: MessageEvent<RequestMessage>) => {
   const msg = event.data;
   if (!msg || !msg.requestId) return;
 
+  const cancelView = msg.cancelSignal ? new Int32Array(msg.cancelSignal) : null;
+  const expectedEpoch = msg.cancelEpoch ?? 0;
+  const shouldAbort = cancelView && typeof Atomics !== 'undefined'
+    ? () => Atomics.load(cancelView, 0) !== expectedEpoch
+    : undefined;
+
+  if (shouldAbort?.()) return;
+
   const startTime = performance.now();
   requestStartTimes.set(msg.requestId, startTime);
 
   try {
-    const snapshot = computeSupportRenderLookup(msg.input);
+    const snapshot = computeSupportRenderLookup(msg.input, { shouldAbort });
+    if (shouldAbort?.()) return;
     const out: ResponseMessage = { requestId: msg.requestId, snapshot };
     self.postMessage(out);
 
