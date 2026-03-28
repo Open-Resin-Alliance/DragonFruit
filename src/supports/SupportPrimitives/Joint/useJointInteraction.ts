@@ -62,6 +62,44 @@ export function useJointInteraction(enabled: boolean = true) {
     }, []);
 
     useEffect(() => {
+        if (!enabled) return;
+        if (isDragging || activeJointId.current) return;
+        if (hit.category !== 'joint' || !hit.objectId) return;
+
+        const jointId = hit.objectId;
+        if (jointParentCacheRef.current.has(jointId)) return;
+
+        const resolveJointPosFromSegments = (segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>, targetJointId: string): Vec3 | null => {
+            for (const s of segments) {
+                if (s.topJoint?.id === targetJointId) return s.topJoint.pos;
+                if (s.bottomJoint?.id === targetJointId) return s.bottomJoint.pos;
+            }
+            return null;
+        };
+
+        for (const trunk of getTrunks()) {
+            if (resolveJointPosFromSegments(trunk.segments as any[], jointId)) {
+                jointParentCacheRef.current.set(jointId, { kind: 'trunk', supportId: trunk.id });
+                return;
+            }
+        }
+
+        for (const branch of getBranches()) {
+            if (resolveJointPosFromSegments(branch.segments as any[], jointId)) {
+                jointParentCacheRef.current.set(jointId, { kind: 'branch', supportId: branch.id });
+                return;
+            }
+        }
+
+        for (const kickstand of Object.values(getKickstandSnapshot().kickstands)) {
+            if (resolveJointPosFromSegments(kickstand.segments as any[], jointId)) {
+                jointParentCacheRef.current.set(jointId, { kind: 'kickstand', supportId: kickstand.id });
+                return;
+            }
+        }
+    }, [enabled, isDragging, hit.category, hit.objectId]);
+
+    useEffect(() => {
         return () => {
             setJointInteractionLock(false, 0);
         };

@@ -48,6 +48,9 @@ export function useKnotInteraction(enabled: boolean = true) {
 
     // Store initial state of all attached branches for elastic drag
     const elasticState = useRef<Record<string, ElasticChainInitialState>>({});
+    const prewarmedKnotIdRef = useRef<string | null>(null);
+    const prewarmedHostRef = useRef<ActiveHost | null>(null);
+    const prewarmedElasticStateRef = useRef<Record<string, ElasticChainInitialState> | null>(null);
 
     const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -606,19 +609,15 @@ export function useKnotInteraction(enabled: boolean = true) {
     };
 
     // Capture the initial state of attached branches
-    const captureElasticState = (knotId: string) => {
+    const captureElasticState = (knotId: string): Record<string, ElasticChainInitialState> => {
         const allBranches = getBranches();
         const attached = allBranches.filter(b => b.parentKnotId === knotId);
         const state: Record<string, ElasticChainInitialState> = {};
-
-        console.log('[ElasticChain] Capturing state for knot:', knotId);
-        console.log('[ElasticChain] Attached branches:', attached.length);
 
         for (const b of attached) {
             const joints: { id: string; pos: { x: number, y: number, z: number } }[] = [];
 
             // Traverse segments to collect joints
-            console.log('[ElasticChain] Branch', b.id, 'has', b.segments.length, 'segments');
 
             for (let i = 0; i < b.segments.length; i++) {
                 const seg = b.segments[i];
@@ -631,7 +630,6 @@ export function useKnotInteraction(enabled: boolean = true) {
                 }
 
                 if (joint) {
-                    console.log('[ElasticChain] Found joint:', joint.id, 'at Z:', joint.pos.z);
                     joints.push({
                         id: joint.id,
                         pos: { ...joint.pos }
@@ -640,8 +638,6 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
 
             const knotPos = getKnotById(knotId)?.pos || { x: 0, y: 0, z: 0 };
-            console.log('[ElasticChain] Knot pos:', knotPos);
-            console.log('[ElasticChain] Total joints captured:', joints.length);
 
             state[b.id] = {
                 branchId: b.id,
@@ -654,22 +650,43 @@ export function useKnotInteraction(enabled: boolean = true) {
             };
         }
 
-        elasticState.current = state;
+        return state;
     };
+
+    useEffect(() => {
+        if (!enabled) return;
+        if (isDragging) return;
+        if (hit.category !== 'knot' || !hit.objectId) return;
+
+        const knotId = hit.objectId;
+        if (prewarmedKnotIdRef.current === knotId && prewarmedHostRef.current && prewarmedElasticStateRef.current) {
+            return;
+        }
+
+        const knot = getKnotById(knotId);
+        if (!knot) return;
+
+        const host = findHost(knot);
+        if (!host) return;
+        resolveEndpoints(host);
+
+        prewarmedKnotIdRef.current = knotId;
+        prewarmedHostRef.current = host;
+        prewarmedElasticStateRef.current = captureElasticState(knotId);
+    }, [enabled, isDragging, hit.category, hit.objectId]);
 
     useEffect(() => {
         if (!enabled && !activeKnotId.current) return;
 
         if (enabled && isDragging && hit.category === 'knot' && hit.objectId && !activeKnotId.current) {
-            console.log('[useKnotInteraction] Starting knot drag!');
             const knot = getKnotById(hit.objectId);
             if (!knot) {
-                console.log('[useKnotInteraction] Knot not found for id:', hit.objectId);
                 return;
             }
-            const host = findHost(knot);
+            const host = prewarmedKnotIdRef.current === knot.id && prewarmedHostRef.current
+                ? prewarmedHostRef.current
+                : findHost(knot);
             if (!host) {
-                console.log('[useKnotInteraction] Host not found for knot');
                 return;
             }
             resolveEndpoints(host);
@@ -678,15 +695,19 @@ export function useKnotInteraction(enabled: boolean = true) {
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
             setKnotDragInteractionLock(true);
 
-            // Capture State
-            captureElasticState(knot.id);
+            // Capture/restore state
+            elasticState.current = prewarmedKnotIdRef.current === knot.id && prewarmedElasticStateRef.current
+                ? prewarmedElasticStateRef.current
+                : captureElasticState(knot.id);
+
+            prewarmedKnotIdRef.current = null;
+            prewarmedHostRef.current = null;
+            prewarmedElasticStateRef.current = null;
         }
 
         const shouldEndDrag = (!isDragging || forceEndDragRef.current) && !!activeKnotId.current;
 
         if (shouldEndDrag) {
-            console.log('[useKnotInteraction] Drag ended, clearing state');
-
             if (activeHost.current && initialEditSnapshotRef.current) {
                 const description =
                     activeHost.current.containerType === 'leafCone'
@@ -711,6 +732,10 @@ export function useKnotInteraction(enabled: boolean = true) {
                 leafClampWarningTimeout.current = null;
             }
             setInteractionWarning(null);
+
+            prewarmedKnotIdRef.current = null;
+            prewarmedHostRef.current = null;
+            prewarmedElasticStateRef.current = null;
         }
     }, [isDragging, hit, enabled, setKnotDragInteractionLock]);
 
@@ -1003,14 +1028,6 @@ export function useKnotInteraction(enabled: boolean = true) {
             });
 
             if (branchChanged) {
-                console.log('[Elastic] Updating branch joints:', {
-                    branchId: branchId.slice(0, 8),
-                    numSegments: newSegments.length,
-                    jointPositions: Object.keys(res.jointPositions).map(id => ({
-                        id: id.slice(0, 8),
-                        z: res.jointPositions[id].z.toFixed(2)
-                    }))
-                });
                 updateBranch({ ...branch, segments: newSegments });
             }
         }

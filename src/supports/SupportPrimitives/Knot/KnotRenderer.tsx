@@ -40,8 +40,7 @@ export function KnotRenderer({
     enablePicking = true,
 }: KnotRendererProps) {
     const SELECTABLE_KNOT_VISUAL_SCALE = 1.15;
-    const SELECTABLE_KNOT_HITBOX_SCALE = 1.9;
-    const MIN_SELECTABLE_KNOT_HITBOX_RADIUS = 0.9;
+    const SELECTABLE_KNOT_HITBOX_SCALE = 1.15;
 
     const resolvedDiameter = knot.diameter ?? 1.2;
     const blendedDiameter = Math.max(0.001, resolvedDiameter - JOINT_DIAMETER_OFFSET_MM);
@@ -154,7 +153,6 @@ export function KnotRenderer({
 
         if (!isSelected) {
             selectPrimitiveById(knot.id);
-            if (onSelect) onSelect(knot.id);
         }
 
         e.stopPropagation();
@@ -162,17 +160,13 @@ export function KnotRenderer({
         onDragStart();
         document.body.style.cursor = 'grabbing';
 
-        const handlePointerUp = () => {
+        const handleMouseUp = () => {
             onDragEnd();
             document.body.style.cursor = 'grab';
-            window.removeEventListener('pointerup', handlePointerUp, true);
-            window.removeEventListener('pointercancel', handlePointerUp, true);
-            window.removeEventListener('mouseup', handlePointerUp, true);
+            window.removeEventListener('mouseup', handleMouseUp);
         };
 
-        window.addEventListener('pointerup', handlePointerUp, true);
-        window.addEventListener('pointercancel', handlePointerUp, true);
-        window.addEventListener('mouseup', handlePointerUp, true);
+        window.addEventListener('mouseup', handleMouseUp);
     };
 
     // Grab cursor on hover when parent is selected
@@ -239,9 +233,7 @@ export function KnotRenderer({
         document.body.style.cursor = '';
     };
 
-    const hitboxRadius = isParentSelected
-        ? Math.max(radius * SELECTABLE_KNOT_HITBOX_SCALE, MIN_SELECTABLE_KNOT_HITBOX_RADIUS)
-        : radius;
+    const hitboxRadius = isParentSelected ? radius * SELECTABLE_KNOT_HITBOX_SCALE : radius;
 
     return (
         <group
