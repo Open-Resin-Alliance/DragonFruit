@@ -32,6 +32,7 @@ export function BezierGizmoManager() {
     const state = useSyncExternalStore(subscribe, getSnapshot);
     const kickstandState = useKickstandStoreState();
     const selectedId = state.selectedId;
+    const selectedCategory = state.selectedCategory;
     useCurveInteractionState();
     const initialTrunkRef = useRef<Trunk | null>(null);
     const initialBranchRef = useRef<Branch | null>(null);
@@ -62,22 +63,28 @@ export function BezierGizmoManager() {
         };
     }, [setBezierGizmoInteractionFlags]);
 
-    // Helper to find all relevant handle contexts based on selection
-    const findGizmoContexts = useCallback((): HandleContext[] => {
-        const contexts: HandleContext[] = [];
-        const trunks = Object.values(state.trunks);
+    const gizmoContextIndex = useMemo(() => {
+        const jointContextsById = new Map<string, HandleContext[]>();
+        const segmentContextsById = new Map<string, HandleContext[]>();
+        const braceContextsById = new Map<string, HandleContext[]>();
 
-        for (const trunk of trunks) {
+        const pushContext = (map: Map<string, HandleContext[]>, key: string | null | undefined, context: HandleContext) => {
+            if (!key) return;
+            const existing = map.get(key);
+            if (existing) {
+                existing.push(context);
+            } else {
+                map.set(key, [context]);
+            }
+        };
+
+        for (const trunk of Object.values(state.trunks)) {
             const segments = trunk.segments;
             for (let i = 0; i < segments.length; i++) {
                 const seg = segments[i];
-                
-                // Check Joint Selection
-                // If Joint is selected, we show BOTH handles (incoming and outgoing) if applicable
-                if (seg.topJoint?.id === selectedId) {
-                    // Joint is "Top" of this segment (Incoming)
-                    // It is also "Bottom" of next segment (Outgoing)
-                    contexts.push({
+
+                if (seg.topJoint?.id) {
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `joint-${seg.topJoint.id}-incoming`,
                         trunk,
                         joint: seg.topJoint,
@@ -85,9 +92,10 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'incoming'
+                        activeHandle: 'incoming',
                     });
-                    contexts.push({
+
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `joint-${seg.topJoint.id}-outgoing`,
                         trunk,
                         joint: seg.topJoint,
@@ -95,21 +103,12 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
-                
-                // (No need to check bottomJoint explicitly for "Joint Selection" because 
-                // every bottomJoint is someone else's topJoint, OR it's the first segment.
-                // Wait, the first segment's bottomJoint connects to Root/Knot. It CAN be selected.)
-                if (seg.bottomJoint?.id === selectedId && i === 0) {
-                    // Only catch bottomJoint if it's the very first one (otherwise caught as topJoint of prev)
-                    // But wait, segments store joints independently? No, joints are shared? 
-                    // In my data model, they are distinct objects in the array, but might share ID?
-                    // Usually joints are distinct entities.
-                    
-                    // If this is the bottom-most joint of the trunk:
-                    contexts.push({
+
+                if (seg.bottomJoint?.id && i === 0) {
+                    pushContext(jointContextsById, seg.bottomJoint.id, {
                         id: `joint-${seg.bottomJoint.id}-outgoing`,
                         trunk,
                         joint: seg.bottomJoint,
@@ -117,104 +116,88 @@ export function BezierGizmoManager() {
                         incomingIndex: -1,
                         outgoingSegment: seg,
                         outgoingIndex: i,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
 
-                // Check Segment Selection
-                if (seg.id === selectedId && seg.type === 'bezier') {
-                    // If this segment is selected, show handles at BOTH ends (its bottom and top)
-                    
-                    // 1. Handle at Bottom (Outgoing from bottom joint)
-                    let bottomJoint = seg.bottomJoint;
+                if (seg.type !== 'bezier') continue;
 
-                    // Fallback: Try to find the joint from the previous segment
-                    if (!bottomJoint) {
-                        if (i > 0) {
-                            bottomJoint = segments[i - 1].topJoint;
-                        } else {
-                            // Use Root as Joint
-                            const root = state.roots[trunk.rootId];
-                            if (root) {
-                                // Match offset from curveUtils.ts
-                                const rPos = root.transform.pos;
-                                const diskHeight = 0.5;
-                                const coneHeight = root.coneHeight || 1.5;
-
-                                bottomJoint = {
-                                    id: root.id,
-                                    pos: { 
-                                        x: rPos.x, 
-                                        y: rPos.y, 
-                                        z: rPos.z + diskHeight + coneHeight 
-                                    },
-                                    diameter: root.diameter
-                                };
-                            }
+                let bottomJoint = seg.bottomJoint;
+                if (!bottomJoint) {
+                    if (i > 0) {
+                        bottomJoint = segments[i - 1].topJoint;
+                    } else {
+                        const root = state.roots[trunk.rootId];
+                        if (root) {
+                            const rPos = root.transform.pos;
+                            const diskHeight = 0.5;
+                            const coneHeight = root.coneHeight || 1.5;
+                            bottomJoint = {
+                                id: root.id,
+                                pos: {
+                                    x: rPos.x,
+                                    y: rPos.y,
+                                    z: rPos.z + diskHeight + coneHeight,
+                                },
+                                diameter: root.diameter,
+                            };
                         }
                     }
+                }
 
-                    if (bottomJoint) {
-                         contexts.push({
-                            id: `seg-${seg.id}-bottom`,
-                            trunk,
-                            joint: bottomJoint,
-                            incomingSegment: segments[i - 1], // Might be undefined
-                            incomingIndex: i - 1,
-                            outgoingSegment: seg,
-                            outgoingIndex: i,
-                            activeHandle: 'outgoing'
-                        });
-                    }
-                    
-                    // 2. Handle at Top (Incoming to top joint)
-                    if (seg.topJoint) {
-                        contexts.push({
-                            id: `seg-${seg.id}-top`,
-                            trunk,
-                            joint: seg.topJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: segments[i + 1], // Might be undefined
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    } else if (trunk.contactCone) {
-                        // Handle Connection to Contact Cone
-                        const socketPos = getFinalSocketPosition(trunk.contactCone);
-                        const syntheticJoint: Joint = {
-                            id: trunk.contactCone.socketJointId || 'cone-socket',
-                            pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
-                            diameter: trunk.contactCone.profile?.bodyDiameterMm ?? seg.diameter
-                        };
+                if (bottomJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `seg-${seg.id}-bottom`,
+                        trunk,
+                        joint: bottomJoint,
+                        incomingSegment: segments[i - 1],
+                        incomingIndex: i - 1,
+                        outgoingSegment: seg,
+                        outgoingIndex: i,
+                        activeHandle: 'outgoing',
+                    });
+                }
 
-                        contexts.push({
-                            id: `seg-${seg.id}-top-cone`,
-                            trunk,
-                            joint: syntheticJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: undefined,
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    }
+                if (seg.topJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `seg-${seg.id}-top`,
+                        trunk,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
+                } else if (trunk.contactCone) {
+                    const socketPos = getFinalSocketPosition(trunk.contactCone);
+                    const syntheticJoint: Joint = {
+                        id: trunk.contactCone.socketJointId || 'cone-socket',
+                        pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
+                        diameter: trunk.contactCone.profile?.bodyDiameterMm ?? seg.diameter,
+                    };
+
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `seg-${seg.id}-top-cone`,
+                        trunk,
+                        joint: syntheticJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: undefined,
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
                 }
             }
         }
 
-        // Also check branches (same logic as trunks)
-        const branches = Object.values(state.branches);
-        const knots = state.knots;
-
-        for (const branch of branches) {
+        for (const branch of Object.values(state.branches)) {
             const segments = branch.segments;
             for (let i = 0; i < segments.length; i++) {
                 const seg = segments[i];
-                
-                // Check Joint Selection
-                if (seg.topJoint?.id === selectedId) {
-                    contexts.push({
+
+                if (seg.topJoint?.id) {
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `branch-joint-${seg.topJoint.id}-incoming`,
                         branch,
                         joint: seg.topJoint,
@@ -222,9 +205,10 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'incoming'
+                        activeHandle: 'incoming',
                     });
-                    contexts.push({
+
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `branch-joint-${seg.topJoint.id}-outgoing`,
                         branch,
                         joint: seg.topJoint,
@@ -232,12 +216,12 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
-                
-                if (seg.bottomJoint?.id === selectedId && i === 0) {
-                    contexts.push({
+
+                if (seg.bottomJoint?.id && i === 0) {
+                    pushContext(jointContextsById, seg.bottomJoint.id, {
                         id: `branch-joint-${seg.bottomJoint.id}-outgoing`,
                         branch,
                         joint: seg.bottomJoint,
@@ -245,86 +229,81 @@ export function BezierGizmoManager() {
                         incomingIndex: -1,
                         outgoingSegment: seg,
                         outgoingIndex: i,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
 
-                // Check Segment Selection
-                if (seg.id === selectedId && seg.type === 'bezier') {
-                    let bottomJoint = seg.bottomJoint;
+                if (seg.type !== 'bezier') continue;
 
-                    if (!bottomJoint) {
-                        if (i > 0) {
-                            bottomJoint = segments[i - 1].topJoint;
-                        } else {
-                            // Use Knot as Joint for branches
-                            const parentKnot = knots[branch.parentKnotId];
-                            if (parentKnot) {
-                                bottomJoint = {
-                                    id: parentKnot.id,
-                                    pos: parentKnot.pos,
-                                    diameter: 1.5 // Default
-                                };
-                            }
+                let bottomJoint = seg.bottomJoint;
+                if (!bottomJoint) {
+                    if (i > 0) {
+                        bottomJoint = segments[i - 1].topJoint;
+                    } else {
+                        const parentKnot = state.knots[branch.parentKnotId];
+                        if (parentKnot) {
+                            bottomJoint = {
+                                id: parentKnot.id,
+                                pos: parentKnot.pos,
+                                diameter: 1.5,
+                            };
                         }
                     }
+                }
 
-                    if (bottomJoint) {
-                        contexts.push({
-                            id: `branch-seg-${seg.id}-bottom`,
-                            branch,
-                            joint: bottomJoint,
-                            incomingSegment: segments[i - 1],
-                            incomingIndex: i - 1,
-                            outgoingSegment: seg,
-                            outgoingIndex: i,
-                            activeHandle: 'outgoing'
-                        });
-                    }
-                    
-                    if (seg.topJoint) {
-                        contexts.push({
-                            id: `branch-seg-${seg.id}-top`,
-                            branch,
-                            joint: seg.topJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: segments[i + 1],
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    } else if (branch.contactCone) {
-                        const socketPos = getFinalSocketPosition(branch.contactCone);
-                        const syntheticJoint: Joint = {
-                            id: branch.contactCone.socketJointId || 'cone-socket',
-                            pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
-                            diameter: branch.contactCone.profile?.bodyDiameterMm ?? seg.diameter
-                        };
+                if (bottomJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `branch-seg-${seg.id}-bottom`,
+                        branch,
+                        joint: bottomJoint,
+                        incomingSegment: segments[i - 1],
+                        incomingIndex: i - 1,
+                        outgoingSegment: seg,
+                        outgoingIndex: i,
+                        activeHandle: 'outgoing',
+                    });
+                }
 
-                        contexts.push({
-                            id: `branch-seg-${seg.id}-top-cone`,
-                            branch,
-                            joint: syntheticJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: undefined,
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    }
+                if (seg.topJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `branch-seg-${seg.id}-top`,
+                        branch,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
+                } else if (branch.contactCone) {
+                    const socketPos = getFinalSocketPosition(branch.contactCone);
+                    const syntheticJoint: Joint = {
+                        id: branch.contactCone.socketJointId || 'cone-socket',
+                        pos: { x: socketPos.x, y: socketPos.y, z: socketPos.z },
+                        diameter: branch.contactCone.profile?.bodyDiameterMm ?? seg.diameter,
+                    };
+
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `branch-seg-${seg.id}-top-cone`,
+                        branch,
+                        joint: syntheticJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: undefined,
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
                 }
             }
         }
 
-        // Also check twigs.
-        const twigs = Object.values(state.twigs);
-        for (const twig of twigs) {
+        for (const twig of Object.values(state.twigs)) {
             const segments = twig.segments;
             for (let i = 0; i < segments.length; i++) {
                 const seg = segments[i];
 
-                if (seg.topJoint?.id === selectedId) {
-                    contexts.push({
+                if (seg.topJoint?.id) {
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `twig-joint-${seg.topJoint.id}-incoming`,
                         twig,
                         joint: seg.topJoint,
@@ -332,9 +311,10 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'incoming'
+                        activeHandle: 'incoming',
                     });
-                    contexts.push({
+
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `twig-joint-${seg.topJoint.id}-outgoing`,
                         twig,
                         joint: seg.topJoint,
@@ -342,12 +322,12 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
 
-                if (seg.bottomJoint?.id === selectedId && i === 0) {
-                    contexts.push({
+                if (seg.bottomJoint?.id && i === 0) {
+                    pushContext(jointContextsById, seg.bottomJoint.id, {
                         id: `twig-joint-${seg.bottomJoint.id}-outgoing`,
                         twig,
                         joint: seg.bottomJoint,
@@ -355,48 +335,47 @@ export function BezierGizmoManager() {
                         incomingIndex: -1,
                         outgoingSegment: seg,
                         outgoingIndex: i,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
 
-                if (seg.id === selectedId && seg.type === 'bezier') {
-                    if (seg.bottomJoint) {
-                        contexts.push({
-                            id: `twig-seg-${seg.id}-bottom`,
-                            twig,
-                            joint: seg.bottomJoint,
-                            incomingSegment: segments[i - 1],
-                            incomingIndex: i - 1,
-                            outgoingSegment: seg,
-                            outgoingIndex: i,
-                            activeHandle: 'outgoing'
-                        });
-                    }
-                    if (seg.topJoint) {
-                        contexts.push({
-                            id: `twig-seg-${seg.id}-top`,
-                            twig,
-                            joint: seg.topJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: segments[i + 1],
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    }
+                if (seg.type !== 'bezier') continue;
+
+                if (seg.bottomJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `twig-seg-${seg.id}-bottom`,
+                        twig,
+                        joint: seg.bottomJoint,
+                        incomingSegment: segments[i - 1],
+                        incomingIndex: i - 1,
+                        outgoingSegment: seg,
+                        outgoingIndex: i,
+                        activeHandle: 'outgoing',
+                    });
+                }
+
+                if (seg.topJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `twig-seg-${seg.id}-top`,
+                        twig,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
                 }
             }
         }
 
-        // Also check sticks.
-        const sticks = Object.values(state.sticks);
-        for (const stick of sticks) {
+        for (const stick of Object.values(state.sticks)) {
             const segments = stick.segments;
             for (let i = 0; i < segments.length; i++) {
                 const seg = segments[i];
 
-                if (seg.topJoint?.id === selectedId) {
-                    contexts.push({
+                if (seg.topJoint?.id) {
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `stick-joint-${seg.topJoint.id}-incoming`,
                         stick,
                         joint: seg.topJoint,
@@ -404,9 +383,10 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'incoming'
+                        activeHandle: 'incoming',
                     });
-                    contexts.push({
+
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `stick-joint-${seg.topJoint.id}-outgoing`,
                         stick,
                         joint: seg.topJoint,
@@ -414,12 +394,12 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
 
-                if (seg.bottomJoint?.id === selectedId && i === 0) {
-                    contexts.push({
+                if (seg.bottomJoint?.id && i === 0) {
+                    pushContext(jointContextsById, seg.bottomJoint.id, {
                         id: `stick-joint-${seg.bottomJoint.id}-outgoing`,
                         stick,
                         joint: seg.bottomJoint,
@@ -427,89 +407,81 @@ export function BezierGizmoManager() {
                         incomingIndex: -1,
                         outgoingSegment: seg,
                         outgoingIndex: i,
-                        activeHandle: 'outgoing'
-                    });
-                }
-
-                if (seg.id === selectedId && seg.type === 'bezier') {
-                    if (seg.bottomJoint) {
-                        contexts.push({
-                            id: `stick-seg-${seg.id}-bottom`,
-                            stick,
-                            joint: seg.bottomJoint,
-                            incomingSegment: segments[i - 1],
-                            incomingIndex: i - 1,
-                            outgoingSegment: seg,
-                            outgoingIndex: i,
-                            activeHandle: 'outgoing'
-                        });
-                    }
-                    if (seg.topJoint) {
-                        contexts.push({
-                            id: `stick-seg-${seg.id}-top`,
-                            stick,
-                            joint: seg.topJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: segments[i + 1],
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    }
-                }
-            }
-        }
-
-        // Also check braces.
-        // Brace can be selected either by its support id (brace.id) or by its segment id (braceSegment:<braceId>).
-        if (selectedId) {
-            const braceId = selectedId.startsWith('braceSegment:')
-                ? selectedId.slice('braceSegment:'.length)
-                : selectedId;
-            const brace = state.braces[braceId];
-
-            if (brace?.curve?.type === 'bezier') {
-                const startKnot = state.knots[brace.startKnotId];
-                const endKnot = state.knots[brace.endKnotId];
-                if (startKnot && endKnot) {
-                    const startJoint: Joint = { id: startKnot.id, pos: startKnot.pos, diameter: startKnot.diameter ?? 1.5 };
-                    const endJoint: Joint = { id: endKnot.id, pos: endKnot.pos, diameter: endKnot.diameter ?? 1.5 };
-
-                    contexts.push({
-                        id: `brace-${brace.id}-start-outgoing`,
-                        brace,
-                        joint: startJoint,
-                        incomingSegment: undefined,
-                        incomingIndex: -1,
-                        outgoingSegment: undefined,
-                        outgoingIndex: 0,
                         activeHandle: 'outgoing',
                     });
-                    contexts.push({
-                        id: `brace-${brace.id}-end-incoming`,
-                        brace,
-                        joint: endJoint,
-                        incomingSegment: undefined,
-                        incomingIndex: 0,
-                        outgoingSegment: undefined,
-                        outgoingIndex: 1,
+                }
+
+                if (seg.type !== 'bezier') continue;
+
+                if (seg.bottomJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `stick-seg-${seg.id}-bottom`,
+                        stick,
+                        joint: seg.bottomJoint,
+                        incomingSegment: segments[i - 1],
+                        incomingIndex: i - 1,
+                        outgoingSegment: seg,
+                        outgoingIndex: i,
+                        activeHandle: 'outgoing',
+                    });
+                }
+
+                if (seg.topJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `stick-seg-${seg.id}-top`,
+                        stick,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
                         activeHandle: 'incoming',
                     });
                 }
             }
         }
 
-        // Also check kickstands.
-        const kickstands = Object.values(kickstandState.kickstands);
-        for (const kickstand of kickstands) {
+        for (const brace of Object.values(state.braces)) {
+            if (brace?.curve?.type !== 'bezier') continue;
+            const startKnot = state.knots[brace.startKnotId];
+            const endKnot = state.knots[brace.endKnotId];
+            if (!startKnot || !endKnot) continue;
+
+            const startJoint: Joint = { id: startKnot.id, pos: startKnot.pos, diameter: startKnot.diameter ?? 1.5 };
+            const endJoint: Joint = { id: endKnot.id, pos: endKnot.pos, diameter: endKnot.diameter ?? 1.5 };
+
+            pushContext(braceContextsById, brace.id, {
+                id: `brace-${brace.id}-start-outgoing`,
+                brace,
+                joint: startJoint,
+                incomingSegment: undefined,
+                incomingIndex: -1,
+                outgoingSegment: undefined,
+                outgoingIndex: 0,
+                activeHandle: 'outgoing',
+            });
+
+            pushContext(braceContextsById, brace.id, {
+                id: `brace-${brace.id}-end-incoming`,
+                brace,
+                joint: endJoint,
+                incomingSegment: undefined,
+                incomingIndex: 0,
+                outgoingSegment: undefined,
+                outgoingIndex: 1,
+                activeHandle: 'incoming',
+            });
+        }
+
+        for (const kickstand of Object.values(kickstandState.kickstands)) {
             const segments = kickstand.segments;
             const hostKnot = kickstandState.knots[kickstand.hostKnotId];
 
             for (let i = 0; i < segments.length; i++) {
                 const seg = segments[i];
 
-                if (seg.topJoint?.id === selectedId) {
-                    contexts.push({
+                if (seg.topJoint?.id) {
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `kickstand-joint-${seg.topJoint.id}-incoming`,
                         kickstand,
                         joint: seg.topJoint,
@@ -517,9 +489,10 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'incoming'
+                        activeHandle: 'incoming',
                     });
-                    contexts.push({
+
+                    pushContext(jointContextsById, seg.topJoint.id, {
                         id: `kickstand-joint-${seg.topJoint.id}-outgoing`,
                         kickstand,
                         joint: seg.topJoint,
@@ -527,12 +500,12 @@ export function BezierGizmoManager() {
                         incomingIndex: i,
                         outgoingSegment: segments[i + 1],
                         outgoingIndex: i + 1,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
 
-                if (seg.bottomJoint?.id === selectedId && i === 0) {
-                    contexts.push({
+                if (seg.bottomJoint?.id && i === 0) {
+                    pushContext(jointContextsById, seg.bottomJoint.id, {
                         id: `kickstand-joint-${seg.bottomJoint.id}-outgoing`,
                         kickstand,
                         joint: seg.bottomJoint,
@@ -540,61 +513,101 @@ export function BezierGizmoManager() {
                         incomingIndex: -1,
                         outgoingSegment: seg,
                         outgoingIndex: i,
-                        activeHandle: 'outgoing'
+                        activeHandle: 'outgoing',
                     });
                 }
 
-                if (seg.id === selectedId && seg.type === 'bezier') {
-                    if (seg.bottomJoint) {
-                        contexts.push({
-                            id: `kickstand-seg-${seg.id}-bottom`,
-                            kickstand,
-                            joint: seg.bottomJoint,
-                            incomingSegment: segments[i - 1],
-                            incomingIndex: i - 1,
-                            outgoingSegment: seg,
-                            outgoingIndex: i,
-                            activeHandle: 'outgoing'
-                        });
-                    }
+                if (seg.type !== 'bezier') continue;
 
-                    if (seg.topJoint) {
-                        contexts.push({
-                            id: `kickstand-seg-${seg.id}-top`,
-                            kickstand,
-                            joint: seg.topJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: segments[i + 1],
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    } else if (hostKnot) {
-                        const syntheticJoint: Joint = {
-                            id: hostKnot.id,
-                            pos: hostKnot.pos,
-                            diameter: hostKnot.diameter ?? seg.diameter,
-                        };
+                if (seg.bottomJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `kickstand-seg-${seg.id}-bottom`,
+                        kickstand,
+                        joint: seg.bottomJoint,
+                        incomingSegment: segments[i - 1],
+                        incomingIndex: i - 1,
+                        outgoingSegment: seg,
+                        outgoingIndex: i,
+                        activeHandle: 'outgoing',
+                    });
+                }
 
-                        contexts.push({
-                            id: `kickstand-seg-${seg.id}-top-host`,
-                            kickstand,
-                            joint: syntheticJoint,
-                            incomingSegment: seg,
-                            incomingIndex: i,
-                            outgoingSegment: undefined,
-                            outgoingIndex: i + 1,
-                            activeHandle: 'incoming'
-                        });
-                    }
+                if (seg.topJoint) {
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `kickstand-seg-${seg.id}-top`,
+                        kickstand,
+                        joint: seg.topJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: segments[i + 1],
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
+                } else if (hostKnot) {
+                    const syntheticJoint: Joint = {
+                        id: hostKnot.id,
+                        pos: hostKnot.pos,
+                        diameter: hostKnot.diameter ?? seg.diameter,
+                    };
+
+                    pushContext(segmentContextsById, seg.id, {
+                        id: `kickstand-seg-${seg.id}-top-host`,
+                        kickstand,
+                        joint: syntheticJoint,
+                        incomingSegment: seg,
+                        incomingIndex: i,
+                        outgoingSegment: undefined,
+                        outgoingIndex: i + 1,
+                        activeHandle: 'incoming',
+                    });
                 }
             }
         }
 
-        return contexts;
-    }, [selectedId, state.trunks, state.branches, state.twigs, state.sticks, state.braces, state.knots, kickstandState.kickstands, kickstandState.knots]);
+        return {
+            jointContextsById,
+            segmentContextsById,
+            braceContextsById,
+        };
+    }, [
+        state.trunks,
+        state.roots,
+        state.branches,
+        state.twigs,
+        state.sticks,
+        state.braces,
+        state.knots,
+        kickstandState.kickstands,
+        kickstandState.knots,
+    ]);
 
-    const contexts = findGizmoContexts();
+    const contexts = useMemo(() => {
+        if (!selectedId) return [] as HandleContext[];
+
+        if (selectedCategory === 'joint') {
+            return gizmoContextIndex.jointContextsById.get(selectedId) ?? [];
+        }
+
+        if (selectedCategory === 'segment') {
+            if (selectedId.startsWith('braceSegment:')) {
+                const braceId = selectedId.slice('braceSegment:'.length);
+                return gizmoContextIndex.braceContextsById.get(braceId) ?? [];
+            }
+            return gizmoContextIndex.segmentContextsById.get(selectedId) ?? [];
+        }
+
+        if (selectedCategory === 'brace') {
+            return gizmoContextIndex.braceContextsById.get(selectedId) ?? [];
+        }
+
+        // Defensive fallback when category has not yet synchronized.
+        if (selectedId.startsWith('braceSegment:')) {
+            const braceId = selectedId.slice('braceSegment:'.length);
+            return gizmoContextIndex.braceContextsById.get(braceId) ?? [];
+        }
+
+        return [] as HandleContext[];
+    }, [selectedId, selectedCategory, gizmoContextIndex]);
     if (contexts.length === 0) return null;
 
     /**

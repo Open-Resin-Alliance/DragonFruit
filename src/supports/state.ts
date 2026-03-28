@@ -31,6 +31,142 @@ const initialState: SupportState = {
 
 let state: SupportState = { ...initialState };
 
+type SelectionCategory = 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null;
+
+interface SelectionLookupCache {
+    trunksRef: SupportState['trunks'];
+    branchesRef: SupportState['branches'];
+    leavesRef: SupportState['leaves'];
+    twigsRef: SupportState['twigs'];
+    sticksRef: SupportState['sticks'];
+    kickstandsRef: Record<string, Kickstand>;
+    jointIds: Set<string>;
+    segmentIds: Set<string>;
+    contactDiskIds: Set<string>;
+    kickstandIds: Set<string>;
+}
+
+let selectionLookupCache: SelectionLookupCache | null = null;
+
+function getSelectionLookupCache(): SelectionLookupCache {
+    const kickstandSnapshot = getKickstandSnapshot();
+    const kickstands = kickstandSnapshot.kickstands;
+
+    if (
+        selectionLookupCache
+        && selectionLookupCache.trunksRef === state.trunks
+        && selectionLookupCache.branchesRef === state.branches
+        && selectionLookupCache.leavesRef === state.leaves
+        && selectionLookupCache.twigsRef === state.twigs
+        && selectionLookupCache.sticksRef === state.sticks
+        && selectionLookupCache.kickstandsRef === kickstands
+    ) {
+        return selectionLookupCache;
+    }
+
+    const jointIds = new Set<string>();
+    const segmentIds = new Set<string>();
+    const contactDiskIds = new Set<string>();
+    const kickstandIds = new Set<string>();
+
+    for (const trunk of Object.values(state.trunks)) {
+        for (const segment of trunk.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (trunk.contactCone?.id) {
+            contactDiskIds.add(trunk.contactCone.id);
+        }
+    }
+
+    for (const branch of Object.values(state.branches)) {
+        for (const segment of branch.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (branch.contactCone?.id) {
+            contactDiskIds.add(branch.contactCone.id);
+        }
+    }
+
+    for (const leaf of Object.values(state.leaves)) {
+        if (leaf.contactCone?.id) {
+            contactDiskIds.add(leaf.contactCone.id);
+        }
+    }
+
+    for (const twig of Object.values(state.twigs)) {
+        for (const segment of twig.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (twig.contactDiskA?.id) contactDiskIds.add(twig.contactDiskA.id);
+        if (twig.contactDiskB?.id) contactDiskIds.add(twig.contactDiskB.id);
+    }
+
+    for (const stick of Object.values(state.sticks)) {
+        for (const segment of stick.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+
+        if (stick.contactConeA?.id) contactDiskIds.add(stick.contactConeA.id);
+        if (stick.contactConeB?.id) contactDiskIds.add(stick.contactConeB.id);
+    }
+
+    for (const kickstand of Object.values(kickstands)) {
+        kickstandIds.add(kickstand.id);
+        for (const segment of kickstand.segments) {
+            segmentIds.add(segment.id);
+            if (segment.topJoint?.id) jointIds.add(segment.topJoint.id);
+            if (segment.bottomJoint?.id) jointIds.add(segment.bottomJoint.id);
+        }
+    }
+
+    selectionLookupCache = {
+        trunksRef: state.trunks,
+        branchesRef: state.branches,
+        leavesRef: state.leaves,
+        twigsRef: state.twigs,
+        sticksRef: state.sticks,
+        kickstandsRef: kickstands,
+        jointIds,
+        segmentIds,
+        contactDiskIds,
+        kickstandIds,
+    };
+
+    return selectionLookupCache;
+}
+
+function resolveSelectionCategory(id: string): SelectionCategory {
+    if (!id) return null;
+    if (id.startsWith('braceSegment:')) return 'segment';
+    if (state.roots[id]) return 'root';
+    if (state.trunks[id]) return 'trunk';
+    if (state.branches[id]) return 'branch';
+    if (state.leaves[id]) return 'leaf';
+    if (state.twigs[id]) return 'twig';
+    if (state.sticks[id]) return 'stick';
+    if (state.braces[id]) return 'brace';
+
+    const lookup = getSelectionLookupCache();
+    if (lookup.kickstandIds.has(id)) return 'brace';
+    if (state.knots[id]) return 'knot';
+    if (lookup.jointIds.has(id)) return 'joint';
+    if (lookup.segmentIds.has(id)) return 'segment';
+    if (lookup.contactDiskIds.has(id)) return 'contactDisk';
+
+    return null;
+}
+
 function deepClone<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
 }
@@ -2187,188 +2323,7 @@ export function mergeFromLychee(data: DragonfruitImportFormat) {
 
 export function setSelectedId(id: string | null) {
     if (state.selectedId === id) return;
-
-    let category: 'trunk' | 'branch' | 'leaf' | 'twig' | 'stick' | 'brace' | 'root' | 'joint' | 'knot' | 'segment' | 'contactDisk' | null = null;
-
-    if (id) {
-        const kickstands = Object.values(getKickstandSnapshot().kickstands);
-
-        if (id.startsWith('braceSegment:')) category = 'segment';
-        if (state.roots[id]) category = 'root';
-        else if (state.trunks[id]) category = 'trunk';
-        else if (state.branches[id]) category = 'branch';
-        else if (state.leaves[id]) category = 'leaf';
-        else if (state.twigs[id]) category = 'twig';
-        else if (state.sticks[id]) category = 'stick';
-        else if (state.braces[id]) category = 'brace';
-        else if (kickstands.some((kickstand) => kickstand.id === id)) category = 'brace';
-        else if (state.knots[id]) category = 'knot';
-        else {
-            // Check for joints inside trunks
-            let foundJoint = false;
-            const trunks = Object.values(state.trunks);
-            for (const t of trunks) {
-                for (const s of t.segments) {
-                    if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                        foundJoint = true;
-                        break;
-                    }
-                }
-                if (foundJoint) break;
-            }
-
-            if (foundJoint) {
-                category = 'joint';
-            } else {
-                // Check for joints inside branches
-                const branches = Object.values(state.branches);
-                for (const b of branches) {
-                    for (const s of b.segments) {
-                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                            foundJoint = true;
-                            break;
-                        }
-                    }
-                    if (foundJoint) break;
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            if (!category) {
-                for (const kickstand of kickstands) {
-                    const hasJoint = kickstand.segments.some(s => s.topJoint?.id === id || s.bottomJoint?.id === id);
-                    if (hasJoint) {
-                        foundJoint = true;
-                        break;
-                    }
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            if (!category) {
-                const twigs = Object.values(state.twigs);
-                for (const t of twigs) {
-                    for (const s of t.segments) {
-                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                            foundJoint = true;
-                            break;
-                        }
-                    }
-                    if (foundJoint) break;
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            if (!category) {
-                const sticks = Object.values(state.sticks);
-                for (const spt of sticks) {
-                    for (const s of spt.segments) {
-                        if (s.topJoint?.id === id || s.bottomJoint?.id === id) {
-                            foundJoint = true;
-                            break;
-                        }
-                    }
-                    if (foundJoint) break;
-                }
-                if (foundJoint) category = 'joint';
-            }
-
-            // Check for segments
-            if (!category) {
-                const trunks = Object.values(state.trunks);
-                for (const t of trunks) {
-                    if (t.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                const branches = Object.values(state.branches);
-                for (const b of branches) {
-                    if (b.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                const twigs = Object.values(state.twigs);
-                for (const t of twigs) {
-                    if (t.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                const sticks = Object.values(state.sticks);
-                for (const spt of sticks) {
-                    if (spt.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const kickstand of kickstands) {
-                    if (kickstand.segments.some(s => s.id === id)) {
-                        category = 'segment';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const trunk of Object.values(state.trunks)) {
-                    if (trunk.contactCone?.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const branch of Object.values(state.branches)) {
-                    if (branch.contactCone?.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const leaf of Object.values(state.leaves)) {
-                    if (leaf.contactCone?.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const twig of Object.values(state.twigs)) {
-                    if (twig.contactDiskA.id === id || twig.contactDiskB.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-
-            if (!category) {
-                for (const stick of Object.values(state.sticks)) {
-                    if (stick.contactConeA.id === id || stick.contactConeB.id === id) {
-                        category = 'contactDisk';
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    const category: SelectionCategory = id ? resolveSelectionCategory(id) : null;
 
     state = { ...state, selectedId: id, selectedCategory: category };
     notify();
