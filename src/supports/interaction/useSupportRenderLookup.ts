@@ -4,6 +4,15 @@ import type { KickstandState } from '../SupportTypes/Kickstand/types';
 import { computeSupportRenderLookup, type SupportRenderLookupInput, type SupportRenderLookupSnapshot } from './supportRenderLookupMath';
 import { isSupportEditInteractionActive } from './gizmoInteractionLock';
 import { getSupportWorkerRuntimeCapabilities } from './supportWorkerCapabilities';
+import { isSupportWorkerSafetyModeEnabled } from './supportWorkerSafetyMode';
+import type {
+  RecordDelta,
+  SupportLookupCollections,
+  SupportLookupInputDelta,
+  SupportLookupKickstandCollections,
+  SupportRenderLookupWorkerRequestMessage,
+  SupportRenderLookupWorkerResponseMessage,
+} from './supportRenderLookup.worker.shared';
 
 interface UseSupportRenderLookupOptions {
   state: Pick<SupportState, 'roots' | 'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'knots'>;
@@ -14,17 +23,140 @@ interface UseSupportRenderLookupOptions {
   } | null;
 }
 
-type WorkerRequest = {
-  requestId: number;
-  input: SupportRenderLookupInput;
-  cancelSignal?: SharedArrayBuffer;
-  cancelEpoch?: number;
+type WorkerCollectionsRef = {
+  state: SupportLookupCollections;
+  kickstandState: SupportLookupKickstandCollections;
+  activePreviewSupport: SupportRenderLookupInput['activePreviewSupport'];
 };
 
-type WorkerResponse = {
-  requestId: number;
-  snapshot: SupportRenderLookupSnapshot;
-};
+function createEmptyWorkerCollectionsRef(): WorkerCollectionsRef {
+  return {
+    state: {
+      roots: {},
+      trunks: {},
+      branches: {},
+      leaves: {},
+      twigs: {},
+      sticks: {},
+      braces: {},
+      knots: {},
+    },
+    kickstandState: {
+      kickstands: {},
+      knots: {},
+    },
+    activePreviewSupport: null,
+  };
+}
+
+type MutableRecord<T> = Record<string, T>;
+
+function diffRecordByRef<T>(prev: Record<string, T>, next: Record<string, T>, forceFullSync: boolean): RecordDelta<T> | undefined {
+  if (!forceFullSync && prev === next) return undefined;
+
+  const upserts: Record<string, T> = {};
+  const deleteIds: string[] = [];
+
+  for (const [id, value] of Object.entries(next)) {
+    if (forceFullSync || prev[id] !== value) {
+      upserts[id] = value;
+    }
+  }
+
+  for (const id of Object.keys(prev)) {
+    if (!(id in next)) {
+      deleteIds.push(id);
+    }
+  }
+
+  if (Object.keys(upserts).length === 0 && deleteIds.length === 0) {
+    return undefined;
+  }
+
+  return { upserts, deleteIds };
+}
+
+function applyRecordDeltaInPlace<T>(target: MutableRecord<T>, delta?: RecordDelta<T>) {
+  if (!delta) return;
+
+  for (const id of delta.deleteIds) {
+    delete target[id];
+  }
+
+  for (const [id, value] of Object.entries(delta.upserts)) {
+    target[id] = value;
+  }
+}
+
+function buildInputDelta(
+  latest: SupportRenderLookupInput,
+  workerCollectionsRef: WorkerCollectionsRef,
+  forceFullSync: boolean,
+): SupportLookupInputDelta | null {
+  const stateDelta = {
+    roots: diffRecordByRef(workerCollectionsRef.state.roots, latest.state.roots, forceFullSync),
+    trunks: diffRecordByRef(workerCollectionsRef.state.trunks, latest.state.trunks, forceFullSync),
+    branches: diffRecordByRef(workerCollectionsRef.state.branches, latest.state.branches, forceFullSync),
+    leaves: diffRecordByRef(workerCollectionsRef.state.leaves, latest.state.leaves, forceFullSync),
+    twigs: diffRecordByRef(workerCollectionsRef.state.twigs, latest.state.twigs, forceFullSync),
+    sticks: diffRecordByRef(workerCollectionsRef.state.sticks, latest.state.sticks, forceFullSync),
+    braces: diffRecordByRef(workerCollectionsRef.state.braces, latest.state.braces, forceFullSync),
+    knots: diffRecordByRef(workerCollectionsRef.state.knots, latest.state.knots, forceFullSync),
+  };
+
+  const kickstandStateDelta = {
+    kickstands: diffRecordByRef(workerCollectionsRef.kickstandState.kickstands, latest.kickstandState.kickstands, forceFullSync),
+    knots: diffRecordByRef(workerCollectionsRef.kickstandState.knots, latest.kickstandState.knots, forceFullSync),
+  };
+
+  const activePreviewSupportChanged = forceFullSync || workerCollectionsRef.activePreviewSupport !== latest.activePreviewSupport;
+
+  const hasStateDelta = Boolean(
+    stateDelta.roots ||
+    stateDelta.trunks ||
+    stateDelta.branches ||
+    stateDelta.leaves ||
+    stateDelta.twigs ||
+    stateDelta.sticks ||
+    stateDelta.braces ||
+    stateDelta.knots,
+  );
+
+  const hasKickstandDelta = Boolean(kickstandStateDelta.kickstands || kickstandStateDelta.knots);
+
+  if (!hasStateDelta && !hasKickstandDelta && !activePreviewSupportChanged) {
+    return null;
+  }
+
+  return {
+    state: hasStateDelta ? stateDelta : undefined,
+    kickstandState: hasKickstandDelta ? kickstandStateDelta : undefined,
+    activePreviewSupport: activePreviewSupportChanged ? latest.activePreviewSupport : undefined,
+    activePreviewSupportChanged,
+  };
+}
+
+function applyDeltaToWorkerCollectionsRef(target: WorkerCollectionsRef, delta: SupportLookupInputDelta) {
+  if (delta.state) {
+    applyRecordDeltaInPlace(target.state.roots, delta.state.roots);
+    applyRecordDeltaInPlace(target.state.trunks, delta.state.trunks);
+    applyRecordDeltaInPlace(target.state.branches, delta.state.branches);
+    applyRecordDeltaInPlace(target.state.leaves, delta.state.leaves);
+    applyRecordDeltaInPlace(target.state.twigs, delta.state.twigs);
+    applyRecordDeltaInPlace(target.state.sticks, delta.state.sticks);
+    applyRecordDeltaInPlace(target.state.braces, delta.state.braces);
+    applyRecordDeltaInPlace(target.state.knots, delta.state.knots);
+  }
+
+  if (delta.kickstandState) {
+    applyRecordDeltaInPlace(target.kickstandState.kickstands, delta.kickstandState.kickstands);
+    applyRecordDeltaInPlace(target.kickstandState.knots, delta.kickstandState.knots);
+  }
+
+  if (delta.activePreviewSupportChanged) {
+    target.activePreviewSupport = delta.activePreviewSupport ?? null;
+  }
+}
 
 const REQUEST_TIMEOUT_MS = 5000;
 const WORKER_RESTART_BACKOFF_MS = 100;
@@ -43,6 +175,7 @@ const EMPTY_LOOKUP: SupportRenderLookupSnapshot = {
 
 export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): SupportRenderLookupSnapshot {
   const workerCapabilities = React.useMemo(() => getSupportWorkerRuntimeCapabilities(), []);
+  const supportsWorkerSafeMode = React.useMemo(() => isSupportWorkerSafetyModeEnabled(), []);
   const [lookup, setLookup] = React.useState<SupportRenderLookupSnapshot>(EMPTY_LOOKUP);
 
   const workerRef = React.useRef<Worker | null>(null);
@@ -56,6 +189,8 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
   const requestTimeoutRef = React.useRef<number | null>(null);
   const restartTimerRef = React.useRef<number | null>(null);
   const interactionFlushRafRef = React.useRef<number | null>(null);
+  const workerCollectionsRef = React.useRef<WorkerCollectionsRef>(createEmptyWorkerCollectionsRef());
+  const workerNeedsFullSyncRef = React.useRef(true);
 
   const clearRequestTimeout = React.useCallback(() => {
     if (requestTimeoutRef.current !== null) {
@@ -80,6 +215,8 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     cancelSignalRef.current = null;
     cancelSignalViewRef.current = null;
     inFlightRequestIdRef.current = null;
+    workerCollectionsRef.current = createEmptyWorkerCollectionsRef();
+    workerNeedsFullSyncRef.current = true;
   }, [cancelOutstandingWorkerRequest, clearRequestTimeout]);
 
   const postLatestRequestRef = React.useRef<(() => void) | null>(null);
@@ -124,7 +261,7 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
       cancelSignalViewRef.current = null;
     }
 
-    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    worker.onmessage = (event: MessageEvent<SupportRenderLookupWorkerResponseMessage>) => {
       const data = event.data;
       if (!data || typeof data.requestId !== 'number') return;
 
@@ -176,7 +313,8 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
       return;
     }
 
-    if (!workerCapabilities.hasWorker || typeof Worker === 'undefined') {
+    if (supportsWorkerSafeMode || !workerCapabilities.hasWorker || typeof Worker === 'undefined') {
+      terminateWorker();
       setLookup(computeSupportRenderLookup(latestOptionsRef.current));
       return;
     }
@@ -196,9 +334,19 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
       ? (Atomics.add(cancelSignalView, 0, 1) + 1)
       : undefined;
 
-    const request: WorkerRequest = {
+    const delta = buildInputDelta(
+      latestOptionsRef.current,
+      workerCollectionsRef.current,
+      workerNeedsFullSyncRef.current,
+    );
+
+    if (!delta) {
+      return;
+    }
+
+    const request: SupportRenderLookupWorkerRequestMessage = {
       requestId,
-      input: latestOptionsRef.current,
+      delta,
       cancelSignal: cancelSignalRef.current ?? undefined,
       cancelEpoch,
     };
@@ -206,6 +354,8 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     try {
       inFlightRequestIdRef.current = requestId;
       workerRef.current.postMessage(request);
+      applyDeltaToWorkerCollectionsRef(workerCollectionsRef.current, delta);
+      workerNeedsFullSyncRef.current = false;
 
       clearRequestTimeout();
       requestTimeoutRef.current = window.setTimeout(() => {
@@ -233,7 +383,7 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
         postLatestRequestRef.current();
       }
     }
-  }, [clearRequestTimeout, createWorker, scheduleFlushAfterInteraction, terminateWorker, workerCapabilities]);
+  }, [clearRequestTimeout, createWorker, scheduleFlushAfterInteraction, supportsWorkerSafeMode, terminateWorker, workerCapabilities]);
 
   React.useEffect(() => {
     postLatestRequestRef.current = postLatestRequest;
@@ -257,6 +407,11 @@ export function useSupportRenderLookup(options: UseSupportRenderLookupOptions): 
     options.kickstandState.knots,
     options.activePreviewSupport,
   ]);
+
+  React.useEffect(() => {
+    if (!supportsWorkerSafeMode) return;
+    terminateWorker();
+  }, [supportsWorkerSafeMode, terminateWorker]);
 
   React.useEffect(() => {
     return () => {

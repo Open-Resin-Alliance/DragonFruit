@@ -1,21 +1,81 @@
 import { computeSupportRenderLookup, type SupportRenderLookupInput, type SupportRenderLookupSnapshot } from './supportRenderLookupMath';
+import type { RecordDelta, SupportRenderLookupWorkerRequestMessage, SupportRenderLookupWorkerResponseMessage } from './supportRenderLookup.worker.shared';
 
-type RequestMessage = {
-  requestId: number;
-  input: SupportRenderLookupInput;
-  cancelSignal?: SharedArrayBuffer;
-  cancelEpoch?: number;
+type MutableRecord<T> = Record<string, T>;
+
+const EMPTY_LOOKUP: SupportRenderLookupSnapshot = {
+  supportIdBySegmentId: {},
+  supportIdByJointId: {},
+  supportIdByKnotId: {},
+  supportIdByContactDiskId: {},
+  entitySegmentModelIdById: {},
+  entityModelIdByKnotId: {},
+  knotIdsByParentShaftId: {},
+  kickstandKnotIdsByParentShaftId: {},
+  previewCandidateKnots: {},
 };
 
-type ResponseMessage = {
-  requestId: number;
-  snapshot: SupportRenderLookupSnapshot;
+const cachedInput: SupportRenderLookupInput = {
+  state: {
+    roots: {},
+    trunks: {},
+    branches: {},
+    leaves: {},
+    twigs: {},
+    sticks: {},
+    braces: {},
+    knots: {},
+  },
+  kickstandState: {
+    kickstands: {},
+    knots: {},
+  },
+  activePreviewSupport: null,
 };
+
+function applyRecordDelta<T>(target: MutableRecord<T>, delta?: RecordDelta<T>) {
+  if (!delta) return;
+
+  for (const deleteId of delta.deleteIds) {
+    delete target[deleteId];
+  }
+
+  for (const [id, value] of Object.entries(delta.upserts)) {
+    target[id] = value;
+  }
+}
+
+function applyInputDelta(msg: SupportRenderLookupWorkerRequestMessage) {
+  const delta = msg.delta;
+  if (!delta) return;
+
+  const stateDelta = delta.state;
+  if (stateDelta) {
+    applyRecordDelta(cachedInput.state.roots, stateDelta.roots);
+    applyRecordDelta(cachedInput.state.trunks, stateDelta.trunks);
+    applyRecordDelta(cachedInput.state.branches, stateDelta.branches);
+    applyRecordDelta(cachedInput.state.leaves, stateDelta.leaves);
+    applyRecordDelta(cachedInput.state.twigs, stateDelta.twigs);
+    applyRecordDelta(cachedInput.state.sticks, stateDelta.sticks);
+    applyRecordDelta(cachedInput.state.braces, stateDelta.braces);
+    applyRecordDelta(cachedInput.state.knots, stateDelta.knots);
+  }
+
+  const kickstandDelta = delta.kickstandState;
+  if (kickstandDelta) {
+    applyRecordDelta(cachedInput.kickstandState.kickstands, kickstandDelta.kickstands);
+    applyRecordDelta(cachedInput.kickstandState.knots, kickstandDelta.knots);
+  }
+
+  if (delta.activePreviewSupportChanged) {
+    cachedInput.activePreviewSupport = delta.activePreviewSupport ?? null;
+  }
+}
 
 // Track request start times for performance diagnostics
 const requestStartTimes = new Map<number, number>();
 
-self.onmessage = (event: MessageEvent<RequestMessage>) => {
+self.onmessage = (event: MessageEvent<SupportRenderLookupWorkerRequestMessage>) => {
   const msg = event.data;
   if (!msg || !msg.requestId) return;
 
@@ -31,9 +91,11 @@ self.onmessage = (event: MessageEvent<RequestMessage>) => {
   requestStartTimes.set(msg.requestId, startTime);
 
   try {
-    const snapshot = computeSupportRenderLookup(msg.input, { shouldAbort });
+    applyInputDelta(msg);
+
+    const snapshot = computeSupportRenderLookup(cachedInput, { shouldAbort });
     if (shouldAbort?.()) return;
-    const out: ResponseMessage = { requestId: msg.requestId, snapshot };
+    const out: SupportRenderLookupWorkerResponseMessage = { requestId: msg.requestId, snapshot };
     self.postMessage(out);
 
     const duration = performance.now() - startTime;
@@ -43,19 +105,9 @@ self.onmessage = (event: MessageEvent<RequestMessage>) => {
   } catch (error) {
     console.error('[SupportRenderLookupWorker] Failed to compute lookup (request#' + msg.requestId + '):', error);
     
-    const out: ResponseMessage = {
+    const out: SupportRenderLookupWorkerResponseMessage = {
       requestId: msg.requestId,
-      snapshot: {
-        supportIdBySegmentId: {},
-        supportIdByJointId: {},
-        supportIdByKnotId: {},
-        supportIdByContactDiskId: {},
-        entitySegmentModelIdById: {},
-        entityModelIdByKnotId: {},
-        knotIdsByParentShaftId: {},
-        kickstandKnotIdsByParentShaftId: {},
-        previewCandidateKnots: {},
-      },
+      snapshot: EMPTY_LOOKUP,
     };
     self.postMessage(out);
   }

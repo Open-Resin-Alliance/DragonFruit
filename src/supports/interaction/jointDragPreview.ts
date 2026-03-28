@@ -4,6 +4,15 @@ import { computeJointDragPreviewKnots, type JointDragPreviewCandidateKnots, type
 import type { PartDragPreviewPayload } from './partDragPreview';
 import { subscribeSupportInteractionReset } from './supportInteractionReset';
 import { getSupportWorkerRuntimeCapabilities } from './supportWorkerCapabilities';
+import { isSupportWorkerSafetyModeEnabled } from './supportWorkerSafetyMode';
+import { SupportComputeRuntime } from './supportComputeRuntime';
+import type {
+  JointDragPreviewInputDelta,
+  JointDragPreviewWorkerCollectionsRef,
+  JointDragPreviewWorkerRequestMessage,
+  JointDragPreviewWorkerResponseMessage,
+  RecordDelta,
+} from './jointDragPreview.worker.shared';
 
 const EVENT_NAME = 'dragonfruit-joint-drag-preview';
 const PART_EVENT_NAME = 'dragonfruit-part-drag-update';
@@ -19,20 +28,94 @@ interface UseJointDragPreviewOverridesOptions {
   candidateKnots: JointDragPreviewCandidateKnots;
 }
 
-interface JointDragPreviewWorkerRequest {
-  requestId: number;
-  preview: JointDragPreviewSnapshot | null;
-  root?: Roots | null;
-  parentKnot?: Knot | null;
-  hostKnot?: Knot | null;
-  candidateKnots: JointDragPreviewCandidateKnots;
-  cancelSignal?: SharedArrayBuffer;
-  cancelEpoch?: number;
+type MutableRecord<T> = Record<string, T>;
+
+function createEmptyWorkerCollectionsRef(): JointDragPreviewWorkerCollectionsRef {
+  return {
+    roots: {},
+    knots: {},
+    kickstandKnots: {},
+    candidateKnots: {},
+  };
 }
 
-interface JointDragPreviewWorkerResponse {
-  requestId: number;
-  previewKnots: Record<string, Knot>;
+function diffRecordByRef<T>(prev: Record<string, T>, next: Record<string, T>, forceFullSync: boolean): RecordDelta<T> | undefined {
+  if (!forceFullSync && prev === next) return undefined;
+
+  const upserts: Record<string, T> = {};
+  const deleteIds: string[] = [];
+
+  for (const [id, value] of Object.entries(next)) {
+    if (forceFullSync || prev[id] !== value) {
+      upserts[id] = value;
+    }
+  }
+
+  for (const id of Object.keys(prev)) {
+    if (!(id in next)) {
+      deleteIds.push(id);
+    }
+  }
+
+  if (Object.keys(upserts).length === 0 && deleteIds.length === 0) {
+    return undefined;
+  }
+
+  return { upserts, deleteIds };
+}
+
+function applyRecordDeltaInPlace<T>(target: MutableRecord<T>, delta?: RecordDelta<T>) {
+  if (!delta) return;
+
+  for (const id of delta.deleteIds) {
+    delete target[id];
+  }
+
+  for (const [id, value] of Object.entries(delta.upserts)) {
+    target[id] = value;
+  }
+}
+
+function buildCollectionsDelta(
+  workerCollections: JointDragPreviewWorkerCollectionsRef,
+  source: {
+    roots: Record<string, Roots>;
+    knots: Record<string, Knot>;
+    kickstandKnots: Record<string, Knot>;
+    candidateKnots: JointDragPreviewCandidateKnots;
+  },
+  forceFullSync: boolean,
+): JointDragPreviewInputDelta | undefined {
+  const roots = diffRecordByRef(workerCollections.roots, source.roots, forceFullSync);
+  const knots = diffRecordByRef(workerCollections.knots, source.knots, forceFullSync);
+  const kickstandKnots = diffRecordByRef(workerCollections.kickstandKnots, source.kickstandKnots, forceFullSync);
+  const candidateKnots = diffRecordByRef(workerCollections.candidateKnots, source.candidateKnots, forceFullSync);
+
+  if (!roots && !knots && !kickstandKnots && !candidateKnots) {
+    return undefined;
+  }
+
+  return {
+    roots,
+    knots,
+    kickstandKnots,
+    candidateKnots,
+  };
+}
+
+function applyCollectionsDelta(workerCollections: JointDragPreviewWorkerCollectionsRef, delta?: JointDragPreviewInputDelta) {
+  if (!delta) return;
+
+  applyRecordDeltaInPlace(workerCollections.roots, delta.roots);
+  applyRecordDeltaInPlace(workerCollections.knots, delta.knots);
+  applyRecordDeltaInPlace(workerCollections.kickstandKnots, delta.kickstandKnots);
+  applyRecordDeltaInPlace(workerCollections.candidateKnots, delta.candidateKnots);
+}
+
+interface MainThreadPreviewComputePayload {
+  preview: JointDragPreviewSnapshot;
+  context: JointDragPreviewContext;
+  candidateKnots: JointDragPreviewCandidateKnots;
 }
 
 function quantizePreviewValue(value: number | undefined | null) {
@@ -209,6 +292,7 @@ export function useActiveJointDragPreview() {
 
 export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, candidateKnots }: UseJointDragPreviewOverridesOptions) {
   const workerCapabilities = React.useMemo(() => getSupportWorkerRuntimeCapabilities(), []);
+  const supportsWorkerSafeMode = React.useMemo(() => isSupportWorkerSafetyModeEnabled(), []);
   const preview = useActiveJointDragPreview();
   const [previewKnots, setPreviewKnots] = React.useState<Record<string, Knot>>(EMPTY_PREVIEW_KNOTS);
   const workerRef = React.useRef<Worker | null>(null);
@@ -218,6 +302,28 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
   const cancelSignalViewRef = React.useRef<Int32Array | null>(null);
   const nextRequestIdRef = React.useRef(1);
   const latestRequestedRequestIdRef = React.useRef(0);
+  const workerCollectionsRef = React.useRef<JointDragPreviewWorkerCollectionsRef>(createEmptyWorkerCollectionsRef());
+  const workerNeedsFullSyncRef = React.useRef(true);
+  const latestMainThreadComputeGenerationRef = React.useRef(0);
+  const previewRuntimeRef = React.useRef<SupportComputeRuntime | null>(null);
+
+  if (!previewRuntimeRef.current) {
+    previewRuntimeRef.current = new SupportComputeRuntime({
+      runners: {
+        'joint-drag-preview': (payload) => {
+          const p = payload as {
+            preview: JointDragPreviewSnapshot;
+            context: JointDragPreviewContext;
+            candidateKnots: JointDragPreviewCandidateKnots;
+          };
+          return computeJointDragPreviewKnots(p.preview, p.context, p.candidateKnots);
+        },
+      },
+      onError: (_kind, error) => {
+        console.error('[JointDragPreview] Runtime compute failed:', error);
+      },
+    });
+  }
 
   const cancelOutstandingWorkerRequest = React.useCallback(() => {
     const cancelView = cancelSignalViewRef.current;
@@ -240,6 +346,45 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
     return computeJointDragPreviewKnots(activePreview, resolvePreviewContext(activePreview), candidateKnots);
   }, [resolvePreviewContext, candidateKnots]);
 
+  const scheduleMainThreadPreviewCompute = React.useCallback((activePreview: JointDragPreviewSnapshot) => {
+    const runtime = previewRuntimeRef.current;
+    if (!runtime) {
+      setPreviewKnots(computeSync(activePreview));
+      return;
+    }
+
+    const context = resolvePreviewContext(activePreview);
+    const generation = latestMainThreadComputeGenerationRef.current + 1;
+    latestMainThreadComputeGenerationRef.current = generation;
+
+    runtime.cancelGeneration(generation - 1);
+
+    const payload: MainThreadPreviewComputePayload = {
+      preview: activePreview,
+      context,
+      candidateKnots,
+    };
+
+    void runtime
+      .enqueue<MainThreadPreviewComputePayload, Record<string, Knot>>(
+        'joint-drag-preview',
+        payload,
+        {
+          priority: 'high',
+          generation,
+          dedupeKey: 'joint-drag-preview:main-thread',
+        },
+      )
+      .then((result) => {
+        if (generation !== latestMainThreadComputeGenerationRef.current) return;
+        setPreviewKnots(result ?? EMPTY_PREVIEW_KNOTS);
+      })
+      .catch(() => {
+        if (generation !== latestMainThreadComputeGenerationRef.current) return;
+        setPreviewKnots(EMPTY_PREVIEW_KNOTS);
+      });
+  }, [candidateKnots, computeSync, resolvePreviewContext]);
+
   const candidateKnotCount = React.useMemo(() => countCandidateKnots(candidateKnots), [candidateKnots]);
   const useInlinePreviewCompute = preview?.kind === 'trunk' || candidateKnotCount <= INLINE_PREVIEW_CANDIDATE_THRESHOLD;
   const inlinePreviewKnots = React.useMemo(() => {
@@ -251,6 +396,7 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
     if (!preview) {
       cancelOutstandingWorkerRequest();
       canAcceptWorkerResultsRef.current = false;
+      latestMainThreadComputeGenerationRef.current += 1;
       setPreviewKnots(EMPTY_PREVIEW_KNOTS);
       latestRequestedRequestIdRef.current = 0;
       return;
@@ -259,12 +405,23 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
     if (useInlinePreviewCompute) {
       cancelOutstandingWorkerRequest();
       canAcceptWorkerResultsRef.current = false;
+      latestMainThreadComputeGenerationRef.current += 1;
       // Avoid worker roundtrip latency for small/typical preview sets.
       return;
     }
 
-    if (!workerCapabilities.hasWorker || typeof window === 'undefined' || typeof Worker === 'undefined' || workerFailedRef.current) {
-      setPreviewKnots(computeSync(preview));
+    if (supportsWorkerSafeMode || !workerCapabilities.hasWorker || typeof window === 'undefined' || typeof Worker === 'undefined' || workerFailedRef.current) {
+      canAcceptWorkerResultsRef.current = false;
+      cancelOutstandingWorkerRequest();
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+      cancelSignalRef.current = null;
+      cancelSignalViewRef.current = null;
+      workerCollectionsRef.current = createEmptyWorkerCollectionsRef();
+      workerNeedsFullSyncRef.current = true;
+      scheduleMainThreadPreviewCompute(preview);
       return;
     }
 
@@ -281,7 +438,7 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
           cancelSignalViewRef.current = null;
         }
 
-        worker.onmessage = (event: MessageEvent<JointDragPreviewWorkerResponse>) => {
+        worker.onmessage = (event: MessageEvent<JointDragPreviewWorkerResponseMessage>) => {
           const data = event.data;
           if (!data || typeof data.requestId !== 'number') return;
           if (!canAcceptWorkerResultsRef.current) return;
@@ -295,8 +452,10 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
           workerRef.current = null;
           cancelSignalRef.current = null;
           cancelSignalViewRef.current = null;
+          workerCollectionsRef.current = createEmptyWorkerCollectionsRef();
+          workerNeedsFullSyncRef.current = true;
           if (preview) {
-            setPreviewKnots(computeSync(preview));
+            scheduleMainThreadPreviewCompute(preview);
           }
         };
         workerRef.current = worker;
@@ -305,7 +464,9 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
         workerFailedRef.current = true;
         cancelSignalRef.current = null;
         cancelSignalViewRef.current = null;
-        setPreviewKnots(computeSync(preview));
+        workerCollectionsRef.current = createEmptyWorkerCollectionsRef();
+        workerNeedsFullSyncRef.current = true;
+        scheduleMainThreadPreviewCompute(preview);
         return;
       }
     }
@@ -320,19 +481,32 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
       : undefined;
 
     const context = resolvePreviewContext(preview);
-    const request: JointDragPreviewWorkerRequest = {
+    const collectionsDelta = buildCollectionsDelta(
+      workerCollectionsRef.current,
+      {
+        roots,
+        knots,
+        kickstandKnots: kickstandKnots ?? knots,
+        candidateKnots,
+      },
+      workerNeedsFullSyncRef.current,
+    );
+
+    const request: JointDragPreviewWorkerRequestMessage = {
       requestId,
       preview,
-      root: context.root ?? null,
-      parentKnot: context.parentKnot ?? null,
-      hostKnot: context.hostKnot ?? null,
-      candidateKnots,
+      delta: collectionsDelta,
+      rootId: context.root?.id ?? null,
+      parentKnotId: context.parentKnot?.id ?? null,
+      hostKnotId: context.hostKnot?.id ?? null,
       cancelSignal: cancelSignalRef.current ?? undefined,
       cancelEpoch,
     };
 
     try {
       workerRef.current.postMessage(request);
+      applyCollectionsDelta(workerCollectionsRef.current, collectionsDelta);
+      workerNeedsFullSyncRef.current = false;
     } catch (error) {
       console.error('[JointDragPreview] Worker postMessage failed; using main-thread compute:', error);
       workerFailedRef.current = true;
@@ -340,13 +514,18 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
       workerRef.current = null;
       cancelSignalRef.current = null;
       cancelSignalViewRef.current = null;
-      setPreviewKnots(computeSync(preview));
+      workerCollectionsRef.current = createEmptyWorkerCollectionsRef();
+      workerNeedsFullSyncRef.current = true;
+      scheduleMainThreadPreviewCompute(preview);
     }
-  }, [preview, candidateKnots, resolvePreviewContext, computeSync, useInlinePreviewCompute, cancelOutstandingWorkerRequest, workerCapabilities]);
+  }, [preview, roots, knots, kickstandKnots, candidateKnots, resolvePreviewContext, scheduleMainThreadPreviewCompute, useInlinePreviewCompute, cancelOutstandingWorkerRequest, supportsWorkerSafeMode, workerCapabilities]);
 
   React.useEffect(() => {
     return () => {
       canAcceptWorkerResultsRef.current = false;
+      latestMainThreadComputeGenerationRef.current += 1;
+      previewRuntimeRef.current?.dispose();
+      previewRuntimeRef.current = null;
       cancelOutstandingWorkerRequest();
       if (workerRef.current) {
         workerRef.current.terminate();
@@ -354,6 +533,8 @@ export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, can
       }
       cancelSignalRef.current = null;
       cancelSignalViewRef.current = null;
+      workerCollectionsRef.current = createEmptyWorkerCollectionsRef();
+      workerNeedsFullSyncRef.current = true;
     };
   }, [cancelOutstandingWorkerRequest]);
 

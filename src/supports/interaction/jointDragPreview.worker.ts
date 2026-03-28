@@ -1,23 +1,54 @@
 import type { Knot, Roots } from '../types';
 import { computeJointDragPreviewKnots, type JointDragPreviewSnapshot } from './jointDragPreviewMath';
+import type {
+  JointDragPreviewWorkerCollectionsRef,
+  JointDragPreviewWorkerRequestMessage,
+  JointDragPreviewWorkerResponseMessage,
+  RecordDelta,
+} from './jointDragPreview.worker.shared';
 
-interface JointDragPreviewWorkerRequest {
-  requestId: number;
-  preview: JointDragPreviewSnapshot | null;
-  root?: Roots | null;
-  parentKnot?: Knot | null;
-  hostKnot?: Knot | null;
-  candidateKnots: Record<string, Knot>;
-  cancelSignal?: SharedArrayBuffer;
-  cancelEpoch?: number;
+type MutableRecord<T> = Record<string, T>;
+
+const cachedCollections: JointDragPreviewWorkerCollectionsRef = {
+  roots: {},
+  knots: {},
+  kickstandKnots: {},
+  candidateKnots: {},
+};
+
+function applyRecordDelta<T>(target: MutableRecord<T>, delta?: RecordDelta<T>) {
+  if (!delta) return;
+
+  for (const id of delta.deleteIds) {
+    delete target[id];
+  }
+
+  for (const [id, value] of Object.entries(delta.upserts)) {
+    target[id] = value;
+  }
 }
 
-interface JointDragPreviewWorkerResponse {
-  requestId: number;
-  previewKnots: Record<string, Knot>;
+function applyInputDelta(msg: JointDragPreviewWorkerRequestMessage) {
+  const delta = msg.delta;
+  if (!delta) return;
+
+  applyRecordDelta(cachedCollections.roots, delta.roots);
+  applyRecordDelta(cachedCollections.knots, delta.knots);
+  applyRecordDelta(cachedCollections.kickstandKnots, delta.kickstandKnots);
+  applyRecordDelta(cachedCollections.candidateKnots, delta.candidateKnots);
 }
 
-self.onmessage = (event: MessageEvent<JointDragPreviewWorkerRequest>) => {
+function resolveContext(msg: JointDragPreviewWorkerRequestMessage) {
+  return {
+    root: msg.rootId ? cachedCollections.roots[msg.rootId] ?? null : null,
+    parentKnot: msg.parentKnotId ? cachedCollections.knots[msg.parentKnotId] ?? null : null,
+    hostKnot: msg.hostKnotId
+      ? cachedCollections.kickstandKnots[msg.hostKnotId] ?? cachedCollections.knots[msg.hostKnotId] ?? null
+      : null,
+  };
+}
+
+self.onmessage = (event: MessageEvent<JointDragPreviewWorkerRequestMessage>) => {
   const msg = event.data;
   if (!msg || !msg.requestId) return;
 
@@ -30,16 +61,18 @@ self.onmessage = (event: MessageEvent<JointDragPreviewWorkerRequest>) => {
   if (shouldAbort?.()) return;
 
   try {
+    applyInputDelta(msg);
+
     const previewKnots = computeJointDragPreviewKnots(
       msg.preview,
-      { root: msg.root ?? null, parentKnot: msg.parentKnot ?? null, hostKnot: msg.hostKnot ?? null },
-      msg.candidateKnots,
+      resolveContext(msg),
+      cachedCollections.candidateKnots,
       { shouldAbort },
     );
 
     if (shouldAbort?.()) return;
 
-    const out: JointDragPreviewWorkerResponse = {
+    const out: JointDragPreviewWorkerResponseMessage = {
       requestId: msg.requestId,
       previewKnots,
     };
@@ -47,7 +80,7 @@ self.onmessage = (event: MessageEvent<JointDragPreviewWorkerRequest>) => {
     self.postMessage(out);
   } catch (error) {
     console.error('[JointDragPreviewWorker] Failed to compute preview knots', error);
-    const out: JointDragPreviewWorkerResponse = {
+    const out: JointDragPreviewWorkerResponseMessage = {
       requestId: msg.requestId,
       previewKnots: {},
     };
