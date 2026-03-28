@@ -22,9 +22,9 @@ import { subscribeSupportInteractionReset } from '../../interaction/supportInter
  * It monitors the picking state and handles drag operations for any 'joint' object.
  */
 export function useJointInteraction(enabled: boolean = true) {
-    const MIN_DRAG_DELTA_SQ = 1e-4; // ~0.01mm positional epsilon to drop high-frequency jitter churn
+    const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm positional epsilon to drop high-frequency jitter churn
     const MIN_PUBLISHED_CLAMPED_DELTA_SQ = 1e-8;
-    const DRAG_SNAP_MM = 0.01;
+    const DRAG_SNAP_MM = 0.001;
     const WARNING_DISTANCE_THRESHOLD = 0.05; // mm
     const WARNING_EVAL_INTERVAL_MS = 48; // ~20Hz warning updates during drag
     const JOINT_PARENT_CACHE_MAX_ENTRIES = 12000;

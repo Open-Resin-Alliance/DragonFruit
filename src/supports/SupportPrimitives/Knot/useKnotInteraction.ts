@@ -37,10 +37,10 @@ interface ActiveHost {
 }
 
 export function useKnotInteraction(enabled: boolean = true) {
-    const MIN_DRAG_DELTA_SQ = 1e-4; // ~0.01mm epsilon to drop high-frequency jitter churn
+    const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm epsilon to drop high-frequency jitter churn
     const BEZIER_PROJECTION_STEPS = 36;
     const FAST_KNOT_DRAG_ELASTIC_PREVIEW = true;
-    const DRAG_SNAP_MM = 0.01;
+    const DRAG_SNAP_MM = 0.001;
 
     const { isDragging, hit } = usePicking();
     const { camera, raycaster, pointer } = useThree();
