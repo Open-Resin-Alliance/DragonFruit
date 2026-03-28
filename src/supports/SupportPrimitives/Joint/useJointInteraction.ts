@@ -55,6 +55,7 @@ export function useJointInteraction(enabled: boolean = true) {
     const activeConstraintStartRef = useRef<Vec3 | undefined>(undefined);
     const dragGestureSelectionAtStartRef = useRef<string | null>(null);
     const wasDraggingRef = useRef(false);
+    const lastEmittedPreviewJointPosRef = useRef<Vec3 | null>(null);
 
     const savedControlsEnabledRef = useRef<boolean | null>(null);
 
@@ -175,6 +176,7 @@ export function useJointInteraction(enabled: boolean = true) {
         activeConstraintStartRef.current = undefined;
         activeJointBindingRef.current = null;
         lastDragPos.current = null;
+        lastEmittedPreviewJointPosRef.current = null;
         applyInteractionWarning(null);
 
         if (controls && savedControlsEnabledRef.current !== null) {
@@ -575,6 +577,7 @@ export function useJointInteraction(enabled: boolean = true) {
             lastAppliedDragPosRef.current = null;
             lastResolvedJointPosRef.current = null;
             lastPublishedClampedJointPosRef.current = null;
+            lastEmittedPreviewJointPosRef.current = null;
             lastWarningEvalAtRef.current = 0;
             activeConstraintRootRef.current = undefined;
             activeConstraintStartRef.current = undefined;
@@ -596,7 +599,16 @@ export function useJointInteraction(enabled: boolean = true) {
 
     const emitPreviewJointPos = (clampedPos: Vec3 | null, rawPos: Vec3) => {
         const stablePos = clampedPos ?? lastResolvedJointPosRef.current ?? rawPos;
+        const prev = lastEmittedPreviewJointPosRef.current;
+        if (prev
+            && Math.abs(prev.x - stablePos.x) < MIN_DRAG_DELTA_SQ
+            && Math.abs(prev.y - stablePos.y) < MIN_DRAG_DELTA_SQ
+            && Math.abs(prev.z - stablePos.z) < MIN_DRAG_DELTA_SQ) {
+            return;
+        }
+
         lastResolvedJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
+        lastEmittedPreviewJointPosRef.current = { x: stablePos.x, y: stablePos.y, z: stablePos.z };
         emitJointDragPositionPreview(activeJointId.current!, stablePos);
     };
 

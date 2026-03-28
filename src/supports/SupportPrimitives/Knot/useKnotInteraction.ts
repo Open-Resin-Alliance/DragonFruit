@@ -59,6 +59,8 @@ export function useKnotInteraction(enabled: boolean = true) {
     const lastAppliedKnotPosRef = useRef<THREE.Vector3 | null>(null);
     const previewBranchSegmentsByIdRef = useRef<Record<string, Branch['segments']>>({});
     const previewKnotRef = useRef<Knot | null>(null);
+    const lastEmittedKnotPreviewPosRef = useRef<{ x: number; y: number; z: number } | null>(null);
+    const lastEmittedBranchPreviewRef = useRef<Record<string, Branch['segments']> | null>(null);
 
     const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -706,6 +708,8 @@ export function useKnotInteraction(enabled: boolean = true) {
             lastAppliedKnotPosRef.current = null;
             previewBranchSegmentsByIdRef.current = {};
             previewKnotRef.current = null;
+            lastEmittedKnotPreviewPosRef.current = null;
+            lastEmittedBranchPreviewRef.current = null;
             clearKnotDragPreview();
 
             // Capture/restore state
@@ -869,6 +873,8 @@ export function useKnotInteraction(enabled: boolean = true) {
             lastAppliedKnotPosRef.current = null;
             previewBranchSegmentsByIdRef.current = {};
             previewKnotRef.current = null;
+            lastEmittedKnotPreviewPosRef.current = null;
+            lastEmittedBranchPreviewRef.current = null;
             clearKnotDragPreview();
         }
     }, [isDragging, hit, enabled, setKnotDragInteractionLock]);
@@ -911,11 +917,21 @@ export function useKnotInteraction(enabled: boolean = true) {
             };
 
             previewKnotRef.current = finalKnot;
-            emitKnotDragPreview({
-                knotId: finalKnot.id,
-                knot: finalKnot,
-                branchSegmentsById: previewBranchSegmentsByIdRef.current,
-            });
+            const prevKnot = lastEmittedKnotPreviewPosRef.current;
+            const nextKnotPos = finalKnot.pos;
+            const sameKnotPos = !!prevKnot
+                && Math.abs(prevKnot.x - nextKnotPos.x) < MIN_DRAG_DELTA_SQ
+                && Math.abs(prevKnot.y - nextKnotPos.y) < MIN_DRAG_DELTA_SQ
+                && Math.abs(prevKnot.z - nextKnotPos.z) < MIN_DRAG_DELTA_SQ;
+            if (!sameKnotPos || lastEmittedBranchPreviewRef.current !== previewBranchSegmentsByIdRef.current) {
+                lastEmittedKnotPreviewPosRef.current = { ...nextKnotPos };
+                lastEmittedBranchPreviewRef.current = previewBranchSegmentsByIdRef.current;
+                emitKnotDragPreview({
+                    knotId: finalKnot.id,
+                    knot: finalKnot,
+                    branchSegmentsById: previewBranchSegmentsByIdRef.current,
+                });
+            }
             return;
         }
 
@@ -1374,10 +1390,20 @@ export function useKnotInteraction(enabled: boolean = true) {
         }
         previewKnotRef.current = finalKnot;
 
-        emitKnotDragPreview({
-            knotId: finalKnot.id,
-            knot: finalKnot,
-            branchSegmentsById: previewBranchSegmentsByIdRef.current,
-        });
+        const prevKnot = lastEmittedKnotPreviewPosRef.current;
+        const nextKnotPos = finalKnot.pos;
+        const sameKnotPos = !!prevKnot
+            && Math.abs(prevKnot.x - nextKnotPos.x) < MIN_DRAG_DELTA_SQ
+            && Math.abs(prevKnot.y - nextKnotPos.y) < MIN_DRAG_DELTA_SQ
+            && Math.abs(prevKnot.z - nextKnotPos.z) < MIN_DRAG_DELTA_SQ;
+        if (!sameKnotPos || lastEmittedBranchPreviewRef.current !== previewBranchSegmentsByIdRef.current) {
+            lastEmittedKnotPreviewPosRef.current = { ...nextKnotPos };
+            lastEmittedBranchPreviewRef.current = previewBranchSegmentsByIdRef.current;
+            emitKnotDragPreview({
+                knotId: finalKnot.id,
+                knot: finalKnot,
+                branchSegmentsById: previewBranchSegmentsByIdRef.current,
+            });
+        }
     });
 }
