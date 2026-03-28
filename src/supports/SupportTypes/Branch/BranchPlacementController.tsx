@@ -41,6 +41,7 @@ import { usePlacementSnappingSession } from '../../interaction/shared/placement/
 import { buildPrimarySnapTargetIndex, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
 import { projectPointToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
+import { previewNormalKey, previewVecKey, quantizePreviewValue } from '../shared/previewSignature';
 
 interface ShaftHoverDetail {
     segmentId?: string | null;
@@ -61,6 +62,7 @@ export function BranchPlacementController() {
     const hoveredShaftRef = useRef<ShaftHoverDetail | null>(null);
     const pointerFreshSinceIdleActivationRef = useRef(false);
     const supportEditSuppressedRef = useRef(false);
+    const lastPreviewSignatureRef = useRef<string | null>(null);
 
     const modelMeshesRef = useRef<THREE.Object3D[]>([]);
 
@@ -145,6 +147,18 @@ export function BranchPlacementController() {
     const getPotentialTargets = useCallback(() => allTargets, [allTargets]);
 
     const { updateAndGetResolvedSnap, resetSnapping } = usePlacementSnappingSession(getTarget, getPotentialTargets);
+
+    const publishPreview = useCallback((signature: string, previewData: SupportData | null) => {
+        if (lastPreviewSignatureRef.current === signature) return;
+        lastPreviewSignatureRef.current = signature;
+        branchPlacementStore.setPreviewData(previewData);
+    }, []);
+
+    useEffect(() => {
+        if (!isActive || stage === 'idle') {
+            lastPreviewSignatureRef.current = null;
+        }
+    }, [isActive, stage]);
 
     // Fallback: pointer events inside the canvas may not reach window listeners.
     // If Alt is released but keyup is missed, pointer events still report modifier state.
@@ -248,7 +262,7 @@ export function BranchPlacementController() {
     useFrame(() => {
         if (isContactDiskHudInteractionActive() || shouldSuppressContactDiskHudPlacementCommit()) {
             branchPlacementStore.setHoverPosition(null);
-            branchPlacementStore.setPreviewData(null);
+            publishPreview('blocked:contact-disk', null);
             branchPlacementStore.setSnapTarget(null);
             meshHoverRef.current = null;
             meshKindRef.current = null;
@@ -259,7 +273,7 @@ export function BranchPlacementController() {
             if (!supportEditSuppressedRef.current) {
                 supportEditSuppressedRef.current = true;
                 branchPlacementStore.setHoverPosition(null);
-                branchPlacementStore.setPreviewData(null);
+                publishPreview('blocked:support-edit', null);
                 branchPlacementStore.setSnapTarget(null);
                 meshHoverRef.current = null;
                 meshKindRef.current = null;
@@ -273,11 +287,13 @@ export function BranchPlacementController() {
         if (altActive && stage === 'idle') {
             if (!pointerFreshSinceIdleActivationRef.current) {
                 branchPlacementStore.setHoverPosition(null);
+                publishPreview('idle:waiting-pointer', null);
                 return;
             }
 
             if (isHoveringSupportTarget) {
                 branchPlacementStore.setHoverPosition(null);
+                publishPreview('idle:hovering-support-target', null);
                 return;
             }
 
@@ -294,10 +310,12 @@ export function BranchPlacementController() {
             } else {
                 branchPlacementStore.setHoverPosition(null);
             }
+            publishPreview('idle:hover-dot', null);
             return;
         }
 
         if (!isActive || stage !== 'awaitingBase' || !tipPosition || !tipNormal) {
+            publishPreview(`inactive:${stage}:${altActive ? 'alt' : 'none'}`, null);
             return;
         }
 
@@ -355,6 +373,38 @@ export function BranchPlacementController() {
                 hostDiameterMm,
                 hostSegmentId: segmentId,
             });
+
+            const previewSignature = [
+                'branch:snap',
+                modelId,
+                segmentId,
+                previewVecKey(knotPos),
+                quantizePreviewValue(t),
+                quantizePreviewValue(hostDiameterMm ?? fallbackHostDiameterMm),
+                previewVecKey(tipPosition),
+                previewNormalKey(tipNormal),
+            ].join('|');
+
+            const parentKnot: Knot = {
+                id: 'preview-knot',
+                parentShaftId: segmentId,
+                t,
+                pos: knotPos,
+                diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
+            };
+
+            const buildResult = buildBranchData({
+                tipPos: tipPosition,
+                tipNormal: tipNormal,
+                modelId: modelId,
+                parentKnot,
+            });
+
+            publishPreview(previewSignature, {
+                ...buildResult.supportData,
+                startPos: parentKnot.pos,
+            });
+            return;
         } else {
             let hoveredSnapResolved = false;
             const hoveredShaft = hoveredShaftRef.current;
@@ -403,6 +453,39 @@ export function BranchPlacementController() {
                         hostDiameterMm,
                         hostSegmentId: segmentId,
                     });
+
+                    const previewSignature = [
+                        'branch:hovered-snap',
+                        modelId,
+                        segmentId,
+                        previewVecKey(knotPos),
+                        quantizePreviewValue(t),
+                        quantizePreviewValue(hostDiameterMm ?? fallbackHostDiameterMm),
+                        previewVecKey(tipPosition),
+                        previewNormalKey(tipNormal),
+                    ].join('|');
+
+                    const parentKnot: Knot = {
+                        id: 'preview-knot',
+                        parentShaftId: segmentId,
+                        t,
+                        pos: knotPos,
+                        diameter: (hostDiameterMm ?? fallbackHostDiameterMm) + 0.1,
+                    };
+
+                    const buildResult = buildBranchData({
+                        tipPos: tipPosition,
+                        tipNormal: tipNormal,
+                        modelId: modelId,
+                        parentKnot,
+                    });
+
+                    publishPreview(previewSignature, {
+                        ...buildResult.supportData,
+                        startPos: parentKnot.pos,
+                    });
+
+                    return;
                 }
             }
 
@@ -439,23 +522,43 @@ export function BranchPlacementController() {
                         if (kind === 'twig') {
                             const { twig } = buildTwig({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
                             const startPos = twig.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                            const previewSignature = [
+                                'branch:twig',
+                                modelId,
+                                bModelId,
+                                previewVecKey(tipPosition),
+                                previewNormalKey(tipNormal),
+                                previewVecKey(bPos),
+                                previewNormalKey(bNormal),
+                                previewVecKey(startPos),
+                            ].join('|');
                             const supportData: SupportData = {
                                 id: 'preview-meshlink',
                                 startPos,
                                 segments: twig.segments,
                                 contactDisks: [twig.contactDiskA, twig.contactDiskB],
                             };
-                            branchPlacementStore.setPreviewData(supportData);
+                            publishPreview(previewSignature, supportData);
                         } else {
                             const { stick } = buildStick({ modelId, aPos: tipPosition, aNormal: tipNormal, bPos, bNormal });
                             const startPos = stick.segments[0]?.bottomJoint?.pos ?? tipPosition;
+                            const previewSignature = [
+                                'branch:stick',
+                                modelId,
+                                bModelId,
+                                previewVecKey(tipPosition),
+                                previewNormalKey(tipNormal),
+                                previewVecKey(bPos),
+                                previewNormalKey(bNormal),
+                                previewVecKey(startPos),
+                            ].join('|');
                             const supportData: SupportData = {
                                 id: 'preview-meshlink',
                                 startPos,
                                 segments: stick.segments,
                                 contactCones: [stick.contactConeA, stick.contactConeB],
                             };
-                            branchPlacementStore.setPreviewData(supportData);
+                            publishPreview(previewSignature, supportData);
                         }
                         return;
                     }
@@ -463,13 +566,13 @@ export function BranchPlacementController() {
 
                 meshHoverRef.current = null;
                 meshKindRef.current = null;
-                branchPlacementStore.setPreviewData(null);
+                publishPreview('branch:clear-meshlink', null);
                 return;
             }
         }
 
         if (!knotPos) {
-            branchPlacementStore.setPreviewData(null);
+            publishPreview('branch:clear-no-knot', null);
             return;
         }
 
@@ -490,7 +593,17 @@ export function BranchPlacementController() {
             parentKnot,
         });
 
-        branchPlacementStore.setPreviewData({
+        const previewSignature = [
+            'branch:free',
+            modelId,
+            segmentId,
+            previewVecKey(knotPos),
+            quantizePreviewValue(resolvedHostDiameter),
+            previewVecKey(tipPosition),
+            previewNormalKey(tipNormal),
+        ].join('|');
+
+        publishPreview(previewSignature, {
             ...buildResult.supportData,
             startPos: parentKnot.pos,
         });
