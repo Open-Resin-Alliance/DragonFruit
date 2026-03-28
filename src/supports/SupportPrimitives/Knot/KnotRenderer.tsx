@@ -56,7 +56,7 @@ export function KnotRenderer({
     const isSelected = state.selectedId === knot.id;
 
     const pickIdRef = useRef<number | null>(null);
-    const { register, unregister, hit } = usePicking();
+    const { register, unregister, hit, isDragging } = usePicking();
 
     // Register with picking system - only when parent is selected
     // When parent is NOT selected, we don't register so picking falls through to the support
@@ -86,10 +86,11 @@ export function KnotRenderer({
 
     const isTopPickedKnot = frontBlockingModelId === null
         && isInteractable
+        && !isDragging
         && hit.category === 'knot'
         && hit.objectId === knot.id
         && isParentSelected;
-    const isHovered = (isTopPickedKnot || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && (isTopPickedKnot || pointerHoverActive) && !isSelected;
 
     const displayColor = isSelected ? '#1a75ff' : (isHovered ? '#efd8c2' : (isParentSelected ? '#7fc56a' : propColor));
     const displayEmissive = isHovered ? '#efd8c2' : propEmissive;
@@ -178,14 +179,14 @@ export function KnotRenderer({
     }, [isHovered, isInteractable]);
 
     React.useEffect(() => {
-        if (isInteractable) return;
+        if (!isDragging && isInteractable) return;
 
         setPointerHoverActive((prev) => (prev ? false : prev));
         if (state.hoveredCategory === 'knot' && state.hoveredId === knot.id) {
             setHoveredCategory('none');
             setHoveredId(null);
         }
-    }, [isInteractable, knot.id, state.hoveredCategory, state.hoveredId]);
+    }, [isDragging, isInteractable, knot.id, state.hoveredCategory, state.hoveredId]);
 
     React.useEffect(() => {
         if (!isParentSelected || !pointerHoverActive) return;
@@ -196,6 +197,11 @@ export function KnotRenderer({
     }, [isParentSelected, knot.id, pointerHoverActive, state.hoveredCategory, state.hoveredId]);
 
     const handlePointerMove = (e: any) => {
+        if (isDragging) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));

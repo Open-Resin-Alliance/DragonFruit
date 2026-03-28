@@ -14,6 +14,8 @@ interface GizmoMoveProps {
   isActive?: boolean;
   isDimmed?: boolean;
   isHidden?: boolean;
+  suppressHover?: boolean;
+  opacityScale?: number;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   handleScale?: number;
@@ -36,6 +38,8 @@ export function GizmoMove({
   isActive,
   isDimmed,
   isHidden,
+  suppressHover = false,
+  opacityScale = 1,
   enableLighting = true,
   gizmoPosition,
   handleScale = 1.0,
@@ -83,7 +87,7 @@ export function GizmoMove({
     };
   }, [register, unregister, handleType]);
 
-  const isPickingHovered = hit.category === 'gizmo' && 'gizmoHandle' in hit && hit.gizmoHandle === handleType;
+  const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 'gizmoHandle' in hit && hit.gizmoHandle === handleType;
   const axisColors = axis === 'x' ? GIZMO_COLORS.xAxis : axis === 'y' ? GIZMO_COLORS.yAxis : GIZMO_COLORS.zAxis;
 
   const shaftLength = Math.max(0.3, GIZMO_SIZES.arrowShaftLength * moveHandleLengthScale);
@@ -196,10 +200,11 @@ export function GizmoMove({
     };
   }, [axisDirection, getWorldPointFromMouse, isDragging, onDrag, onDragEnd]);
 
-  const effectiveHovered = isPickingHovered || isHovered;
+  const effectiveHovered = !suppressHover && (isPickingHovered || isHovered);
   const isHighlighted = !!isActive;
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const baseOpacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.9;
+  const opacity = baseOpacity * opacityScale;
   const hoverScale = isActive ? 1.18 : effectiveHovered ? 1.1 : 1.0;
   const dimmedColor = '#cccccc';
   const lightIntensity = isActive

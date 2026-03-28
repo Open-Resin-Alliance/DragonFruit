@@ -438,7 +438,7 @@ export function useJointInteraction(enabled: boolean = true) {
         }
     }, [isDragging, hit, camera, pointer, raycaster, controls, applyInteractionWarning]);
 
-    const PREVIEW_COMPUTE_INTERVAL_MS = 6; // throttle heavy support recompute to ~165Hz target
+    const PREVIEW_COMPUTE_INTERVAL_MS = 12; // throttle heavy support recompute to ~80Hz target for smoother frame pacing
     const lastPreviewComputeAtRef = useRef(0);
 
     const resolveJointPosById = (segments: Array<{ topJoint?: { id: string; pos: Vec3 }; bottomJoint?: { id: string; pos: Vec3 } }>, jointId: string): Vec3 | null => {
@@ -486,7 +486,16 @@ export function useJointInteraction(enabled: boolean = true) {
                 // can be very expensive if recomputed at full render rate on complex trunks/branches.
                 // Throttle expensive preview recomputes to 60Hz while still updating joint/gizmo position every frame.
                 const frameNow = performance.now();
-                const shouldComputePreview = frameNow - lastPreviewComputeAtRef.current >= PREVIEW_COMPUTE_INTERVAL_MS;
+                let shouldComputePreview = frameNow - lastPreviewComputeAtRef.current >= PREVIEW_COMPUTE_INTERVAL_MS;
+                // During fast pointer sweeps, skip every other heavy recompute to reduce CPU spikes
+                // while still updating visual joint position each frame.
+                if (shouldComputePreview && hasLastAppliedPos && deltaSq > FAST_DRAG_DELTA_SQ) {
+                    fastDragFrameSkipToggleRef.current = !fastDragFrameSkipToggleRef.current;
+                    if (fastDragFrameSkipToggleRef.current) {
+                        shouldComputePreview = false;
+                    }
+                }
+
                 if (shouldComputePreview) {
                     lastPreviewComputeAtRef.current = frameNow;
                 }

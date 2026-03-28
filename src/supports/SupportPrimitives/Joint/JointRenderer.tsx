@@ -55,7 +55,7 @@ export function JointRenderer({
 
     // GPU Picking Setup
     const pickIdRef = useRef<number | null>(null);
-    const { register, unregister, hit, onDragStart, onDragEnd } = usePicking();
+    const { register, unregister, hit, onDragStart, onDragEnd, isDragging } = usePicking();
 
     // Register with picking system - only when parent is selected
     // When parent is NOT selected, we don't register so picking falls through to the support
@@ -87,10 +87,11 @@ export function JointRenderer({
     // Only show hover if parent is selected (editable mode) AND joint is not already selected
     const isTopPickedJoint = frontBlockingModelId === null
         && isInteractable
+        && !isDragging
         && hit.category === 'joint'
         && hit.objectId === joint.id
         && isParentSelected;
-    const isHovered = (isTopPickedJoint || pointerHoverActive) && !isSelected;
+    const isHovered = !isDragging && (isTopPickedJoint || pointerHoverActive) && !isSelected;
     
     // Visual State
     // If hovered, glow white. If selected, be blue. Else default/prop color.
@@ -183,14 +184,14 @@ export function JointRenderer({
     }, [isHovered, isInteractable]);
 
     React.useEffect(() => {
-        if (isInteractable) return;
+        if (!isDragging && isInteractable) return;
 
         setPointerHoverActive((prev) => (prev ? false : prev));
         if (state.hoveredCategory === 'joint' && state.hoveredId === joint.id) {
             setHoveredCategory('none');
             setHoveredId(null);
         }
-    }, [isInteractable, joint.id, state.hoveredCategory, state.hoveredId]);
+    }, [isDragging, isInteractable, joint.id, state.hoveredCategory, state.hoveredId]);
 
     // Sync global hover state so the picking system can resolve the hovered support owner
     React.useEffect(() => {
@@ -202,6 +203,11 @@ export function JointRenderer({
     }, [isParentSelected, joint.id, isHovered, state.hoveredCategory, state.hoveredId]);
     
     const handlePointerMove = (e: any) => {
+        if (isDragging) {
+            setPointerHoverActive((prev) => (prev ? false : prev));
+            return;
+        }
+
         const frontModelId = getFrontBlockingModelId(e, groupRef.current);
         if (frontModelId) {
             setFrontBlockingModelId((prev) => (prev === frontModelId ? prev : frontModelId));

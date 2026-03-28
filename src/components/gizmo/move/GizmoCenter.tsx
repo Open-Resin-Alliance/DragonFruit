@@ -12,6 +12,8 @@ interface GizmoCenterProps {
   isActive?: boolean;
   isDimmed?: boolean;
   isHidden?: boolean;
+  suppressHover?: boolean;
+  opacityScale?: number;
   enableLighting?: boolean;
   gizmoPosition: THREE.Vector3;
   onDragStart: () => boolean | void;
@@ -29,6 +31,8 @@ export function GizmoCenter({
   isActive,
   isDimmed,
   isHidden,
+  suppressHover = false,
+  opacityScale = 1,
   enableLighting = true,
   gizmoPosition,
   onDragStart,
@@ -77,7 +81,7 @@ export function GizmoCenter({
   }, [register, unregister, handleType]);
   
   // Check if this handle is hovered via GPU picking
-  const isPickingHovered = hit.category === 'gizmo' && 
+  const isPickingHovered = !suppressHover && hit.category === 'gizmo' && 
     'gizmoHandle' in hit && 
     hit.gizmoHandle === handleType;
 
@@ -143,7 +147,7 @@ export function GizmoCenter({
   };
 
   useFrame(() => {
-    if (isDragging || isHidden) {
+    if (isDragging || isHidden || suppressHover) {
       if (hoverStateRef.current) {
         hoverStateRef.current = false;
         setIsScreenHovered(false);
@@ -219,7 +223,7 @@ export function GizmoCenter({
   }, [isDragging, onDrag, onDragEnd, getWorldPointFromMouse]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
-  const effectiveHovered = isPickingHovered || isHovered || isScreenHovered;
+  const effectiveHovered = !suppressHover && (isPickingHovered || isHovered || isScreenHovered);
   const isHighlighted = !!(effectiveHovered || isActive);
 
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
@@ -231,7 +235,8 @@ export function GizmoCenter({
         ? GIZMO_COLORS.hover
         : GIZMO_COLORS.center;
 
-  const opacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.55;
+  const baseOpacity = isHidden ? 0 : isDimmed ? 0.15 : isHighlighted ? 1.0 : 0.55;
+  const opacity = baseOpacity * opacityScale;
 
   // Emissive intensity - disabled for center disc (no glow)
   const emissiveIntensity = 0;

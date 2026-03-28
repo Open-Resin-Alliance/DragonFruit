@@ -8,6 +8,7 @@ import { GizmoCenter } from './move/GizmoCenter';
 import { GizmoMove } from './move/GizmoMove';
 import { GizmoRotation } from './rotate/GizmoRotation';
 import { GizmoScale } from './scale/GizmoScale';
+import { usePicking } from '@/components/picking';
 
 /**
  * TransformGizmo - Unified 3D transform widget
@@ -67,6 +68,7 @@ export function TransformGizmo({
   onDragStateChange,
   rootRef,
 }: TransformGizmoProps) {
+  const { isDragging: isGlobalDragging } = usePicking();
   const gizmoRootRef = React.useRef<THREE.Group | null>(null);
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<string | null>(null);
@@ -128,6 +130,7 @@ export function TransformGizmo({
     : [rotation.x, rotation.y, rotation.z];
 
   const handlePointerEnter = (part: string) => {
+    if (isGlobalDragging) return;
     if (hoverClearRafRef.current !== null) {
       window.cancelAnimationFrame(hoverClearRafRef.current);
       hoverClearRafRef.current = null;
@@ -139,6 +142,7 @@ export function TransformGizmo({
   };
 
   const handlePointerLeave = () => {
+    if (isGlobalDragging) return;
     if (activePartRef.current) return;
 
     if (hoverClearRafRef.current !== null) {
@@ -248,15 +252,28 @@ export function TransformGizmo({
   };
 
   const isAxisAllowed = (axis: GizmoAxis) => !axisLock || axisLock === axis;
+  const suppressHover = isGlobalDragging;
+  const dragOpacityScale = isGlobalDragging ? 0.6 : 1;
+
+  React.useEffect(() => {
+    if (!suppressHover) return;
+    if (hoverClearRafRef.current !== null) {
+      window.cancelAnimationFrame(hoverClearRafRef.current);
+      hoverClearRafRef.current = null;
+    }
+    setHoveredPart(null);
+  }, [suppressHover]);
 
   return (
     <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
       {enableMove && showCenter && (
         <GizmoCenter
-          isHovered={hoveredPart === 'center'}
+          isHovered={!suppressHover && hoveredPart === 'center'}
           isActive={activePart === 'center'}
           isDimmed={isDimmed('center')}
           isHidden={isHidden('center')}
+          suppressHover={suppressHover}
+          opacityScale={dragOpacityScale}
           gizmoPosition={posVec}
           onDragStart={() => handleDragStart('center')}
           onDrag={handleCenterMove}
@@ -271,10 +288,12 @@ export function TransformGizmo({
           {isAxisAllowed('x') && (
             <GizmoMove
               axis="x"
-              isHovered={hoveredPart === 'axis-x'}
+              isHovered={!suppressHover && hoveredPart === 'axis-x'}
               isActive={activePart === 'axis-x'}
               isDimmed={isDimmed('axis-x')}
               isHidden={isHidden('axis-x')}
+              suppressHover={suppressHover}
+              opacityScale={dragOpacityScale}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -291,10 +310,12 @@ export function TransformGizmo({
           {isAxisAllowed('y') && (
             <GizmoMove
               axis="y"
-              isHovered={hoveredPart === 'axis-y'}
+              isHovered={!suppressHover && hoveredPart === 'axis-y'}
               isActive={activePart === 'axis-y'}
               isDimmed={isDimmed('axis-y')}
               isHidden={isHidden('axis-y')}
+              suppressHover={suppressHover}
+              opacityScale={dragOpacityScale}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -311,10 +332,12 @@ export function TransformGizmo({
           {isAxisAllowed('z') && (
             <GizmoMove
               axis="z"
-              isHovered={hoveredPart === 'axis-z'}
+              isHovered={!suppressHover && hoveredPart === 'axis-z'}
               isActive={activePart === 'axis-z'}
               isDimmed={isDimmed('axis-z')}
               isHidden={isHidden('axis-z')}
+              suppressHover={suppressHover}
+              opacityScale={dragOpacityScale}
               enableLighting={enableLighting}
               gizmoPosition={posVec}
               handleScale={handleScale}
@@ -335,10 +358,12 @@ export function TransformGizmo({
         <>
           <GizmoRotation
             axis="x"
-            isHovered={hoveredPart === 'ring-x'}
+            isHovered={!suppressHover && hoveredPart === 'ring-x'}
             isActive={activePart === 'ring-x'}
             isDimmed={isDimmed('ring-x')}
             isHidden={isHidden('ring-x')}
+            suppressHover={suppressHover}
+            opacityScale={dragOpacityScale}
             suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-x')}
@@ -349,10 +374,12 @@ export function TransformGizmo({
           />
           <GizmoRotation
             axis="y"
-            isHovered={hoveredPart === 'ring-y'}
+            isHovered={!suppressHover && hoveredPart === 'ring-y'}
             isActive={activePart === 'ring-y'}
             isDimmed={isDimmed('ring-y')}
             isHidden={isHidden('ring-y')}
+            suppressHover={suppressHover}
+            opacityScale={dragOpacityScale}
             suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-y')}
@@ -363,10 +390,12 @@ export function TransformGizmo({
           />
           <GizmoRotation
             axis="z"
-            isHovered={hoveredPart === 'ring-z'}
+            isHovered={!suppressHover && hoveredPart === 'ring-z'}
             isActive={activePart === 'ring-z'}
             isDimmed={isDimmed('ring-z')}
             isHidden={isHidden('ring-z')}
+            suppressHover={suppressHover}
+            opacityScale={dragOpacityScale}
             suppressAxisAnimations={suppressAxisAnimations}
             gizmoPosition={posVec}
             onDragStart={() => handleDragStart('ring-z')}
@@ -382,10 +411,12 @@ export function TransformGizmo({
         <>
           <GizmoScale
             axis="x"
-            isHovered={hoveredPart === 'scale-x'}
+            isHovered={!suppressHover && hoveredPart === 'scale-x'}
             isActive={activePart === 'scale-x'}
             isDimmed={isDimmed('scale-x')}
             isHidden={isHidden('scale-x')}
+            suppressHover={suppressHover}
+            opacityScale={dragOpacityScale}
             gizmoPosition={posVec}
             onDragStart={(isUniform: boolean) => handleDragStart('scale-x', isUniform)}
             onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('x', factor, isUniform)}
@@ -395,10 +426,12 @@ export function TransformGizmo({
           />
           <GizmoScale
             axis="y"
-            isHovered={hoveredPart === 'scale-y'}
+            isHovered={!suppressHover && hoveredPart === 'scale-y'}
             isActive={activePart === 'scale-y'}
             isDimmed={isDimmed('scale-y')}
             isHidden={isHidden('scale-y')}
+            suppressHover={suppressHover}
+            opacityScale={dragOpacityScale}
             gizmoPosition={posVec}
             onDragStart={(isUniform: boolean) => handleDragStart('scale-y', isUniform)}
             onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('y', factor, isUniform)}
@@ -408,10 +441,12 @@ export function TransformGizmo({
           />
           <GizmoScale
             axis="z"
-            isHovered={hoveredPart === 'scale-z'}
+            isHovered={!suppressHover && hoveredPart === 'scale-z'}
             isActive={activePart === 'scale-z'}
             isDimmed={isDimmed('scale-z')}
             isHidden={isHidden('scale-z')}
+            suppressHover={suppressHover}
+            opacityScale={dragOpacityScale}
             gizmoPosition={posVec}
             onDragStart={(isUniform: boolean) => handleDragStart('scale-z', isUniform)}
             onDrag={(factor: number, isUniform: boolean) => handleScaleDrag('z', factor, isUniform)}

@@ -36,6 +36,10 @@ interface ActiveHost {
 }
 
 export function useKnotInteraction(enabled: boolean = true) {
+    const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm epsilon to drop high-frequency jitter churn
+    const FAST_DRAG_DELTA_SQ = 0.04; // >0.2mm/frame considered fast sweep
+    const PREVIEW_COMPUTE_INTERVAL_MS = 12; // heavy direct-drag solve cadence (~80Hz)
+
     const { isDragging, hit } = usePicking();
     const { camera, raycaster, pointer } = useThree();
 
@@ -51,6 +55,9 @@ export function useKnotInteraction(enabled: boolean = true) {
     const prewarmedKnotIdRef = useRef<string | null>(null);
     const prewarmedHostRef = useRef<ActiveHost | null>(null);
     const prewarmedElasticStateRef = useRef<Record<string, ElasticChainInitialState> | null>(null);
+    const lastPreviewComputeAtRef = useRef(0);
+    const lastAppliedKnotPosRef = useRef<THREE.Vector3 | null>(null);
+    const fastDragFrameSkipToggleRef = useRef(false);
 
     const setKnotDragInteractionLock = useCallback((isDragging: boolean, postGuardMs = 180) => {
         if (typeof window === 'undefined') return;
@@ -694,6 +701,9 @@ export function useKnotInteraction(enabled: boolean = true) {
             activeHost.current = host;
             initialEditSnapshotRef.current = captureSupportEditSnapshot();
             setKnotDragInteractionLock(true);
+            lastPreviewComputeAtRef.current = 0;
+            lastAppliedKnotPosRef.current = null;
+            fastDragFrameSkipToggleRef.current = false;
 
             // Capture/restore state
             elasticState.current = prewarmedKnotIdRef.current === knot.id && prewarmedElasticStateRef.current
@@ -736,6 +746,9 @@ export function useKnotInteraction(enabled: boolean = true) {
             prewarmedKnotIdRef.current = null;
             prewarmedHostRef.current = null;
             prewarmedElasticStateRef.current = null;
+            lastPreviewComputeAtRef.current = 0;
+            lastAppliedKnotPosRef.current = null;
+            fastDragFrameSkipToggleRef.current = false;
         }
     }, [isDragging, hit, enabled, setKnotDragInteractionLock]);
 
@@ -781,6 +794,31 @@ export function useKnotInteraction(enabled: boolean = true) {
         }
 
         raycaster.setFromCamera(pointer, camera);
+
+        const quickProjected = projectOntoSegment(raycaster.ray, host.start, host.end);
+        const quickProjectedVec = new THREE.Vector3(quickProjected.point.x, quickProjected.point.y, quickProjected.point.z);
+        const hasLastApplied = !!lastAppliedKnotPosRef.current;
+        const deltaSq = hasLastApplied
+            ? lastAppliedKnotPosRef.current!.distanceToSquared(quickProjectedVec)
+            : Number.POSITIVE_INFINITY;
+
+        if (hasLastApplied && deltaSq < MIN_DRAG_DELTA_SQ) {
+            return;
+        }
+
+        const frameNow = performance.now();
+        let shouldComputePreview = frameNow - lastPreviewComputeAtRef.current >= PREVIEW_COMPUTE_INTERVAL_MS;
+        if (shouldComputePreview && hasLastApplied && deltaSq > FAST_DRAG_DELTA_SQ) {
+            fastDragFrameSkipToggleRef.current = !fastDragFrameSkipToggleRef.current;
+            if (fastDragFrameSkipToggleRef.current) {
+                shouldComputePreview = false;
+            }
+        }
+
+        if (!shouldComputePreview) {
+            return;
+        }
+        lastPreviewComputeAtRef.current = frameNow;
 
         // Allow cross-segment dragging: choose the best segment in this trunk/branch.
         const candidates = getHostCandidates(host);
@@ -1190,6 +1228,12 @@ export function useKnotInteraction(enabled: boolean = true) {
         // Update diameter when crossing into a segment with a different diameter
         if (host.containerType === 'trunk' || host.containerType === 'branch' || host.containerType === 'twig' || host.containerType === 'stick' || host.containerType === 'brace' || host.containerType === 'kickstand') {
             finalKnot.diameter = bestDiameter + 0.1;
+        }
+
+        if (!lastAppliedKnotPosRef.current) {
+            lastAppliedKnotPosRef.current = finalOnLine.clone();
+        } else {
+            lastAppliedKnotPosRef.current.copy(finalOnLine);
         }
 
         updateKnot(finalKnot);
