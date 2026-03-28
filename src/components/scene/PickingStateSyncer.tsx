@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { usePicking } from '@/components/picking';
 import { setHoveredCategory, setHoveredId } from '@/supports/state';
 import { isContactDiskHudInteractionActive } from '@/supports/SupportPrimitives/ContactDisk/contactDiskHudInteraction';
+import { isSupportEditInteractionActive } from '@/supports/interaction/gizmoInteractionLock';
 
 /**
  * Syncs the GPU picking state to the global support state store.
  * This allows non-React logic (like useInteractionStatus) to know what is being hovered.
  */
 export function PickingStateSyncer() {
-    const { hit } = usePicking();
+    const { hit, isDragging } = usePicking();
     const [contactDiskHudInteractionActive, setContactDiskHudInteractionActive] = useState(() => isContactDiskHudInteractionActive());
 
     useEffect(() => {
@@ -26,11 +27,18 @@ export function PickingStateSyncer() {
     }, []);
 
     useEffect(() => {
-        if (contactDiskHudInteractionActive) return;
+        const hoverSyncSuppressed = contactDiskHudInteractionActive || isDragging || isSupportEditInteractionActive();
+
+        if (hoverSyncSuppressed) {
+            setHoveredCategory('none');
+            setHoveredId(null);
+            return;
+        }
+
         // Update global store with the category and ID of the hovered item
         setHoveredCategory(hit.category);
         setHoveredId(hit.objectId);
-    }, [hit.category, hit.objectId, contactDiskHudInteractionActive]);
+    }, [hit.category, hit.objectId, contactDiskHudInteractionActive, isDragging]);
 
     return null;
 }
