@@ -6,12 +6,78 @@ import type { PartDragPreviewPayload } from './partDragPreview';
 const EVENT_NAME = 'dragonfruit-joint-drag-preview';
 const PART_EVENT_NAME = 'dragonfruit-part-drag-update';
 const EMPTY_PREVIEW_KNOTS: Record<string, Knot> = {};
+const INLINE_PREVIEW_CANDIDATE_THRESHOLD = 512;
+const NULL_PREVIEW_KEY = 'null';
+const PREVIEW_KEY_PRECISION = 1e4;
 
 interface UseJointDragPreviewOverridesOptions {
   roots: Record<string, Roots>;
   knots: Record<string, Knot>;
   kickstandKnots?: Record<string, Knot>;
   candidateKnots: JointDragPreviewCandidateKnots;
+}
+
+interface JointDragPreviewWorkerRequest {
+  requestId: number;
+  preview: JointDragPreviewSnapshot | null;
+  root?: Roots | null;
+  parentKnot?: Knot | null;
+  hostKnot?: Knot | null;
+  candidateKnots: JointDragPreviewCandidateKnots;
+}
+
+interface JointDragPreviewWorkerResponse {
+  requestId: number;
+  previewKnots: Record<string, Knot>;
+}
+
+function quantizePreviewValue(value: number | undefined | null) {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'n';
+  return Math.round(value * PREVIEW_KEY_PRECISION);
+}
+
+function appendPreviewPos(parts: string[], pos: { x: number; y: number; z: number } | undefined | null) {
+  if (!pos) {
+    parts.push('p:n');
+    return;
+  }
+
+  parts.push(
+    `p:${quantizePreviewValue(pos.x)},${quantizePreviewValue(pos.y)},${quantizePreviewValue(pos.z)}`,
+  );
+}
+
+function buildPreviewSnapshotKey(preview: JointDragPreviewSnapshot | null) {
+  if (!preview?.support) return NULL_PREVIEW_KEY;
+
+  const support = preview.support;
+  const parts: string[] = [preview.kind, preview.supportId, String(support.segments.length)];
+
+  for (const segment of support.segments) {
+    parts.push(
+      's',
+      segment.id,
+      segment.type,
+      String(quantizePreviewValue(segment.diameter)),
+      segment.topJoint?.id ?? 'tj:n',
+      segment.bottomJoint?.id ?? 'bj:n',
+    );
+
+    appendPreviewPos(parts, segment.topJoint?.pos);
+    appendPreviewPos(parts, segment.bottomJoint?.pos);
+    appendPreviewPos(parts, segment.controlPoint1);
+    appendPreviewPos(parts, segment.controlPoint2);
+  }
+
+  return parts.join('|');
+}
+
+function countCandidateKnots(candidateKnots: JointDragPreviewCandidateKnots) {
+  let count = 0;
+  for (const _knotId in candidateKnots) {
+    count += 1;
+  }
+  return count;
 }
 
 export type { JointDragPreviewKind, JointDragPreviewPayload, JointDragPreviewSnapshot } from './jointDragPreviewMath';
@@ -48,14 +114,25 @@ export function useJointDragPreview<TSupport>(kind: JointDragPreviewKind, suppor
 export function useActiveJointDragPreview() {
   const [preview, setPreview] = React.useState<JointDragPreviewSnapshot | null>(null);
   const pendingPreviewRef = React.useRef<JointDragPreviewSnapshot | null>(null);
+  const pendingPreviewKeyRef = React.useRef<string>(NULL_PREVIEW_KEY);
+  const committedPreviewKeyRef = React.useRef<string>(NULL_PREVIEW_KEY);
   const frameRef = React.useRef<number | null>(null);
 
   const schedulePreview = React.useCallback((nextPreview: JointDragPreviewSnapshot | null) => {
+    const nextPreviewKey = buildPreviewSnapshotKey(nextPreview);
+    const currentKey = frameRef.current !== null
+      ? pendingPreviewKeyRef.current
+      : committedPreviewKeyRef.current;
+
+    if (nextPreviewKey === currentKey) return;
+
     pendingPreviewRef.current = nextPreview;
+    pendingPreviewKeyRef.current = nextPreviewKey;
     if (frameRef.current !== null) return;
 
     frameRef.current = window.requestAnimationFrame(() => {
       frameRef.current = null;
+      committedPreviewKeyRef.current = pendingPreviewKeyRef.current;
       setPreview(pendingPreviewRef.current);
     });
   }, []);
@@ -100,6 +177,8 @@ export function useActiveJointDragPreview() {
         frameRef.current = null;
       }
       pendingPreviewRef.current = null;
+      pendingPreviewKeyRef.current = NULL_PREVIEW_KEY;
+      committedPreviewKeyRef.current = NULL_PREVIEW_KEY;
     };
   }, [schedulePreview]);
 
@@ -108,21 +187,112 @@ export function useActiveJointDragPreview() {
 
 export function useJointDragPreviewOverrides({ roots, knots, kickstandKnots, candidateKnots }: UseJointDragPreviewOverridesOptions) {
   const preview = useActiveJointDragPreview();
+  const [previewKnots, setPreviewKnots] = React.useState<Record<string, Knot>>(EMPTY_PREVIEW_KNOTS);
+  const workerRef = React.useRef<Worker | null>(null);
+  const workerFailedRef = React.useRef(false);
+  const nextRequestIdRef = React.useRef(1);
+  const latestRequestedRequestIdRef = React.useRef(0);
 
-  return React.useMemo(() => {
+  const resolvePreviewContext = React.useCallback((activePreview: JointDragPreviewSnapshot): JointDragPreviewContext => {
+    return activePreview.kind === 'trunk'
+      ? { root: roots[activePreview.support.rootId] ?? null }
+      : activePreview.kind === 'kickstand'
+        ? {
+          root: roots[activePreview.support.rootId] ?? null,
+          hostKnot: kickstandKnots?.[activePreview.support.hostKnotId] ?? knots[activePreview.support.hostKnotId] ?? null,
+        }
+        : { parentKnot: knots[activePreview.support.parentKnotId] ?? null };
+  }, [roots, kickstandKnots, knots]);
+
+  const computeSync = React.useCallback((activePreview: JointDragPreviewSnapshot) => {
+    return computeJointDragPreviewKnots(activePreview, resolvePreviewContext(activePreview), candidateKnots);
+  }, [resolvePreviewContext, candidateKnots]);
+
+  const candidateKnotCount = React.useMemo(() => countCandidateKnots(candidateKnots), [candidateKnots]);
+  const useInlinePreviewCompute = preview?.kind === 'trunk' || candidateKnotCount <= INLINE_PREVIEW_CANDIDATE_THRESHOLD;
+  const inlinePreviewKnots = React.useMemo(() => {
+    if (!preview || !useInlinePreviewCompute) return EMPTY_PREVIEW_KNOTS;
+    return computeSync(preview);
+  }, [preview, useInlinePreviewCompute, computeSync]);
+
+  React.useEffect(() => {
     if (!preview) {
-      return EMPTY_PREVIEW_KNOTS;
+      setPreviewKnots(EMPTY_PREVIEW_KNOTS);
+      latestRequestedRequestIdRef.current = 0;
+      return;
     }
 
-    const context: JointDragPreviewContext = preview.kind === 'trunk'
-      ? { root: roots[preview.support.rootId] ?? null }
-      : preview.kind === 'kickstand'
-        ? {
-          root: roots[preview.support.rootId] ?? null,
-          hostKnot: kickstandKnots?.[preview.support.hostKnotId] ?? knots[preview.support.hostKnotId] ?? null,
-        }
-        : { parentKnot: knots[preview.support.parentKnotId] ?? null };
+    if (useInlinePreviewCompute) {
+      // Avoid worker roundtrip latency for small/typical preview sets.
+      return;
+    }
 
-    return computeJointDragPreviewKnots(preview, context, candidateKnots);
-  }, [preview, roots, knots, kickstandKnots, candidateKnots]);
+    if (typeof window === 'undefined' || typeof Worker === 'undefined' || workerFailedRef.current) {
+      setPreviewKnots(computeSync(preview));
+      return;
+    }
+
+    if (!workerRef.current) {
+      try {
+        const worker = new Worker(new URL('./jointDragPreview.worker.ts', import.meta.url), { type: 'module' });
+        worker.onmessage = (event: MessageEvent<JointDragPreviewWorkerResponse>) => {
+          const data = event.data;
+          if (!data || typeof data.requestId !== 'number') return;
+          if (data.requestId < latestRequestedRequestIdRef.current) return;
+          setPreviewKnots(data.previewKnots ?? EMPTY_PREVIEW_KNOTS);
+        };
+        worker.onerror = (error) => {
+          console.error('[JointDragPreview] Worker failed; falling back to main-thread compute:', error);
+          workerFailedRef.current = true;
+          worker.terminate();
+          workerRef.current = null;
+          if (preview) {
+            setPreviewKnots(computeSync(preview));
+          }
+        };
+        workerRef.current = worker;
+      } catch (error) {
+        console.error('[JointDragPreview] Failed to create worker; using main-thread compute:', error);
+        workerFailedRef.current = true;
+        setPreviewKnots(computeSync(preview));
+        return;
+      }
+    }
+
+    const requestId = nextRequestIdRef.current++;
+    latestRequestedRequestIdRef.current = requestId;
+
+    const context = resolvePreviewContext(preview);
+    const request: JointDragPreviewWorkerRequest = {
+      requestId,
+      preview,
+      root: context.root ?? null,
+      parentKnot: context.parentKnot ?? null,
+      hostKnot: context.hostKnot ?? null,
+      candidateKnots,
+    };
+
+    try {
+      workerRef.current.postMessage(request);
+    } catch (error) {
+      console.error('[JointDragPreview] Worker postMessage failed; using main-thread compute:', error);
+      workerFailedRef.current = true;
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      setPreviewKnots(computeSync(preview));
+    }
+  }, [preview, candidateKnots, resolvePreviewContext, computeSync, useInlinePreviewCompute]);
+
+  React.useEffect(() => {
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, []);
+
+  if (!preview) return EMPTY_PREVIEW_KNOTS;
+  if (useInlinePreviewCompute) return inlinePreviewKnots;
+  return previewKnots;
 }

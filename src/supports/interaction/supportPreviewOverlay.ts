@@ -63,7 +63,7 @@ export function buildBranchCandidateKnotIdsByBranchId(
 }
 
 interface ComputeCascadedPreviewKnotOverridesOptions {
-  activeJointDragPreview: JointDragPreviewSnapshot | null;
+  enableCascade: boolean;
   basePreviewKnotOverrides: Record<string, Knot>;
   branchesByParentKnotId: Map<string, Branch[]>;
   branchCandidateKnotIdsByBranchId: Map<string, string[]>;
@@ -72,14 +72,14 @@ interface ComputeCascadedPreviewKnotOverridesOptions {
 }
 
 export function computeCascadedPreviewKnotOverrides({
-  activeJointDragPreview,
+  enableCascade,
   basePreviewKnotOverrides,
   branchesByParentKnotId,
   branchCandidateKnotIdsByBranchId,
   branchesById,
   committedKnotsById,
 }: ComputeCascadedPreviewKnotOverridesOptions) {
-  if (!activeJointDragPreview?.support) return basePreviewKnotOverrides;
+  if (!enableCascade) return basePreviewKnotOverrides;
   const merged: Record<string, Knot> = { ...basePreviewKnotOverrides };
 
   const processedBranchIds = new Set<string>();

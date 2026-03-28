@@ -20,6 +20,25 @@ export interface JointDragPreviewContext {
 
 export type JointDragPreviewCandidateKnots = Record<string, Knot>;
 
+function buildCandidateKnotIdsByParentShaftId(candidateKnots: JointDragPreviewCandidateKnots) {
+  const map = new Map<string, string[]>();
+
+  for (const knotId in candidateKnots) {
+    const knot = candidateKnots[knotId];
+    const parentShaftId = knot.parentShaftId;
+    if (!parentShaftId) continue;
+
+    const list = map.get(parentShaftId);
+    if (list) {
+      list.push(knotId);
+    } else {
+      map.set(parentShaftId, [knotId]);
+    }
+  }
+
+  return map;
+}
+
 function getKickstandSegmentEndpoints(
   kickstand: Kickstand,
   segmentIndex: number,
@@ -53,28 +72,33 @@ export function computeJointDragPreviewKnots(
   if (!support) return {} as Record<string, Knot>;
 
   const nextKnots: Record<string, Knot> = {};
-  const segmentIndexById = new Map<string, number>();
-  support.segments.forEach((segment, index) => segmentIndexById.set(segment.id, index));
+  const candidateKnotIdsByParentShaftId = buildCandidateKnotIdsByParentShaftId(candidateKnots);
+  if (candidateKnotIdsByParentShaftId.size === 0) return nextKnots;
 
   if (preview.kind === 'trunk') {
     const trunk = support as Trunk;
     const root = context.root ?? null;
     if (!root) return nextKnots;
 
-    for (const knot of Object.values(candidateKnots)) {
-      const segIndex = segmentIndexById.get(knot.parentShaftId);
-      if (segIndex === undefined) continue;
-
+    for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
       const segment = support.segments[segIndex];
-      const endpoints = getTrunkSegmentEndpoints(trunk, segment, segIndex, root);
-      if (!endpoints || knot.t === undefined) continue;
+      const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
+      if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
 
-      const nextPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, knot.t);
-      nextKnots[knot.id] = {
-        ...knot,
-        pos: nextPos,
-        diameter: segment.diameter + 0.1,
-      };
+      const endpoints = getTrunkSegmentEndpoints(trunk, segment, segIndex, root);
+      if (!endpoints) continue;
+
+      for (const knotId of segmentKnotIds) {
+        const knot = candidateKnots[knotId];
+        if (!knot || knot.t === undefined) continue;
+
+        const nextPos = calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, knot.t);
+        nextKnots[knot.id] = {
+          ...knot,
+          pos: nextPos,
+          diameter: segment.diameter + 0.1,
+        };
+      }
     }
 
     return nextKnots;
@@ -86,17 +110,23 @@ export function computeJointDragPreviewKnots(
     const hostKnot = context.hostKnot ?? null;
     if (!root || !hostKnot) return nextKnots;
 
-    for (const knot of Object.values(candidateKnots)) {
-      const segIndex = segmentIndexById.get(knot.parentShaftId);
-      if (segIndex === undefined) continue;
+    for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
+      const segment = support.segments[segIndex];
+      const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
+      if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
 
       const endpoints = getKickstandSegmentEndpoints(kickstand, segIndex, root, hostKnot);
-      if (!endpoints || knot.t === undefined) continue;
+      if (!endpoints) continue;
 
-      nextKnots[knot.id] = {
-        ...knot,
-        pos: calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, endpoints.segment, knot.t),
-      };
+      for (const knotId of segmentKnotIds) {
+        const knot = candidateKnots[knotId];
+        if (!knot || knot.t === undefined) continue;
+
+        nextKnots[knot.id] = {
+          ...knot,
+          pos: calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, endpoints.segment, knot.t),
+        };
+      }
     }
 
     return nextKnots;
@@ -106,18 +136,23 @@ export function computeJointDragPreviewKnots(
   const parentKnot = context.parentKnot ?? null;
   if (!parentKnot) return nextKnots;
 
-  for (const knot of Object.values(candidateKnots)) {
-    const segIndex = segmentIndexById.get(knot.parentShaftId);
-    if (segIndex === undefined) continue;
-
+  for (let segIndex = 0; segIndex < support.segments.length; segIndex += 1) {
     const segment = support.segments[segIndex];
-    const endpoints = getBranchSegmentEndpoints(branch, segment, segIndex, parentKnot);
-    if (!endpoints || knot.t === undefined) continue;
+    const segmentKnotIds = candidateKnotIdsByParentShaftId.get(segment.id);
+    if (!segmentKnotIds || segmentKnotIds.length === 0) continue;
 
-    nextKnots[knot.id] = {
-      ...knot,
-      pos: calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, knot.t),
-    };
+    const endpoints = getBranchSegmentEndpoints(branch, segment, segIndex, parentKnot);
+    if (!endpoints) continue;
+
+    for (const knotId of segmentKnotIds) {
+      const knot = candidateKnots[knotId];
+      if (!knot || knot.t === undefined) continue;
+
+      nextKnots[knot.id] = {
+        ...knot,
+        pos: calculateKnotPositionOnSegmentFromT(endpoints.start, endpoints.end, segment, knot.t),
+      };
+    }
   }
 
   return nextKnots;

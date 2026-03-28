@@ -39,6 +39,7 @@ interface ActiveHost {
 export function useKnotInteraction(enabled: boolean = true) {
     const MIN_DRAG_DELTA_SQ = 1e-6; // ~0.001mm epsilon to drop high-frequency jitter churn
     const BEZIER_PROJECTION_STEPS = 36;
+    const FAST_KNOT_DRAG_ELASTIC_PREVIEW = true;
 
     const { isDragging, hit } = usePicking();
     const { camera, raycaster, pointer } = useThree();
@@ -722,8 +723,105 @@ export function useKnotInteraction(enabled: boolean = true) {
         if (shouldEndDrag) {
             const activeKnotIdAtEnd = activeKnotId.current;
             const activeHostAtEnd = activeHost.current;
-            const previewBranchSegmentsByIdAtEnd = previewBranchSegmentsByIdRef.current;
+            const previewBranchSegmentsByIdAtEnd = { ...previewBranchSegmentsByIdRef.current };
             const previewKnotAtEnd = previewKnotRef.current;
+
+            if (
+                FAST_KNOT_DRAG_ELASTIC_PREVIEW
+                && activeHostAtEnd?.containerType === 'trunk'
+                && previewKnotAtEnd
+                && Object.keys(elasticState.current).length > 0
+            ) {
+                const maxAngleDeg = getSettings().shaft.maxAngleDeg ?? 80;
+                let releaseKnotPos = { ...previewKnotAtEnd.pos };
+
+                let minAllowedZ = Number.POSITIVE_INFINITY;
+                let requiresClamping = false;
+                const firstPassElasticResults: Record<string, ElasticChainResult> = {};
+
+                for (const branchId in elasticState.current) {
+                    const state = elasticState.current[branchId];
+                    const res = solveElasticChain(releaseKnotPos, state, maxAngleDeg);
+                    firstPassElasticResults[branchId] = res;
+
+                    if (res.isLocked) {
+                        requiresClamping = true;
+                        if (res.knotPos.z < minAllowedZ) {
+                            minAllowedZ = res.knotPos.z;
+                        }
+                    }
+                }
+
+                if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY && releaseKnotPos.z > minAllowedZ) {
+                    resolveEndpoints(activeHostAtEnd);
+                    const dir = new THREE.Vector3().subVectors(activeHostAtEnd.end, activeHostAtEnd.start);
+                    if (Math.abs(dir.z) > 0.001) {
+                        const t = (minAllowedZ - activeHostAtEnd.start.z) / dir.z;
+                        const newPos = activeHostAtEnd.start.clone().add(dir.multiplyScalar(t));
+                        releaseKnotPos = { x: newPos.x, y: newPos.y, z: newPos.z };
+                    } else {
+                        releaseKnotPos = { ...releaseKnotPos, z: minAllowedZ };
+                    }
+                }
+
+                const elasticResults: Record<string, ElasticChainResult> = {};
+                if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
+                    for (const branchId in elasticState.current) {
+                        const state = elasticState.current[branchId];
+                        elasticResults[branchId] = solveElasticChain(releaseKnotPos, state, maxAngleDeg);
+                    }
+                } else {
+                    Object.assign(elasticResults, firstPassElasticResults);
+                }
+
+                for (const branchId in elasticState.current) {
+                    const res = elasticResults[branchId];
+                    if (!res) continue;
+
+                    const branch = getBranchById(branchId);
+                    if (!branch) continue;
+
+                    let branchChanged = false;
+                    const newSegments = branch.segments.map(seg => {
+                        let segChanged = false;
+                        let newTopJoint = seg.topJoint;
+                        let newBottomJoint = seg.bottomJoint;
+
+                        if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
+                            const newPos = res.jointPositions[seg.topJoint.id];
+                            if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
+                                newTopJoint = { ...seg.topJoint, pos: newPos };
+                                segChanged = true;
+                            }
+                        }
+
+                        if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
+                            const newPos = res.jointPositions[seg.bottomJoint.id];
+                            if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
+                                newBottomJoint = { ...seg.bottomJoint, pos: newPos };
+                                segChanged = true;
+                            }
+                        }
+
+                        if (segChanged) {
+                            branchChanged = true;
+                            return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
+                        }
+                        return seg;
+                    });
+
+                    if (branchChanged) {
+                        previewBranchSegmentsByIdAtEnd[branch.id] = newSegments;
+                    } else {
+                        delete previewBranchSegmentsByIdAtEnd[branch.id];
+                    }
+                }
+
+                previewKnotRef.current = {
+                    ...previewKnotAtEnd,
+                    pos: releaseKnotPos,
+                };
+            }
 
             // Reconcile drag-time fast-path edits with an exact pass once on release.
             for (const [branchId, previewSegments] of Object.entries(previewBranchSegmentsByIdAtEnd)) {
@@ -990,39 +1088,41 @@ export function useKnotInteraction(enabled: boolean = true) {
             }
         }
 
+        const branchSegmentsById: Record<string, Branch['segments']> = {};
+
         // 2. Elastic Chain Logic
-        // We run the solver for ALL attached branches.
-        // If any branch is 'locked' (requires clamping), we clamp the Knot position.
+        // Fast trunk-knot preview path: skip heavy per-frame elastic solving and
+        // defer exact solving to release for smoother branch/leaf visual response.
+        const shouldSkipElasticPreview = FAST_KNOT_DRAG_ELASTIC_PREVIEW && host.containerType === 'trunk';
+        let finalKnotPos = constrainedPos;
 
-        let minAllowedZ = Number.POSITIVE_INFINITY;
-        let requiresClamping = false;
-        const firstPassElasticResults: Record<string, ElasticChainResult> = {};
-
-        // First Pass: Check constraints
-        for (const branchId in elasticState.current) {
-            const state = elasticState.current[branchId];
-            const res = solveElasticChain(constrainedPos, state, maxAngleDeg);
-            firstPassElasticResults[branchId] = res;
-
-            if (res.isLocked) {
-                requiresClamping = true;
-                if (res.knotPos.z < minAllowedZ) {
-                    minAllowedZ = res.knotPos.z;
+        if (shouldSkipElasticPreview) {
+            for (const branchId of Object.keys(previewBranchSegmentsByIdRef.current)) {
+                const branch = getBranchById(branchId);
+                if (branch) {
+                    // Explicitly mark previously preview-overridden branches for prune.
+                    branchSegmentsById[branch.id] = branch.segments;
                 }
             }
-        }
+        } else {
+            let minAllowedZ = Number.POSITIVE_INFINITY;
+            let requiresClamping = false;
+            const firstPassElasticResults: Record<string, ElasticChainResult> = {};
 
-        // If we hit a limit, apply it
-        if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
-            // Apply Z Clamp
-            // If dragging UP (usually), we cap the Max Z.
-            // NOTE: solveElasticChain returns the clamped value in res.knotPos.z
-            // If the user drags 'too high', the solver says 'here is the max Z'.
-            // So we take the MINIMUM of all MaxZs (most restrictive limit).
-            // (Assuming dragging UP increases Z. If dragging DOWN, logic might differ but 'pulling down' usually safe)
+            for (const branchId in elasticState.current) {
+                const state = elasticState.current[branchId];
+                const res = solveElasticChain(constrainedPos, state, maxAngleDeg);
+                firstPassElasticResults[branchId] = res;
 
-            if (constrainedPos.z > minAllowedZ) {
-                // We need to move constrainedPos to have Z = minAllowedZ while staying on shaft.
+                if (res.isLocked) {
+                    requiresClamping = true;
+                    if (res.knotPos.z < minAllowedZ) {
+                        minAllowedZ = res.knotPos.z;
+                    }
+                }
+            }
+
+            if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY && constrainedPos.z > minAllowedZ) {
                 const dir = new THREE.Vector3().subVectors(host.end, host.start);
                 if (Math.abs(dir.z) > 0.001) {
                     const t = (minAllowedZ - host.start.z) / dir.z;
@@ -1031,69 +1131,62 @@ export function useKnotInteraction(enabled: boolean = true) {
                 } else {
                     constrainedPos = { ...constrainedPos, z: minAllowedZ };
                 }
+                finalKnotPos = constrainedPos;
             }
-        }
 
-        // 3. Final Pass: Apply Final Knot Pos to get Joint positions and Update Branches
-        let finalKnotPos = constrainedPos;
+            const elasticResults: Record<string, ElasticChainResult> = {};
+            if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
+                for (const branchId in elasticState.current) {
+                    const state = elasticState.current[branchId];
+                    elasticResults[branchId] = solveElasticChain(finalKnotPos, state, maxAngleDeg);
+                }
+            } else {
+                Object.assign(elasticResults, firstPassElasticResults);
+            }
 
-        const elasticResults: Record<string, ElasticChainResult> = {};
-        if (requiresClamping && minAllowedZ !== Number.POSITIVE_INFINITY) {
             for (const branchId in elasticState.current) {
-                const state = elasticState.current[branchId];
-                elasticResults[branchId] = solveElasticChain(finalKnotPos, state, maxAngleDeg);
-            }
-        } else {
-            Object.assign(elasticResults, firstPassElasticResults);
-        }
+                const res = elasticResults[branchId];
+                if (!res) continue;
 
-        const branchSegmentsById: Record<string, Branch['segments']> = {};
+                const branch = getBranchById(branchId);
+                if (!branch) continue;
 
-        for (const branchId in elasticState.current) {
-            const res = elasticResults[branchId];
-            if (!res) continue;
+                let branchChanged = false;
+                const newSegments = branch.segments.map(seg => {
+                    let segChanged = false;
+                    let newTopJoint = seg.topJoint;
+                    let newBottomJoint = seg.bottomJoint;
 
-            // Update branch joints
-            const branch = getBranchById(branchId);
-            if (!branch) continue;
-
-            let branchChanged = false;
-
-            // Map segments to new joint positions
-            const newSegments = branch.segments.map(seg => {
-                let segChanged = false;
-                let newTopJoint = seg.topJoint;
-                let newBottomJoint = seg.bottomJoint;
-
-                if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
-                    const newPos = res.jointPositions[seg.topJoint.id];
-                    if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
-                        newTopJoint = { ...seg.topJoint, pos: newPos };
-                        segChanged = true;
+                    if (seg.topJoint && res.jointPositions[seg.topJoint.id]) {
+                        const newPos = res.jointPositions[seg.topJoint.id];
+                        if (Math.abs(newPos.z - seg.topJoint.pos.z) > 0.0001) {
+                            newTopJoint = { ...seg.topJoint, pos: newPos };
+                            segChanged = true;
+                        }
                     }
-                }
 
-                if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
-                    const newPos = res.jointPositions[seg.bottomJoint.id];
-                    if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
-                        newBottomJoint = { ...seg.bottomJoint, pos: newPos };
-                        segChanged = true;
+                    if (seg.bottomJoint && res.jointPositions[seg.bottomJoint.id]) {
+                        const newPos = res.jointPositions[seg.bottomJoint.id];
+                        if (Math.abs(newPos.z - seg.bottomJoint.pos.z) > 0.0001) {
+                            newBottomJoint = { ...seg.bottomJoint, pos: newPos };
+                            segChanged = true;
+                        }
                     }
-                }
 
-                if (segChanged) {
-                    branchChanged = true;
-                    return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
-                }
-                return seg;
-            });
+                    if (segChanged) {
+                        branchChanged = true;
+                        return { ...seg, topJoint: newTopJoint, bottomJoint: newBottomJoint };
+                    }
+                    return seg;
+                });
 
-            if (branchChanged) {
-                branchSegmentsById[branch.id] = newSegments;
-            } else if (Object.prototype.hasOwnProperty.call(previewBranchSegmentsByIdRef.current, branch.id)) {
-                // Branch returned to committed geometry; keep an explicit sync entry so
-                // we can prune stale preview overrides below.
-                branchSegmentsById[branch.id] = branch.segments;
+                if (branchChanged) {
+                    branchSegmentsById[branch.id] = newSegments;
+                } else if (Object.prototype.hasOwnProperty.call(previewBranchSegmentsByIdRef.current, branch.id)) {
+                    // Branch returned to committed geometry; keep an explicit sync entry so
+                    // we can prune stale preview overrides below.
+                    branchSegmentsById[branch.id] = branch.segments;
+                }
             }
         }
 
