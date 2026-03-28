@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
-import { ThreeEvent, useThree } from '@react-three/fiber';
+import { ThreeEvent, useFrame, useThree } from '@react-three/fiber';
 import { GIZMO_COLORS, GIZMO_SIZES, GIZMO_LIGHTING } from '../constants';
 import { usePicking } from '@/components/picking';
 import type { GizmoHandleType } from '@/components/picking/types';
@@ -39,13 +39,15 @@ export function GizmoCenter({
 }: GizmoCenterProps) {
   const MIN_DRAG_DELTA_SQ = 1e-12;
   const [isDragging, setIsDragging] = useState(false);
+  const [isScreenHovered, setIsScreenHovered] = useState(false);
   const lastPointRef = useRef<THREE.Vector3 | null>(null);
   const dragPlane = useRef<THREE.Plane | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
   const ndcRef = useRef(new THREE.Vector2());
   const intersectionRef = useRef(new THREE.Vector3());
   const deltaRef = useRef(new THREE.Vector3());
-  const { camera, gl } = useThree();
+  const hoverStateRef = useRef(false);
+  const { camera, gl, pointer } = useThree();
 
   // GPU Picking registration
   const pickMeshRef = useRef<THREE.Mesh>(null);
@@ -140,6 +142,38 @@ export function GizmoCenter({
     onPointerLeave();
   };
 
+  useFrame(() => {
+    if (isDragging || isHidden) {
+      if (hoverStateRef.current) {
+        hoverStateRef.current = false;
+        setIsScreenHovered(false);
+      }
+      return;
+    }
+
+    const rect = gl.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const projected = gizmoPosition.clone().project(camera);
+    const centerX = rect.left + ((projected.x + 1) * 0.5) * rect.width;
+    const centerY = rect.top + ((1 - projected.y) * 0.5) * rect.height;
+    const pointerX = rect.left + ((pointer.x + 1) * 0.5) * rect.width;
+    const pointerY = rect.top + ((1 - pointer.y) * 0.5) * rect.height;
+
+    const hoverRadiusPx = 24;
+    const isNearCenter = Math.hypot(pointerX - centerX, pointerY - centerY) <= hoverRadiusPx;
+
+    if (hoverStateRef.current !== isNearCenter) {
+      hoverStateRef.current = isNearCenter;
+      setIsScreenHovered(isNearCenter);
+      if (isNearCenter) {
+        onPointerEnter();
+      } else {
+        onPointerLeave();
+      }
+    }
+  });
+
   const handlePointerUp = () => {
     if (!isDragging) return;
     
@@ -185,7 +219,7 @@ export function GizmoCenter({
   }, [isDragging, onDrag, onDragEnd, getWorldPointFromMouse]);
 
   // Use GPU picking hover state OR prop-based hover (fallback)
-  const effectiveHovered = isPickingHovered || isHovered;
+  const effectiveHovered = isPickingHovered || isHovered || isScreenHovered;
   const isHighlighted = !!(effectiveHovered || isActive);
 
   const dimmedColor = '#cccccc'; // Light grey for dimmed state
@@ -218,7 +252,7 @@ export function GizmoCenter({
         onPointerEnter={handlePointerEnterLocal}
         onPointerLeave={handlePointerLeaveLocal}
       >
-        <circleGeometry args={[GIZMO_SIZES.centerRadius * 3.1, 48]} />
+        <sphereGeometry args={[GIZMO_SIZES.centerRadius * 1.08, 24, 24]} />
         <meshBasicMaterial
           visible={false}
           depthTest={false}

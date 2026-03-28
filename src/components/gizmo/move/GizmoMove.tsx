@@ -251,7 +251,7 @@ export function GizmoMove({
           onPointerLeave={handlePointerLeaveLocal}
           scale={handleScale}
         >
-          <sphereGeometry args={[Math.max(0.13, headRadius * 1.95), 12, 12]} />
+          <sphereGeometry args={[Math.max(0.14, headRadius * 2.35), 12, 12]} />
           <meshBasicMaterial visible={false} depthTest={false} />
         </mesh>
 
@@ -263,7 +263,7 @@ export function GizmoMove({
             onPointerLeave={handlePointerLeaveLocal}
             scale={handleScale}
           >
-            <sphereGeometry args={[Math.max(0.13, headRadius * 1.95), 12, 12]} />
+            <sphereGeometry args={[Math.max(0.14, headRadius * 2.35), 12, 12]} />
             <meshBasicMaterial visible={false} depthTest={false} />
           </mesh>
         )}

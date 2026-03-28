@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import * as THREE from 'three';
-import { GIZMO_COLORS, GIZMO_SIZES, DEFAULT_GIZMO_CONFIG } from './constants';
+import { DEFAULT_GIZMO_CONFIG } from './constants';
 import type { TransformGizmoProps, GizmoAxis } from './types';
 import { GizmoCenter } from './move/GizmoCenter';
 import { GizmoMove } from './move/GizmoMove';
@@ -50,7 +50,7 @@ export function TransformGizmo({
   constrainToSurface = DEFAULT_GIZMO_CONFIG.constrainToSurface,
   constrainToPlane = DEFAULT_GIZMO_CONFIG.constrainToPlane,
   axisLock = DEFAULT_GIZMO_CONFIG.axisLock,
-  handleScale = 1.0, // New prop
+  handleScale = 1.0,
   moveHandleBidirectional = false,
   moveHandleLengthScale = 1.0,
   moveHandleThicknessScale = 1.0,
@@ -71,6 +71,8 @@ export function TransformGizmo({
   const [hoveredPart, setHoveredPart] = useState<string | null>(null);
   const [activePart, setActivePart] = useState<string | null>(null);
   const [isUniformScale, setIsUniformScale] = useState(false);
+  const activePartRef = React.useRef<string | null>(null);
+  const hoverClearRafRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     if (!gizmoRootRef.current) return;
@@ -95,6 +97,15 @@ export function TransformGizmo({
     });
   }, []);
 
+  React.useEffect(() => {
+    return () => {
+      if (hoverClearRafRef.current !== null) {
+        window.cancelAnimationFrame(hoverClearRafRef.current);
+        hoverClearRafRef.current = null;
+      }
+    };
+  }, []);
+
   const setGizmoRootRef = React.useCallback((node: THREE.Group | null) => {
     gizmoRootRef.current = node;
     if (rootRef) {
@@ -104,31 +115,42 @@ export function TransformGizmo({
 
   if (!visible) return null;
 
-  // Convert position to array if it's a Vector3
   const posArray: [number, number, number] = Array.isArray(position)
     ? position
     : [position.x, position.y, position.z];
 
-  // Convert position to Vector3 for passing to child components
-  const posVec = Array.isArray(position) 
+  const posVec = Array.isArray(position)
     ? new THREE.Vector3(...position)
     : position;
 
-  // Convert rotation to array if it's an Euler
   const rotArray: [number, number, number] = Array.isArray(rotation)
     ? rotation
     : [rotation.x, rotation.y, rotation.z];
 
   const handlePointerEnter = (part: string) => {
-    if (!activePart) {
+    if (hoverClearRafRef.current !== null) {
+      window.cancelAnimationFrame(hoverClearRafRef.current);
+      hoverClearRafRef.current = null;
+    }
+
+    if (!activePartRef.current) {
       setHoveredPart(part);
     }
   };
 
   const handlePointerLeave = () => {
-    if (!activePart) {
-      setHoveredPart(null);
+    if (activePartRef.current) return;
+
+    if (hoverClearRafRef.current !== null) {
+      window.cancelAnimationFrame(hoverClearRafRef.current);
     }
+
+    hoverClearRafRef.current = window.requestAnimationFrame(() => {
+      hoverClearRafRef.current = null;
+      if (!activePartRef.current) {
+        setHoveredPart(null);
+      }
+    });
   };
 
   const handleDragStart = (part: string, isUniform?: boolean): boolean => {
@@ -158,14 +180,13 @@ export function TransformGizmo({
     }
 
     setActivePart(part);
+    activePartRef.current = part;
     setHoveredPart(null);
-    
-    // Store uniform scale mode for scale operations
+
     if (part.startsWith('scale-') && isUniform !== undefined) {
       setIsUniformScale(isUniform);
     }
-    
-    // Notify parent that dragging started (to disable OrbitControls)
+
     if (onDragStateChange) onDragStateChange(true);
 
     return true;
@@ -174,10 +195,15 @@ export function TransformGizmo({
   const handleDragEnd = () => {
     const part = activePart;
     setActivePart(null);
-    
-    // Notify parent that dragging ended (to re-enable OrbitControls)
+    activePartRef.current = null;
+
+    if (hoverClearRafRef.current !== null) {
+      window.cancelAnimationFrame(hoverClearRafRef.current);
+      hoverClearRafRef.current = null;
+    }
+
     if (onDragStateChange) onDragStateChange(false);
-    
+
     if (part === 'center' && onMoveEnd) onMoveEnd();
     if (part?.startsWith('axis-') && onMoveEnd) onMoveEnd();
     if (part?.startsWith('ring-') && onRotateEnd) onRotateEnd();
@@ -186,7 +212,6 @@ export function TransformGizmo({
 
   const handleAxisMove = (axis: GizmoAxis, delta: THREE.Vector3) => {
     if (onMove) {
-      // Delta is already axis-constrained in GizmoMove.
       onMove(delta, axis);
     }
   };
@@ -205,7 +230,6 @@ export function TransformGizmo({
 
   const handleScaleDrag = (axis: GizmoAxis, factor: number, isUniform: boolean) => {
     if (onScale) {
-      // If uniform scaling, apply to all axes. Otherwise, apply to specific axis.
       if (isUniform) {
         onScale('uniform', factor);
       } else {
@@ -215,13 +239,11 @@ export function TransformGizmo({
   };
 
   const isDimmed = (part: string) => {
-    // Only dim while actively dragging; do not dim on hover.
     const focusedPart = activePart;
     return focusedPart !== null && focusedPart !== part;
   };
 
   const isHidden = (part: string) => {
-    // Hide all parts except the active one during drag
     return activePart !== null && activePart !== part;
   };
 
@@ -229,7 +251,6 @@ export function TransformGizmo({
 
   return (
     <group ref={setGizmoRootRef} position={posArray} rotation={rotArray} scale={size} renderOrder={2500}>
-      {/* Center plane - XY movement only */}
       {enableMove && showCenter && (
         <GizmoCenter
           isHovered={hoveredPart === 'center'}
@@ -245,7 +266,6 @@ export function TransformGizmo({
         />
       )}
 
-      {/* Axis arrows - constrained movement */}
       {enableMove && (
         <>
           {isAxisAllowed('x') && (
@@ -311,7 +331,6 @@ export function TransformGizmo({
         </>
       )}
 
-      {/* Rotation rings with diamond handles */}
       {enableRotate && (
         <>
           <GizmoRotation
@@ -359,7 +378,6 @@ export function TransformGizmo({
         </>
       )}
 
-      {/* Scale hexagons */}
       {enableScale && (
         <>
           <GizmoScale

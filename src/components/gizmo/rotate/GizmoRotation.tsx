@@ -161,6 +161,10 @@ export function GizmoRotation({
       handleRootRef.current.rotation.set(0, 0, handleAngle + Math.PI / 2);
     }
 
+    if (pickMeshRef.current) {
+      pickMeshRef.current.position.set(hx, hy, 0);
+    }
+
     if (pointLightRef.current) {
       pointLightRef.current.position.set(hx, hy, 0);
     }
@@ -405,16 +409,16 @@ export function GizmoRotation({
   return (
     <group
       rotation={rotation}
-      onPointerDown={handlePointerDown}
     >
       {/* Pickable mesh for GPU picking - invisible but rendered in pick pass */}
       <mesh
         ref={pickMeshRef}
+        position={initialHandlePos}
         onPointerDown={handlePointerDown}
         onPointerEnter={handlePointerEnterLocal}
         onPointerLeave={handlePointerLeaveLocal}
       >
-        <torusGeometry args={[GIZMO_SIZES.ringMajorRadius, Math.max(0.04, GIZMO_SIZES.ringDiamondRadius * 0.55), 16, 112]} />
+        <sphereGeometry args={[Math.max(0.18, GIZMO_SIZES.ringDiamondRadius * 0.9), 16, 16]} />
         <meshBasicMaterial visible={false} />
       </mesh>
 
@@ -463,7 +467,14 @@ export function GizmoRotation({
       </group>
 
       {/* Double-pointed arrow handle (two cones) */}
-      <group ref={handleRootRef} position={initialHandlePos} scale={isHighlighted ? 1.08 : 1.0}>
+      <group
+        ref={handleRootRef}
+        position={initialHandlePos}
+        scale={isHighlighted ? 1.08 : 1.0}
+        onPointerDown={handlePointerDown}
+        onPointerEnter={handlePointerEnterLocal}
+        onPointerLeave={handlePointerLeaveLocal}
+      >
         {/* Billboard group to improve arrow readability relative to camera */}
         <group ref={billboardGroupRef}>
           {/* Clockwise-pointing cone along tangent */}

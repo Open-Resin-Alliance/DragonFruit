@@ -294,9 +294,9 @@ export function GizmoScale({
         onContextMenu={handleContextMenu}
       >
         <boxGeometry args={[
-          GIZMO_SIZES.scaleHexagonRadius * 1.8,
-          GIZMO_SIZES.scaleHexagonRadius * 1.8,
-          GIZMO_SIZES.scaleHexagonRadius * 1.8
+          GIZMO_SIZES.scaleHexagonRadius * 2.3,
+          GIZMO_SIZES.scaleHexagonRadius * 2.3,
+          GIZMO_SIZES.scaleHexagonRadius * 2.3
         ]} />
         <meshBasicMaterial visible={false} depthTest={false} />
       </mesh>
