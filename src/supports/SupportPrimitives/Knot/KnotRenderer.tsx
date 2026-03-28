@@ -152,11 +152,9 @@ export function KnotRenderer({
         const pointerOverKnot = isPointerOverThisKnot(e);
         if (!isParentSelected || !isInteractable || !pointerOverKnot) return;
 
-        // First press should select only; second press can start drag.
         if (!isSelected) {
             selectPrimitiveById(knot.id);
-            e.stopPropagation();
-            return;
+            if (onSelect) onSelect(knot.id);
         }
 
         e.stopPropagation();
